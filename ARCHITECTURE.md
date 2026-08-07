@@ -50,6 +50,8 @@ One assessment per real user entry, bounded by one end-to-end deadline (`assessm
 - Only a **high-confidence, `scope: bounded`** verdict may lower the dimension, by **at most one tier**, never from `implement` or `review`, and never while the depth latch is engaged.
 - Capability repick: a consult that raised the dimension owns that decision (`router-consult` cause remains active for capability repick purposes).
 
+Unlike `shadow`, `active` adds assessor spend and egress to the turn — that is the price of adopting verdicts; `shadow` (default) adds no wall-clock time and dispatches nothing that affects routing.
+
 Set `consultRouter: false` to keep routing fully local with no assessment dispatched.
 
 ---
@@ -124,6 +126,8 @@ The router-chosen effort uses an **up-only walk** (`levelFrom`) from the clamped
 
 The loop walks the ranked fallback chain (each entry is a `provider/id:effort` key) and streams the first candidate that produces meaningful output.
 
+Provider availability is only resolved at stream time. Registry auth-filtering is per-provider, not per-model, and the per-attempt credential check is the real gate — an authenticated provider can still 421/hang/error on a specific model. The fallback chain absorbs the failure, but the first attempt's latency is already spent.
+
 ### Pre-answer failure modes
 
 | Failure | Handling |
@@ -139,6 +143,8 @@ The loop walks the ranked fallback chain (each entry is a `provider/id:effort` k
 ### Provider circuit breaker
 
 Three provider-health strikes (credential, auth, transport, `stopReason: error`) skip that provider's remaining models. Model-specific output-limit exhaustion and missing-registry failures do not condemn the provider — a sibling model on the same provider remains reachable.
+
+A usage-limit error — quota/billing exhaustion, OpenCode `GoUsageLimitError`, or a plain 429/rate-limit — blacklists the whole provider for the session immediately, bypassing the three-strike accumulation: the cap is shared by every model on it, so retrying siblings wastes time. Model-specific output-limit exhaustion never triggers it. `/router-blacklist remove <provider>/*` lifts the exclusion after a top-up.
 
 ### Effort resolution per chain entry
 
@@ -198,7 +204,7 @@ Parent-assisted respawn described in §4. User-pinned roles are never overridden
 
 ### Benchmarks
 
-The **Artificial Analysis** Data API (free tier, `x-api-key` header) provides the sole benchmark source. Rows carry `evaluations` (intelligence, coding, agentic indices), `pricing` ($/1M input/output), and `performance` (tokens/sec, TTFT, TTFA).
+The **Artificial Analysis** Data API (free tier, `x-api-key` header) provides the sole benchmark source. Rows carry `evaluations` (intelligence, coding, agentic indices), `pricing` ($/1M input/output), and `performance` (tokens/sec, TTFT, TTFA). Quality coverage is bounded by what Artificial Analysis publishes: a model with no matched row carries no quality signal and routes on registry metadata alone.
 
 **Effort labels** are parsed from the model name parenthetical: `GPT-5.6 Luna (low)`, `Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)` → `off`. The parse fails closed (unrecognized → undefined).
 
@@ -208,7 +214,7 @@ The **Artificial Analysis** Data API (free tier, `x-api-key` header) provides th
 
 ### Fuzzy matching
 
-Benchmark slugs are fuzzy-matched against Pi's live registry model IDs. Manual overrides are available via `/router-fix` when matching fails.
+Benchmark slugs are fuzzy-matched against Pi's live registry model IDs. Manual overrides are available via `/router-fix` when matching fails; until an override lands, the unmatched model has no quality data and routes on registry metadata only.
 
 ### Decision log
 
@@ -216,7 +222,7 @@ Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<times
 
 ### Timing log
 
-Per-step millisecond timing (opt-in via `debug` config or `PI_AUTO_ROUTER_DEBUG`): registry wait, classification, per-candidate auth/stream attempts, turn totals. Written as a per-session `*.router-debug.log` sidecar (`/tmp/pi8-debug.log` when ephemeral).
+Per-step millisecond timing (opt-in via the `debug` config): registry wait, classification, per-candidate auth/stream attempts, turn totals. Written as a per-session `*.router-debug.log` sidecar (`/tmp/pi8-debug.log` when ephemeral).
 
 ---
 

@@ -50,6 +50,8 @@ Mỗi user entry thực chỉ có một assessment, bị giới hạn bởi mộ
 - Chỉ verdict **confidence cao, `scope: bounded`** mới được phép hạ dimension, tối đa **một tier**, không bao giờ hạ từ `implement` hoặc `review`, và không bao giờ khi depth latch đang hoạt động.
 - Capability repick: consult đã nâng dimension sẽ sở hữu quyết định đó (`router-consult` vẫn là cause đang hoạt động cho mục đích capability repick).
 
+Không giống `shadow`, `active` làm phát sinh chi phí assessor và egress trong lượt — đó là cái giá của việc áp dụng verdict; `shadow` (mặc định) không làm tăng wall-clock time và không dispatch thứ gì có ảnh hưởng đến routing.
+
 Đặt `consultRouter: false` để routing hoàn toàn cục bộ và không dispatch assessment.
 
 ---
@@ -124,6 +126,8 @@ Effort do router chọn sử dụng **up-only walk** (`levelFrom`) từ floor đ
 
 Vòng lặp đi dọc fallback chain đã xếp hạng (mỗi entry là key `provider/id:effort`) và stream candidate đầu tiên tạo ra output có ý nghĩa.
 
+Tính khả dụng của provider chỉ được xác định tại thời điểm stream. Registry auth-filtering là theo provider, không phải theo model, và per-attempt credential check mới là cổng kiểm tra thực sự — một provider đã xác thực vẫn có thể trả 421, treo hoặc lỗi trên một model cụ thể. Fallback chain sẽ hấp thụ lỗi đó, nhưng latency của lần thử đầu tiên đã bị tiêu tốn.
+
 ### Các lỗi trước khi có câu trả lời
 
 | Lỗi | Cách xử lý |
@@ -139,6 +143,8 @@ Vòng lặp đi dọc fallback chain đã xếp hạng (mỗi entry là key `pro
 ### Provider circuit breaker
 
 Ba provider-health strike (credential, auth, transport, `stopReason: error`) sẽ bỏ qua các model còn lại của provider đó. Lỗi hết output limit theo từng model và lỗi không có trong registry không làm cả provider bị đánh giá xấu — sibling model cùng provider vẫn có thể được dùng.
+
+Lỗi usage-limit — hết quota/billing, OpenCode `GoUsageLimitError`, hoặc plain 429/rate-limit — sẽ blacklist toàn bộ provider cho session ngay lập tức, bỏ qua cơ chế tích lũy ba strike: giới hạn được chia sẻ cho mọi model trên provider đó, vì vậy retry sibling chỉ làm lãng phí thời gian. Lỗi hết output limit riêng theo model không bao giờ kích hoạt cơ chế này. `/router-blacklist remove <provider>/*` sẽ gỡ exclusion sau khi top-up.
 
 ### Resolve effort cho từng chain entry
 
@@ -201,7 +207,7 @@ Parent-assisted respawn được mô tả trong §4. Các role bị người dù
 
 ### Benchmark
 
-**Artificial Analysis** Data API (free tier, header `x-api-key`) là nguồn benchmark duy nhất. Các row chứa `evaluations` (intelligence, coding, agentic indices), `pricing` ($/1M input/output) và `performance` (tokens/giây, TTFT, TTFA).
+**Artificial Analysis** Data API (free tier, header `x-api-key`) là nguồn benchmark duy nhất. Các row chứa `evaluations` (intelligence, coding, agentic indices), `pricing` ($/1M input/output) và `performance` (tokens/giây, TTFT, TTFA). Mức độ bao phủ chất lượng bị giới hạn bởi dữ liệu mà Artificial Analysis công bố: model không có row khớp sẽ không có quality signal và chỉ route dựa trên registry metadata.
 
 **Effort label** được parse từ phần trong ngoặc của tên model: `GPT-5.6 Luna (low)`, `Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)` → `off`. Quá trình parse fail closed (không nhận diện được → undefined).
 
@@ -211,7 +217,7 @@ Parent-assisted respawn được mô tả trong §4. Các role bị người dù
 
 ### Fuzzy matching
 
-Benchmark slug được fuzzy-match với model ID trong live registry của Pi. Có thể dùng manual override qua `/router-fix` khi matching thất bại.
+Benchmark slug được fuzzy-match với model ID trong live registry của Pi. Có thể dùng manual override qua `/router-fix` khi matching thất bại; cho đến khi có override, model chưa match sẽ không có quality data và chỉ route dựa trên registry metadata.
 
 ### Decision log
 
@@ -219,7 +225,7 @@ Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi
 
 ### Timing log
 
-Timing từng bước theo mili-giây (opt-in qua config `debug` hoặc `PI_AUTO_ROUTER_DEBUG`): chờ registry, phân loại, auth/stream attempt theo từng candidate, tổng thời gian mỗi lượt. Được ghi dưới dạng sidecar `*.router-debug.log` theo từng session (`/tmp/pi8-debug.log` khi là session tạm thời).
+Timing từng bước theo mili-giây (opt-in qua config `debug`): chờ registry, phân loại, auth/stream attempt theo từng candidate, tổng thời gian mỗi lượt. Được ghi dưới dạng sidecar `*.router-debug.log` theo từng session (`/tmp/pi8-debug.log` khi là session tạm thời).
 
 ---
 
