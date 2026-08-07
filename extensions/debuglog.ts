@@ -6,10 +6,7 @@
  * itself does the same with ~/.pi/agent/pi-debug.log). This exists to answer
  * "where did the turn's time actually go?" with evidence instead of guesses.
  *
- * OFF by default. Enable via the PI_AUTO_ROUTER_DEBUG env var OR the `debug`
- * key in ~/.pi/agent/pi8/config.json (env wins when both are set):
- *   PI_AUTO_ROUTER_DEBUG=1        → per-session log (or /tmp if ephemeral)
- *   PI_AUTO_ROUTER_DEBUG=/path…   → that explicit file
+ * OFF by default. Enable via the `debug` key in ~/.pi/agent/pi8/config.json:
  *   config.json { "debug": true }         → per-session log
  *   config.json { "debug": "/path…" }     → that explicit file
  *
@@ -58,21 +55,15 @@ function normalize(raw: string | boolean | undefined): Directive {
  * Resolve the debug log path (or null when disabled). Recomputed per call
  * — NOT cached — because the session file changes across new/resume/fork.
  *
- * Priority: explicit override → env var → config `debug`. A bare "on" (env `1`
- * or config `true`) lands in the current session's directory when one exists,
+ * Priority: explicit override (test seam) → config `debug`. A bare "on"
+ * (config `true`) lands in the current session's directory when one exists,
  * else the shared /tmp default.
  */
 function debugPath(): string | null {
   if (explicitPath === null) return null;
   if (typeof explicitPath === 'string') return explicitPath;
 
-  // The env var takes precedence WHENEVER it is set (even to an off value like
-  // `0`/`false`); config `debug` applies only when the env var is absent.
-  const envRaw = process.env.PI_AUTO_ROUTER_DEBUG;
-  const directive =
-    envRaw !== undefined && envRaw !== ''
-      ? normalize(envRaw)
-      : normalize(configDebug);
+  const directive = normalize(configDebug);
 
   if (directive.mode === 'off') return null;
   if (directive.mode === 'path') return directive.path;

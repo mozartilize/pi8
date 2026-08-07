@@ -19,7 +19,6 @@ const probeLog = (): boolean => {
 afterEach(() => {
   setDebugPath(undefined);
   setConfigDebug(undefined);
-  delete process.env.PI_AUTO_ROUTER_DEBUG;
   rmSync(DEFAULT_DEBUG_PATH, { force: true });
 });
 
@@ -49,18 +48,13 @@ describe('debuglog', () => {
     }
   });
 
-  it('resolves PI_AUTO_ROUTER_DEBUG=1 to the default /tmp path', () => {
-    const prev = process.env.PI_AUTO_ROUTER_DEBUG;
-    try {
-      process.env.PI_AUTO_ROUTER_DEBUG = '1';
-      setDebugPath(undefined); // re-resolve from env
-      expect(probeLog()).toBe(true);
-      expect(DEFAULT_DEBUG_PATH).toBe('/tmp/pi8-debug.log');
-    } finally {
-      if (prev === undefined) delete process.env.PI_AUTO_ROUTER_DEBUG;
-      else process.env.PI_AUTO_ROUTER_DEBUG = prev;
-      setDebugPath(undefined);
-    }
+  // Expected behavior change: the PI_AUTO_ROUTER_DEBUG env var was removed —
+  // the `debug` config key is now the only enable switch (see debuglog.ts).
+  it('config `debug: true` resolves to the default /tmp path', () => {
+    setDebugPath(undefined);
+    setConfigDebug(true);
+    expect(DEFAULT_DEBUG_PATH).toBe('/tmp/pi8-debug.log');
+    expect(probeLog()).toBe(true);
   });
 
   it('startTimer returns elapsed milliseconds', async () => {
@@ -69,9 +63,8 @@ describe('debuglog', () => {
     expect(t()).toBeGreaterThanOrEqual(8);
   });
 
-  it('is enabled by config `debug: true` even without the env var', () => {
+  it('is enabled by config `debug: true`', () => {
     setDebugPath(undefined);
-    delete process.env.PI_AUTO_ROUTER_DEBUG;
     setConfigDebug(true);
     expect(probeLog()).toBe(true);
   });
@@ -94,15 +87,6 @@ describe('debuglog', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  it('env var takes precedence over config (env off-string beats config path)', () => {
-    // env explicitly disables; config would enable — env wins.
-    process.env.PI_AUTO_ROUTER_DEBUG = 'false';
-    setConfigDebug('/tmp/should-not-be-used.log');
-    setDebugPath(undefined);
-    expect(probeLog()).toBe(false);
-    expect(existsSync('/tmp/should-not-be-used.log')).toBe(false);
   });
 
   it('creates missing parent directories', () => {

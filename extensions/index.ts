@@ -148,7 +148,7 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
       // Session cleanup is best-effort and must not block startup.
     }
     // Point per-session logs (decisions + debug) at THIS session's directory,
-    // and pick up the `debug` config flag (env var still takes precedence).
+    // and pick up the `debug` config flag.
     try {
       setSessionFile(ctx.sessionManager?.getSessionFile());
       setConfigDebug(loadConfig().debug);

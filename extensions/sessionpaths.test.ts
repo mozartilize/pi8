@@ -9,14 +9,14 @@ import { tmpdir } from 'node:os';
 import { setSessionFile, getSessionFile, sessionSidecarPath } from './sessionpaths.js';
 import { appendDecision } from './decisionlog.js';
 import { setDecisionLogBase } from './decisionlog.js';
-import { debugLog, setDebugPath } from './debuglog.js';
+import { debugLog, setDebugPath, setConfigDebug } from './debuglog.js';
 import type { RoutingDecision } from './types.js';
 
 afterEach(() => {
   setSessionFile(undefined);
   setDecisionLogBase(undefined);
   setDebugPath(undefined);
-  delete process.env.PI_AUTO_ROUTER_DEBUG;
+  setConfigDebug(undefined);
 });
 
 describe('sessionpaths', () => {
@@ -73,13 +73,15 @@ describe('per-session log routing', () => {
     }
   });
 
-  it('debug log (bare PI_AUTO_ROUTER_DEBUG=1) writes into the session dir', () => {
+  // Expected behavior change: the PI_AUTO_ROUTER_DEBUG env var was removed —
+  // the `debug` config key is now the only enable switch (see debuglog.ts).
+  it('debug log (config `debug: true`) writes into the session dir', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ar-sess-'));
     try {
       const sessionFile = join(dir, '2026-08-01T04-30-00_abc123.jsonl');
       setSessionFile(sessionFile);
-      process.env.PI_AUTO_ROUTER_DEBUG = '1';
-      setDebugPath(undefined); // fall through to env + session resolution
+      setConfigDebug(true);
+      setDebugPath(undefined); // fall through to config + session resolution
       debugLog('turn.start', { registryModels: 3 });
       const sidecar = join(dir, '2026-08-01T04-30-00_abc123.router-debug.log');
       expect(existsSync(sidecar)).toBe(true);
@@ -89,12 +91,12 @@ describe('per-session log routing', () => {
     }
   });
 
-  it('an explicit env path overrides the session sidecar', () => {
+  it('config `debug: "<path>"` writes to the explicit file, not the session sidecar', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ar-sess-'));
     try {
       const explicit = join(dir, 'explicit.log');
       setSessionFile(join(dir, 'sess_abc.jsonl'));
-      process.env.PI_AUTO_ROUTER_DEBUG = explicit;
+      setConfigDebug(explicit);
       setDebugPath(undefined);
       debugLog('x', {});
       expect(existsSync(explicit)).toBe(true);

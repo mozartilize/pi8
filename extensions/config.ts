@@ -80,8 +80,7 @@ export interface PersistedConfig {
   blacklist?: string[];
   /**
    * Debug logging. `true` → per-session timing log next to the session file;
-   * a string → that explicit path; `false`/absent → off. Overridden by the
-   * PI_AUTO_ROUTER_DEBUG env var when it is set.
+   * a string → that explicit path; `false`/absent → off.
    */
   debug?: boolean | string;
   /**

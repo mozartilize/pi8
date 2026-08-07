@@ -298,7 +298,6 @@ export interface AutoRouterConfig {
   /**
    * Debug logging. `true` writes per-session timing logs next to the session
    * file; a string writes to that explicit path; `false`/absent disables it.
-   * The PI_AUTO_ROUTER_DEBUG env var takes precedence when set.
    */
   debug?: boolean | string;
   /**
