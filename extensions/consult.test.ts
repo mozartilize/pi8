@@ -1,0 +1,498 @@
+/**
+ * Unit tests for the always-on assessment layer (formerly the consult gate).
+ */
+import { describe, it, expect, vi } from 'vitest';
+import {
+  runAssessment,
+  selectAssessor,
+  type AssessmentConfig,
+  type AssessmentAttempt,
+} from './consult.js';
+import { classify } from './classifier.js';
+import type { AssessmentEvidence } from './assessment-prompt.js';
+import type { Candidate } from './types.js';
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type { Model, Api, Context } from '@earendil-works/pi-ai';
+
+vi.mock('@earendil-works/pi-ai/compat', () => ({
+  streamSimple: vi.fn(),
+}));
+
+const evidence: AssessmentEvidence = {
+  conversation: 'User: list the main features of docs/plan.md',
+  toolNames: ['read'],
+  skillNames: [],
+  toolActivity: [],
+};
+
+const candidate = (
+  id: string,
+  intelligence?: number,
+  extra: Record<string, unknown> = {},
+): Candidate =>
+  ({
+    registryId: id,
+    provider: id.split('/')[0],
+    id: id.split('/')[1],
+    available: true,
+    cost: { input: 1, output: 3 },
+    bench: intelligence == null ? undefined : { quality: { intelligence }, ...extra },
+  }) as Candidate;
+
+describe('selectAssessor — competence floor', () => {
+  it('rejects an assessor below the intelligence ratio of the best routable', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [candidate('test/strong', 100), candidate('test/weak', 33)],
+    );
+    expect(chosen?.registryId).toBe('test/strong');
+  });
+
+  it('accepts a cheaper assessor that clears the floor', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [
+        candidate('test/expensive', 100),
+        { ...candidate('test/cheap', 60), cost: { input: 0.1, output: 0.3 } },
+      ],
+    );
+    expect(chosen?.registryId).toBe('test/cheap');
+  });
+
+  // Expected behavior change, not a contract violation: TTFT still never gates
+  // on a fixed threshold, but a measured TTFT at or past the whole end-to-end
+  // budget is an arithmetic impossibility, not a prediction.
+  it('never excludes on latencyMsTtft when no deadline bounds the attempt', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [candidate('test/slow', 90, { latencyMsTtft: 200_000 })],
+    );
+    expect(chosen?.registryId).toBe('test/slow');
+  });
+
+  it('excludes a candidate whose measured TTFT exceeds the end-to-end deadline', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5, deadlineMs: 1500 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [
+        // Cheapest, but its first token lands after the deadline aborts.
+        { ...candidate('test/doomed', 90, { latencyMsTtft: 1760 }), cost: { input: 0.1, output: 0.3 } },
+        candidate('test/viable', 90, { latencyMsTtft: 750 }),
+      ],
+    );
+    expect(chosen?.registryId).toBe('test/viable');
+  });
+
+  it('gates a reasoning row on time-to-first-ANSWER, not the fast first thinking token', () => {
+    // deepseek-v4-pro pattern: ttft 1.6 s (a thinking token) but ttfa 71 s.
+    // The gate must read the answer latency, or a guaranteed-expiry assessor
+    // sneaks past on its fast thinking token.
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5, deadlineMs: 1500 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [
+        {
+          ...candidate('test/reasoning-doomed', 90, { latencyMsTtft: 100, latencyMsTtfa: 1760 }),
+          cost: { input: 0.1, output: 0.3 },
+        },
+        { ...candidate('test/viable', 90, { latencyMsTtft: 750, latencyMsTtfa: 900 }), cost: { input: 1, output: 3 } },
+      ],
+    );
+    expect(chosen?.registryId).toBe('test/viable');
+  });
+
+  it('falls back to TTFT when the row has no answer measurement', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5, deadlineMs: 1500 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [
+        { ...candidate('test/only-ttft-doomed', 90, { latencyMsTtft: 1760 }), cost: { input: 0.1, output: 0.3 } },
+        candidate('test/viable', 90, { latencyMsTtft: 750 }),
+      ],
+    );
+    expect(chosen?.registryId).toBe('test/viable');
+  });
+
+  it('keeps an unmeasured TTFT eligible — absent data is not evidence of slowness', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5, deadlineMs: 1500 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [candidate('test/unmeasured-ttft', 90)],
+    );
+    expect(chosen?.registryId).toBe('test/unmeasured-ttft');
+  });
+
+  it('returns no assessor rather than spending a request guaranteed to expire', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5, deadlineMs: 1500 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [candidate('test/doomed', 90, { latencyMsTtft: 1760 })],
+    );
+    expect(chosen).toBeUndefined();
+  });
+
+  it('uses latencyMsTtft to break a tie between equally priced peers', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [
+        candidate('test/a', 80, { latencyMsTtft: 9000 }),
+        candidate('test/b', 80, { latencyMsTtft: 800 }),
+      ],
+    );
+    expect(chosen?.registryId).toBe('test/b');
+  });
+
+  it('rejects a candidate with no intelligence measurement at all', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [candidate('test/unmeasured')],
+    );
+    expect(chosen).toBeUndefined();
+  });
+
+  it('honours an explicit modelRef when it is routable, bypassing the price order', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5, modelRef: 'test/slow' } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [
+        candidate('test/cheap', 60, { latencyMsTtft: 100 }),
+        candidate('test/slow', 90, { latencyMsTtft: 9000 }),
+      ],
+    );
+    expect(chosen?.registryId).toBe('test/slow');
+  });
+
+  it('ignores a modelRef that is not in the routable pool and falls back to selection', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5, modelRef: 'test/elsewhere' } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [candidate('test/only', 80)],
+    );
+    expect(chosen?.registryId).toBe('test/only');
+  });
+
+  it('returns undefined for an empty candidate pool', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [],
+    );
+    expect(chosen).toBeUndefined();
+  });
+});
+
+function asStreamWithUsage(
+  text: string,
+  usage: { inputTokens: number; outputTokens: number },
+): AsyncIterable<{ type: string }> {
+  const events: Array<{ type: string; usage?: unknown; delta?: string }> = [
+    { type: 'usage', usage },
+    { type: 'text_delta', delta: text },
+  ];
+  return {
+    [Symbol.asyncIterator]: () => {
+      let i = 0;
+      return {
+        next: async () => {
+          if (i < events.length) {
+            const value = events[i];
+            i += 1;
+            return { done: false, value };
+          }
+          return { done: true, value: undefined };
+        },
+      };
+    },
+  };
+}
+
+let lastSentPrompt = '';
+
+function asTextStream(text: string): AsyncIterable<{ type: string }> {
+  return {
+    [Symbol.asyncIterator]: () => {
+      let sent = false;
+      return {
+        next: async () => {
+          if (sent) return { done: true, value: undefined };
+          sent = true;
+          return { done: false, value: { type: 'text_delta', delta: text } };
+        },
+      };
+    },
+  };
+}
+
+async function runAssessmentWithStream(
+  stream: AsyncIterable<{ type: string }>,
+  over: Partial<AssessmentConfig> = {},
+  sentEvidence: AssessmentEvidence = evidence,
+): Promise<AssessmentAttempt> {
+  const { streamSimple } = await import('@earendil-works/pi-ai/compat');
+  vi.mocked(streamSimple).mockImplementation(((_model: Model<Api>, context: Context) => {
+    const content = context.messages[0]?.content;
+    lastSentPrompt = typeof content === 'string' ? content : '';
+    return stream as never;
+  }) as never);
+
+  const candidates: Candidate[] = [
+    {
+      registryId: 'test/a',
+      provider: 'test',
+      id: 'a',
+      bench: {
+        registryId: 'test/a',
+        benchSlug: 'a',
+        active: true,
+        quality: { intelligence: 90 },
+        source: 'test',
+      },
+      cost: { input: 1, output: 3, cacheRead: 0, cacheWrite: 0 },
+      available: true,
+    },
+  ];
+  const registry = {
+    find: () => ({ id: 'a', provider: 'test' } as unknown as Model<Api>),
+    getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'k', headers: {} }),
+  } as unknown as ExtensionContext['modelRegistry'];
+
+  return runAssessment(
+    {
+      enabled: true,
+      mode: 'shadow',
+      deadlineMs: 500,
+      maxInputChars: 4000,
+      assessorQualityRatio: 0.5,
+      ...over,
+    },
+    registry,
+    candidates,
+    sentEvidence,
+  );
+}
+
+const runAssessmentWithStreamText = (text: string): Promise<AssessmentAttempt> =>
+  runAssessmentWithStream(asTextStream(text));
+
+async function runAssessmentWithNeverEndingStream({
+  deadlineMs,
+  usageBefore,
+}: {
+  deadlineMs: number;
+  usageBefore?: boolean;
+}): Promise<AssessmentAttempt> {
+  const events: Array<{ type: string; usage?: { inputTokens?: number; outputTokens?: number } }> =
+    usageBefore ? [{ type: 'usage', usage: { inputTokens: 120 } }] : [];
+  const neverEnding: AsyncIterable<{ type: string }> = {
+    [Symbol.asyncIterator]: () => {
+      let i = 0;
+      return {
+        next: (): Promise<IteratorResult<{ type: string }>> => {
+          if (i < events.length) {
+            const value = events[i];
+            i += 1;
+            return Promise.resolve({ done: false, value });
+          }
+          return new Promise(() => {});
+        },
+      };
+    },
+  };
+  return runAssessmentWithStream(neverEnding, { deadlineMs });
+}
+
+/**
+ * A stream that never resolves `next` but records `return()` calls, so the
+ * expiry path's iterator release is observable.
+ */
+function neverEndingWithReturnTracker(): {
+  stream: AsyncIterable<{ type: string }>;
+  wasReturned: () => boolean;
+} {
+  let returned = false;
+  const stream: AsyncIterable<{ type: string }> = {
+    [Symbol.asyncIterator]: () => ({
+      next: (): Promise<IteratorResult<{ type: string }>> => new Promise(() => {}),
+      return: async () => {
+        returned = true;
+        return { done: true, value: undefined };
+      },
+    }),
+  };
+  return { stream, wasReturned: () => returned };
+}
+
+async function capturePromptSentFor(customEvidence: AssessmentEvidence): Promise<string> {
+  lastSentPrompt = '';
+  await runAssessmentWithStream(
+    asTextStream(
+      [
+        'Dimension: lightweight',
+        'Scope: bounded',
+        'Outcome: extract',
+        'Confidence: high',
+        'Reasoning: ok',
+      ].join('\n'),
+    ),
+    {},
+    customEvidence,
+  );
+  return lastSentPrompt;
+}
+
+describe('runAssessment', () => {
+  it('returns no-assessor when no candidate clears the floor', async () => {
+    const result = await runAssessment(
+      { enabled: true, mode: 'shadow', deadlineMs: 500, maxInputChars: 4000, assessorQualityRatio: 0.5 },
+      { find: () => undefined } as never,
+      [],
+      evidence,
+    );
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'no-assessor' });
+  });
+
+  it('returns disabled without dispatching when consultRouter is false', async () => {
+    const result = await runAssessment(
+      { enabled: false, mode: 'shadow', deadlineMs: 500, maxInputChars: 4000, assessorQualityRatio: 0.5 },
+      { find: () => ({ provider: 'test', id: 'a' }) } as never,
+      [candidate('test/a', 90)],
+      evidence,
+    );
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'disabled' });
+  });
+
+  it('returns auth when credentials cannot be resolved', async () => {
+    const result = await runAssessment(
+      { enabled: true, mode: 'shadow', deadlineMs: 500, maxInputChars: 4000, assessorQualityRatio: 0.5 },
+      {
+        find: () => ({ provider: 'test', id: 'a' }),
+        getApiKeyAndHeaders: async () => ({ ok: false }),
+      } as never,
+      [candidate('test/a', 90)],
+      evidence,
+    );
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'auth' });
+  });
+
+  it('returns parse when the reply fails validation', async () => {
+    const result = await runAssessmentWithStreamText('Dimension: gather\nScope: nonsense');
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'parse' });
+  });
+
+  it('returns expiry when the deadline elapses before any output', async () => {
+    const result = await runAssessmentWithNeverEndingStream({ deadlineMs: 60 });
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry' });
+  });
+
+  it('returns a fully populated assessment on a valid reply', async () => {
+    const result = await runAssessmentWithStreamText(
+      [
+        'Dimension: lightweight',
+        'Scope: bounded',
+        'Outcome: extract',
+        'Confidence: high',
+        'Reasoning: a bounded extraction from one named file',
+      ].join('\n'),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.assessment.dimension).toBe('lightweight');
+    expect(result.assessment.scope).toBe('bounded');
+    expect(result.assessment.confidence).toBe('high');
+    expect(result.assessment.model).toBe('test/a');
+    expect(result.assessment.ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('extracts usage events and computes the cost against the candidate price', async () => {
+    const result = await runAssessmentWithStream(
+      asStreamWithUsage(
+        [
+          'Dimension: gather',
+          'Scope: bounded',
+          'Outcome: investigate',
+          'Confidence: high',
+          'Reasoning: reading a few files',
+        ].join('\n'),
+        { inputTokens: 120, outputTokens: 30 },
+      ),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.assessment.usage).toEqual({ input: 120, output: 30 });
+    // test/a costs 1 USD / 1M input and 3 USD / 1M output.
+    expect(result.assessment.costUsd).toBeCloseTo(120 / 1e6 + (30 * 3) / 1e6, 10);
+  });
+
+  it('calls iterator.return() when the deadline expires mid-stream', async () => {
+    const { stream, wasReturned } = neverEndingWithReturnTracker();
+    const result = await runAssessmentWithStream(stream, { deadlineMs: 50 });
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry' });
+    expect(wasReturned()).toBe(true);
+  });
+
+  it('bounds auth and streaming under the single deadline', async () => {
+    const started = Date.now();
+    const { streamSimple } = await import('@earendil-works/pi-ai/compat');
+    vi.mocked(streamSimple).mockImplementation((() =>
+      ({
+        [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
+      }) as never) as never);
+
+    const registry = {
+      find: () => ({ provider: 'test', id: 'a' }),
+      getApiKeyAndHeaders: async () => {
+        await new Promise((r) => setTimeout(r, 120));
+        return { ok: true, apiKey: 'k' };
+      },
+    };
+
+    const result = await runAssessment(
+      { enabled: true, mode: 'shadow', deadlineMs: 200, maxInputChars: 4000, assessorQualityRatio: 0.5 },
+      registry as never,
+      [candidate('test/a', 90)],
+      evidence,
+    );
+
+    // Auth ate 120ms of the 200ms budget; the stream cannot get a fresh 200ms.
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry' });
+  });
+
+  it('returns expiry for a timed-out attempt', async () => {
+    const timedOut = await runAssessmentWithNeverEndingStream({ deadlineMs: 60, usageBefore: true });
+    // A cancelled attempt still cost money; the failure return carries costUsd
+    // and ms so the caller can account for the wasted spend.
+    expect(timedOut).toMatchObject({ ok: false, fallbackReason: 'expiry' });
+    if (!timedOut.ok) {
+      expect(timedOut.costUsd).toBeGreaterThan(0);
+      expect(timedOut.ms).toBeGreaterThan(0);
+    }
+  });
+
+  it('never sends tool arguments, tool results or skill descriptions', async () => {
+    const sent = await capturePromptSentFor({
+      conversation: 'User: fix the bug',
+      toolNames: ['read'],
+      skillNames: ['systematic-debugging'],
+      toolActivity: [{ name: 'read', count: 2 }],
+    });
+    expect(sent).toContain('read');
+    expect(sent).toContain('systematic-debugging');
+    expect(sent).not.toContain('"path"');
+    expect(sent).not.toContain('Use read to examine files');
+  });
+});
+
+describe('consult integration with classifier', () => {
+  it('motivating prompt now classifies high enough to avoid lightweight', () => {
+    const prompt =
+      'ok, put it aside, lets try something harder. currently we learn pi-subagents and support it, what if after we publish this extension, other extensions especially subagents extensions want to utilize it, which mean we have to expose some apis for them to use, go for a research';
+    const result = classify(prompt);
+    expect(result.dimension).not.toBe('lightweight');
+  });
+});

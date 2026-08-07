@@ -1,0 +1,70 @@
+# AGENTS.md — pi8
+
+Conventions for anyone (human or AI agent) working on this codebase. Read this before making changes.
+
+A Pi extension registering a synthetic `router/auto` provider: it classifies each turn, scores candidates from Pi's model registry against synced benchmark data, and delegates the stream with a fallback chain. It stays in-process — no external gateway or daemon — and takes benchmark data from APIs rather than scraping. User-facing behavior is in `README.md`.
+
+## What belongs here
+
+Rules are **traps to avoid**, not **maps to follow**. No module layout, data flow, or key-type descriptions — they go stale fast and the agent can gather them by reading the code.
+
+New rules must clear all three bars:
+
+1. **Non-obvious** — someone familiar with the codebase would still get it wrong without it.
+2. **Repeatedly encountered** — it has bitten more than once.
+3. **Specific enough to act on** — a concrete instruction, not a vague principle.
+
+## Hard rules (do not violate)
+
+1. **Never write to `~/.pi/agent/settings.json`.** It is pi-core-owned and lock-protected; persisting a routing decision there would leak a per-session choice into global cross-project config. Subagent role injection happens per-spawn via the `tool_call` hook patching the `subagent` tool's own `model` argument. `subagents.ts` reads settings only to detect user pins — it stays read-only.
+2. **The router must never block or fail a turn because of its own bugs.** Every hook handler, command handler, and the top-level `streamSimple` closure wraps its body in try/catch that degrades to "route with defaults" or "surface a router error event" rather than throwing. New code paths wrap the same way.
+3. **Uncertainty always routes up, never down.** Missing benchmark data, low classifier confidence, ambiguous prompts, and assessment failure must never make routing cheaper. A low-confidence assessment yields `max(heuristic, oneTierAbove(verdict))`, never anything below the heuristic; unknown quality outranks measured weak capability. Measured capability is a different thing from uncertainty: the scorer's deterministic, bounded economic promotion still applies, and the only downward path is a **high-confidence, `scope: bounded`** assessment lowering the dimension by **at most one tier**, never from `implement` or `review`, and never while the depth latch is engaged. Neither exception weakens uncertainty handling or objective fallback. The effort axis follows the same rule: `MIN_THINKING_BY_DIMENSION` in `scorer.ts` is a floor, not an assignment — a scored effort may raise it, never lower it, and an unmeasured effort variant is unknown quality, never the cheap pick.
+4. **Registry auth-filtering is per-provider, not per-model.** `ctx.modelRegistry.getAvailable()` already filters by provider-level auth — do not add a redundant upfront credential pre-filter to the per-turn routing path. The per-attempt `getApiKeyAndHeaders` call inside `delegation.ts`'s fallback loop is the real, fail-fast gate, because an authed provider can still 421/hang on a specific model at stream time. The one place an upfront auth probe *is* correct is subagent role injection: that's a pick-once decision that can't retry mid-spawn.
+5. **A silent hang is a distinct failure mode from a thrown error.** The meaningful-output timeout exists because a provider can open a connection and emit only lifecycle events — lifecycle-only events must not disarm it; text, thinking, or tool-call output does. Reasoning-only output may still hit a terminal `stopReason: 'length'` before visible text. Automatic fallback uses objective signals only; there is no semantic-quality detector. A clean iterator completion with no text, thinking, or tool-call output is an objective answerless failure, not success. Once visible text or a tool call has streamed, never replay on another model — that duplicates output or side effects.
+6. **Every routing decision records its `cause`.** If you add a new way a decision can be influenced, add a new `DecisionCause` value (`types.ts` holds the current set) rather than overloading an existing one — `/router-why` and the decision log depend on this being accurate. The `cause` belongs to the mechanism that actually changed the routed dimension; secondary mechanisms stay in decision metadata and the reason string. `no-data` means no routable candidate had an active benchmark row and ordinary heuristic scoring remained primary; partial candidate coverage is metadata/reasoning, not a cause override. Advisory context pressure is carried on `decision.contextPressure`, never as a cause. `DEPTH_PASSIVE_CAUSES` and `POLICY_PASSIVE_CAUSES` are deliberately different sets — `router-consult` is passive for depth escalation (an assessment answers what kind of work this is, not how deep the context got) and active for capability repicks — do not unify them.
+7. **`scorer.ts` and `classifier.ts` stay pure** — no I/O, no registry/session access. They're the cheapest modules to test precisely because everything is deterministic given their inputs. If a change requires I/O, it belongs in the caller. Candidate expansion is the caller's job: `provider.ts`/`subagents.ts` assemble one candidate per measured, supported (model, effort) pair and `scorer.ts` receives the expanded list with `effort` on each candidate — it never looks up rows itself.
+8. **Provider circuit strikes are provider-health evidence, not candidate failure.** Credential/auth/transport failures and provider `stopReason: 'error'` count toward the three-strike per-provider circuit breaker; a missing registry model and model-specific output-limit exhaustion do not. Output-limit exhaustion proves only that one model ran out of room, not that its provider is unhealthy, so a later sibling model on the same provider must stay reachable. Per-model blacklisting policy is unchanged.
+9. **Every subagent- and escalation-facing hook is gated on the session's active model actually being `router/auto`.** `route_up` is a globally registered tool (Pi has no per-session tool registration) and the `subagent` `tool_call`/`tool_result` handlers fire for every session regardless of which extension installed them. When the active model is a concrete pick, this extension must be a complete no-op: no subagent model injection, no escalation state mutation, no debug/decision log writes. `isRouterAutoActive(ctx.model)` in `index.ts` and the equivalent check in `escalation.ts`'s `route_up` `execute()` are the only gates — do not add routing side effects to a hook without checking through one of them first.
+10. **Semantic judgment belongs in the router agent's prompt and output ontology; structural thresholds, triggers, and budgets stay deterministic and tunable.** The test is whether a change encodes a judgment about what a task *means* (prompt) or about when to *ask* (code). A prompt change without an `ASSESSMENT_PROMPT_VERSION` bump is not a valid change. `classifier.ts`/`classifier-keywords.ts` are the survivable fallback, not a policy engine — but `assessmentMode` defaults to `shadow`, so in practice they route every turn; they are not frozen. Justify a change there with `classifier-corpus.test.ts` (net movement across the corpus), never with a single anecdotal prompt, and never pin classifier internals: asserting an exact weight or intermediate score freezes tuning without protecting behavior.
+11. **`provider.ts` state lives in `router-session-state.ts`, not module-level `let`s** (owned behind named accessors). Do not redefine shared helpers like `makeErrorEvent` locally in `provider.ts`/`delegation.ts` again. Its orchestrator role: ARCHITECTURE §10.
+12. **Resolve intent once per user entry; score once per low-level invocation.** Pi invokes the provider again after tool batches, so the base classification/consult result is cached until the latest user entry changes while candidate availability, escalation, scoring, auth, and fallback remain live. No automatic mid-loop downgrades and no replacing a running child — handoffs happen at provider boundaries (`route_up`, or a new user-message/spawn boundary).
+13. **A benchmark re-sync is a review event.** Check new rows for run-configuration variants (`-<4 digits>`) and add them to `BENCHMARK_RUN_VARIANTS` in `matcher.ts`; check new rows for unparsed effort labels (`parseEffort` in the adapter must recognize them). The variant list is explicit, not a general stripping rule — generic suffix-stripping corrupts real identities (`qwen3.7-max`). Identity/store/refresh semantics: ARCHITECTURE §7.
+14. **Never assume how Pi works — check the installed package.** This extension runs inside the `@earendil-works/pi-coding-agent` npm package, which ships its own `README.md` and `docs/` covering the extension API, hook signatures, provider semantics, registry behavior, and file ownership. When a change depends on Pi behavior (hook ordering, stream events, `stopReason`, what `settings.json` is for), verify against that documentation and the installed source before coding to a guess.
+
+## Assessment egress and privacy
+
+`assessmentMode` defaults to **`shadow`**: the assessment runs detached, adds no wall-clock time to the turn, and writes a counterfactual `assessment-shadow` record to the decision log joined by `intentKey`. Routing in shadow is byte-identical to `consultRouter: false`; setting `consultRouter: false` dispatches nothing at all. One bounded, cancellable assessment per real user entry — never more.
+
+When an assessment runs, a bounded prompt may be sent to an authenticated provider, typically **different from** the one serving the turn (the assessor is the cheapest candidate that clears the competence floor, not the dimension-matched serving pick). It contains only:
+
+- recent conversation, role-labelled by provenance — a compaction summary is labelled as a summary, never as user speech
+- the latest compaction or branch summary body, explicitly marked
+- active tool **names**; active skill **names**; recent tool activity as **names and counts**
+- the five dimension definitions
+
+It never contains tool arguments, tool result payloads, file contents, environment values, or skill descriptions. Pi's own docs mark `systemPromptOptions` sensitive, so only skill names are retained from it. A credential scrub runs over the assembled input before dispatch. Total input is capped by `assessmentMaxInputChars` (default 6000) and truncated oldest-first, preserving the latest request. Assessment spend is accumulated separately from routed spend and shown by `/router-status`, so the routing tax is visible next to the savings.
+
+## Comment style
+
+Comments should explain *why the current code is the way it is*, not narrate its history. Write:
+
+> "Benchmarks only cover quality indices — price/speed/context ship in Pi's own registry metadata."
+
+not:
+
+> "We used to fetch price from benchmarks too, but then we discovered the registry already had it…"
+
+If a past mistake or regression is worth preserving for future readers, it belongs in a commit message, not narrated inline in source comments.
+
+## Testing conventions
+
+- `npm run tsc` and `npx vitest run` must both pass before considering any change done. Inspect the test/file counts reported by the current run rather than relying on a hard-coded historical count.
+- **Always run vitest under an explicit timeout** (e.g. `timeout 60 npx vitest run …`). A hanging test — not a slow one — is a failure mode: vitest buffers per-file output, so a blocked test prints nothing until it dies. When a run hangs, bisect with `-t` filters and `--test-timeout` rather than assuming slowness.
+- **Never use `/proc/…` (or similar virtual-fs paths) as an unwritable path in tests.** Filesystem calls under `/proc` can block indefinitely on some kernels — even a plain `existsSync`/`mkdirSync`. For a fast, portable unwritable path use a regular file in place of a directory (ENOTDIR, fails in 0 ms), e.g. `<tmp>/blocker.txt/sub`.
+- Adapters are tested against fixture payloads (`extensions/__fixtures__/`); benchmark re-syncs may legitimately require fixture review.
+- **Tests pin contracts, not snapshots.** A failing test must be classifiable: a contract violation (fix the code) or an expected behavior change (rewrite the test in the same change, with a comment stating which class it is). Never update a pinned value to green without that classification. Contract tests pin invariants (up-only uncertainty, `plan` never promoted, tiers stay in the fallback chain, escalation excludes the requesting model) and must never break; snapshot/behavior tests pin current values (winners, scores, reason strings) and are rewritten together with the redesign they encode. Benchmark fixtures only — never pin live store data.
+- Test seams exist deliberately — `setDelegationTimeouts()` (delegation.ts), `resetEscalation()` (escalation.ts), `PI8_DIR` (store.ts/config.ts), and the debug/decision-log path setters. Use them; don't monkeypatch around them. A seam is not a licence to export production symbols that only tests call.
+
+## Documentation policy
+
+This file holds traps only. Architecture rationale lives in code comments. If a change contradicts a rule above, update this file in the same change — and if a rule is a one-off observation, leave it out: it must clear the three bars under "What belongs here" or it does not belong here. Prefer the smallest change that satisfies the actual requirement.

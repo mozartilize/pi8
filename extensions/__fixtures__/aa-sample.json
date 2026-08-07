@@ -1,0 +1,233 @@
+{
+  "tier": "free",
+  "intelligence_index_version": 4.1,
+  "pagination": {
+    "page": 1,
+    "page_size": 200,
+    "total_pages": 1,
+    "has_more": false
+  },
+  "data": [
+    {
+      "id": "0097ebf5-124f-42f6-9463-33b00e711f03",
+      "name": "Gemini 3.5 Flash (high)",
+      "slug": "gemini-3-5-flash",
+      "release_date": "2026-05-19",
+      "model_creator": {
+        "id": "faddc6d9-2c14-445f-9b28-56726f59c793",
+        "name": "Google"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 50.2,
+        "artificial_analysis_coding_index": 70.1,
+        "artificial_analysis_agentic_index": 37.4
+      },
+      "artificial_analysis_intelligence_index_cost": {
+        "total_cost": 1040.88,
+        "cost_per_task": {
+          "total_cost": 0.6912
+        }
+      },
+      "pricing": {
+        "price_1m_input_tokens": 1.5,
+        "price_1m_output_tokens": 9,
+        "price_1m_cache_hit_tokens": 0.15,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": 171.52,
+        "median_time_to_first_token_seconds": 22.42,
+        "median_time_to_first_answer_token_seconds": 22.42,
+        "median_end_to_end_response_time_seconds": 25.33
+      }
+    },
+    {
+      "id": "0081ab31-d10a-44a0-a10d-eee5533fec65",
+      "name": "GLM-4.5V (Non-reasoning)",
+      "slug": "glm-4-5v",
+      "release_date": "2025-08-11",
+      "model_creator": {
+        "id": "67437eb6-7dc1-4e93-befd-22c8b8ec2065",
+        "name": "Z AI"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 7,
+        "artificial_analysis_coding_index": null,
+        "artificial_analysis_agentic_index": null
+      },
+      "artificial_analysis_intelligence_index_cost": null,
+      "pricing": {
+        "price_1m_input_tokens": 0.6,
+        "price_1m_output_tokens": 1.8,
+        "price_1m_cache_hit_tokens": null,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": 88.99,
+        "median_time_to_first_token_seconds": 1.75,
+        "median_time_to_first_answer_token_seconds": 1.75,
+        "median_end_to_end_response_time_seconds": 7.37
+      }
+    },
+    {
+      "id": "0121d27b-5b8a-4901-8684-80589cc6d40d",
+      "name": "JT-35B-Flash",
+      "slug": "jt-35b-flash",
+      "release_date": "2026-05-14",
+      "model_creator": {
+        "id": "7e7b7290-eacc-420e-a35f-7c8eb4e5205d",
+        "name": "China Mobile"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 28.4,
+        "artificial_analysis_coding_index": null,
+        "artificial_analysis_agentic_index": null
+      },
+      "artificial_analysis_intelligence_index_cost": null,
+      "pricing": {
+        "price_1m_input_tokens": null,
+        "price_1m_output_tokens": null,
+        "price_1m_cache_hit_tokens": null,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": null,
+        "median_time_to_first_token_seconds": null,
+        "median_time_to_first_answer_token_seconds": null,
+        "median_end_to_end_response_time_seconds": null
+      }
+    },
+    {
+      "id": "1c3f8d2e-9a11-4b2c-8d3e-4f5a6b7c8d9e",
+      "name": "GPT-5.6 Luna (low)",
+      "slug": "gpt-5-6-luna-low",
+      "release_date": "2026-06-10",
+      "model_creator": {
+        "id": "faddc6d9-2c14-445f-9b28-56726f59c793",
+        "name": "OpenAI"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 33.3,
+        "artificial_analysis_coding_index": 30.1,
+        "artificial_analysis_agentic_index": 29.5
+      },
+      "artificial_analysis_intelligence_index_cost": {
+        "total_cost": 1.2345,
+        "cost_per_task": {
+          "total_cost": 0.0088
+        }
+      },
+      "pricing": {
+        "price_1m_input_tokens": 0.95,
+        "price_1m_output_tokens": 0.95,
+        "price_1m_cache_hit_tokens": 0.19,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": 120.5,
+        "median_time_to_first_token_seconds": 2.12,
+        "median_time_to_first_answer_token_seconds": 2.12,
+        "median_end_to_end_response_time_seconds": 9.8
+      }
+    },
+    {
+      "id": "2d4e9f3a-b022-4c3d-9e4f-5a6b7c8d9e0f",
+      "name": "GPT-5.6 Luna (high)",
+      "slug": "gpt-5-6-luna-high",
+      "release_date": "2026-06-10",
+      "model_creator": {
+        "id": "faddc6d9-2c14-445f-9b28-56726f59c793",
+        "name": "OpenAI"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 43.8,
+        "artificial_analysis_coding_index": 41.2,
+        "artificial_analysis_agentic_index": 40.0
+      },
+      "artificial_analysis_intelligence_index_cost": {
+        "total_cost": 2.1,
+        "cost_per_task": {
+          "total_cost": 0.0214
+        }
+      },
+      "pricing": {
+        "price_1m_input_tokens": 0.95,
+        "price_1m_output_tokens": 0.95,
+        "price_1m_cache_hit_tokens": 0.19,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": 118.2,
+        "median_time_to_first_token_seconds": 31.5,
+        "median_time_to_first_answer_token_seconds": 31.5,
+        "median_end_to_end_response_time_seconds": 48.9
+      }
+    },
+    {
+      "id": "3e5fa4b1-c133-4d4e-af50-6b7c8d9e0f1a",
+      "name": "GPT-5.6 Luna (Adaptive Reasoning, Max Effort)",
+      "slug": "gpt-5-6-luna",
+      "release_date": "2026-06-10",
+      "model_creator": {
+        "id": "faddc6d9-2c14-445f-9b28-56726f59c793",
+        "name": "OpenAI"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 51.2,
+        "artificial_analysis_coding_index": 48.7,
+        "artificial_analysis_agentic_index": 47.9
+      },
+      "artificial_analysis_intelligence_index_cost": {
+        "total_cost": 5.6,
+        "cost_per_task": {
+          "total_cost": 0.0473
+        }
+      },
+      "pricing": {
+        "price_1m_input_tokens": 0.95,
+        "price_1m_output_tokens": 0.95,
+        "price_1m_cache_hit_tokens": 0.19,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": 101.4,
+        "median_time_to_first_token_seconds": 117.3,
+        "median_time_to_first_answer_token_seconds": 117.3,
+        "median_end_to_end_response_time_seconds": 210.5
+      }
+    },
+    {
+      "id": "4f6ab5c2-d244-4e5f-b061-7c8d9e0f1a2b",
+      "name": "DeepSeek V4 Pro (Adaptive Reasoning, Max Effort)",
+      "slug": "deepseek-v4-pro",
+      "release_date": "2026-05-28",
+      "model_creator": {
+        "id": "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "name": "DeepSeek"
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 44.3,
+        "artificial_analysis_coding_index": 41.9,
+        "artificial_analysis_agentic_index": 40.5
+      },
+      "artificial_analysis_intelligence_index_cost": {
+        "total_cost": 3.2,
+        "cost_per_task": {
+          "total_cost": 0.0475
+        }
+      },
+      "pricing": {
+        "price_1m_input_tokens": 0.76,
+        "price_1m_output_tokens": 0.76,
+        "price_1m_cache_hit_tokens": 0.15,
+        "price_1m_cache_write_tokens": null
+      },
+      "performance": {
+        "median_output_tokens_per_second": 89.3,
+        "median_time_to_first_token_seconds": 1.6,
+        "median_time_to_first_answer_token_seconds": 71.25,
+        "median_end_to_end_response_time_seconds": 162.4
+      }
+    }
+  ]
+}

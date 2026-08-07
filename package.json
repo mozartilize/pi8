@@ -1,0 +1,56 @@
+{
+  "name": "pi8",
+  "version": "0.1.0",
+  "type": "module",
+  "files": [
+    "extensions",
+    "!extensions/*.test.ts",
+    "!extensions/**/*.test.ts",
+    "!extensions/__fixtures__/",
+    "!extensions/test-support/",
+    "index.ts",
+    "README.md"
+  ],
+  "description": "Benchmark-aware auto model router for Pi — routes per-turn and per-subagent-role to the best available model based on live intelligence, speed, and cost data.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "model-router",
+    "pi8",
+    "llm",
+    "coding-agent",
+    "extension"
+  ],
+  "license": "MIT",
+  "author": "",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "tsc": "tsc --noEmit",
+    "build": "tsc",
+    "prepublishOnly": "npm run tsc",
+    "test": "vitest run",
+    "check": "npm run tsc && npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "typebox": "1.3.7"
+  }
+}

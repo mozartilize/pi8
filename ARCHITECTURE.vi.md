@@ -1,0 +1,280 @@
+# ARCHITECTURE.md — pi8
+
+Kiến trúc ở cấp độ triển khai của router. Để xem hướng dẫn thiết lập và lệnh dành cho người dùng, hãy xem [`README.md`](README.md). Để xem quy ước dành cho người đóng góp, hãy xem [`AGENTS.md`](AGENTS.md).
+
+## Tổng quan pipeline
+
+```
+/router-sync (chạy theo yêu cầu, cảnh báo khi dữ liệu đã cũ hơn 14 ngày)
+   └─ adapter: artificial-analysis  (REST, API key miễn phí)
+         chuẩn hóa + fuzzy-match với registry model đang hoạt động của Pi
+~/.pi/agent/pi8/benchmarks.json
+        ▼
+phân loại + đánh giá (cho mỗi entry của người dùng) → một trong 5 dimension
+        ▼
+pickBest(candidates × measured effort, dimension, weights) → chuỗi fallback đã xếp hạng
+        ▼
+ủy quyền cho candidate (model, effort) đứng đầu; nếu có lỗi khách quan trước khi trả lời, chuyển tiếp dọc theo chuỗi
+```
+
+Ở mỗi lượt:
+
+1. **Xác định intent** — hai classifier chạy cho mỗi entry thực của người dùng.
+2. **Chấm điểm** — mở rộng các candidate `(model, effort)`, lọc theo capability, xếp hạng theo chất lượng/chi phí/tốc độ.
+3. **Ủy quyền với fallback khách quan** — stream, xử lý lỗi trước khi có câu trả lời, rồi đi dọc theo chuỗi.
+4. **Định tuyến subagent** — chèn model cụ thể cho mỗi lần spawn thông qua hook `tool_call`.
+
+---
+
+## 1. Xác định intent
+
+### Keyword classifier (fallback tất định)
+
+Một classifier intent/keyword cục bộ, tốc độ cao, được port từ `complexity_router.py` của LiteLLM (Apache-2.0). Nó ánh xạ request sang một task dimension bằng năm danh sách keyword (`code`, `reasoning`, `technical`, `simple`, `gather`) cùng các marker riêng theo dimension (`review`, `plan`, các động từ thể hiện intent). Cơ chế chấm điểm tổng có trọng số dùng các dimension weight của LiteLLM để tạo confidence score; trường hợp hòa điểm được phân xử theo độ mạnh của dimension. Intent đã xác định được cache theo key của user entry và được tái sử dụng xuyên suốt vòng lặp tool của Pi cho entry đó.
+
+Các câu chấp thuận hoặc chuyển tiếp ngắn (ví dụ `ok go for it` hoặc `what's next?`) sử dụng tối đa 1.500 ký tự context user/assistant có gắn nhãn role và kết thúc tại entry đó; chúng được đánh key khác để một lượt phân loại đầy đủ và phần tiếp nối ngắn của nó dùng chung intent dimension.
+
+Phạm vi ngữ nghĩa của keyword classifier được đóng băng — nó tồn tại như một fallback có khả năng sống sót, không phải policy engine. Các threshold mang tính cấu trúc (token để depth escalation, deadline đánh giá, giới hạn input) vẫn có thể điều chỉnh; danh sách keyword và quy tắc phạm vi thì không.
+
+### Semantic assessment (bật mặc định)
+
+Assessment luôn bật sẽ dispatch một model call có giới hạn — được chọn từ routable pool dưới một competence floor (`assessorQualityRatio`, mặc định bằng 0,5 lần mức intelligence mạnh nhất có thể định tuyến) — và chỉ hỏi loại công việc đang được yêu cầu. Deterministic scorer vẫn là thành phần quyết định model nào thực sự phục vụ.
+
+Mỗi user entry thực chỉ có một assessment, bị giới hạn bởi một end-to-end deadline duy nhất (`assessmentDeadlineMs`, mặc định 1500 ms). Input bị giới hạn bởi `assessmentMaxInputChars` (mặc định 6000), cắt từ phần cũ nhất trước, và được loại bỏ credential trước khi dispatch.
+
+**Chế độ `shadow`** (mặc định): assessment chạy tách rời — không làm tăng wall-clock time của lượt và ghi một record phản thực tế `assessment-shadow` vào decision log (join bằng `intentKey`). Kết quả routing giống từng byte với `consultRouter: false`.
+
+**Chế độ `active`**: verdict có thể được áp dụng dưới các giới hạn nghiêm ngặt:
+
+- Khi không chắc chắn, luôn route lên: assessment confidence thấp sẽ cho kết quả `max(heuristic, oneTierAbove(verdict))`, không bao giờ thấp hơn heuristic.
+- Chỉ verdict **confidence cao, `scope: bounded`** mới được phép hạ dimension, tối đa **một tier**, không bao giờ hạ từ `implement` hoặc `review`, và không bao giờ khi depth latch đang hoạt động.
+- Capability repick: consult đã nâng dimension sẽ sở hữu quyết định đó (`router-consult` vẫn là cause đang hoạt động cho mục đích capability repick).
+
+Đặt `consultRouter: false` để routing hoàn toàn cục bộ và không dispatch assessment.
+
+---
+
+## 2. Chấm điểm (`scorer.ts`)
+
+### Mở rộng candidate
+
+Candidate được mở rộng theo từng cặp `(model, effort)` đã được đo và được hỗ trợ. Một model trong registry có thể tạo ra nhiều routable candidate khi benchmark có các row ở nhiều effort level khác nhau — mỗi candidate có measurement riêng về chất lượng/chi phí/tốc độ. Effort level không có measurement sẽ không bao giờ được tổng hợp giả định (không đo nghĩa là chất lượng chưa biết). Các row `off` vẫn được phát ra ngay cả với model không reasoning (đó là mode duy nhất có thể phục vụ của chúng). Khi toàn bộ effort đã đo không được `thinkingLevelMap` của model hỗ trợ, model fallback về một candidate duy nhất không có effort.
+
+### Các capability tier
+
+Model được phân loại vào ba tier dựa trên capability tương đối so với peer mạnh nhất trong phạm vi request hiện tại:
+
+| Tier | Tiêu chí |
+|---|---|
+| 0 | Tỷ lệ trên task axis ≥ frontier ratio (85%), và nếu là `implement`/`review`: tỷ lệ broad-capability ≥ sanity floor (45%) |
+| 1 | Chất lượng chưa biết (xếp sau tier-0 đã biết nhưng trước tier-2 yếu) |
+| 2 | Dưới ngưỡng (yếu trên task axis hoặc không đạt sanity floor) |
+
+Mọi tier đều vẫn nằm trong fallback chain: capability judgement kiểm soát model được ưu tiên, không bao giờ loại bỏ khả năng phục hồi trước lỗi khách quan.
+
+### Ánh xạ dimension sang axis
+
+| Dimension | Task axis (cổng eligibility) | Quality axis (xếp hạng) |
+|---|---|---|
+| `lightweight` | intelligence (không áp dụng floor) | intelligence |
+| `gather` | intelligence | intelligence |
+| `plan` | intelligence (không bao giờ được promote) | intelligence |
+| `implement` | agenticCoding → coding (fallback) | agenticCoding → coding (fallback) |
+| `review` | coding → intelligence (chỉ cho xếp hạng) | coding → intelligence |
+
+`implement` dùng agentic-coding làm axis chính (`artificial_analysis_agentic_index` của AA), fallback sang coding khi không có. Ranking axis có fallback để mọi model đều được sắp xếp dựa trên dữ liệu thực; eligibility axis thì không (yêu cầu bằng chứng trực tiếp).
+
+### Economic promotion (có giới hạn)
+
+Một candidate tier-2 chỉ có thể được nâng lên tier 0 khi đáp ứng **tất cả** các điều kiện sau:
+
+1. Tỷ lệ trên task axis ≥ economy floor (70%)
+2. Đạt sanity floor (nếu là `implement`/`review`)
+3. Giá ≤ model tier-0 rẻ nhất ÷ 4 (lợi thế gấp bốn)
+4. Không bị Pareto-dominate bởi peer rẻ hơn và có capability tương đương
+5. Không phải sibling: provider khác của cùng một benchmark row không được tính là peer
+
+Promotion chỉ được đánh giá cho `gather`, `implement` và `review`. `plan` không bao giờ được promote và `lightweight` hoàn toàn không bị gate.
+
+### Tín hiệu chi phí
+
+Cơ sở chi phí theo mỗi call: dùng `costPerTask` khi mọi candidate đều có; nếu không thì dùng giá pha trộn `$/1M` token (input×0,25 + output×0,75). Giá trong registry là nguồn có thẩm quyền khi tồn tại; giá benchmark là fallback. Model miễn phí có benchmark data được xem là dữ liệu thực (zero-cost là chủ ý); model miễn phí không có benchmark data được xem là chưa biết (không được hưởng cost credit).
+
+### Switch penalty
+
+Model đang phục vụ nhận cache-preservation bonus khi context tăng: `min(estContextTokens × 0.000005, switchMargin)`. Điều này phản ánh kinh tế học của prompt cache — cached input có thể rẻ hơn fresh input khoảng 10 lần, và việc chuyển model làm mất cache của toàn bộ cuộc hội thoại. Bonus bị giới hạn bởi `switchMargin` (mặc định 0,15). Chỉ áp dụng khi caller cung cấp incumbent và không đặt `isSubagentSpawn`; role injection không cung cấp cả hai, vì vậy subagent spawn không bao giờ nhận bonus này (không có cache để mất).
+
+### Effort floor
+
+Reasoning effort tối thiểu cho từng dimension — đây là **floor**, không phải assignment. Effort đã đo có thể nâng lên, không bao giờ hạ xuống:
+
+| Dimension | Thinking tối thiểu |
+|---|---|
+| `lightweight` | off |
+| `gather` | low |
+| `implement` | medium |
+| `review` | high |
+| `plan` | max |
+
+Effort do router chọn sử dụng **up-only walk** (`levelFrom`) từ floor đã clamp — một khoảng trống trong `thinkingLevelMap` không bao giờ được resolve xuống dưới floor. Yêu cầu reasoning tường minh từ người dùng sử dụng nearest-first walk để tôn trọng lựa chọn của người dùng sát nhất có thể.
+
+---
+
+## 3. Vòng lặp delegation fallback (`delegation.ts`)
+
+Vòng lặp đi dọc fallback chain đã xếp hạng (mỗi entry là key `provider/id:effort`) và stream candidate đầu tiên tạo ra output có ý nghĩa.
+
+### Các lỗi trước khi có câu trả lời
+
+| Lỗi | Cách xử lý |
+|---|---|
+| Không có trong registry | Đưa vào blacklist, chuyển candidate tiếp theo |
+| Không có credential / auth timeout (5 giây) | Đưa vào blacklist, ghi một provider strike |
+| First event timeout (30 giây) mà chưa có text/thinking/tool | Chuyển candidate tiếp theo |
+| Provider trả `stopReason: error` | Retry cùng candidate (tối đa 2 lần với lỗi transient / 1 lần với lỗi generic), sau đó chuyển candidate tiếp theo |
+| `done` sạch nhưng không có text/thinking/tool output | Chuyển candidate tiếp theo |
+| Hết reasoning-only (`stopReason: length`, không có text/tool hiển thị) | Chuyển candidate tiếp theo |
+| Người dùng abort | Kết thúc, không blacklist |
+
+### Provider circuit breaker
+
+Ba provider-health strike (credential, auth, transport, `stopReason: error`) sẽ bỏ qua các model còn lại của provider đó. Lỗi hết output limit theo từng model và lỗi không có trong registry không làm cả provider bị đánh giá xấu — sibling model cùng provider vẫn có thể được dùng.
+
+### Resolve effort cho từng chain entry
+
+Mỗi chain entry mang effort riêng từ benchmark row. Effort do router chọn được clamp theo dimension floor và resolve bằng up-only walk (`levelFrom`). Yêu cầu reasoning tường minh từ người dùng dùng nearest-first walk (`resolveThinkingLevel`) để tôn trọng lựa chọn của người dùng sát nhất với khả năng model hỗ trợ.
+
+### Tính không thể đảo ngược sau khi có nội dung
+
+Khi text hiển thị hoặc tool call đã được stream, router không bao giờ replay trên model khác — việc đó sẽ tạo output hoặc side effect trùng lặp. Lỗi xảy ra sau đó sẽ được báo vào stream.
+
+---
+
+## 4. Định tuyến subagent
+
+### Chèn role
+
+Các role của pi-subagents (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) được ánh xạ sang dimension thông qua `ROLE_DIMENSIONS`. Với mỗi lần spawn, router xây candidate từ registry + store, chấm điểm theo dimension đó, rồi chèn `provider/model` cụ thể vào subagent tool call qua hook `tool_call`.
+
+Không ghi gì vào `settings.json` — việc chèn chỉ áp dụng cho từng spawn. Lựa chọn model tường minh và các pin của người dùng/project (`source` ≠ `pi8`) luôn được ưu tiên. Một child cụ thể không thể đổi model giữa chừng.
+
+### Escalation cho subagent (parent hỗ trợ respawn)
+
+Một router-owned child chạy đồng bộ với stable result index có thể xác định được sẽ nhận một bounded self-report contract. Nếu nó chỉ trả về contract marker (giới hạn capability), router sẽ nối thêm một retry directive vào tool result, chỉ rõ model tiếp theo trong fallback chain của role đó. **Parent phải đồng bộ respawn lại đúng role/task đó một lần, không truyền model tường minh**, để router chèn one-shot override.
+
+Các task song song cố định cùng role sẽ key directive theo task gốc. Dynamic fanout có giới hạn giữ lại một role-wide override; async child và fanout không biết span sẽ fail open (vẫn chèn concrete model, bỏ escalation contract).
+
+### Bộ lọc auth theo provider
+
+Trước khi gán role cho subagent, một credential probe theo provider (timeout 3 giây) sẽ lọc các provider chưa xác thực. Nếu không có bước này, một lần subagent spawn kiểu pick-once trỏ đến provider chưa xác thực sẽ hard-fail. Nếu toàn bộ probe thất bại, trạng thái authentication được xem là chưa biết, không phải đã xác thực thành công — khi đó không thực hiện injection.
+
+---
+
+## 5. Depth escalation
+
+Cơ chế này bao phủ một chuyển tiếp mà classifier không nhìn thấy: một gather session liên tục tích lũy context đã trở thành quá trình tổng hợp trên material đã thu thập, loại công việc mà các tier rẻ xử lý kém.
+
+- **Trigger**: live context vượt `depthEscalationTokens` (mặc định 32768), lượt được phân loại là `lightweight`/`gather`, không có active routing intent (escalation/user override)
+- **Effect**: nâng một tier cho invocation đó (cause: `context-depth`)
+- **Thuộc tính**: chỉ nâng lên, không bao giờ cache, đánh giá theo từng invocation
+- **Latch veto**: lần chuyển depth-latch đầu tiên trong mỗi session có thể bị veto bởi assessment confidence cao, `scope: bounded`. Veto nghĩa là từ chối escalation — dimension và cause giữ nguyên — và tái sử dụng assessment verdict hiện có của entry thay vì dispatch assessment thứ hai. Mọi failure path (timeout, không có assessor, reply không parse được, assessment bị tắt) đều escalation mà không có veto.
+
+---
+
+## 6. Các cơ chế escalation (3 đường riêng biệt)
+
+### 1. Capability escalation trong hội thoại chính
+
+Tự chạy `/router-escalate [dimension]`, hoặc để serving model gọi `route_up` trước khi có câu trả lời mang tính thực chất. Không có argument sẽ nâng một tier; dimension tường minh yếu hơn dimension được route gần nhất sẽ bị từ chối. Ở cùng dimension, capability repick ưu tiên chất lượng sẽ loại model đang yêu cầu. Override kéo dài `escalationTtlTurns` lượt hoặc 5 phút.
+
+### 2. Automatic fallback trên main stream
+
+Delegation loop chỉ phản ứng với lỗi khách quan trước khi có câu trả lời. Không suy luận chất lượng ngữ nghĩa, không replay sau khi đã có output hiển thị.
+
+### 3. Retry subagent đồng bộ
+
+Parent-assisted respawn được mô tả trong §4. Các role bị người dùng pin sẽ không bao giờ bị override.
+
+---
+
+## 7. Luồng dữ liệu
+
+### Benchmark
+
+**Artificial Analysis** Data API (free tier, header `x-api-key`) là nguồn benchmark duy nhất. Các row chứa `evaluations` (intelligence, coding, agentic indices), `pricing` ($/1M input/output) và `performance` (tokens/giây, TTFT, TTFA).
+
+**Effort label** được parse từ phần trong ngoặc của tên model: `GPT-5.6 Luna (low)`, `Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)` → `off`. Quá trình parse fail closed (không nhận diện được → undefined).
+
+**Run variant**: AA chạy lại benchmark dưới các cấu hình khác nhau, thêm hậu tố `-<4 chữ số>` vào slug (ví dụ `gpt-5-6-luna-low-1234`). Các hậu tố này được loại bỏ bằng một variant list tường minh trong `matcher.ts`. Variant list được viết tường minh thay vì dùng quy tắc strip tổng quát vì việc strip hậu tố chung sẽ làm hỏng identity thật của model như `qwen3.7-max`.
+
+**Định dạng store**: identity là `(registryId, effort)` — phân tách bằng NUL trong storage, dùng `provider/id:effort` trong candidate key. Store v2 sẽ loại bỏ store v1 và chỉ ghi một dòng cảnh báo. Các source được chọn được refresh như một transaction duy nhất — nếu một source bị outage một phần, store trước đó được giữ lại thay vì ghi đè bằng dataset không đầy đủ.
+
+### Fuzzy matching
+
+Benchmark slug được fuzzy-match với model ID trong live registry của Pi. Có thể dùng manual override qua `/router-fix` khi matching thất bại.
+
+### Decision log
+
+Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict, shadow counterfactual. Các giá trị cause: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `model-escalation`, `capability-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
+
+### Timing log
+
+Timing từng bước theo mili-giây (opt-in qua config `debug` hoặc `PI_AUTO_ROUTER_DEBUG`): chờ registry, phân loại, auth/stream attempt theo từng candidate, tổng thời gian mỗi lượt. Được ghi dưới dạng sidecar `*.router-debug.log` theo từng session (`/tmp/pi8-debug.log` khi là session tạm thời).
+
+---
+
+## 8. Tham chiếu cấu hình
+
+Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
+
+| Key | Mặc định | Mô tả |
+|---|---|---|
+| `artificialAnalysisApiKey` | — | Được lưu bởi `/router-sync` |
+| `models` | `[]` (tất cả) | Allowlist: glob pattern `provider/id` |
+| `blacklist` | `[]` | Các exclude pattern được lưu bền vững |
+| `escalationTool` | `true` | Đăng ký tool `route_up` |
+| `escalationTtlTurns` | `4` | Thời lượng override của model `route_up` |
+| `consultRouter` | `true` | Công tắc tổng cho semantic assessment |
+| `consultModel` | — | Model assessor override, tùy chọn |
+| `assessmentMode` | `"shadow"` | `"shadow"` hoặc `"active"` |
+| `assessmentDeadlineMs` | `1500` | Ngân sách end-to-end cho assessor |
+| `assessmentMaxInputChars` | `6000` | Giới hạn input của assessor |
+| `assessorQualityRatio` | `0.5` | Competence floor của assessor |
+| `depthEscalation` | `true` | Tự động nâng khi context sâu |
+| `depthEscalationTokens` | `32768` | Ngưỡng context token |
+| `prompt` | `true` | Thông báo TUI khi đổi model |
+| `switchMargin` | `0.15` | Giới hạn cache-preservation cho incumbent |
+| `debug` | `false` | Đường dẫn timing log hoặc `true` |
+| `syntheticPrefixes` | `[]` | Các literal prefix đánh dấu synthetic message |
+| `dimensionWeights` | mặc định theo từng dimension | Override `{quality, cost, speed}` cho từng dimension |
+| `lowConfidenceThreshold` | `0.15` | Ngưỡng classifier confidence mà dưới đó áp dụng uncertainty handling |
+| `sources` | — | Lựa chọn nguồn benchmark |
+| `consultRouterAgent` | — | Alias cũ, chỉ được đọc khi `consultRouter` không tồn tại |
+
+---
+
+## 9. Ngoài phạm vi
+
+- Chấm chất lượng câu trả lời theo ngữ nghĩa hoặc tự động retry dựa trên chất lượng cảm nhận
+- Replay sau khi đã có text hiển thị hoặc tool call, hoặc thay thế child đang chạy ngay tại chỗ
+- Vòng lặp phản hồi có xác minh bằng thực thi / ghi nhớ outcome
+- Hoạt động như model gateway/proxy cho các tool không thuộc Pi
+
+---
+
+## 10. Phát triển
+
+```bash
+npm run check   # tsc --noEmit + vitest run
+```
+
+Các module cốt lõi:
+
+- `scorer.ts` — scoring thuần, `pickBest`, capability tier, effort resolution (không I/O)
+- `classifier.ts` — keyword classification thuần (không I/O)
+- `consult.ts` — dispatch assessment: streaming model call, parse, timeout
+- `delegation.ts` — fallback loop: auth, retry, circuit breaker, timeout
+- `provider.ts` — orchestrator: chờ registry, classify/escalate/consult, score, delegate; đồng thời sở hữu `buildSubagentProviderAuthFilter`, credential probe 3 giây theo từng provider
+- `index.ts` — hook wiring; chạy credential probe trước khi gán role
+- `adapters/` — nguồn benchmark data (hiện chỉ có `artificial-analysis.ts`)
+- `subagents.ts` — role injection, escalation contract (không tự thực hiện probe)
