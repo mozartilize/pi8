@@ -940,6 +940,7 @@ describe('assessment orchestration', () => {
     estimatedContextTokens?: number;
     assessorReply?: string;
     assessorNeverResponds?: boolean;
+    assessorUsageLimit?: boolean;
   }
 
   interface Session {
@@ -1071,6 +1072,18 @@ describe('assessment orchestration', () => {
             [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
           } as never;
         }
+        if (opts.assessorUsageLimit) {
+          return asStream([
+            {
+              type: 'error',
+              error: {
+                stopReason: 'error',
+                errorMessage:
+                  '429: {"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 5 days."}',
+              },
+            },
+          ]);
+        }
         return asStream([
           {
             type: 'text_delta',
@@ -1130,6 +1143,17 @@ describe('assessment orchestration', () => {
     const session = await newSession({ consultRouter: false });
     await session.routeTurn('anything at all');
     expect(session.assessmentDispatchCount).toBe(0);
+  });
+
+  it('blacklists the assessor provider when the assessor hits a usage-limit error', async () => {
+    const session = await newSession({ assessmentMode: 'shadow', consultRouter: true });
+    await session.routeTurn('investigate the flaky test', { assessorUsageLimit: true });
+
+    // The assessor (cheapest candidate above the competence floor) is
+    // alpha/cheap, so the shared cap error excludes provider 'alpha' — the
+    // same provider the serving chain would have tried next.
+    const { getBlacklistedProviders } = await import('./blacklist.js');
+    expect([...getBlacklistedProviders()]).toEqual(['alpha']);
   });
 
   it('active mode adopts a high-confidence bounded downward verdict', async () => {
@@ -1592,5 +1616,56 @@ describe('config-file blacklist — excluded from routing entirely', () => {
     const errorEvent = harness.outStream.events.find((e) => e.type === 'error');
     expect(errorEvent).toBeDefined();
     expect(errorEvent!.error?.errorMessage ?? errorEvent!.error?.message).toContain('No routable models');
+  });
+});
+
+describe('usage-limit provider blacklist — excluded from routing entirely', () => {
+  let harness: ProviderTestHarness;
+
+  beforeEach(async () => {
+    harness = await setupProviderTest({
+      dir: temp.path,
+      models: [
+        registryModel('alpha/one', { contextWindow: 200000, maxTokens: 8192, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 } }),
+        registryModel('alpha/two', { contextWindow: 200000, maxTokens: 8192, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 } }),
+        registryModel('beta/second', { contextWindow: 200000, maxTokens: 8192, cost: { input: 1, output: 5, cacheRead: 0, cacheWrite: 0 } }),
+      ],
+    });
+    // Seed the provider exclusion against the same blacklist module instance
+    // the router reads (setupProviderTest resets modules).
+    const { blacklistProvider } = await import('./blacklist.js');
+    blacklistProvider('alpha');
+  });
+
+  it('excludes every model of the blacklisted provider from the fallback chain', async () => {
+    const ctx = { messages: [{ role: 'user', content: 'hello' }] } as unknown as Context;
+    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+
+    await harness.serve(ctx);
+
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision).toBeDefined();
+    expect(decision!.chosen).toBe('beta/second');
+    expect(decision!.fallbackChain).not.toContain('alpha/one');
+    expect(decision!.fallbackChain).not.toContain('alpha/two');
+  });
+
+  it('reports "no routable models" naming the excluded provider when it is the only provider', async () => {
+    const h = await setupProviderTest({
+      dir: temp.path,
+      models: [registryModel('alpha/only', { contextWindow: 200000, maxTokens: 8192, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 } })],
+    });
+    const { blacklistProvider } = await import('./blacklist.js');
+    blacklistProvider('alpha');
+
+    const ctx = { messages: [{ role: 'user', content: 'hello' }] } as unknown as Context;
+
+    await h.serve(ctx);
+
+    const errorEvent = h.outStream.events.find((e) => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    const msg = errorEvent!.error?.errorMessage ?? errorEvent!.error?.message;
+    expect(msg).toContain('No routable models');
+    expect(msg).toContain('alpha');
   });
 });

@@ -24,6 +24,7 @@ import type {
 import { buildAssessmentPrompt, parseAssessment, type AssessmentEvidence } from './assessment-prompt.js';
 import { debugLog } from './debuglog.js';
 import { blendedPricePer1M } from './scorer.js';
+import { isUsageLimitErrorMessage } from './usage-limit.js';
 
 export interface AssessmentConfig {
   /** Mirrors `config.consultRouter`; false means fully deterministic routing. */
@@ -49,6 +50,10 @@ export type AssessmentAttempt =
        *  failed attempt that produced NO output is the structural dud signal
        *  the caller strikes; a partial-then-failed attempt is not. */
       producedOutput?: boolean;
+      /** Provider of the assessor when its own failure was a usage-limit
+       *  error. The cap is shared with the serving path, so the caller
+       *  blacklists the whole provider. */
+      usageLimitProvider?: string;
     };
 
 function parseProviderId(modelRef: string): { provider: string; id: string } | undefined {
@@ -190,6 +195,20 @@ function costFor(
   return (usage.input / 1_000_000) * inputPerM + (usage.output / 1_000_000) * outputPerM;
 }
 
+/**
+ * Provider of the assessor when its own failure message is a usage-limit
+ * signal. Returns undefined when the message carries no such signal or no
+ * registry id is available, so callers can attach it conditionally.
+ */
+function usageLimitProviderOf(
+  message: string | undefined,
+  registryId: string | undefined,
+): string | undefined {
+  if (!registryId || !isUsageLimitErrorMessage(message)) return undefined;
+  const slash = registryId.indexOf('/');
+  return slash > 0 ? registryId.slice(0, slash) : registryId;
+}
+
 export async function runAssessment(
   config: AssessmentConfig,
   registry: ExtensionContext['modelRegistry'] | undefined,
@@ -205,6 +224,8 @@ export async function runAssessment(
   const expiry = setTimeout(() => controller.abort(), config.deadlineMs);
   let iterator: AsyncIterator<{ type: string }> | undefined;
   let usage = { input: 0, output: 0, cacheRead: undefined as number | undefined };
+  let selectedRegistryId: string | undefined;
+  let errorMessage: string | undefined;
 
   try {
     const selected = selectAssessor(config, registry, candidates, strikes);
@@ -212,6 +233,7 @@ export async function runAssessment(
       debugLog('assessment.skip', { reason: 'no-assessor' });
       return { ok: false, fallbackReason: 'no-assessor', costUsd: 0, ms: Date.now() - start };
     }
+    selectedRegistryId = selected.registryId;
 
     const auth = await resolveAuth(registry, selected.model, deadlineAt);
     if (!auth) {
@@ -256,6 +278,10 @@ export async function runAssessment(
           expired = true;
         } else {
           streamError = true;
+          // Keep the first signal: a usage-limit error event that arrived
+          // before a dropped connection must not be overwritten by the
+          // transport error that followed it.
+          if (!errorMessage) errorMessage = err instanceof Error ? err.message : String(err);
         }
         break;
       }
@@ -263,6 +289,19 @@ export async function runAssessment(
       const event = step.value;
       const eventUsage = usageFromEvent(event);
       if (eventUsage) usage = { ...usage, ...eventUsage };
+      if (event.type === 'error' && !errorMessage) {
+        // A provider error event carries the usage-limit signature (e.g. 429
+        // GoUsageLimitError) the caller needs to exclude the provider. Only a
+        // genuine `stopReason: 'error'` counts — same gate as the serving path
+        // (delegation.ts), so output-limit exhaustion (`stopReason: 'length'`)
+        // can never blacklist a provider. `errorMessage` is the structured
+        // field and is preferred over the loose `message`, mirroring
+        // delegation's `errorMessageObj?.errorMessage ?? message`.
+        const err = (event as unknown as {
+          error?: { stopReason?: string; errorMessage?: string; message?: string };
+        }).error;
+        if (err?.stopReason === 'error') errorMessage = err?.errorMessage ?? err?.message;
+      }
       if (
         event.type === 'text_delta' &&
         typeof (event as unknown as { delta?: string }).delta === 'string'
@@ -280,12 +319,14 @@ export async function runAssessment(
       // A cancelled or unparseable attempt still cost money; report the spend
       // so the routing tax stays visible even when the verdict is unusable.
       const reason: AssessmentFallbackReason = expired ? 'expiry' : streamError ? 'error' : 'parse';
+      const usageLimitProvider = usageLimitProviderOf(errorMessage, selectedRegistryId);
       debugLog('assessment.skip', {
         reason,
         model: selected.registryId,
         ms,
         costUsd,
         textChars: fullText.length,
+        ...(usageLimitProvider ? { usageLimitProvider } : {}),
       });
       return {
         ok: false,
@@ -294,6 +335,7 @@ export async function runAssessment(
         ms,
         model: selected.registryId,
         producedOutput: fullText.length > 0,
+        ...(usageLimitProvider ? { usageLimitProvider } : {}),
       };
     }
 
@@ -309,11 +351,20 @@ export async function runAssessment(
     };
   } catch (err) {
     const ms = Date.now() - start;
+    const message = err instanceof Error ? err.message : String(err);
+    const usageLimitProvider = usageLimitProviderOf(message, selectedRegistryId);
     debugLog('assessment.error', {
-      message: err instanceof Error ? err.message : String(err),
+      message,
       ms,
+      ...(usageLimitProvider ? { usageLimitProvider } : {}),
     });
-    return { ok: false, fallbackReason: 'error', costUsd: 0, ms };
+    return {
+      ok: false,
+      fallbackReason: 'error',
+      costUsd: 0,
+      ms,
+      ...(usageLimitProvider ? { usageLimitProvider } : {}),
+    };
   } finally {
     clearTimeout(expiry);
     controller.abort();

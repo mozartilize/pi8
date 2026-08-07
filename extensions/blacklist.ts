@@ -5,12 +5,19 @@
  *    the delegation loop;
  *  - `provider/id` glob patterns the user excluded for this session only.
  *
+ * Providers are excluded separately: a provider that returned a usage-limit
+ * error is unusable as a whole, because the quota/limit behind it is shared by
+ * every model it serves.
+ *
  * Stored in its own tiny module so both the provider orchestrator and the
  * delegation fallback loop can reference it without a circular import.
  */
 
 /** Models that failed before producing content during this Pi session. */
 const sessionBlacklistedModels = new Set<string>();
+
+/** Providers excluded after a usage-limit error during this Pi session. */
+const sessionBlacklistedProviders = new Set<string>();
 
 /** User-supplied exclusion globs scoped to this session; insertion-ordered. */
 const sessionBlacklistPatterns: string[] = [];
@@ -31,6 +38,22 @@ export const clearBlacklistedModels = (): void => {
 };
 
 export const getBlacklistedModels = (): ReadonlySet<string> => sessionBlacklistedModels;
+
+/** Exclude every model of a provider for the rest of the session. */
+export const blacklistProvider = (provider: string): void => {
+  if (provider) sessionBlacklistedProviders.add(provider);
+};
+
+/** Lift a session provider exclusion (e.g. after the account was topped up). */
+export const removeBlacklistedProvider = (provider: string): boolean =>
+  sessionBlacklistedProviders.delete(provider);
+
+/** Wipe the runtime provider exclusions (test seam / session reset). */
+export const clearBlacklistedProviders = (): void => {
+  sessionBlacklistedProviders.clear();
+};
+
+export const getBlacklistedProviders = (): ReadonlySet<string> => sessionBlacklistedProviders;
 
 /** Add exclusion globs for this session. Returns the ones that were new. */
 export const addSessionBlacklistPatterns = (patterns: readonly string[]): string[] => {
@@ -64,4 +87,5 @@ export const getSessionBlacklistPatterns = (): readonly string[] => [...sessionB
 export const clearSessionBlacklist = (): void => {
   sessionBlacklistPatterns.length = 0;
   sessionBlacklistedModels.clear();
+  sessionBlacklistedProviders.clear();
 };

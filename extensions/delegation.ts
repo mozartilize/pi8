@@ -22,7 +22,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { ROUTER_PROVIDER_ID } from './types.js';
 import type { Candidate, RoutingDecision } from './types.js';
-import { blacklistModel } from './blacklist.js';
+import { blacklistModel, blacklistProvider } from './blacklist.js';
 import {
   addAccumulatedCost,
   getAccumulatedCost,
@@ -37,6 +37,7 @@ import { debugLog, startTimer } from './debuglog.js';
 import { appendDecision } from './decisionlog.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import { clampEffortToFloor, levelFrom, parseCandidateKey, resolveThinkingLevel } from './scorer.js';
+import { isUsageLimitErrorMessage } from './usage-limit.js';
 
 const AUTH_RESOLVE_TIMEOUT_MS = 5000;
 const FIRST_EVENT_TIMEOUT_MS = 30000;
@@ -487,6 +488,16 @@ export async function runDelegationLoop(
         // can safely retry in place. pi's own classifier tells transient
         // (overload/5xx/rate-limit/network) apart from everything else.
         const isProviderError = errorMessageObj?.stopReason === 'error';
+        // A usage-limit/quota error is account-wide: every model on this
+        // provider will fail the same way, so exclude the whole provider now
+        // (session-scoped) and skip its remaining candidates this turn. Fail
+        // fast — a retry cannot succeed against an exhausted cap.
+        if (isProviderError && isUsageLimitErrorMessage(errorMessageObj?.errorMessage ?? message)) {
+          blacklistProvider(provider);
+          deadProviders.add(provider);
+          debugLog('attempt.usage-limit', { provider, candidate: candidateId });
+          break;
+        }
         candidateTransient =
           isProviderError && isRetryableAssistantError(errorMessageObj as unknown as AssistantMessage);
         const maxRetries = candidateTransient

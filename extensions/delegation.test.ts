@@ -727,3 +727,101 @@ describe('runDelegationLoop fallback policy', () => {
     expect(h.attempts).toEqual([]);
   });
 });
+
+describe('runDelegationLoop usage-limit provider blacklist', () => {
+  it('blacklists the whole provider on a usage-limit error, skips its siblings, and does not retry', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/one', 'alpha/two', 'beta/answer'],
+      scripts: {
+        'alpha/one': [
+          [
+            {
+              type: 'error',
+              error: {
+                stopReason: 'error',
+                errorMessage:
+                  '429: {"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 5 days."}',
+              },
+            },
+          ],
+        ],
+        'alpha/two': [
+          [{ type: 'text_delta', delta: 'x' }, { type: 'done', message: { stopReason: 'stop' } }],
+        ],
+        'beta/answer': [
+          [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }],
+        ],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.lastServed?.registryId).toBe('beta/answer');
+    // Fail-fast: no same-model retry, and the sibling on the same provider is skipped.
+    expect(h.attempts).toEqual(['alpha/one', 'beta/answer']);
+    expect(h.blacklistedProviders).toEqual(['alpha']);
+    expect(h.blacklist).toContain('alpha/one');
+  });
+
+  it('blacklists the provider on a plain 429 rate-limit error', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/one', 'beta/answer'],
+      scripts: {
+        'alpha/one': [
+          [
+            {
+              type: 'error',
+              error: { stopReason: 'error', errorMessage: '429: too many requests' },
+            },
+          ],
+        ],
+        'beta/answer': [
+          [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }],
+        ],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.lastServed?.registryId).toBe('beta/answer');
+    expect(h.attempts).toEqual(['alpha/one', 'beta/answer']);
+    expect(h.blacklistedProviders).toEqual(['alpha']);
+  });
+
+  it('does not blacklist the provider for a transient overload error', async () => {
+    setDelegationTimeouts({ retryBackoffMs: 0 });
+    const h = createDelegationHarness({
+      chain: ['alpha/one', 'beta/answer'],
+      scripts: {
+        'alpha/one': [
+          [{ type: 'error', error: { stopReason: 'error', errorMessage: '503 service unavailable' } }],
+          [{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop' } }],
+        ],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.success).toBe(true);
+    expect(h.blacklistedProviders).toEqual([]);
+    expect(h.blacklist).toEqual([]);
+  });
+
+  it('blacklists only the model for a non-usage provider error', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/one', 'beta/answer'],
+      scripts: {
+        'alpha/one': [[{ type: 'error', error: { errorMessage: '421 Misdirected Request' } }]],
+        'beta/answer': [
+          [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }],
+        ],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.lastServed?.registryId).toBe('beta/answer');
+    expect(h.blacklistedProviders).toEqual([]);
+    expect(h.blacklist).toEqual(['alpha/one']);
+  });
+});

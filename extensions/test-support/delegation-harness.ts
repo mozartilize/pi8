@@ -13,7 +13,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { runDelegationLoop, type DelegationResult } from '../delegation.js';
 import { resetRouterSession } from '../router-session-state.js';
-import { clearBlacklistedModels, getBlacklistedModels } from '../blacklist.js';
+import { clearBlacklistedModels, clearBlacklistedProviders, getBlacklistedModels, getBlacklistedProviders } from '../blacklist.js';
 import { makeTerminalErrorEvent } from '../error-event.js';
 import { routingDecision, registryModel } from './router-fixtures.js';
 
@@ -120,6 +120,8 @@ export interface DelegationHarness {
   /** Reasoning option passed to `streamSimple`, per call (undefined = omitted). */
   reasoningOptions: (string | undefined)[];
   blacklist: string[];
+  /** Providers excluded for usage limits during this run. */
+  blacklistedProviders: string[];
   registry: ExtensionContext['modelRegistry'];
   /** Resolve once at least `n` streamSimple attempts have been recorded. */
   waitForAttempts(n: number): Promise<void>;
@@ -196,6 +198,9 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     get blacklist(): string[] {
       return [...getBlacklistedModels()].sort();
     },
+    get blacklistedProviders(): string[] {
+      return [...getBlacklistedProviders()].sort();
+    },
     waitForAttempts(n: number): Promise<void> {
       return new Promise((resolve) => {
         const check = (): void => {
@@ -208,6 +213,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     async run(): Promise<DelegationResult> {
       resetRouterSession();
       clearBlacklistedModels();
+      clearBlacklistedProviders();
       attempts.length = 0;
       output.length = 0;
       recordingStream.ended = false;

@@ -455,6 +455,100 @@ describe('runAssessment', () => {
     expect(result.assessment.ms).toBeGreaterThanOrEqual(0);
   });
 
+  it('reports the assessor provider when the stream emits a usage-limit error event', async () => {
+    const stream: AsyncIterable<{ type: string }> = (async function* () {
+      yield {
+        type: 'error',
+        error: {
+          stopReason: 'error',
+          errorMessage:
+            '429: {"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 5 days."}',
+        },
+      };
+    })();
+
+    const result = await runAssessmentWithStream(stream);
+
+    expect(result).toMatchObject({
+      ok: false,
+      fallbackReason: 'parse',
+      model: 'test/a',
+      producedOutput: false,
+      usageLimitProvider: 'test',
+    });
+  });
+
+  it('reports the assessor provider when the stream throws a usage-limit error', async () => {
+    const throwing: AsyncIterable<{ type: string }> = {
+      [Symbol.asyncIterator]: () => ({
+        next: (): Promise<IteratorResult<{ type: string }>> =>
+          Promise.reject(new Error('429: too many requests')),
+      }),
+    };
+
+    const result = await runAssessmentWithStream(throwing);
+
+    expect(result).toMatchObject({
+      ok: false,
+      fallbackReason: 'error',
+      model: 'test/a',
+      producedOutput: false,
+      usageLimitProvider: 'test',
+    });
+  });
+
+  it('does not attach usageLimitProvider for a non-usage assessor error', async () => {
+    const stream: AsyncIterable<{ type: string }> = (async function* () {
+      yield { type: 'error', error: { stopReason: 'error', errorMessage: '421 Misdirected Request' } };
+    })();
+
+    const result = await runAssessmentWithStream(stream);
+
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'parse', model: 'test/a' });
+    expect('usageLimitProvider' in result).toBe(false);
+  });
+
+  it('attaches usageLimitProvider after partial text even when the provider drops the connection', async () => {
+    // Partial narration, then a usage-limit error event, then a thrown
+    // transport error on the next next(): the usage-limit signal must survive
+    // the overwrite-by-throw and still blacklist the provider.
+    const stream: AsyncIterable<{ type: string }> = (async function* () {
+      yield { type: 'text_delta', delta: 'Let me look at this...' };
+      yield {
+        type: 'error',
+        error: {
+          stopReason: 'error',
+          errorMessage: '429: {"type":"GoUsageLimitError","message":"Weekly usage limit reached."}',
+        },
+      };
+      throw new Error('read ECONNRESET');
+    })();
+
+    const result = await runAssessmentWithStream(stream);
+
+    expect(result).toMatchObject({
+      ok: false,
+      fallbackReason: 'error',
+      model: 'test/a',
+      producedOutput: true,
+      usageLimitProvider: 'test',
+    });
+  });
+
+  it('does not treat an error event with stopReason length as a usage-limit signal', async () => {
+    const stream: AsyncIterable<{ type: string }> = (async function* () {
+      yield {
+        type: 'error',
+        error: { stopReason: 'length', errorMessage: 'max tokens reached for this request' },
+      };
+    })();
+
+    const result = await runAssessmentWithStream(stream);
+
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'parse', model: 'test/a' });
+    expect('usageLimitProvider' in result).toBe(false);
+  });
+
   it('extracts usage events and computes the cost against the candidate price', async () => {
     const result = await runAssessmentWithStream(
       asStreamWithUsage(

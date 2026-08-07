@@ -17,6 +17,7 @@ import {
   getSessionBlacklistPatterns,
   removeSessionBlacklistPatterns,
   removeBlacklistedModel,
+  removeBlacklistedProvider,
 } from './provider.js';
 import { formatDecisionDetail, formatAssessmentSpend } from './ui.js';
 import {
@@ -154,6 +155,13 @@ export function registerCommands(pi: ExtensionAPI): void {
           lines.push(
             `Runtime failures (this session):\n${sessionFailed.map((id) => `  ${id}`).join('\n')}`,
           );
+        const failedProviders = [...getProviderState().blacklistedProviders];
+        if (failedProviders.length > 0)
+          lines.push(
+            `Providers excluded for usage limits (this session):\n${failedProviders
+              .map((p) => `  ${p}`)
+              .join('\n')}`,
+          );
         lines.push(
           '',
           'add <patterns…>         — exclude matching models for this session',
@@ -227,6 +235,11 @@ export function registerCommands(pi: ExtensionAPI): void {
           const filter = buildModelFilter(patterns);
           for (const id of getProviderState().blacklistedModels) {
             if (filter(id)) removeBlacklistedModel(id);
+          }
+          // A provider-wide pattern (e.g. `opencode-go/*`) also lifts a
+          // usage-limit provider exclusion; an exact model pattern does not.
+          for (const provider of getProviderState().blacklistedProviders) {
+            if (filter(`${provider}/x`)) removeBlacklistedProvider(provider);
           }
           ctx.ui.notify(
             removed.length > 0

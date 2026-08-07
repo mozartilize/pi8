@@ -27,6 +27,7 @@ vi.mock('./provider.js', () => ({
   addSessionBlacklistPatterns: vi.fn(() => []),
   clearSessionBlacklist: vi.fn(() => mockBlacklist.clear()),
   getBlacklistedModels: vi.fn(() => new Set(mockBlacklist)),
+  getBlacklistedProviders: vi.fn(() => new Set()),
   getSessionBlacklistPatterns: vi.fn(() => []),
   blacklistModel: vi.fn((model: string) => mockBlacklist.add(model)),
 }));

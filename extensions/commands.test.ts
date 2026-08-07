@@ -12,7 +12,7 @@ import { join } from 'node:path';
 
 import { registerCommands } from './commands.js';
 import { loadConfig } from './config.js';
-import { blacklistModel, clearBlacklistedModels, getProviderState } from './provider.js';
+import { blacklistModel, blacklistProvider, clearBlacklistedModels, getProviderState } from './provider.js';
 import { clearSessionBlacklist, getSessionBlacklistPatterns } from './blacklist.js';
 import { appendDecision, appendShadowAssessment, appendSubagentGapSignal } from './decisionlog.js';
 import { saveStore, emptyStore } from './store.js';
@@ -127,6 +127,32 @@ describe('/router-blacklist add|remove — session by default', () => {
     expect(getSessionBlacklistPatterns()).toEqual(['opencode-go/hy3']);
     expect(getProviderState().blacklistedModels).toEqual(['opencode-go/deepseek-v4-pro']);
     expect(loadConfig().blacklist ?? []).toEqual([]);
+  });
+
+  it('remove with a provider-wide pattern lifts a usage-limit provider exclusion', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx } = fakeCtx();
+
+    blacklistProvider('opencode-go');
+    await handlers.get('router-blacklist')!('add opencode-go/*', ctx);
+
+    await handlers.get('router-blacklist')!('remove opencode-go/*', ctx);
+
+    expect(getProviderState().blacklistedProviders).toEqual([]);
+  });
+
+  it('remove with an exact model pattern does not lift a provider exclusion', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx } = fakeCtx();
+
+    blacklistProvider('opencode-go');
+    await handlers.get('router-blacklist')!('add opencode-go/deepseek-v4-pro', ctx);
+
+    await handlers.get('router-blacklist')!('remove opencode-go/deepseek-v4-pro', ctx);
+
+    expect(getProviderState().blacklistedProviders).toEqual(['opencode-go']);
   });
 });
 

@@ -18,6 +18,7 @@ import {
   clearSessionBlacklist,
   addSessionBlacklistPatterns,
   getBlacklistedModels,
+  getBlacklistedProviders,
   getSessionBlacklistPatterns,
   blacklistModel,
 } from './provider.js';
@@ -88,10 +89,16 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     const isModelAllowed = loadModelFilter();
     const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
     const blacklistedSet = getBlacklistedModels();
+    const blacklistedProviders = getBlacklistedProviders();
     const allowedModels = models.filter((m) => {
       if (!m.provider || m.provider === 'router') return false;
       const registryId = `${m.provider}/${m.id}`;
-      return isModelAllowed(registryId) && !isBlacklisted(registryId) && !blacklistedSet.has(registryId);
+      return (
+        isModelAllowed(registryId) &&
+        !isBlacklisted(registryId) &&
+        !blacklistedSet.has(registryId) &&
+        !blacklistedProviders.has(m.provider)
+      );
     });
     if (allowedModels.length === 0) return;
     // Gate by credentials: pi-subagents consumes the injected model verbatim
@@ -231,15 +238,25 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     try {
       // Resolve each role's model against the LIVE session blacklist: a model
       // assigned at session_start may have since failed and been blacklisted
-      // by a main-session turn, and must not be injected into a spawn.
+      // by a main-session turn, and must not be injected into a spawn. A
+      // usage-limit-blacklisted provider excludes every model on it the same
+      // way.
       const blacklisted = getBlacklistedModels();
-      const live = routingState.resolveLive((id) => blacklisted.has(id));
+      const blacklistedProviders = getBlacklistedProviders();
+      const isExcluded = (id: string): boolean => {
+        const slash = id.indexOf('/');
+        return (
+          blacklisted.has(id) ||
+          (slash > 0 ? blacklistedProviders.has(id.slice(0, slash)) : false)
+        );
+      };
+      const live = routingState.resolveLive(isExcluded);
       subagentEscalationHooks.toolCall(
         event.toolCallId,
         event.input,
         live.roleModels,
         live.roleFallbacks,
-        (id) => blacklisted.has(id),
+        isExcluded,
       );
     } catch {
       // Never block or break a subagent spawn because of routing.

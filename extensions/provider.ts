@@ -77,17 +77,23 @@ import { makeTerminalErrorEvent } from './error-event.js';
 import { resolveRoutingDecision, wouldDepthEscalate, applyEscalationPrecedence } from './routing-policy.js';
 import {
   getBlacklistedModels,
+  getBlacklistedProviders,
+  blacklistProvider,
   getSessionBlacklistPatterns,
 } from './blacklist.js';
 
 export {
   addSessionBlacklistPatterns,
   blacklistModel,
+  blacklistProvider,
   clearBlacklistedModels,
+  clearBlacklistedProviders,
   clearSessionBlacklist,
   getBlacklistedModels,
+  getBlacklistedProviders,
   getSessionBlacklistPatterns,
   removeBlacklistedModel,
+  removeBlacklistedProvider,
   removeSessionBlacklistPatterns,
 } from './blacklist.js';
 
@@ -180,6 +186,7 @@ export const getProviderState = () => ({
   lastServed: getLastServed(),
   accumulatedCost: getAccumulatedCost(),
   blacklistedModels: [...getBlacklistedModels()].sort(),
+  blacklistedProviders: [...getBlacklistedProviders()].sort(),
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -270,6 +277,9 @@ function recordAssessorOutcome(attempt: Awaited<ReturnType<typeof runAssessment>
     clearAssessorStrikes(attempt.assessment.model);
     return;
   }
+  // The assessor hit the same shared usage cap the serving path would:
+  // exclude the whole provider so later turns fail fast there too.
+  if (attempt.usageLimitProvider) blacklistProvider(attempt.usageLimitProvider);
   if (
     attempt.model &&
     attempt.producedOutput === false &&
@@ -484,11 +494,13 @@ export function registerAutoRouterProvider(
 
             const isModelAllowed = loadModelFilter();
             const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
+            const blacklistedProviders = getBlacklistedProviders();
             const allCandidates = (regModels as unknown as RegistryModelInfo[])
               .filter(
                 (rm) =>
                   rm.provider &&
                   rm.provider !== ROUTER_PROVIDER_ID &&
+                  !blacklistedProviders.has(rm.provider) &&
                   isModelAllowed(`${rm.provider}/${rm.id}`) &&
                   !isBlacklisted(`${rm.provider}/${rm.id}`),
               )
@@ -499,10 +511,13 @@ export function registerAutoRouterProvider(
             const routableCandidates = candidates.length > 0 ? candidates : [];
 
             if (routableCandidates.length === 0) {
+              const excludedProviders = getBlacklistedProviders();
               stream.push(
                 makeTerminalErrorEvent(
                   'error',
-                  'No routable models: the `models` allowlist in `~/.pi/agent/pi8/config.json` matched none of the available models.',
+                  excludedProviders.size > 0
+                    ? `No routable models: providers excluded for usage limits this session (${[...excludedProviders].sort().join(', ')}).`
+                    : 'No routable models: the `models` allowlist in `~/.pi/agent/pi8/config.json` matched none of the available models.',
                 ),
               );
               stream.end();

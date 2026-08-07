@@ -118,6 +118,7 @@ export interface ProviderStateSnapshot {
   lastServed: ServedInfo | undefined;
   accumulatedCost: number;
   blacklistedModels: string[];
+  blacklistedProviders: string[];
 }
 
 export interface ProviderHarnessOptions {

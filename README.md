@@ -59,7 +59,7 @@ Uncertainty always routes up: missing data, ambiguous prompts, and low confidenc
 | `/router-models` | Show allowlist and matching models |
 | `/router-agents` | Show which model each subagent role resolves to |
 | `/router-fix <slug> <id>` | Override a benchmark-to-registry mapping |
-| `/router-blacklist [add/remove/clear]` | Exclude models |
+| `/router-blacklist [add/remove/clear]` | Exclude models; `remove <provider>/*` also lifts a usage-limit provider exclusion |
 
 ## Configuration
 
@@ -98,6 +98,7 @@ Full configuration reference in [`ARCHITECTURE.md`](ARCHITECTURE.md#8-configurat
 - **Benchmark coverage drives quality.** Models with no matched benchmark row route on registry metadata only (price, context window) — no quality signal. Coverage depends on what Artificial Analysis publishes and how well slugs fuzzy-match your registry.
 - **Matching can need manual overrides.** A benchmark slug that doesn't match a registry id needs a `/router-fix <slug> <id>` mapping; until then that model has no quality data.
 - **Provider availability is only known at stream time.** An authenticated provider can still 421/hang/error on a specific model. The router detects this and walks the fallback chain, but the first attempt's latency is already spent.
+- **A usage-limit error excludes the whole provider for the session.** When a model fails with a quota/usage-limit error (OpenCode Go `GoUsageLimitError`, OpenAI `insufficient_quota`, billing/credit exhaustion, plain 429/rate-limit, …) the entire provider is blacklisted — every model on it shares the same exhausted cap, so retrying siblings wastes time. The provider is skipped for the rest of the session (`/router-blacklist remove <provider>/*` lifts it after a top-up). Model-specific output-limit exhaustion stays model-scoped.
 - **Fallback is objective-only, and one-way after output.** There is no answer-quality grading — only pre-answer failure signals trigger fallback. Once text or a tool call has streamed, the router never replays, so a poor-but-complete answer stands.
 - **`active` assessment adds cost and egress.** In `active` mode a bounded prompt (recent conversation, tool/skill names — never arguments or file contents) is sent to an authenticated assessor provider, adding spend. `shadow` (default) dispatches nothing that affects routing.
 
