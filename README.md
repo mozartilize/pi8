@@ -75,7 +75,8 @@ Uncertainty always routes up: missing data, ambiguous prompts, and low confidenc
   "switchMargin": 0.15,                 // cache-preservation bonus for incumbent
   "debug": false,                        // enable timing log
   "embeddingClassifier": false,          // enable multilingual E5-small classifier
-  "embeddingDeadlineMs": 5000            // max ms for model load + inference
+  "embeddingDeadlineMs": 5000,           // max ms for model load + inference
+  "embeddingMinConfidence": 0.15         // min top-two margin before blending
 }
 ```
 
@@ -83,8 +84,9 @@ Uncertainty always routes up: missing data, ambiguous prompts, and low confidenc
 - `assessmentMode`: `"shadow"` runs the assessment in the background without affecting routing. `"active"` lets it adjust the task dimension under strict safety caps.
 - `switchMargin`: how strongly the router prefers keeping the current model to preserve prompt cache. Set to `0` to disable.
 - `debug`: `true` or a file path enables per-turn millisecond timing logs.
-- `embeddingClassifier`: when `true`, a local E5-small embedding model classifies prompts where the keyword classifier has no evidence — non-English languages, ambiguous English. Blends up only; never overrides keyword downward. Requires `onnxruntime-node` and `@xenova/transformers` to be installed.
+- `embeddingClassifier`: when `true`, a local E5-small embedding model classifies prompts where the keyword classifier has no evidence — non-English languages, ambiguous English. Blends up only; never overrides keyword downward. Requires the **optional** `onnxruntime-node` and `@xenova/transformers` packages to be installed (they are not hard dependencies — without them the layer stays disabled). `/router-sync embedding` reports whether the runtime is importable alongside the model download.
 - `embeddingDeadlineMs`: maximum milliseconds the embedding model load + inference may take (default 5000). On expiry the keyword result is used unchanged.
+- `embeddingMinConfidence`: minimum confidence (the margin between the top two prototype scores) for the embedding verdict to influence routing (default 0.15). Below it the embedding abstains and the keyword result stands — a low-confidence embedding never moves routing. Download integrity: provisioned files are verified against `embedding-manifest.json` (sha256) on every `/router-sync embedding`, so a corrupt model file is re-downloaded rather than silently used.
 
 Full configuration reference in [`ARCHITECTURE.md`](ARCHITECTURE.md#8-configuration-reference).
 

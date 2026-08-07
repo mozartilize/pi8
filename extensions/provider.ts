@@ -25,6 +25,7 @@ import { ROUTER_PROVIDER_ID, AUTO_MODEL_ID } from './types.js';
 import { loadStore, activeModels } from './store.js';
 import { classify, estimateTokenCount } from './classifier.js';
 import { DIMENSION_STRENGTH } from './classifier.js';
+import { DEFAULT_EMBEDDING_MIN_CONFIDENCE } from './constants.js';
 import { embedAndClassify } from './embedding.js';
 import { getTurnClassificationInput, buildRoleLabelledContext } from './continuation.js';
 import { loadModelFilter, buildExcludeFilter } from './allowlist.js';
@@ -455,16 +456,24 @@ export function registerAutoRouterProvider(
                   deadlineMs: config.embeddingDeadlineMs,
                 });
                 if (embeddingResult) {
-                  const keywordStrength = DIMENSION_STRENGTH[baseDimension];
-                  const embeddingStrength = DIMENSION_STRENGTH[embeddingResult.dimension];
-                  // Blend up only: embedding can raise but never lower the
-                  // keyword dimension (R3: uncertainty routes up).
-                  if (embeddingStrength > keywordStrength) {
-                    baseDimension = embeddingResult.dimension;
-                    baseCause = 'embedding-classify';
+                  // Abstain below the confidence floor: a low-confidence
+                  // embedding verdict must not move routing at all (R3 —
+                  // abstention never routes cheaper; the keyword result
+                  // stands). Only a confident verdict may apply the blend.
+                  const minConfidence =
+                    config.embeddingMinConfidence ?? DEFAULT_EMBEDDING_MIN_CONFIDENCE;
+                  if (embeddingResult.confidence >= minConfidence) {
+                    const keywordStrength = DIMENSION_STRENGTH[baseDimension];
+                    const embeddingStrength = DIMENSION_STRENGTH[embeddingResult.dimension];
+                    // Blend up only: embedding can raise but never lower the
+                    // keyword dimension (R3: uncertainty routes up).
+                    if (embeddingStrength > keywordStrength) {
+                      baseDimension = embeddingResult.dimension;
+                      baseCause = 'embedding-classify';
+                    }
+                    // If embedding agrees with keyword or is weaker, keep keyword.
+                    // This covers: keyword=gather, embedding=lightweight → keep gather.
                   }
-                  // If embedding agrees with keyword or is weaker, keep keyword.
-                  // This covers: keyword=gather, embedding=lightweight → keep gather.
                 }
               } catch {
                 // Embedding inference failed — degrade to keyword result (R2).

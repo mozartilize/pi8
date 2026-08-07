@@ -35,6 +35,17 @@ import {
   type ResolvedRequestAuth,
 } from './test-support/provider-harness.js';
 import type { BenchModel } from './types.js';
+import type { Dimension } from './types.js';
+import type { EmbeddingResult } from './embedding.js';
+
+// Embedding engine mock: provider.ts pulls `embedAndClassify` from
+// ./embedding.js. Only the embedding-blend describe below drives it; the
+// blend only fires when config.embeddingClassifier is true, which the other
+// tests never set, so a default undefined (no verdict) is a no-op for them.
+const embeddingMock = vi.hoisted(() => ({ embedAndClassify: vi.fn() }));
+vi.mock('./embedding.js', () => ({
+  embedAndClassify: embeddingMock.embedAndClassify,
+}));
 
 describe('candidate expansion — model × measured effort', () => {
   const benchRow = (effort: string, quality: number): BenchModel => ({
@@ -1667,5 +1678,93 @@ describe('usage-limit provider blacklist — excluded from routing entirely', ()
     const msg = errorEvent!.error?.errorMessage ?? errorEvent!.error?.message;
     expect(msg).toContain('No routable models');
     expect(msg).toContain('alpha');
+  });
+});
+
+// ─── Embedding classifier blend (confidence floor) ─────────────────────
+
+const SEEDED_BENCHMARKS = {
+  version: 2,
+  syncedAt: Date.now(),
+  aliases: {},
+  models: [
+    { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+    { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90 } },
+  ],
+};
+
+/** Non-English prompt: keyword classifier has no categorical evidence → gather. */
+const viContext = (suffix: string) =>
+  ({ messages: [{ role: 'user', content: `viết code giúp tôi ${suffix}` }] }) as unknown as Context;
+
+function embeddingResult(overrides: { dimension: Dimension; confidence: number }): EmbeddingResult {
+  return {
+    dimension: overrides.dimension,
+    confidence: overrides.confidence,
+    scores: { lightweight: 0, gather: 0.2, plan: 0.1, implement: 0.9, review: 0.3 },
+  };
+}
+
+function enableEmbeddingClassifier(extra: Record<string, unknown> = {}): void {
+  writeFileSync(
+    join(temp.path, 'config.json'),
+    JSON.stringify({ consultRouter: false, embeddingClassifier: true, ...extra }),
+    'utf8',
+  );
+  writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify(SEEDED_BENCHMARKS), 'utf8');
+}
+
+describe('embedding classifier blend', () => {
+  let harness: ProviderTestHarness;
+
+  beforeEach(async () => {
+    embeddingMock.embedAndClassify.mockReset();
+    embeddingMock.embedAndClassify.mockResolvedValue(undefined);
+    harness = await setupProviderTest({ dir: temp.path });
+  });
+
+  it('abstains on a low-confidence embedding — keyword gather unchanged', async () => {
+    enableEmbeddingClassifier(); // default embeddingMinConfidence 0.15
+    embeddingMock.embedAndClassify.mockResolvedValue(
+      embeddingResult({ dimension: 'implement', confidence: 0.1 }),
+    );
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(viContext('low'));
+
+    const decision = harness.getProviderState().lastDecision;
+    // Confidence 0.1 < floor 0.15 → abstain: keyword's gather stands, cause stays heuristic.
+    expect(decision?.dimension).toBe('gather');
+    expect(decision?.cause).toBe('heuristic');
+    expect(embeddingMock.embedAndClassify).toHaveBeenCalledTimes(1);
+  });
+
+  it('promotes on a high-confidence stronger embedding with cause embedding-classify', async () => {
+    enableEmbeddingClassifier();
+    embeddingMock.embedAndClassify.mockResolvedValue(
+      embeddingResult({ dimension: 'implement', confidence: 0.8 }),
+    );
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(viContext('high'));
+
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.dimension).toBe('implement');
+    expect(decision?.cause).toBe('embedding-classify');
+  });
+
+  it('never lets a below-floor embedding lower the keyword dimension (R3)', async () => {
+    // Confident but WEAKER than keyword gather — must still keep gather.
+    enableEmbeddingClassifier();
+    embeddingMock.embedAndClassify.mockResolvedValue(
+      embeddingResult({ dimension: 'lightweight', confidence: 0.9 }),
+    );
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(viContext('weak'));
+
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.dimension).toBe('gather');
+    expect(decision?.cause).toBe('heuristic');
   });
 });

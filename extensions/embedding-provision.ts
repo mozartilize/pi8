@@ -1,20 +1,30 @@
 /**
  * Embedding model provisioning — downloads E5-small ONNX model + tokenizer
- * into the store directory on demand. Idempotent: skips when files exist
- * with the expected size. Atomic: writes to temp dir then renames.
+ * into the store directory on demand. Idempotent: skips files whose size
+ * AND sha256 match the shipped manifest. Atomic: writes to temp dir then
+ * renames. Integrity: every downloaded and every pre-existing file is
+ * verified against `embedding-manifest.json` (sha256), so a corrupt file
+ * cannot masquerade as provisioned.
  *
  * Wired into `syncBenchmarks` as a sub-step when `config.embeddingClassifier`
  * is true, and also available standalone via `/router-sync embedding`.
+ *
+ * All failures are NON-FATAL (R2): a failed download, checksum mismatch, or
+ * missing runtime is reported through `onProgress`/`status` and the caller
+ * moves on with the layer disabled.
  */
 import {
+  createReadStream,
   createWriteStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream';
@@ -70,6 +80,84 @@ const PROVISION_FILES: Array<{
 /** Subdirectory inside the store dir for embedding artifacts. */
 const EMBEDDING_DIR = 'embedding';
 
+// ─── Integrity manifest ───────────────────────────────────────────────
+
+export interface ManifestEntry {
+  url: string;
+  name: string;
+  sha256: string;
+  bytes: number;
+}
+
+let cachedManifest: ManifestEntry[] | undefined;
+
+/**
+ * Load the shipped integrity manifest (`embedding-manifest.json`).
+ * Returns undefined (degrade to size-only checks) when the manifest is
+ * missing or malformed — provisioning must never fail on the manifest.
+ */
+export function loadManifest(): ManifestEntry[] | undefined {
+  if (cachedManifest) return cachedManifest;
+  try {
+    const raw = readFileSync(
+      new URL('./embedding-manifest.json', import.meta.url),
+      'utf8',
+    );
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.every(
+        (e): e is ManifestEntry =>
+          !!e &&
+          typeof e === 'object' &&
+          typeof (e as ManifestEntry).url === 'string' &&
+          typeof (e as ManifestEntry).name === 'string' &&
+          typeof (e as ManifestEntry).sha256 === 'string' &&
+          typeof (e as ManifestEntry).bytes === 'number',
+      )
+    ) {
+      cachedManifest = parsed;
+    }
+  } catch {
+    // manifest missing/corrupt — caller falls back to size-only verification
+  }
+  return cachedManifest;
+}
+
+/** Stream a file through sha256, resolving to the lowercase hex digest. */
+export function sha256File(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const stream = createReadStream(path);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+// ─── Optional runtime presence ────────────────────────────────────────
+
+/**
+ * Whether the `onnxruntime-node` native runtime is importable. Model files
+ * alone are insufficient — the embedding engine degrades to unavailable when
+ * this optional dependency is missing, so the provisioning status must say so.
+ * Never throws; a missing/broken package resolves to false (R2).
+ */
+export async function isOnnxRuntimeImportable(): Promise<boolean> {
+  try {
+    await import('onnxruntime-node');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runtimeStatusLine(runtimeAvailable: boolean): string {
+  return runtimeAvailable
+    ? 'onnxruntime-node runtime: available'
+    : 'onnxruntime-node runtime: MISSING — install the optional onnxruntime-node + @xenova/transformers deps to use the embedding classifier';
+}
+
 // ─── Platform detection ───────────────────────────────────────────────
 
 export interface PlatformInfo {
@@ -115,6 +203,8 @@ export interface ProvisionResult {
   status: string;
   /** Files that were downloaded (only on fresh downloads). */
   downloaded?: string[];
+  /** Whether the onnxruntime-node optional runtime is importable. */
+  runtimeAvailable: boolean;
 }
 
 /**
@@ -133,8 +223,12 @@ export async function provisionEmbedding(opts: {
   onProgress?: (status: string) => void;
   /** Injectable fetch for testing. Defaults to globalThis.fetch. */
   _fetch?: typeof globalThis.fetch;
+  /** Injectable integrity manifest for testing. Defaults to the shipped manifest. */
+  _manifest?: ManifestEntry[];
 } = {}): Promise<ProvisionResult> {
   const fetcher = opts._fetch ?? globalThis.fetch;
+  const manifest = opts._manifest ?? loadManifest();
+  const runtimeAvailable = await isOnnxRuntimeImportable();
   const targetDir = getEmbeddingDir(opts.base);
   mkdirSync(targetDir, { recursive: true });
 
@@ -145,18 +239,37 @@ export async function provisionEmbedding(opts: {
   for (const file of PROVISION_FILES) {
     const destPath = join(targetDir, file.name);
     mkdirSync(dirname(destPath), { recursive: true });
+    const manifestEntry = manifest?.find((m) => m.name === file.name);
 
-    // Skip if present and valid (not forced)
+    // Skip if present and valid (not forced). "Valid" means size AND sha256
+    // match the manifest — a same-size corrupt file must be re-downloaded.
     if (!opts.force && existsSync(destPath)) {
       try {
         const stat = statSync(destPath);
         if (stat.size >= file.minBytes) {
-          opts.onProgress?.(`${file.name}: present (${(stat.size / 1024 / 1024).toFixed(1)} MB)`);
-          continue;
+          if (manifestEntry && manifestEntry.bytes !== stat.size) {
+            opts.onProgress?.(
+              `${file.name}: corrupt (${stat.size} bytes != ${manifestEntry.bytes} expected), re-downloading`,
+            );
+          } else if (manifestEntry) {
+            const actual = await sha256File(destPath);
+            if (actual === manifestEntry.sha256) {
+              opts.onProgress?.(`${file.name}: present (verified sha256)`);
+              continue;
+            }
+            opts.onProgress?.(
+              `${file.name}: sha256 mismatch (${actual.slice(0, 12)}... != ${manifestEntry.sha256.slice(0, 12)}...), re-downloading`,
+            );
+          } else {
+            // No manifest entry — fall back to the size-only check.
+            opts.onProgress?.(`${file.name}: present (${(stat.size / 1024 / 1024).toFixed(1)} MB)`);
+            continue;
+          }
+        } else {
+          opts.onProgress?.(`${file.name}: corrupt (${stat.size} bytes < ${file.minBytes} min), re-downloading`);
         }
-        opts.onProgress?.(`${file.name}: corrupt (${stat.size} bytes < ${file.minBytes} min), re-downloading`);
       } catch {
-        // stat failed — re-download
+        // stat/hash failed — re-download
       }
     }
 
@@ -181,7 +294,7 @@ export async function provisionEmbedding(opts: {
       const dest = createWriteStream(tmpPath);
       await pipe(response.body, dest);
 
-      // Verify
+      // Verify size then sha256 against the manifest.
       const stat = statSync(tmpPath);
       if (stat.size < file.minBytes) {
         opts.onProgress?.(
@@ -190,6 +303,18 @@ export async function provisionEmbedding(opts: {
         allOk = false;
         rmSync(tmpDir, { recursive: true, force: true });
         continue;
+      }
+
+      if (manifestEntry) {
+        const actual = await sha256File(tmpPath);
+        if (actual !== manifestEntry.sha256) {
+          opts.onProgress?.(
+            `${file.name}: sha256 mismatch (${actual.slice(0, 12)}... != ${manifestEntry.sha256.slice(0, 12)}...), file rejected`,
+          );
+          allOk = false;
+          rmSync(tmpDir, { recursive: true, force: true });
+          continue;
+        }
       }
 
       // Atomic rename into place
@@ -208,21 +333,29 @@ export async function provisionEmbedding(opts: {
     }
   }
 
+  const runtimeLine = runtimeStatusLine(runtimeAvailable);
+
   if (allOk && downloaded.length === 0) {
-    return { ok: true, status: `Embedding model ready (${platform.artifactKey})` };
+    return {
+      ok: true,
+      status: `Embedding model ready (${platform.artifactKey}); ${runtimeLine}`,
+      runtimeAvailable,
+    };
   }
 
   if (allOk) {
     return {
       ok: true,
-      status: `Embedding model provisioned: ${downloaded.join(', ')} (${platform.artifactKey})`,
+      status: `Embedding model provisioned: ${downloaded.join(', ')} (${platform.artifactKey}); ${runtimeLine}`,
       downloaded,
+      runtimeAvailable,
     };
   }
 
   return {
     ok: false,
-    status: `Embedding provision incomplete — some files could not be downloaded. Check network and retry.`,
+    status: `Embedding provision incomplete — some files failed integrity verification. Check network and retry. ${runtimeLine}`,
     downloaded: downloaded.length > 0 ? downloaded : undefined,
+    runtimeAvailable,
   };
 }

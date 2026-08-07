@@ -13,6 +13,7 @@ import {
   DEFAULT_ASSESSOR_QUALITY_RATIO,
   DEFAULT_DEPTH_ESCALATION_TOKENS,
   DEFAULT_DIMENSION_WEIGHTS,
+  DEFAULT_EMBEDDING_MIN_CONFIDENCE,
   DEFAULT_LOW_CONFIDENCE_THRESHOLD,
   DEFAULT_SWITCH_MARGIN,
 } from './constants.js';
@@ -97,6 +98,12 @@ export interface PersistedConfig {
   embeddingClassifier?: boolean;
   /** Max ms for model load + inference. Default 5000. */
   embeddingDeadlineMs?: number;
+  /**
+   * Minimum embedding-classifier confidence (top-two margin) for its verdict
+   * to influence routing. Below it the embedding abstains and the keyword
+   * result stands. Default 0.15.
+   */
+  embeddingMinConfidence?: number;
 }
 
 const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
@@ -228,6 +235,12 @@ export function loadConfig(): AutoRouterConfig {
         ? persisted.embeddingClassifier
         : false,
     embeddingDeadlineMs: positiveInteger(persisted.embeddingDeadlineMs, 5000),
+    embeddingMinConfidence: finiteInRange(
+      persisted.embeddingMinConfidence,
+      DEFAULT_EMBEDDING_MIN_CONFIDENCE,
+      0,
+      1,
+    ),
   };
 }
 

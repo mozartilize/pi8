@@ -317,6 +317,12 @@ export interface AutoRouterConfig {
   embeddingClassifier?: boolean;
   /** Maximum ms the embedding model load + inference may take. Default 5000. */
   embeddingDeadlineMs?: number;
+  /**
+   * Minimum embedding-classifier confidence (top-two margin, [0,1]) for its
+   * verdict to influence routing. Below it the embedding abstains and the
+   * keyword result stands unchanged. Default 0.15.
+   */
+  embeddingMinConfidence?: number;
 }
 
 export interface SyncResult {

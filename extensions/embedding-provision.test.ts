@@ -1,30 +1,56 @@
 import { describe, it, expect } from 'vitest';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
   detectPlatform,
   getEmbeddingDir,
+  loadManifest,
   provisionEmbedding,
+  type ManifestEntry,
 } from './embedding-provision.js';
 
-function makeMockBody(size: number): ReadableStream<Uint8Array> {
+const PROVISION_NAMES = [
+  'Xenova/multilingual-e5-small/tokenizer.json',
+  'Xenova/multilingual-e5-small/tokenizer_config.json',
+  'Xenova/multilingual-e5-small/config.json',
+  'Xenova/multilingual-e5-small/onnx/model_quantized.onnx',
+];
+
+function makeMockBody(size: number, fill = 0): ReadableStream<Uint8Array> {
   return new ReadableStream({
     start(controller) {
-      controller.enqueue(new Uint8Array(size));
+      controller.enqueue(new Uint8Array(size).fill(fill));
       controller.close();
     },
   });
 }
 
-function mockFetch(size: number) {
+function mockFetch(size: number, fill = 0) {
   return () =>
     Promise.resolve({
       ok: true,
       status: 200,
-      body: makeMockBody(size),
+      body: makeMockBody(size, fill),
     } as Response);
+}
+
+/** sha256 of a `size`-byte body filled with `fill` — matches makeMockBody. */
+function bodyHash(size: number, fill = 0): string {
+  return createHash('sha256').update(new Uint8Array(size).fill(fill)).digest('hex');
+}
+
+/** Manifest whose hashes match mock bodies of `size` bytes (fill 0). */
+function makeManifest(size: number): ManifestEntry[] {
+  const sha256 = bodyHash(size);
+  return PROVISION_NAMES.map((name) => ({
+    url: `https://example.test/${name}`,
+    name,
+    sha256,
+    bytes: size,
+  }));
 }
 
 describe('embedding-provision', () => {
@@ -47,7 +73,19 @@ describe('embedding-provision', () => {
     expect(dir.startsWith('/tmp/test-pi8')).toBe(true);
   });
 
-  // ─── Successful provision (mocked fetch) ──────────────────────
+  // ─── Manifest integrity ─────────────────────────────────────────
+
+  it('loads the shipped manifest with 4 entries for the provisioned files', () => {
+    const manifest = loadManifest();
+    expect(manifest).toBeDefined();
+    expect(manifest?.length).toBe(4);
+    for (const entry of manifest ?? []) {
+      expect(entry.url).toContain('huggingface.co');
+      expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(entry.bytes).toBeGreaterThan(0);
+      expect(PROVISION_NAMES).toContain(entry.name);
+    }
+  });
 
   it('provisionEmbedding downloads files and reports ok', async () => {
     const base = join(tmpdir(), `pi8-prov-test-${Date.now()}`);
@@ -56,6 +94,7 @@ describe('embedding-provision', () => {
         base,
         force: true,
         _fetch: mockFetch(120_000_000),
+        _manifest: makeManifest(120_000_000),
       });
       expect(result.ok).toBe(true);
       expect(result.downloaded).toBeDefined();
@@ -75,6 +114,7 @@ describe('embedding-provision', () => {
         base,
         force: true,
         _fetch: mockFetch(120_000_000),
+        _manifest: makeManifest(120_000_000),
       });
       expect(result.ok).toBe(true);
       // transformers.js resolves `<env.localModelPath>/<model id>/<file>`, so
@@ -95,11 +135,16 @@ describe('embedding-provision', () => {
     }
   });
 
-  it('skips files already present with sufficient size (idempotent)', async () => {
+  it('skips files already present with matching size + sha256 (idempotent)', async () => {
     const base = join(tmpdir(), `pi8-prov-test-${Date.now()}`);
     let calls = 0;
     try {
-      await provisionEmbedding({ base, force: true, _fetch: mockFetch(120_000_000) });
+      await provisionEmbedding({
+        base,
+        force: true,
+        _fetch: mockFetch(120_000_000),
+        _manifest: makeManifest(120_000_000),
+      });
       calls = 0;
       const result = await provisionEmbedding({
         base,
@@ -107,10 +152,60 @@ describe('embedding-provision', () => {
           calls += 1;
           return mockFetch(120_000_000)();
         },
+        _manifest: makeManifest(120_000_000),
       });
       expect(result.ok).toBe(true);
       expect(result.downloaded).toBeUndefined();
       expect(calls).toBe(0);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('re-downloads an existing file whose sha256 no longer matches (corrupt, same size)', async () => {
+    const base = join(tmpdir(), `pi8-prov-test-${Date.now()}`);
+    let calls = 0;
+    try {
+      await provisionEmbedding({
+        base,
+        force: true,
+        _fetch: mockFetch(120_000_000),
+        _manifest: makeManifest(120_000_000),
+      });
+      // Corrupt one file in place with same-size, different-content bytes.
+      const modelPath = join(
+        base, 'embedding', 'Xenova', 'multilingual-e5-small', 'onnx', 'model_quantized.onnx',
+      );
+      writeFileSync(modelPath, new Uint8Array(120_000_000).fill(1));
+      calls = 0;
+      const result = await provisionEmbedding({
+        base,
+        _fetch: () => {
+          calls += 1;
+          return mockFetch(120_000_000)();
+        },
+        _manifest: makeManifest(120_000_000),
+      });
+      expect(result.ok).toBe(true);
+      expect(calls).toBe(1); // exactly the corrupt file was re-fetched
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a downloaded file whose sha256 mismatches the manifest (non-fatal)', async () => {
+    const base = join(tmpdir(), `pi8-prov-test-${Date.now()}`);
+    try {
+      // Manifest says zero-filled bodies; the fetch returns one-filled bodies
+      // of the same size — size passes, sha256 must fail.
+      const result = await provisionEmbedding({
+        base,
+        force: true,
+        _fetch: mockFetch(120_000_000, 1),
+        _manifest: makeManifest(120_000_000),
+      });
+      expect(result.ok).toBe(false);
+      expect(result.status).toContain('incomplete');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -125,6 +220,7 @@ describe('embedding-provision', () => {
         base,
         force: true,
         _fetch: () => Promise.resolve({ ok: false, status: 500, body: null } as Response),
+        _manifest: makeManifest(120_000_000),
       });
       expect(result.ok).toBe(false);
       expect(result.status).toContain('incomplete');
@@ -142,8 +238,32 @@ describe('embedding-provision', () => {
         base,
         force: true,
         _fetch: mockFetch(100),
+        _manifest: makeManifest(100),
       });
       expect(result.ok).toBe(false);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  // ─── Runtime presence reporting ───────────────────────────────
+
+  it('reports whether the onnxruntime-node runtime is importable', async () => {
+    const base = join(tmpdir(), `pi8-prov-test-${Date.now()}`);
+    try {
+      const result = await provisionEmbedding({
+        base,
+        force: true,
+        _fetch: mockFetch(120_000_000),
+        _manifest: makeManifest(120_000_000),
+      });
+      expect(typeof result.runtimeAvailable).toBe('boolean');
+      expect(result.status).toContain('onnxruntime-node runtime:');
+      if (result.runtimeAvailable) {
+        expect(result.status).toContain('available');
+      } else {
+        expect(result.status).toContain('MISSING');
+      }
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -160,6 +280,7 @@ describe('embedding-provision', () => {
         base,
         force: true,
         _fetch: mockFetch(120_000_000),
+        _manifest: makeManifest(120_000_000),
         onProgress: (status) => progress.push(status),
       });
 
