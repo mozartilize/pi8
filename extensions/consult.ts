@@ -66,7 +66,7 @@ async function resolveAuth(
   registry: ExtensionContext['modelRegistry'] | undefined,
   model: Model<Api>,
   deadlineAt: number,
-): Promise<{ apiKey: string; headers?: Record<string, string> } | undefined> {
+): Promise<{ apiKey: string; headers?: Record<string, string | null> } | undefined> {
   if (!registry?.getApiKeyAndHeaders) return undefined;
   const remaining = deadlineAt - Date.now();
   if (remaining <= 0) return undefined;
