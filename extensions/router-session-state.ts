@@ -60,6 +60,16 @@ interface RouterSessionState {
   assessmentCost: number;
   /** Skill names captured at before_agent_start; names only. */
   activeSkillNames: readonly string[];
+  /**
+   * Per-session assessor strike counts, keyed by candidate registryId. A
+   * strike is recorded when an assessor produced NO output before the
+   * deadline (a structural "this model cannot deliver a verdict here"
+   * signal, distinct from auth/parse/refusal). `selectAssessor` prefers
+   * lower-strike candidates so the selector stops repicking a dud every
+   * turn; a successful verdict clears that model's strikes so a transient
+   * blip self-heals. Reorder-only — never excludes, so the pool never empties.
+   */
+  assessorStrikes: Map<string, number>;
 }
 
 /** Intent key whose latch transition was vetoed, so subsequent invocations of
@@ -81,6 +91,7 @@ const state: RouterSessionState = {
   latchGeneration: 0,
   assessmentCost: 0,
   activeSkillNames: [],
+  assessorStrikes: new Map(),
 };
 
 export const getLastDecision = (): RoutingDecision | undefined => state.lastDecision;
@@ -167,6 +178,14 @@ export const addAssessmentCost = (delta: number): void => {
  * it sensitive, so only the names are retained and never the descriptions or
  * file contents.
  */
+export const getAssessorStrikes = (): ReadonlyMap<string, number> => state.assessorStrikes;
+export const strikeAssessor = (registryId: string): void => {
+  state.assessorStrikes.set(registryId, (state.assessorStrikes.get(registryId) ?? 0) + 1);
+};
+export const clearAssessorStrikes = (registryId: string): void => {
+  state.assessorStrikes.delete(registryId);
+};
+
 export const getActiveSkillNames = (): readonly string[] => state.activeSkillNames;
 
 export const setActiveSkillNames = (names: readonly string[]): void => {
@@ -205,6 +224,7 @@ export const resetRouterSession = (): void => {
   state.latchGeneration = 0;
   state.assessmentCost = 0;
   state.activeSkillNames = [];
+  state.assessorStrikes.clear();
   latchVetoIntentKey = undefined;
   // lastExtensionContext and currentModelRegistry are intentionally preserved
   // — they are tied to the Pi runtime / session manager, not per-turn state.

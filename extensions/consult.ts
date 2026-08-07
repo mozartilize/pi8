@@ -38,7 +38,18 @@ export interface AssessmentConfig {
 
 export type AssessmentAttempt =
   | { ok: true; assessment: RoutingAssessment }
-  | { ok: false; fallbackReason: AssessmentFallbackReason; costUsd: number; ms: number };
+  | {
+      ok: false;
+      fallbackReason: AssessmentFallbackReason;
+      costUsd: number;
+      ms: number;
+      /** Selected assessor, when one was chosen (absent for no-assessor/disabled). */
+      model?: string;
+      /** Whether the assessor streamed any text before the attempt ended. A
+       *  failed attempt that produced NO output is the structural dud signal
+       *  the caller strikes; a partial-then-failed attempt is not. */
+      producedOutput?: boolean;
+    };
 
 function parseProviderId(modelRef: string): { provider: string; id: string } | undefined {
   const [provider, ...idParts] = modelRef.split('/');
@@ -95,6 +106,7 @@ export function selectAssessor(
   config: AssessmentConfig,
   registry: ExtensionContext['modelRegistry'] | undefined,
   candidates: Candidate[],
+  strikes: ReadonlyMap<string, number> = new Map(),
 ): { model: Model<Api>; registryId: string } | undefined {
   if (!registry?.find || candidates.length === 0) return undefined;
 
@@ -125,6 +137,13 @@ export function selectAssessor(
       return latency == null || latency < config.deadlineMs;
     })
     .sort((a, b) => {
+      // Struck assessors sink below un-struck ones: a model that failed to
+      // emit a verdict before the deadline last time is tried only after
+      // cheaper-and-unproven alternatives, but is never excluded (the pool
+      // must never empty). Fewer strikes first.
+      const strikeA = strikes.get(a.registryId) ?? 0;
+      const strikeB = strikes.get(b.registryId) ?? 0;
+      if (strikeA !== strikeB) return strikeA - strikeB;
       const priceA = blendedPricePer1M(a) ?? Infinity;
       const priceB = blendedPricePer1M(b) ?? Infinity;
       // Only subtract when prices differ — avoids NaN (Infinity - Infinity)
@@ -176,6 +195,7 @@ export async function runAssessment(
   registry: ExtensionContext['modelRegistry'] | undefined,
   candidates: Candidate[],
   evidence: AssessmentEvidence,
+  strikes: ReadonlyMap<string, number> = new Map(),
 ): Promise<AssessmentAttempt> {
   if (!config.enabled) return { ok: false, fallbackReason: 'disabled', costUsd: 0, ms: 0 };
 
@@ -187,7 +207,7 @@ export async function runAssessment(
   let usage = { input: 0, output: 0, cacheRead: undefined as number | undefined };
 
   try {
-    const selected = selectAssessor(config, registry, candidates);
+    const selected = selectAssessor(config, registry, candidates, strikes);
     if (!selected) {
       debugLog('assessment.skip', { reason: 'no-assessor' });
       return { ok: false, fallbackReason: 'no-assessor', costUsd: 0, ms: Date.now() - start };
@@ -267,7 +287,14 @@ export async function runAssessment(
         costUsd,
         textChars: fullText.length,
       });
-      return { ok: false, fallbackReason: reason, costUsd, ms };
+      return {
+        ok: false,
+        fallbackReason: reason,
+        costUsd,
+        ms,
+        model: selected.registryId,
+        producedOutput: fullText.length > 0,
+      };
     }
 
     return {

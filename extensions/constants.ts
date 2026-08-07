@@ -52,6 +52,17 @@ export const DEFAULT_DEPTH_ESCALATION_TOKENS = 32768;
 export const DEFAULT_ASSESSMENT_DEADLINE_MS = 1500;
 
 /**
+ * Shadow-mode assessment budget. Shadow is detached — it adds zero wall-clock
+ * to the turn — so the 1500 ms active budget (which exists only to bound
+ * perceptible turn latency) has no reason to apply. The corpus showed 1500 ms
+ * discarding every shadow verdict on a provider whose first token arrived
+ * after the deadline (24/24 `expiry`, textChars:0). A generous shadow deadline
+ * captures those verdicts at zero user cost; the wall clock via the
+ * AbortController still enforces it, so a genuinely hung provider is bounded.
+ */
+export const DEFAULT_ASSESSMENT_SHADOW_DEADLINE_MS = 12000;
+
+/**
  * Total assembled assessment input cap. The assessor sees bounded, redacted,
  * role-labelled prose — never tool arguments, tool results, file contents or
  * environment values.

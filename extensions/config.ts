@@ -8,6 +8,7 @@ import type { AutoRouterConfig, Dimension, ScoreWeights } from './types.js';
 import {
   CONFIG_FILE,
   DEFAULT_ASSESSMENT_DEADLINE_MS,
+  DEFAULT_ASSESSMENT_SHADOW_DEADLINE_MS,
   DEFAULT_ASSESSMENT_MAX_INPUT_CHARS,
   DEFAULT_ASSESSOR_QUALITY_RATIO,
   DEFAULT_DEPTH_ESCALATION_TOKENS,
@@ -36,8 +37,13 @@ export interface PersistedConfig {
    * without changing routing and adds no turn latency.
    */
   assessmentMode?: 'shadow' | 'active';
-  /** End-to-end assessment budget in ms (default 1500). */
+  /** End-to-end assessment budget in ms for active mode (default 1500). */
   assessmentDeadlineMs?: number;
+  /**
+   * End-to-end assessment budget in ms for shadow mode (default 12000).
+   * Shadow is detached, so this can be generous without adding turn latency.
+   */
+  assessmentShadowDeadlineMs?: number;
   /** Assembled assessment input cap in characters (default 6000). */
   assessmentMaxInputChars?: number;
   /** Assessor intelligence floor as a ratio of the best routable (default 0.5). */
@@ -175,6 +181,10 @@ export function loadConfig(): AutoRouterConfig {
     assessmentDeadlineMs: positiveInteger(
       persisted.assessmentDeadlineMs,
       DEFAULT_ASSESSMENT_DEADLINE_MS,
+    ),
+    assessmentShadowDeadlineMs: positiveInteger(
+      persisted.assessmentShadowDeadlineMs,
+      DEFAULT_ASSESSMENT_SHADOW_DEADLINE_MS,
     ),
     assessmentMaxInputChars: positiveInteger(
       persisted.assessmentMaxInputChars,

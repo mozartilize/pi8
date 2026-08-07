@@ -250,8 +250,10 @@ export interface AutoRouterConfig {
    * Flipping this default is a rollout decision, not a code change.
    */
   assessmentMode: AssessmentMode;
-  /** One end-to-end budget: selection + auth + startup + stream + parse. */
+  /** One end-to-end budget for active mode: selection + auth + startup + stream + parse. */
   assessmentDeadlineMs: number;
+  /** End-to-end budget for shadow mode; generous because shadow is detached. */
+  assessmentShadowDeadlineMs: number;
   /** Hard cap on assembled assessment input, in characters. */
   assessmentMaxInputChars: number;
   /** Assessor must reach this share of the strongest routable intelligence. */

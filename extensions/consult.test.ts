@@ -184,6 +184,45 @@ describe('selectAssessor — competence floor', () => {
     );
     expect(chosen).toBeUndefined();
   });
+
+  // Contract: struck assessors sink below un-struck ones (fewer strikes first),
+  // but a strike NEVER excludes — the pool must never empty.
+  it('prefers an un-struck equal candidate over a struck one', () => {
+    const a = { ...candidate('test/a', 100), cost: { input: 1, output: 3 } };
+    const b = { ...candidate('test/b', 100), cost: { input: 1, output: 3 } };
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [a, b],
+      new Map([['test/a', 1]]),
+    );
+    expect(chosen?.registryId).toBe('test/b');
+  });
+
+  it('prefers the fewer-struck candidate when both are struck', () => {
+    const a = { ...candidate('test/a', 100), cost: { input: 1, output: 3 } };
+    const b = { ...candidate('test/b', 100), cost: { input: 1, output: 3 } };
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [a, b],
+      new Map([
+        ['test/a', 3],
+        ['test/b', 1],
+      ]),
+    );
+    expect(chosen?.registryId).toBe('test/b');
+  });
+
+  it('still selects a struck candidate when it is the only option', () => {
+    const chosen = selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      { find: (p: string, i: string) => ({ provider: p, id: i }) } as never,
+      [candidate('test/only', 80)],
+      new Map([['test/only', 5]]),
+    );
+    expect(chosen?.registryId).toBe('test/only');
+  });
 });
 
 function asStreamWithUsage(
@@ -386,7 +425,15 @@ describe('runAssessment', () => {
 
   it('returns expiry when the deadline elapses before any output', async () => {
     const result = await runAssessmentWithNeverEndingStream({ deadlineMs: 60 });
-    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry' });
+    // Failure carries the chosen model and producedOutput:false so the caller
+    // can strike a model that emitted nothing before the deadline (the dud
+    // signal that dominated the corpus).
+    expect(result).toMatchObject({
+      ok: false,
+      fallbackReason: 'expiry',
+      model: 'test/a',
+      producedOutput: false,
+    });
   });
 
   it('returns a fully populated assessment on a valid reply', async () => {

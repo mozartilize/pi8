@@ -57,6 +57,9 @@ import {
   peekPendingUserEscalation,
   consumePendingUserEscalation,
   addAssessmentCost,
+  getAssessorStrikes,
+  strikeAssessor,
+  clearAssessorStrikes,
   bumpLatchGeneration,
   setCachedRoutingIntent,
   setCurrentModelRegistry,
@@ -251,6 +254,27 @@ function evidenceForAssessment(
     skillNames: getActiveSkillNames(),
     toolActivity: countToolActivity(context.messages),
   };
+}
+
+/**
+ * Update per-session assessor strikes from one attempt. A successful verdict
+ * clears the chosen model's strikes (self-heal); a failure that produced NO
+ * output before an `expiry`/`error` deadline strikes it, so `selectAssessor`
+ * stops repicking a model that structurally cannot deliver a verdict here.
+ * auth/parse/no-assessor/disabled are not slowness signals and never strike.
+ */
+function recordAssessorOutcome(attempt: Awaited<ReturnType<typeof runAssessment>>): void {
+  if (attempt.ok) {
+    clearAssessorStrikes(attempt.assessment.model);
+    return;
+  }
+  if (
+    attempt.model &&
+    attempt.producedOutput === false &&
+    (attempt.fallbackReason === 'expiry' || attempt.fallbackReason === 'error')
+  ) {
+    strikeAssessor(attempt.model);
+  }
 }
 
 // ─── Candidate expansion ───────────────────────────────────────────────
@@ -452,7 +476,13 @@ export function registerAutoRouterProvider(
               enabled: config.consultRouter,
               mode: config.assessmentMode,
               modelRef: config.consultModel,
-              deadlineMs: config.assessmentDeadlineMs,
+              // Shadow is detached (adds no turn latency), so it gets the
+              // generous shadow budget; active must stay tight to bound
+              // perceptible turn latency.
+              deadlineMs:
+                config.assessmentMode === 'shadow'
+                  ? config.assessmentShadowDeadlineMs
+                  : config.assessmentDeadlineMs,
               maxInputChars: config.assessmentMaxInputChars,
               assessorQualityRatio: config.assessorQualityRatio,
             };
@@ -469,7 +499,9 @@ export function registerAutoRouterProvider(
                   registry,
                   routableCandidates,
                   evidence,
+                  getAssessorStrikes(),
                 );
+                recordAssessorOutcome(attempt);
                 if (attempt.ok) {
                   addAssessmentCost(attempt.assessment.costUsd);
                   assessment = attempt.assessment;
@@ -484,8 +516,15 @@ export function registerAutoRouterProvider(
                 // deterministic path.
                 const intentKey = turnInput.key;
                 const heuristicDimension = classifyResult.dimension;
-                void runAssessment(assessmentConfig, registry, routableCandidates, evidence)
+                void runAssessment(
+                  assessmentConfig,
+                  registry,
+                  routableCandidates,
+                  evidence,
+                  getAssessorStrikes(),
+                )
                   .then((attempt) => {
+                    recordAssessorOutcome(attempt);
                     if (attempt.ok) {
                       const counterfactual = adoptAssessment({
                         heuristic: heuristicDimension,
@@ -591,7 +630,9 @@ export function registerAutoRouterProvider(
                     registry,
                     routableCandidates,
                     evidenceForAssessment(context, config, pi),
+                    getAssessorStrikes(),
                   );
+                  recordAssessorOutcome(attempt);
                   if (attempt.ok) {
                     addAssessmentCost(attempt.assessment.costUsd);
                     latchVerdict = attempt.assessment;
@@ -629,8 +670,10 @@ export function registerAutoRouterProvider(
                       registry,
                       routableCandidates,
                       latchEvidence,
+                      getAssessorStrikes(),
                     )
                       .then((attempt) => {
+                        recordAssessorOutcome(attempt);
                         if (attempt.ok) {
                           addAssessmentCost(attempt.assessment.costUsd);
                         } else {

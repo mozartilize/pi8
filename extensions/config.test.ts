@@ -260,8 +260,14 @@ describe('assessment config', () => {
     writeFileSync(getConfigPath(), JSON.stringify({}), 'utf8');
     const config = loadConfig();
     expect(config.assessmentDeadlineMs).toBe(1500);
+    expect(config.assessmentShadowDeadlineMs).toBe(12000);
     expect(config.assessmentMaxInputChars).toBe(6000);
     expect(config.assessorQualityRatio).toBe(0.5);
+  });
+
+  it('honours a shadow deadline override', () => {
+    writeFileSync(getConfigPath(), JSON.stringify({ assessmentShadowDeadlineMs: 8000 }), 'utf8');
+    expect(loadConfig().assessmentShadowDeadlineMs).toBe(8000);
   });
 
   it('clamps a nonsense assessor ratio back to the default', () => {
