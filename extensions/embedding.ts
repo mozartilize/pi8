@@ -21,14 +21,17 @@
  * (the `/router-sync embedding` provision path).
  */
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 
 // Suppress ONNX Runtime telemetry before the first dynamic import.
 // Must be set before onnxruntime-node loads to prevent the uploader,
 // events, and persistent device identifier from being created.
 process.env.ORT_DISABLE_TELEMETRY = '1';
 
-import { resolveStoragePath } from './store.js';
+import {
+  EMBEDDING_MODEL_ID,
+  getEmbeddingDir,
+  getEmbeddingModelPath,
+} from './embedding-provision.js';
 import type { Dimension } from './types.js';
 import { classifyEmbedding, getPrototypeText } from './embedding-head.js';
 import type { EmbeddingResult } from './embedding-head.js';
@@ -56,6 +59,8 @@ interface Session {
     feeds: Record<string, unknown>,
   ) => Promise<Record<string, { data: Float32Array; dims: number[] }>>;
   outputNames: string[];
+  /** Input tensor names declared by the ONNX graph. */
+  inputNames: string[];
 }
 
 interface TokenizerFn {
@@ -125,8 +130,16 @@ async function tryImportOrt(): Promise<OrtModule | undefined> {
 
 async function tryImportTokenizer(): Promise<TokenizerFn | undefined> {
   try {
-    const { AutoTokenizer } = await import('@xenova/transformers');
-    const tok = await AutoTokenizer.from_pretrained('Xenova/multilingual-e5-small');
+    const transformers = await import('@xenova/transformers');
+    // Load the tokenizer from the store dir provisioned by `/router-sync
+    // embedding` (transformers.js layout: `<env.localModelPath>/<model_id>/`).
+    // `local_files_only: true` keeps this fully offline after provisioning —
+    // no transformers.js network cache dependency. `env.localModelPath` is
+    // process-wide transformers.js state; this extension is its only user.
+    transformers.env.localModelPath = getEmbeddingDir();
+    const tok = await transformers.AutoTokenizer.from_pretrained(EMBEDDING_MODEL_ID, {
+      local_files_only: true,
+    });
     return (text: string) => {
       const encoded = tok(text, { padding: true, truncation: true, max_length: 128 });
       return {
@@ -186,11 +199,16 @@ async function embedFromSession(
   const maskTensor = new Tensor('int64', maskData, [1, seqLen]);
   const typeTensor = new Tensor('int64', new BigInt64Array(seqLen).fill(0n), [1, seqLen]);
 
-  const results = await session.run({
-    input_ids: inputTensor,
-    attention_mask: maskTensor,
-    token_type_ids: typeTensor,
-  });
+  // Only feed tensors for inputs the ONNX graph actually declares — passing
+  // an unknown input name makes onnxruntime throw, which would kill the
+  // turn. E5-small exports declare all three today, but a future model ref
+  // (e.g. an XLM-R based export with no token_type_ids) must degrade, not
+  // fail.
+  const feeds: Record<string, unknown> = { input_ids: inputTensor };
+  if (session.inputNames.includes('attention_mask')) feeds.attention_mask = maskTensor;
+  if (session.inputNames.includes('token_type_ids')) feeds.token_type_ids = typeTensor;
+
+  const results = await session.run(feeds);
   const output = results[session.outputNames[0]];
   const floatData = output.data;
 
@@ -248,7 +266,7 @@ async function initEngine(opts: EmbeddingOptions): Promise<boolean> {
     }
 
     const modelPath =
-      opts.modelPath ?? join(resolveStoragePath(), 'embedding', 'model_quantized.onnx');
+      opts.modelPath ?? getEmbeddingModelPath();
     if (!testOverrides && !existsSync(modelPath)) {
       loadError = `embedding model not found at ${modelPath} — run /router-sync embedding`;
       return;

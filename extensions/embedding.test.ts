@@ -43,9 +43,20 @@ function makeFakeDeps(opts: {
   hangCreate?: boolean;
   hangRunAfter?: number;
   failRunAfter?: number;
+  /** ONNX graph input names — exercises the inputNames guard. */
+  inputNames?: string[];
+  /** If set, the session records every feeds object passed to run(). */
+  captureFeeds?: boolean;
 } = {}) {
-  const { hangCreate = false, hangRunAfter, failRunAfter } = opts;
+  const {
+    hangCreate = false,
+    hangRunAfter,
+    failRunAfter,
+    inputNames = ['input_ids', 'attention_mask', 'token_type_ids'],
+    captureFeeds = false,
+  } = opts;
   let runCalls = 0;
+  const feedsLog: Array<Record<string, unknown>> = [];
 
   class FakeTensor {
     constructor(
@@ -57,8 +68,10 @@ function makeFakeDeps(opts: {
 
   const session = {
     outputNames: ['last_hidden_state'],
+    inputNames,
     async run(feeds: Record<string, unknown>) {
       runCalls += 1;
+      if (captureFeeds) feedsLog.push(feeds);
       if (hangRunAfter !== undefined && runCalls > hangRunAfter) {
         return new Promise<never>(() => {});
       }
@@ -74,12 +87,14 @@ function makeFakeDeps(opts: {
     },
   };
 
-  return {
+  const deps = {
     ort: {
       Tensor: FakeTensor,
       InferenceSession: {
-        create: async () =>
-          hangCreate ? new Promise<never>(() => {}) : session,
+        create: async (path: string) => {
+          if (!hangCreate) deps._createPaths.push(path);
+          return hangCreate ? new Promise<never>(() => {}) : session;
+        },
       },
     },
     tokenizer: (text: string) => {
@@ -95,7 +110,11 @@ function makeFakeDeps(opts: {
         attention_mask: { data: mask, dims: [1, SEQ_LEN] },
       };
     },
+    // Test observability: model path passed to create(), feeds passed to run().
+    _createPaths: [] as string[],
+    _feedsLog: feedsLog,
   };
+  return deps;
 }
 
 describe('embedding engine', () => {
@@ -214,5 +233,57 @@ describe('embedding engine', () => {
     resetEmbeddingEngine();
     expect(isEmbeddingAvailable()).toBe(false);
     expect(getEmbeddingError()).toBeUndefined();
+  });
+
+  // ─── ONNX input guard ────────────────────────────────────────
+
+  it('feeds only the ONNX inputs the graph declares', async () => {
+    // Real E5-small exports declare all three today, but an XLM-R based
+    // export (no token_type_ids) must degrade, not throw on an unknown
+    // input name.
+    const deps = makeFakeDeps({
+      inputNames: ['input_ids', 'attention_mask'],
+      captureFeeds: true,
+    });
+    setEmbeddingTestOverrides(deps);
+    expect(await ensureEmbeddingEngine({ deadlineMs: 1000 })).toBe(true);
+    const result = await embedAndClassify('review this pull request', { deadlineMs: 1000 });
+    expect(result?.dimension).toBe('review');
+    // 5 prototype embeds + 1 query run — none may feed an undeclared input.
+    expect(deps._feedsLog.length).toBe(6);
+    for (const feeds of deps._feedsLog) {
+      expect(feeds.input_ids).toBeDefined();
+      expect(feeds.attention_mask).toBeDefined();
+      expect(feeds.token_type_ids).toBeUndefined();
+    }
+  });
+
+  it('feeds token_type_ids when the graph declares it', async () => {
+    const deps = makeFakeDeps({ captureFeeds: true });
+    setEmbeddingTestOverrides(deps);
+    expect(await ensureEmbeddingEngine({ deadlineMs: 1000 })).toBe(true);
+    await embedAndClassify('hello', { deadlineMs: 1000 });
+    for (const feeds of deps._feedsLog) {
+      expect(feeds.token_type_ids).toBeDefined();
+    }
+  });
+
+  // ─── Provisioned model path ──────────────────────────────────
+
+  it('loads the ONNX model from the provisioned store path by default', async () => {
+    const storeDir = mkdtempSync(join(tmpdir(), 'pi8-embed-path-'));
+    try {
+      process.env.PI8_DIR = storeDir;
+      const deps = makeFakeDeps();
+      setEmbeddingTestOverrides(deps);
+      expect(await ensureEmbeddingEngine({ deadlineMs: 1000 })).toBe(true);
+      // transformers.js layout: <store>/embedding/<model id>/onnx/model_quantized.onnx
+      expect(deps._createPaths[0]).toBe(
+        join(storeDir, 'embedding', 'Xenova', 'multilingual-e5-small', 'onnx', 'model_quantized.onnx'),
+      );
+    } finally {
+      delete process.env.PI8_DIR;
+      rmSync(storeDir, { recursive: true, force: true });
+    }
   });
 });

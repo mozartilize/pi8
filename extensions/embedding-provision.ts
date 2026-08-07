@@ -15,7 +15,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pipeline } from 'node:stream';
 import { promisify } from 'node:util';
@@ -28,21 +28,42 @@ const pipe = promisify(pipeline);
 
 const HF_BASE = 'https://huggingface.co/Xenova/multilingual-e5-small/resolve/main';
 
-/** Files to download: relative HF path → local name + minimum expected bytes. */
+/**
+ * transformers.js model id. The tokenizer is loaded from disk under a
+ * model-named subdirectory of the embedding dir (transformers.js layout:
+ * `<env.localModelPath>/<model_id>/<file>`), so files must be laid out as
+ * `Xenova/multilingual-e5-small/...`, not flat.
+ */
+export const EMBEDDING_MODEL_ID = 'Xenova/multilingual-e5-small';
+
+/** Files to download: relative HF path → local path under the embedding dir + minimum expected bytes. */
 const PROVISION_FILES: Array<{
   url: string;
   name: string;
   minBytes: number;
 }> = [
   {
-    url: `${HF_BASE}/onnx/model_quantized.onnx`,
-    name: 'model_quantized.onnx',
-    minBytes: 110_000_000, // ~118 MB int8
+    url: `${HF_BASE}/tokenizer.json`,
+    name: `${EMBEDDING_MODEL_ID}/tokenizer.json`,
+    minBytes: 15_000_000, // ~17 MB
+  },
+  // tokenizer_config.json + config.json are read by transformers.js when
+  // resolving the tokenizer class; without them AutoTokenizer falls back
+  // to heuristics. Both are tiny.
+  {
+    url: `${HF_BASE}/tokenizer_config.json`,
+    name: `${EMBEDDING_MODEL_ID}/tokenizer_config.json`,
+    minBytes: 100,
   },
   {
-    url: `${HF_BASE}/tokenizer.json`,
-    name: 'tokenizer.json',
-    minBytes: 15_000_000, // ~17 MB
+    url: `${HF_BASE}/config.json`,
+    name: `${EMBEDDING_MODEL_ID}/config.json`,
+    minBytes: 100,
+  },
+  {
+    url: `${HF_BASE}/onnx/model_quantized.onnx`,
+    name: `${EMBEDDING_MODEL_ID}/onnx/model_quantized.onnx`,
+    minBytes: 110_000_000, // ~118 MB int8
   },
 ];
 
@@ -70,6 +91,19 @@ export function detectPlatform(): PlatformInfo {
 
 export function getEmbeddingDir(base?: string): string {
   return join(resolveStoragePath(base), EMBEDDING_DIR);
+}
+
+/**
+ * Directory containing the provisioned model files, laid out in
+ * transformers.js form (`<embedding dir>/<model id>/`).
+ */
+export function getEmbeddingModelDir(base?: string): string {
+  return join(getEmbeddingDir(base), EMBEDDING_MODEL_ID);
+}
+
+/** Path to the provisioned int8 ONNX model. */
+export function getEmbeddingModelPath(base?: string): string {
+  return join(getEmbeddingModelDir(base), 'onnx', 'model_quantized.onnx');
 }
 
 // ─── Provisioning ─────────────────────────────────────────────────────
@@ -110,6 +144,7 @@ export async function provisionEmbedding(opts: {
 
   for (const file of PROVISION_FILES) {
     const destPath = join(targetDir, file.name);
+    mkdirSync(dirname(destPath), { recursive: true });
 
     // Skip if present and valid (not forced)
     if (!opts.force && existsSync(destPath)) {
@@ -126,9 +161,11 @@ export async function provisionEmbedding(opts: {
     }
 
     // Download to a fresh temp dir (mkdtemp: unique per call, so concurrent
-    // provisions cannot collide on a shared timestamped name)
+    // provisions cannot collide on a shared timestamped name). The tmp file
+    // stays flat — the nested destination dirs only need to exist at rename
+    // time (the loop mkdirs them above).
     const tmpDir = mkdtempSync(join(tmpdir(), 'pi8-embed-'));
-    const tmpPath = join(tmpDir, file.name);
+    const tmpPath = join(tmpDir, file.name.replaceAll('/', '_'));
 
     try {
       opts.onProgress?.(`${file.name}: downloading from ${file.url} ...`);

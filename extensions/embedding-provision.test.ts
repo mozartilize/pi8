@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -59,8 +59,58 @@ describe('embedding-provision', () => {
       });
       expect(result.ok).toBe(true);
       expect(result.downloaded).toBeDefined();
-      expect(result.downloaded).toContain('model_quantized.onnx');
-      expect(result.downloaded).toContain('tokenizer.json');
+      expect(result.downloaded).toContain('Xenova/multilingual-e5-small/onnx/model_quantized.onnx');
+      expect(result.downloaded).toContain('Xenova/multilingual-e5-small/tokenizer.json');
+      expect(result.downloaded).toContain('Xenova/multilingual-e5-small/tokenizer_config.json');
+      expect(result.downloaded).toContain('Xenova/multilingual-e5-small/config.json');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('lays files out in the transformers.js local layout', async () => {
+    const base = join(tmpdir(), `pi8-prov-test-${Date.now()}`);
+    try {
+      const result = await provisionEmbedding({
+        base,
+        force: true,
+        _fetch: mockFetch(120_000_000),
+      });
+      expect(result.ok).toBe(true);
+      // transformers.js resolves `<env.localModelPath>/<model id>/<file>`, so
+      // the embedding dir must contain a model-named subdirectory — the
+      // tokenizer must be loadable from disk with no network (fix: provisioned
+      // tokenizer.json is actually consumed).
+      const expected = [
+        join(base, 'embedding', 'Xenova', 'multilingual-e5-small', 'tokenizer.json'),
+        join(base, 'embedding', 'Xenova', 'multilingual-e5-small', 'tokenizer_config.json'),
+        join(base, 'embedding', 'Xenova', 'multilingual-e5-small', 'config.json'),
+        join(base, 'embedding', 'Xenova', 'multilingual-e5-small', 'onnx', 'model_quantized.onnx'),
+      ];
+      for (const file of expected) {
+        expect(existsSync(file)).toBe(true);
+      }
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('skips files already present with sufficient size (idempotent)', async () => {
+    const base = join(tmpdir(), `pi8-prov-test-${Date.now()}`);
+    let calls = 0;
+    try {
+      await provisionEmbedding({ base, force: true, _fetch: mockFetch(120_000_000) });
+      calls = 0;
+      const result = await provisionEmbedding({
+        base,
+        _fetch: () => {
+          calls += 1;
+          return mockFetch(120_000_000)();
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(result.downloaded).toBeUndefined();
+      expect(calls).toBe(0);
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

@@ -21,6 +21,7 @@ declare module 'onnxruntime-node' {
       path: string,
       options?: { executionProviders?: string[]; graphOptimizationLevel?: string },
     ): Promise<InferenceSession>;
+    inputNames: string[];
     outputNames: string[];
     run(
       feeds: Record<string, Tensor>,
@@ -43,7 +44,20 @@ declare module '@xenova/transformers' {
     };
   }
 
+  /**
+   * Process-wide transformers.js configuration. `localModelPath` must point
+   * at the provisioned embedding store dir so the tokenizer loads from disk
+   * (offline after `/router-sync embedding`).
+   */
+  export const env: {
+    localModelPath: string;
+    allowRemoteModels?: boolean;
+  };
+
   export const AutoTokenizer: {
-    from_pretrained(modelId: string): Promise<TransformersTokenizer>;
+    from_pretrained(
+      modelId: string,
+      options?: { local_files_only?: boolean; revision?: string },
+    ): Promise<TransformersTokenizer>;
   };
 }
