@@ -53,6 +53,34 @@ const CORPUS: Array<{ prompt: string; expected: Dimension | Dimension[] }> = [
   },
   { prompt: 'what is our strategy for sharding the events table? weigh the options', expected: 'plan' },
   { prompt: 'draft an RFC for replacing our job queue', expected: 'plan' },
+
+  // ─── leading-verb intents (mutating work) ──────────────────
+  // These fell through to gather/plan before the intent-verb list gained
+  // debug/diagnose/convert/rewrite/document/test/configure/scaffold/etc.
+  { prompt: 'debug why the login test is flaky', expected: 'implement' },
+  { prompt: 'diagnose the memory leak in the worker', expected: 'implement' },
+  { prompt: 'troubleshoot the failing CI pipeline', expected: 'implement' },
+  { prompt: 'convert this callback code to promises', expected: 'implement' },
+  { prompt: 'rewrite the parser to be streaming', expected: 'implement' },
+  { prompt: 'document the public API of this module', expected: 'implement' },
+  { prompt: 'test the retry logic', expected: 'implement' },
+  { prompt: 'configure eslint for this repo', expected: 'implement' },
+  { prompt: 'set up a github actions workflow', expected: 'implement' },
+  { prompt: 'scaffold a new express service', expected: 'implement' },
+  { prompt: 'generate types from this json schema', expected: 'implement' },
+  { prompt: 'sketch the data model for a chat app', expected: 'plan' },
+
+  // ─── honest duals: leading verb + design noun ──────────────
+  // The opening verb (analyze/investigate/research/compare) is genuinely
+  // ambiguous between exploration and design/critique. Either verdict is
+  // acceptable; the assessment layer resolves the deliverable. Pinned as a
+  // set so a future tuning pass cannot silently collapse the ambiguity to
+  // the WRONG single answer.
+  { prompt: 'analyze the tradeoffs between kafka and rabbitmq', expected: ['plan', 'gather'] },
+  { prompt: 'investigate the tradeoffs of monorepo vs polyrepo', expected: ['plan', 'gather'] },
+  { prompt: 'research where parseConfig is used', expected: ['gather', 'plan'] },
+  { prompt: 'is my caching implementation correct?', expected: ['review', 'gather'] },
+  { prompt: 'compare my two branches and tell me which is cleaner', expected: ['review', 'plan'] },
 ];
 
 describe('classifier corpus', () => {

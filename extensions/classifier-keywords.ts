@@ -119,6 +119,7 @@ export const INTENT_VERBS: Record<string, Dimension> = {
   evaluate: 'plan',
   compare: 'plan',
   decide: 'plan',
+  sketch: 'plan',
 
   review: 'review',
   audit: 'review',
@@ -161,6 +162,23 @@ export const INTENT_VERBS: Record<string, Dimension> = {
   optimize: 'implement',
   extract: 'implement',
   wire: 'implement',
+  // Leading imperatives that describe code-mutating work. As a LEADING verb
+  // (first meaningful token) these are unambiguous implement intents even
+  // when a bag-of-words keyword (e.g. 'rewrite' in PLAN_KEYWORDS) would
+  // otherwise pull toward plan/gather.
+  debug: 'implement',
+  diagnose: 'implement',
+  troubleshoot: 'implement',
+  convert: 'implement',
+  rewrite: 'implement',
+  document: 'implement',
+  test: 'implement',
+  configure: 'implement',
+  setup: 'implement',
+  set: 'implement',
+  scaffold: 'implement',
+  generate: 'implement',
+  install: 'implement',
 };
 
 export const DIMENSION_STRENGTH: Record<Dimension, number> = {
