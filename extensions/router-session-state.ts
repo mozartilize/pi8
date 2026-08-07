@@ -70,7 +70,23 @@ interface RouterSessionState {
    * blip self-heals. Reorder-only — never excludes, so the pool never empties.
    */
   assessorStrikes: Map<string, number>;
+  /** Per-session embedding-classifier outcome tallies for `/router-status`. */
+  embeddingStats: EmbeddingStats;
 }
+
+/** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */
+export interface EmbeddingStats {
+  /** Inference returned a verdict (a vector was classified). */
+  fired: number;
+  /** Verdict was confident and stronger than keyword → dimension raised. */
+  promoted: number;
+  /** Verdict below the confidence floor → abstained, keyword stood (R3). */
+  abstainedLowConf: number;
+  /** No verdict: timeout, unavailable, or inference error → keyword stood (R2). */
+  degraded: number;
+}
+
+type EmbeddingOutcome = keyof EmbeddingStats;
 
 /** Intent key whose latch transition was vetoed, so subsequent invocations of
  *  the same entry reuse the veto rather than re-evaluating. */
@@ -92,6 +108,7 @@ const state: RouterSessionState = {
   assessmentCost: 0,
   activeSkillNames: [],
   assessorStrikes: new Map(),
+  embeddingStats: { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 },
 };
 
 export const getLastDecision = (): RoutingDecision | undefined => state.lastDecision;
@@ -164,6 +181,13 @@ export const bumpLatchGeneration = (): number => {
   return state.latchGeneration;
 };
 
+export const getEmbeddingStats = (): EmbeddingStats => ({ ...state.embeddingStats });
+
+/** Tally one embedding-classifier outcome for `/router-status`. */
+export const recordEmbedding = (outcome: EmbeddingOutcome): void => {
+  state.embeddingStats[outcome] += 1;
+};
+
 export const getAssessmentCost = (): number => state.assessmentCost;
 
 /** Kept apart from routed spend so `/router-status` can show the routing tax. */
@@ -225,6 +249,7 @@ export const resetRouterSession = (): void => {
   state.assessmentCost = 0;
   state.activeSkillNames = [];
   state.assessorStrikes.clear();
+  state.embeddingStats = { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 };
   latchVetoIntentKey = undefined;
   // lastExtensionContext and currentModelRegistry are intentionally preserved
   // — they are tied to the Pi runtime / session manager, not per-turn state.

@@ -7,6 +7,7 @@
  */
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { RoutingDecision } from './types.js';
+import type { EmbeddingStats } from './router-session-state.js';
 
 export interface ServedInfo {
   /** The model that actually produced the turn, after any fallback. */
@@ -110,6 +111,12 @@ export function formatDecisionDetail(
  */
 export function formatAssessmentSpend(costUsd: number): string {
   return `assessment spend: $${costUsd.toFixed(4)}`;
+}
+
+/** One-line embedding-classifier tally for `/router-status`. */
+export function formatEmbeddingStats(s: EmbeddingStats): string {
+  const kept = s.fired - s.promoted - s.abstainedLowConf;
+  return `embedding: fired ${s.fired} (promoted ${s.promoted}, kept ${kept}, abstained-lowconf ${s.abstainedLowConf}), degraded ${s.degraded}`;
 }
 
 /**

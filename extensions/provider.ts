@@ -60,6 +60,8 @@ import {
   peekPendingUserEscalation,
   consumePendingUserEscalation,
   addAssessmentCost,
+  recordEmbedding,
+  getEmbeddingStats,
   getAssessorStrikes,
   strikeAssessor,
   clearAssessorStrikes,
@@ -186,6 +188,7 @@ export const getProviderState = () => ({
   lastChosenRegistryId: getLastChosenRegistryId(),
   lastServed: getLastServed(),
   accumulatedCost: getAccumulatedCost(),
+  embeddingStats: getEmbeddingStats(),
   blacklistedModels: [...getBlacklistedModels()].sort(),
   blacklistedProviders: [...getBlacklistedProviders()].sort(),
 });
@@ -456,6 +459,7 @@ export function registerAutoRouterProvider(
                   deadlineMs: config.embeddingDeadlineMs,
                 });
                 if (embeddingResult) {
+                  recordEmbedding('fired');
                   // Abstain below the confidence floor: a low-confidence
                   // embedding verdict must not move routing at all (R3 —
                   // abstention never routes cheaper; the keyword result
@@ -470,13 +474,20 @@ export function registerAutoRouterProvider(
                     if (embeddingStrength > keywordStrength) {
                       baseDimension = embeddingResult.dimension;
                       baseCause = 'embedding-classify';
+                      recordEmbedding('promoted');
                     }
                     // If embedding agrees with keyword or is weaker, keep keyword.
                     // This covers: keyword=gather, embedding=lightweight → keep gather.
+                  } else {
+                    recordEmbedding('abstainedLowConf');
                   }
+                } else {
+                  // No verdict (timeout/unavailable) — keyword stands (R2).
+                  recordEmbedding('degraded');
                 }
               } catch {
                 // Embedding inference failed — degrade to keyword result (R2).
+                recordEmbedding('degraded');
               }
             }
 

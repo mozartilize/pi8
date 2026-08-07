@@ -19,7 +19,7 @@ import {
   removeBlacklistedModel,
   removeBlacklistedProvider,
 } from './provider.js';
-import { formatDecisionDetail, formatAssessmentSpend } from './ui.js';
+import { formatDecisionDetail, formatAssessmentSpend, formatEmbeddingStats } from './ui.js';
 import {
   computeRoleModels,
   readExistingOverrides,
@@ -35,6 +35,7 @@ import {
   getLastDecision,
   getLastServed,
   getAssessmentCost,
+  getEmbeddingStats,
   setPendingUserEscalation,
 } from './router-session-state.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Dimension } from './types.js';
@@ -305,6 +306,10 @@ export function registerCommands(pi: ExtensionAPI): void {
       }
       lines.push('', ...formatDecisionDetail(lastDecision, lastServed));
       lines.push(formatAssessmentSpend(getAssessmentCost()));
+      const embStats = getEmbeddingStats();
+      if (embStats.fired + embStats.degraded > 0) {
+        lines.push(formatEmbeddingStats(embStats));
+      }
       // M4: show recent routing history, surfacing any real fallbacks.
       // Shadow counterfactual records join decisions by intentKey offline and
       // must never be aggregated into routing history.

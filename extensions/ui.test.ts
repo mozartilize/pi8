@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearRouterStatus, formatStatus, formatDecisionDetail, formatAssessmentSpend } from './ui.js';
+import { clearRouterStatus, formatStatus, formatDecisionDetail, formatAssessmentSpend, formatEmbeddingStats } from './ui.js';
 import type { RoutingDecision } from './types.js';
 
 const decision: RoutingDecision = {
@@ -53,6 +53,17 @@ describe('formatStatus', () => {
       accumulatedCost: 0,
     });
     expect(s).toContain('context-pressure');
+  });
+});
+
+describe('formatEmbeddingStats', () => {
+  it('derives kept = fired - promoted - abstainedLowConf', () => {
+    const line = formatEmbeddingStats({ fired: 10, promoted: 4, abstainedLowConf: 3, degraded: 2 });
+    expect(line).toContain('fired 10');
+    expect(line).toContain('promoted 4');
+    expect(line).toContain('kept 3');
+    expect(line).toContain('abstained-lowconf 3');
+    expect(line).toContain('degraded 2');
   });
 });
 

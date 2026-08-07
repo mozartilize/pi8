@@ -1737,6 +1737,7 @@ describe('embedding classifier blend', () => {
     expect(decision?.dimension).toBe('gather');
     expect(decision?.cause).toBe('heuristic');
     expect(embeddingMock.embedAndClassify).toHaveBeenCalledTimes(1);
+    expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 1, promoted: 0, abstainedLowConf: 1, degraded: 0 });
   });
 
   it('promotes on a high-confidence stronger embedding with cause embedding-classify', async () => {
@@ -1751,6 +1752,7 @@ describe('embedding classifier blend', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.dimension).toBe('implement');
     expect(decision?.cause).toBe('embedding-classify');
+    expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 1, promoted: 1, abstainedLowConf: 0, degraded: 0 });
   });
 
   it('never lets a below-floor embedding lower the keyword dimension (R3)', async () => {
@@ -1766,5 +1768,21 @@ describe('embedding classifier blend', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.dimension).toBe('gather');
     expect(decision?.cause).toBe('heuristic');
+    // Confident but weaker → kept keyword: fired, no promote, no abstain.
+    expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 1, promoted: 0, abstainedLowConf: 0, degraded: 0 });
+  });
+
+  it('tallies a degraded outcome when inference returns no verdict', async () => {
+    enableEmbeddingClassifier();
+    embeddingMock.embedAndClassify.mockResolvedValue(undefined);
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(viContext('degrade'));
+
+    const decision = harness.getProviderState().lastDecision;
+    // No verdict → keyword stands (R2).
+    expect(decision?.dimension).toBe('gather');
+    expect(decision?.cause).toBe('heuristic');
+    expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 1 });
   });
 });
