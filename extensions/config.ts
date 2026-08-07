@@ -89,6 +89,14 @@ export interface PersistedConfig {
    * over 200 chars are dropped. Default `[]`.
    */
   syntheticPrefixes?: string[];
+  /**
+   * Enable the local multilingual embedding classifier for prompts where the
+   * keyword classifier has no categorical evidence (non-English, ambiguous).
+   * Blends up only; never overrides keyword downward. Default false.
+   */
+  embeddingClassifier?: boolean;
+  /** Max ms for model load + inference. Default 5000. */
+  embeddingDeadlineMs?: number;
 }
 
 const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
@@ -215,6 +223,11 @@ export function loadConfig(): AutoRouterConfig {
     syntheticPrefixes: stringList(persisted.syntheticPrefixes)?.filter(
       (p) => p.length <= 200,
     ) ?? [],
+    embeddingClassifier:
+      typeof persisted.embeddingClassifier === 'boolean'
+        ? persisted.embeddingClassifier
+        : false,
+    embeddingDeadlineMs: positiveInteger(persisted.embeddingDeadlineMs, 5000),
   };
 }
 

@@ -39,10 +39,11 @@ Without step 1–2, the router still works using Pi's registry metadata (price, 
 
 Every turn the router automatically:
 
-1. **Classifies** your request into one of five dimensions (lightweight, gather, plan, implement, review) — a fast keyword classifier runs first, with an optional semantic assessment that can refine the result.
-2. **Scores** every available model against live benchmarks and registry metadata (quality, cost, speed, context window). Models that aren't capable enough stay in the fallback chain but never win the top spot.
-3. **Streams** the best match. If it fails before producing output — missing credentials, timeout, provider error — the router moves to the next best model automatically. Once an answer or tool call starts streaming, it never replays.
-4. **Routes subagents too** — each subagent role gets a concrete model selected per spawn.
+1. **Classifies** your request into one of five dimensions (lightweight, gather, plan, implement, review) — a fast English keyword classifier runs first. When it has no categorical evidence (non-English prompts, ambiguous input), an optional **local multilingual embedding classifier** (E5-small) fills the gap.
+2. **Assesses** the task semantically with an optional LLM consultation for additional confidence.
+3. **Scores** every available model against live benchmarks and registry metadata (quality, cost, speed, context window). Models that aren't capable enough stay in the fallback chain but never win the top spot.
+4. **Streams** the best match. If it fails before producing output — missing credentials, timeout, provider error — the router moves to the next best model automatically. Once an answer or tool call starts streaming, it never replays.
+5. **Routes subagents too** — each subagent role gets a concrete model selected per spawn.
 
 Uncertainty always routes up: missing data, ambiguous prompts, and low confidence never make routing cheaper. Overserving is cheap; underserving costs a bad answer.
 
@@ -51,6 +52,7 @@ Uncertainty always routes up: missing data, ambiguous prompts, and low confidenc
 | Command | Purpose |
 |---|---|
 | `/router-sync [key]` | Fetch fresh benchmark data |
+| `/router-sync embedding [--force]` | Download the E5-small embedding model (~135 MB) for multilingual classification |
 | `/router-status` | Show freshness, coverage, last decision |
 | `/router-why` | Explain why the last model was chosen |
 | `/router-escalate [dimension]` | Re-route to a stronger model |
@@ -71,7 +73,9 @@ Uncertainty always routes up: missing data, ambiguous prompts, and low confidenc
   "consultRouter": true,                 // enable semantic assessment
   "prompt": true,                        // notify when model switches
   "switchMargin": 0.15,                 // cache-preservation bonus for incumbent
-  "debug": false                        // enable timing log
+  "debug": false,                        // enable timing log
+  "embeddingClassifier": false,          // enable multilingual E5-small classifier
+  "embeddingDeadlineMs": 5000            // max ms for model load + inference
 }
 ```
 
@@ -79,6 +83,8 @@ Uncertainty always routes up: missing data, ambiguous prompts, and low confidenc
 - `assessmentMode`: `"shadow"` runs the assessment in the background without affecting routing. `"active"` lets it adjust the task dimension under strict safety caps.
 - `switchMargin`: how strongly the router prefers keeping the current model to preserve prompt cache. Set to `0` to disable.
 - `debug`: `true` or a file path enables per-turn millisecond timing logs.
+- `embeddingClassifier`: when `true`, a local E5-small embedding model classifies prompts where the keyword classifier has no evidence — non-English languages, ambiguous English. Blends up only; never overrides keyword downward. Requires `onnxruntime-node` and `@xenova/transformers` to be installed.
+- `embeddingDeadlineMs`: maximum milliseconds the embedding model load + inference may take (default 5000). On expiry the keyword result is used unchanged.
 
 Full configuration reference in [`ARCHITECTURE.md`](ARCHITECTURE.md#8-configuration-reference).
 
@@ -94,7 +100,6 @@ Full configuration reference in [`ARCHITECTURE.md`](ARCHITECTURE.md#8-configurat
 - **Provider availability is only known at stream time.** An authenticated provider can still 421/hang/error on a specific model. The router detects this and walks the fallback chain, but the first attempt's latency is already spent.
 - **Fallback is objective-only, and one-way after output.** There is no answer-quality grading — only pre-answer failure signals trigger fallback. Once text or a tool call has streamed, the router never replays, so a poor-but-complete answer stands.
 - **`active` assessment adds cost and egress.** In `active` mode a bounded prompt (recent conversation, tool/skill names — never arguments or file contents) is sent to an authenticated assessor provider, adding spend. `shadow` (default) dispatches nothing that affects routing.
-- **Subagent escalation is respawn, not live switch.** A running child cannot change its own model; the override only applies when the parent respawns the same role. Async children don't use the protocol.
 
 ## Further reading
 

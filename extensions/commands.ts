@@ -28,6 +28,7 @@ import {
 import { readRecentEntries, type DecisionLogEntry } from './decisionlog.js';
 import { detectToolGaps } from './gap-detector.js';
 import { DIMENSION_STRENGTH } from './classifier-keywords.js';
+import { provisionEmbedding } from './embedding-provision.js';
 import { clearActiveEscalation } from './escalation.js';
 import {
   getLastDecision,
@@ -92,7 +93,19 @@ export function registerCommands(pi: ExtensionAPI): void {
   pi.registerCommand('router-sync', {
     description: 'Fetch fresh benchmark data and update the model routing table',
     handler: safeCommand('/router-sync', async (args, ctx: ExtensionCommandContext) => {
-      const [sourceOrKey] = splitArgs(args);
+      const [sourceOrKey, subArg] = splitArgs(args);
+
+      // `/router-sync embedding` — download embedding model only.
+      if (sourceOrKey === 'embedding') {
+        const force = subArg === '--force';
+        const result = await provisionEmbedding({
+          force,
+          onProgress: (status) => ctx.ui.notify(status, 'info'),
+        });
+        ctx.ui.notify(result.status, result.ok ? 'info' : 'error');
+        return;
+      }
+
       const config = loadConfig();
       let apiKey: string | undefined;
       if (sourceOrKey) {

@@ -160,6 +160,7 @@ export type DecisionCause =
   | 'continuation-context'
   | 'user-escalation'
   | 'router-consult'
+  | 'embedding-classify'
   | 'error-fallback'
   | 'no-data'
   | 'model-escalation'
@@ -307,6 +308,15 @@ export interface AutoRouterConfig {
    * impersonate the request. Never inferred — the list is explicit config.
    */
   syntheticPrefixes: string[];
+  /**
+   * If true, uses a local multilingual embedding classifier (E5-small) when
+   * the keyword classifier has no categorical evidence — i.e. non-English
+   * prompts and ambiguous English prompts. Blends up only; never overrides
+   * a keyword verdict downward. Default false.
+   */
+  embeddingClassifier?: boolean;
+  /** Maximum ms the embedding model load + inference may take. Default 5000. */
+  embeddingDeadlineMs?: number;
 }
 
 export interface SyncResult {

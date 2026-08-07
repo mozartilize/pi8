@@ -24,6 +24,8 @@ import type { BenchModel, Candidate, Dimension, DecisionCause, AutoRouterConfig 
 import { ROUTER_PROVIDER_ID, AUTO_MODEL_ID } from './types.js';
 import { loadStore, activeModels } from './store.js';
 import { classify, estimateTokenCount } from './classifier.js';
+import { DIMENSION_STRENGTH } from './classifier.js';
+import { embedAndClassify } from './embedding.js';
 import { getTurnClassificationInput, buildRoleLabelledContext } from './continuation.js';
 import { loadModelFilter, buildExcludeFilter } from './allowlist.js';
 import { loadConfig } from './config.js';
@@ -423,6 +425,41 @@ export function registerAutoRouterProvider(
                 ? 'continuation-context'
                 : 'heuristic';
             const confidence = classifyResult.confidence;
+
+            // ─── Embedding classifier ────────────────────────────────────
+            // When the keyword classifier has no categorical evidence
+            // (non-English prompts, ambiguous English prompts), the local
+            // multilingual embedding classifier supplies the dimension.
+            // Blends up only: never overrides keyword downward. The whole
+            // call — engine load + inference — is bounded by
+            // `embeddingDeadlineMs`; on timeout or failure we degrade to
+            // the keyword result (R2, R5). Runs once per user entry
+            // because it sits on the fresh-classify path (`!cacheHit`).
+            if (
+              !classifyResult.hasCategoricalEvidence &&
+              config.embeddingClassifier &&
+              !cacheHit
+            ) {
+              try {
+                const embeddingResult = await embedAndClassify(classifyText, {
+                  deadlineMs: config.embeddingDeadlineMs,
+                });
+                if (embeddingResult) {
+                  const keywordStrength = DIMENSION_STRENGTH[baseDimension];
+                  const embeddingStrength = DIMENSION_STRENGTH[embeddingResult.dimension];
+                  // Blend up only: embedding can raise but never lower the
+                  // keyword dimension (R3: uncertainty routes up).
+                  if (embeddingStrength > keywordStrength) {
+                    baseDimension = embeddingResult.dimension;
+                    baseCause = 'embedding-classify';
+                  }
+                  // If embedding agrees with keyword or is weaker, keep keyword.
+                  // This covers: keyword=gather, embedding=lightweight → keep gather.
+                }
+              } catch {
+                // Embedding inference failed — degrade to keyword result (R2).
+              }
+            }
 
             // Consume an active route_up request once per low-level Pi turn, as
             // before. Its effect is applied after the cached base intent is
