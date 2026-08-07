@@ -55,6 +55,24 @@ function isRouterAutoActive(model: { provider?: string; id?: string } | undefine
   return model?.provider === ROUTER_PROVIDER_ID && model?.id === AUTO_MODEL_ID;
 }
 
+/** Matches Pi's own offline semantics (model-runtime.js: any non-empty value). */
+function isOfflineMode(): boolean {
+  const raw = process.env.PI_OFFLINE;
+  return raw !== undefined && raw !== '';
+}
+
+/**
+ * The session_start auth sweep probes provider credential resolution, which
+ * can trigger a network token refresh for OAuth providers (pi#7508). It must
+ * only run when the router actually owns the session AND the user did not
+ * request offline mode. Concrete-model sessions stay a complete no-op (hard
+ * rule 9); a switch to router/auto re-arms the sweep via model_select.
+ */
+function shouldRunAuthSweep(model: { provider?: string; id?: string } | undefined): boolean {
+  if (isOfflineMode()) return false;
+  return isRouterAutoActive(model);
+}
+
 type ModelRegistry = ExtensionContext['modelRegistry'];
 
 export default async function autoModelRouterExtension(pi: ExtensionAPI) {
@@ -169,7 +187,9 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
       // Provider registration/model selection must never crash the session.
     }
     try {
-      await refreshRoleModels(ctx.modelRegistry, ctx);
+      // Gated: a concrete-model session must not poke provider auth (it can
+      // trigger a token refresh under Pi's credential-store lock, pi#7508).
+      if (shouldRunAuthSweep(ctx?.model)) await refreshRoleModels(ctx.modelRegistry, ctx);
     } catch {
       // Advisory only.
     }
@@ -177,7 +197,19 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
 
   pi.on('model_select', (event, ctx) => {
     // A concrete model selection makes the previous router decision stale.
-    if (event.model.provider !== ROUTER_PROVIDER_ID) clearRouterStatus(ctx);
+    if (event.model.provider !== ROUTER_PROVIDER_ID) {
+      clearRouterStatus(ctx);
+      return;
+    }
+    // Switching TO router/auto mid-session re-arms subagent role routing that
+    // the session_start gate skipped in a concrete-model session. Detached and
+    // generation-guarded: a slow probe sweep must never block the switch, and
+    // a stale refresh cannot overwrite a newer one.
+    if (event.model.id === AUTO_MODEL_ID && !isOfflineMode()) {
+      void refreshRoleModels(ctx.modelRegistry, ctx).catch(() => {
+        // Advisory only.
+      });
+    }
   });
 
   pi.on('before_agent_start', (event, ctx) => {

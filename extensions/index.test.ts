@@ -4,6 +4,7 @@ import type { RegistryModelInfo } from './scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 
 import autoModelRouterExtension from './index.js';
+import { buildSubagentProviderAuthFilter } from './provider.js';
 import { applyEscalation, requestEscalation, resetEscalation } from './escalation.js';
 import { computeRoleModels } from './subagents.js';
 import {
@@ -195,6 +196,100 @@ describe('registry-only role routing', () => {
       expect.anything(),
       expect.objectContaining({ ctx: expect.objectContaining({ cwd: '/workspace/some-project' }) }),
     );
+  });
+
+  describe('auth sweep gating (pi#7508 amplification)', () => {
+    const authFilter = vi.mocked(buildSubagentProviderAuthFilter);
+    const calls = () => authFilter.mock.calls.length;
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    const offline = process.env.PI_OFFLINE;
+    afterEach(() => {
+      if (offline === undefined) delete process.env.PI_OFFLINE;
+      else process.env.PI_OFFLINE = offline;
+    });
+
+    it('skips the credential sweep at session_start when the session is on a concrete model', async () => {
+      const handlers = new Map<string, (...args: any[]) => unknown>();
+      const pi = {
+        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+        registerTool: vi.fn(),
+      } as unknown as ExtensionAPI;
+      await autoModelRouterExtension(pi);
+
+      const before = calls();
+      const sessionStart = handlers.get('session_start');
+      const ctx = contextWithRegistry([registryModel('alpha/cheap')], {
+        provider: 'github-copilot',
+        id: 'gpt-5.4',
+      });
+      await sessionStart!({ reason: 'new' }, ctx);
+
+      // A concrete-model session must be a complete no-op (hard rule 9): the
+      // sweep can trigger an OAuth token refresh under Pi's credential-store
+      // lock (pi#7508) even when the router is inert.
+      expect(calls()).toBe(before);
+    });
+
+    it('skips the credential sweep at session_start in offline mode even when router/auto is active', async () => {
+      process.env.PI_OFFLINE = '1';
+      const handlers = new Map<string, (...args: any[]) => unknown>();
+      const pi = {
+        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+        registerTool: vi.fn(),
+      } as unknown as ExtensionAPI;
+      await autoModelRouterExtension(pi);
+
+      const before = calls();
+      const sessionStart = handlers.get('session_start');
+      const ctx = contextWithRegistry([registryModel('alpha/cheap')], {
+        provider: ROUTER_PROVIDER_ID,
+        id: AUTO_MODEL_ID,
+      });
+      await sessionStart!({ reason: 'new' }, ctx);
+
+      expect(calls()).toBe(before);
+    });
+
+    it('re-arms the credential sweep when the user switches TO router/auto', async () => {
+      const handlers = new Map<string, (...args: any[]) => unknown>();
+      const pi = {
+        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+        registerTool: vi.fn(),
+      } as unknown as ExtensionAPI;
+      await autoModelRouterExtension(pi);
+
+      const before = calls();
+      const modelSelect = handlers.get('model_select');
+      const ctx = contextWithRegistry([registryModel('alpha/cheap')], {
+        provider: 'github-copilot',
+        id: 'gpt-5.4',
+      });
+      modelSelect!({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctx);
+      await tick();
+
+      // The session_start gate skipped the sweep; switching into the router
+      // must re-arm it so subagent role routing is populated mid-session.
+      expect(calls()).toBe(before + 1);
+    });
+
+    it('does not sweep when a model_select lands on a concrete model', async () => {
+      const handlers = new Map<string, (...args: any[]) => unknown>();
+      const pi = {
+        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+        registerTool: vi.fn(),
+      } as unknown as ExtensionAPI;
+      await autoModelRouterExtension(pi);
+
+      const before = calls();
+      const modelSelect = handlers.get('model_select');
+      modelSelect!(
+        { model: { provider: 'github-copilot', id: 'gpt-5.4' } },
+        contextWithRegistry([registryModel('alpha/cheap')]),
+      );
+      await tick();
+
+      expect(calls()).toBe(before);
+    });
   });
 
   it('preserves an explicit concrete child model under a router/auto parent', async () => {

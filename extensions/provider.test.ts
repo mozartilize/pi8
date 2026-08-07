@@ -221,6 +221,52 @@ describe('provider auth filtering', () => {
     const filter = await buildSubagentProviderAuthFilter(registry, [{ provider: 'unavailable', id: 'model' }]);
     expect(filter('unavailable')).toBe(false);
   });
+
+  it('does not probe OAuth providers; uses the snapshot auth status instead (pi#7508)', async () => {
+    const probe = vi.fn();
+    const registry = {
+      find: () => ({ provider: 'oauth-provider', id: 'model' }),
+      getApiKeyAndHeaders: probe,
+      isUsingOAuth: () => true,
+      getProviderAuthStatus: () => ({ configured: true, source: 'stored' }),
+    } as unknown as ExtensionContext['modelRegistry'];
+    const filter = await buildSubagentProviderAuthFilter(registry, [
+      { provider: 'oauth-provider', id: 'model' },
+    ]);
+    // The probe must never run: getApiKeyAndHeaders can trigger an untimed
+    // token refresh under Pi's credential-store lock; the snapshot status is
+    // refresh-free and still excludes providers with no stored credentials.
+    expect(filter('oauth-provider')).toBe(true);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it('excludes an OAuth provider with no configured credentials', async () => {
+    const registry = {
+      find: () => ({ provider: 'oauth-provider', id: 'model' }),
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'x' }),
+      isUsingOAuth: () => true,
+      getProviderAuthStatus: () => ({ configured: false }),
+    } as unknown as ExtensionContext['modelRegistry'];
+    const filter = await buildSubagentProviderAuthFilter(registry, [
+      { provider: 'oauth-provider', id: 'model' },
+    ]);
+    expect(filter('oauth-provider')).toBe(false);
+  });
+
+  it('still probes API-key providers', async () => {
+    const probe = vi.fn(async () => ({ ok: true, apiKey: 'key' }));
+    const registry = {
+      find: () => ({ provider: 'api-provider', id: 'model' }),
+      getApiKeyAndHeaders: probe,
+      isUsingOAuth: () => false,
+      getProviderAuthStatus: () => ({ configured: true }),
+    } as unknown as ExtensionContext['modelRegistry'];
+    const filter = await buildSubagentProviderAuthFilter(registry, [
+      { provider: 'api-provider', id: 'model' },
+    ]);
+    expect(filter('api-provider')).toBe(true);
+    expect(probe).toHaveBeenCalled();
+  });
 });
 
 describe('provider orchestration', () => {

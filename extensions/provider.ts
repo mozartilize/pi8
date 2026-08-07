@@ -113,10 +113,19 @@ const AUTH_PROBE_TIMEOUT_MS = 3000;
  * actually spawn, because pi-subagents consumes the model verbatim and
  * hard-fails on an unauthenticated provider.
  *
- * Every `getAuth` call is individually time-boxed via Promise.race so a slow
- * or hanging credential prompt on one provider cannot block the entire router.
- * After the timeout the provider is treated as unauthenticated and routing
- * proceeds with the remaining candidates.
+ * API-key providers are probed via `getApiKeyAndHeaders`, individually
+ * time-boxed via Promise.race so a slow or hanging credential resolution on
+ * one provider cannot block the entire router; after the timeout the provider
+ * is treated as unauthenticated and routing proceeds with the remaining
+ * candidates.
+ *
+ * OAuth providers are NOT probed: `getApiKeyAndHeaders` can trigger an untimed
+ * token refresh under Pi's serialized credential-store lock when the token is
+ * near expiry (pi#7508), and our time-boxed abandon leaves that lock held with
+ * nobody watching. The snapshot auth status is local and refresh-free, and it
+ * still excludes providers with no stored credentials — the case the probe
+ * exists to catch. An expiring OAuth token is refreshed by Pi's own auth
+ * resolution at stream time, exactly as it would be without this extension.
  */
 export async function buildSubagentProviderAuthFilter(
   registry: ExtensionContext['modelRegistry'] | undefined,
@@ -127,6 +136,8 @@ export async function buildSubagentProviderAuthFilter(
   if (!registry?.getApiKeyAndHeaders || !registry.find) return () => false;
   const find = registry.find.bind(registry);
   const getAuth = registry.getApiKeyAndHeaders.bind(registry);
+  const getAuthStatus = registry.getProviderAuthStatus?.bind(registry);
+  const isUsingOAuth = registry.isUsingOAuth?.bind(registry);
 
   const providers = [...new Set(models.map((m) => m.provider))].filter(
     (p) => p && p !== ROUTER_PROVIDER_ID,
@@ -138,6 +149,11 @@ export async function buildSubagentProviderAuthFilter(
       const probe = models.find((m) => m.provider === provider);
       if (!probe) return;
       try {
+        if (isUsingOAuth?.({ provider } as unknown as Model<Api>)) {
+          // Local snapshot signal; never triggers a token refresh.
+          if (getAuthStatus?.(provider)?.configured) usable.add(provider);
+          return;
+        }
         const model = find(provider, probe.id);
         if (!model) return;
         const auth = await Promise.race([
