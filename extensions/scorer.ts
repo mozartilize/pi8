@@ -13,7 +13,7 @@ import type {
   RoutingDecision,
   ScoreWeights,
 } from './types.js';
-import { DEFAULT_DIMENSION_WEIGHTS } from './constants.js';
+import { DEFAULT_DIMENSION_WEIGHTS, DEFAULT_SWITCH_MARGIN } from './constants.js';
 import type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
 // ─── Candidate identity ─────────────────────────────────────────────
@@ -534,7 +534,7 @@ export function pickBest(
   if (opts.incumbentRegistryId && !opts.isSubagentSpawn) {
     // The configured margin caps cache-preservation stickiness so it cannot
     // overwhelm the quality/cost/speed score on long sessions.
-    const margin = clamp(opts.switchMargin ?? 1.0, 0, 1);
+    const margin = clamp(opts.switchMargin ?? DEFAULT_SWITCH_MARGIN, 0, 1);
     const penalty = Math.min(opts.estimatedContextTokens * 0.000005, margin);
     for (const s of scored) {
       if (candidateKey(s) === opts.incumbentRegistryId) {
