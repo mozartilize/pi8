@@ -259,8 +259,6 @@ export interface AutoRouterConfig {
   assessmentMaxInputChars: number;
   /** Assessor must reach this share of the strongest routable intelligence. */
   assessorQualityRatio: number;
-  /** Alias / legacy key for consultRouter. */
-  consultRouterAgent: boolean;
   /** Optional "provider/id" override for the consultation model. */
   consultModel?: string;
   /**

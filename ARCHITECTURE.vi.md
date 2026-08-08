@@ -255,7 +255,7 @@ Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 | `dimensionWeights` | mặc định theo từng dimension | Override `{quality, cost, speed}` cho từng dimension |
 | `lowConfidenceThreshold` | `0.15` | Ngưỡng classifier confidence mà dưới đó áp dụng uncertainty handling |
 | `sources` | — | Lựa chọn nguồn benchmark |
-| `consultRouterAgent` | — | Alias cũ, chỉ được đọc khi `consultRouter` không tồn tại |
+| `consultRouterAgent` | — | Alias đầu vào cũ; dùng `consultRouter` (chính tắc) cho config mới |
 
 ---
 

@@ -186,7 +186,6 @@ export function loadConfig(): AutoRouterConfig {
       1,
     ),
     consultRouter,
-    consultRouterAgent: consultRouter,
     consultModel:
       typeof persisted.consultModel === 'string' && persisted.consultModel.trim()
         ? persisted.consultModel

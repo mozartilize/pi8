@@ -252,7 +252,7 @@ Options in `~/.pi/agent/pi8/config.json`:
 | `dimensionWeights` | per-dimension defaults | Override `{quality, cost, speed}` per dimension |
 | `lowConfidenceThreshold` | `0.15` | Classifier confidence below which uncertainty handling applies |
 | `sources` | — | Benchmark source selection |
-| `consultRouterAgent` | — | Legacy alias read only when `consultRouter` is absent |
+| `consultRouterAgent` | — | Legacy input alias; use `consultRouter` (canonical) for new configs |
 
 ---
 

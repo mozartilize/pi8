@@ -76,17 +76,15 @@ describe('saveBlacklist', () => {
 });
 
 describe('consult router option', () => {
-  it('defaults both config aliases to true when absent', () => {
+  it('defaults consultRouter to true when absent', () => {
     expect(loadConfig().consultRouter).toBe(true);
-    expect(loadConfig().consultRouterAgent).toBe(true);
   });
 
   it.each(['consultRouter', 'consultRouterAgent'] as const)(
-    'respects an explicit false for %s',
+    'respects an explicit false for %s (legacy input alias still works)',
     (key) => {
       writeFileSync(getConfigPath(), JSON.stringify({ [key]: false }), 'utf8');
       expect(loadConfig().consultRouter).toBe(false);
-      expect(loadConfig().consultRouterAgent).toBe(false);
     },
   );
 });
