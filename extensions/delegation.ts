@@ -219,7 +219,8 @@ export async function runDelegationLoop(
       debugLog('attempt.auth', { candidate: candidateId, ms: authTimer(), outcome: 'timeout' });
       continue;
     }
-    if (!auth || !auth.ok || !auth.apiKey) {
+    // Header-only auth (e.g. kimi-coding OAuth Bearer) is valid; apiKey may be absent.
+    if (!auth || !auth.ok || (!auth.apiKey && (!auth.headers || Object.keys(auth.headers).length === 0))) {
       lastError = `no usable credentials: ${candidateId}`;
       blacklistModel(candidateId);
       recordFailure(provider, 'provider');

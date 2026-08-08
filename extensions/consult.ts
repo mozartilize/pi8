@@ -66,7 +66,7 @@ async function resolveAuth(
   registry: ExtensionContext['modelRegistry'] | undefined,
   model: Model<Api>,
   deadlineAt: number,
-): Promise<{ apiKey: string; headers?: Record<string, string | null> } | undefined> {
+): Promise<{ apiKey?: string; headers?: Record<string, string | null> } | undefined> {
   if (!registry?.getApiKeyAndHeaders) return undefined;
   const remaining = deadlineAt - Date.now();
   if (remaining <= 0) return undefined;
@@ -77,7 +77,8 @@ async function resolveAuth(
         setTimeout(() => reject(new Error('consult auth timeout')), remaining),
       ),
     ]);
-    if (auth && auth.ok && auth.apiKey) {
+    // Header-only auth (e.g. kimi-coding OAuth Bearer) is valid; apiKey may be absent.
+    if (auth && auth.ok && (auth.apiKey || (auth.headers && Object.keys(auth.headers).length > 0))) {
       return { apiKey: auth.apiKey, headers: auth.headers };
     }
   } catch {
