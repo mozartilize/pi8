@@ -208,64 +208,39 @@ const REGISTRY_MODELS = [
 ];
 
 describe('provider auth filtering', () => {
-  it('fails closed when the registry cannot probe credentials', async () => {
-    const filter = await buildSubagentProviderAuthFilter(undefined, [{ provider: 'unavailable', id: 'model' }]);
+  it('fails closed when the registry has no snapshot auth', () => {
+    const filter = buildSubagentProviderAuthFilter(undefined, [{ provider: 'unavailable', id: 'model' }]);
     expect(filter('unavailable')).toBe(false);
   });
 
-  it('fails closed when every credential probe fails', async () => {
+  it('fails closed when no provider has configured credentials', () => {
     const registry = {
-      find: () => ({ provider: 'unavailable', id: 'model' }),
-      getApiKeyAndHeaders: async () => { throw new Error('probe failed'); },
-    } as unknown as ExtensionContext['modelRegistry'];
-    const filter = await buildSubagentProviderAuthFilter(registry, [{ provider: 'unavailable', id: 'model' }]);
-    expect(filter('unavailable')).toBe(false);
-  });
-
-  it('does not probe OAuth providers; uses the snapshot auth status instead (pi#7508)', async () => {
-    const probe = vi.fn();
-    const registry = {
-      find: () => ({ provider: 'oauth-provider', id: 'model' }),
-      getApiKeyAndHeaders: probe,
-      isUsingOAuth: () => true,
-      getProviderAuthStatus: () => ({ configured: true, source: 'stored' }),
-    } as unknown as ExtensionContext['modelRegistry'];
-    const filter = await buildSubagentProviderAuthFilter(registry, [
-      { provider: 'oauth-provider', id: 'model' },
-    ]);
-    // The probe must never run: getApiKeyAndHeaders can trigger an untimed
-    // token refresh under Pi's credential-store lock; the snapshot status is
-    // refresh-free and still excludes providers with no stored credentials.
-    expect(filter('oauth-provider')).toBe(true);
-    expect(probe).not.toHaveBeenCalled();
-  });
-
-  it('excludes an OAuth provider with no configured credentials', async () => {
-    const registry = {
-      find: () => ({ provider: 'oauth-provider', id: 'model' }),
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'x' }),
-      isUsingOAuth: () => true,
       getProviderAuthStatus: () => ({ configured: false }),
     } as unknown as ExtensionContext['modelRegistry'];
-    const filter = await buildSubagentProviderAuthFilter(registry, [
-      { provider: 'oauth-provider', id: 'model' },
-    ]);
-    expect(filter('oauth-provider')).toBe(false);
+    const filter = buildSubagentProviderAuthFilter(registry, [{ provider: 'unavailable', id: 'model' }]);
+    expect(filter('unavailable')).toBe(false);
   });
 
-  it('still probes API-key providers', async () => {
-    const probe = vi.fn(async () => ({ ok: true, apiKey: 'key' }));
+  it('uses the synchronous snapshot auth status — no async I/O', () => {
     const registry = {
-      find: () => ({ provider: 'api-provider', id: 'model' }),
-      getApiKeyAndHeaders: probe,
-      isUsingOAuth: () => false,
+      getProviderAuthStatus: (p: string) => ({ configured: p === 'configured-only' }),
+    } as unknown as ExtensionContext['modelRegistry'];
+    const filter = buildSubagentProviderAuthFilter(registry, [
+      { provider: 'configured-only', id: 'model' },
+      { provider: 'unconfigured', id: 'model' },
+    ]);
+    expect(filter('configured-only')).toBe(true);
+    expect(filter('unconfigured')).toBe(false);
+  });
+
+  it('excludes the router provider itself', () => {
+    const registry = {
       getProviderAuthStatus: () => ({ configured: true }),
     } as unknown as ExtensionContext['modelRegistry'];
-    const filter = await buildSubagentProviderAuthFilter(registry, [
-      { provider: 'api-provider', id: 'model' },
+    const filter = buildSubagentProviderAuthFilter(registry, [
+      { provider: 'router', id: 'auto' },
     ]);
-    expect(filter('api-provider')).toBe(true);
-    expect(probe).toHaveBeenCalled();
+    expect(filter('router')).toBe(false);
   });
 });
 

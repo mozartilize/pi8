@@ -102,74 +102,34 @@ export {
 
 // ─── Registry-wait (mandatory for subagents) ────────────────────────
 
-/** Per-provider timeout for credential probes (ms). */
-const AUTH_PROBE_TIMEOUT_MS = 3000;
-
 /**
- * Resolve credentials once per provider and return a membership test.
+ * Build a synchronous per-provider membership test for subagent role injection.
  *
- * Without this, a registry full of providers the user never logged into (e.g.
- * ~109 amazon-bedrock entries) would produce subagent picks that can never
- * actually spawn, because pi-subagents consumes the model verbatim and
- * hard-fails on an unauthenticated provider.
- *
- * API-key providers are probed via `getApiKeyAndHeaders`, individually
- * time-boxed via Promise.race so a slow or hanging credential resolution on
- * one provider cannot block the entire router; after the timeout the provider
- * is treated as unauthenticated and routing proceeds with the remaining
- * candidates.
- *
- * OAuth providers are NOT probed: `getApiKeyAndHeaders` can trigger an untimed
- * token refresh under Pi's serialized credential-store lock when the token is
- * near expiry (pi#7508), and our time-boxed abandon leaves that lock held with
- * nobody watching. The snapshot auth status is local and refresh-free, and it
- * still excludes providers with no stored credentials — the case the probe
- * exists to catch. An expiring OAuth token is refreshed by Pi's own auth
- * resolution at stream time, exactly as it would be without this extension.
+ * Subagent spawns are pick-once: the injected model is consumed verbatim by
+ * pi-subagents, which hard-fails on an unauthenticated provider.
+ * `getProviderAuthStatus` reads the locally cached credential snapshot
+ * synchronously — no network call, no credential-store lock, no OAuth token
+ * refresh hazard. `getAvailable()` already pre-filters by provider auth, so
+ * this is a belt-and-suspenders per-provider check for the one path where
+ * retry-on-failure is impossible.
  */
-export async function buildSubagentProviderAuthFilter(
+export function buildSubagentProviderAuthFilter(
   registry: ExtensionContext['modelRegistry'] | undefined,
   models: readonly RegistryModelInfo[],
-): Promise<(provider: string) => boolean> {
-  // Without a credential probe, never inject an arbitrary provider into a
-  // pick-once subagent spawn; Pi's own default resolution remains available.
-  if (!registry?.getApiKeyAndHeaders || !registry.find) return () => false;
-  const find = registry.find.bind(registry);
-  const getAuth = registry.getApiKeyAndHeaders.bind(registry);
-  const getAuthStatus = registry.getProviderAuthStatus?.bind(registry);
-  const isUsingOAuth = registry.isUsingOAuth?.bind(registry);
+): (provider: string) => boolean {
+  if (!registry?.getProviderAuthStatus) return () => false;
 
   const providers = [...new Set(models.map((m) => m.provider))].filter(
     (p) => p && p !== ROUTER_PROVIDER_ID,
   );
 
   const usable = new Set<string>();
-  await Promise.all(
-    providers.map(async (provider) => {
-      const probe = models.find((m) => m.provider === provider);
-      if (!probe) return;
-      try {
-        if (isUsingOAuth?.({ provider } as unknown as Model<Api>)) {
-          // Local snapshot signal; never triggers a token refresh.
-          if (getAuthStatus?.(provider)?.configured) usable.add(provider);
-          return;
-        }
-        const model = find(provider, probe.id);
-        if (!model) return;
-        const auth = await Promise.race([
-          getAuth(model),
-          new Promise<undefined>((_, reject) =>
-            setTimeout(() => reject(new Error('auth probe timed out')), AUTH_PROBE_TIMEOUT_MS),
-          ),
-        ]);
-        if (auth?.ok && auth.apiKey) usable.add(provider);
-      } catch {
-        // Treat a probe failure (or timeout) as "unknown", not as "authenticated".
-      }
-    }),
-  );
+  for (const provider of providers) {
+    if (registry.getProviderAuthStatus(provider)?.configured) {
+      usable.add(provider);
+    }
+  }
 
-  // A total probe failure means authentication is unknown, not successful.
   if (usable.size === 0) return () => false;
   return (provider: string) => usable.has(provider);
 }

@@ -24,7 +24,7 @@ const mockBlacklist = new Set<string>();
 
 vi.mock('./provider.js', () => ({
   registerAutoRouterProvider: vi.fn(),
-  buildSubagentProviderAuthFilter: vi.fn(async () => () => true),
+  buildSubagentProviderAuthFilter: vi.fn(() => () => true),
   addSessionBlacklistPatterns: vi.fn(() => []),
   clearSessionBlacklist: vi.fn(() => mockBlacklist.clear()),
   getBlacklistedModels: vi.fn(() => new Set(mockBlacklist)),

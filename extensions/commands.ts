@@ -509,7 +509,7 @@ export function registerCommands(pi: ExtensionAPI): void {
       if (registryModels.length > 0 && store && store.models.length > 0) {
         // Same credential gate the spawn-time injection uses, so what we show
         // is what a subagent would actually get.
-        const isProviderUsable = await buildSubagentProviderAuthFilter(
+        const isProviderUsable = buildSubagentProviderAuthFilter(
           ctx.modelRegistry,
           registryModels as never,
         );

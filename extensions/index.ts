@@ -122,7 +122,7 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     // Gate by credentials: pi-subagents consumes the injected model verbatim
     // and hard-fails ("No API key found for <provider>") on a provider we are
     // not logged into.
-    const isProviderUsable = await buildSubagentProviderAuthFilter(modelRegistry, allowedModels);
+    const isProviderUsable = buildSubagentProviderAuthFilter(modelRegistry, allowedModels);
     // Pass ctx through so project-scoped pins (.pi/settings.json under
     // ctx.cwd) are discovered, not just user-scope ones — without this, a
     // project pin silently loses to router injection at spawn time.
