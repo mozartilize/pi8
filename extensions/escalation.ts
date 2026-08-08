@@ -27,7 +27,10 @@ export const ROUTE_UP_TOOL = 'route_up';
  * name/description in the skills listing; a fast model would have to choose to
  * `read` the file before it even learns it can escalate. Inlining the rules
  * removes that dependency so the tier most likely to need escalation always
- * sees them. Keep this in sync with skills/route-up/SKILL.md.
+ * sees them. This inline paragraph and skills/route-up/SKILL.md are two
+ * renderings of one invocation contract; their shared contract is guarded by
+ * route-up-guidance.test.ts. SKILL.md intentionally adds a skill-only
+ * "Router behavior and boundaries" section not included inline.
  */
 export const ROUTE_UP_INLINE_GUIDANCE = [
   '[router/auto] You were selected automatically for this turn.',
