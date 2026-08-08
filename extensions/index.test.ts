@@ -37,6 +37,7 @@ vi.mock('./config.js', () => ({ loadConfig: vi.fn(() => ({ debug: false })) }));
 vi.mock('./allowlist.js', () => ({
   loadModelFilter: vi.fn(() => () => true),
   buildExcludeFilter: vi.fn(() => () => false),
+  buildScopedModelFilter: vi.fn(() => () => true),
 }));
 const mockRoleModels = new Map<Role, string>([
   ['worker', 'alpha/cheap'],

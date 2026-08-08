@@ -81,3 +81,29 @@ export function loadConfigBlacklistFilter(): (registryId: string) => boolean {
     return () => false;
   }
 }
+
+/**
+ * Build a predicate that restricts routing to Pi's native session-scoped
+ * models (`--models` / `enabledModels`). When the user has scoped their
+ * session, this is the authoritative user-intent signal — it must intersect
+ * every candidate filter as a hard layer, not a soft preference. An empty or
+ * absent scope means no scoping is configured and every model is usable.
+ *
+ * {@link https://pi.ai/docs/extensions#ctxmodelregistry--ctxmodel--ctxthinkinglevel--ctxscopedmodels Pi docs}
+ */
+export function buildScopedModelFilter(
+  scopedModels?: readonly { model: { provider: string; id: string } }[] | null,
+): (registryId: string) => boolean {
+  if (!Array.isArray(scopedModels) || scopedModels.length === 0) return () => true;
+
+  const allowed = new Set<string>();
+  for (const sm of scopedModels) {
+    if (sm?.model?.provider && sm?.model?.id) {
+      allowed.add(`${sm.model.provider}/${sm.model.id}`.toLowerCase());
+    }
+  }
+  // Defensive: if every entry was malformed, degrade to allow-all.
+  if (allowed.size === 0) return () => true;
+
+  return (registryId: string) => allowed.has(registryId.toLowerCase());
+}

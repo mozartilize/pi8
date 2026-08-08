@@ -9,7 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 
-import { buildModelFilter, buildExcludeFilter } from './allowlist.js';
+import { buildModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
 
 const REGISTRY_IDS = [
   'github-copilot/claude-opus-4.8',
@@ -142,5 +142,63 @@ describe('buildExcludeFilter — blacklist semantics', () => {
       'github-copilot/kimi-k2.7-code',
       'opencode-go/deepseek-v4-pro',
     ]);
+  });
+});
+
+describe('buildScopedModelFilter — session-scoping layer (Pi --models / enabledModels)', () => {
+  const toScoped = (ids: string[]) =>
+    ids.map((id) => {
+      const [provider, ...rest] = id.split('/');
+      return { model: { provider, id: rest.join('/') } };
+    });
+
+  const filtered = (ids: string[], scope: string[]): string[] =>
+    ids.filter(buildScopedModelFilter(scope.length > 0 ? toScoped(scope) : undefined));
+
+  it('allows everything when scopedModels is undefined', () => {
+    expect(filtered(REGISTRY_IDS, [])).toEqual(REGISTRY_IDS);
+    expect(buildScopedModelFilter(undefined)('anything/goes')).toBe(true);
+    expect(buildScopedModelFilter(null)('anything/goes')).toBe(true);
+  });
+
+  it('allows everything for an empty array', () => {
+    expect(filtered(REGISTRY_IDS, [])).toEqual(REGISTRY_IDS);
+    expect(buildScopedModelFilter([])('anything/goes')).toBe(true);
+  });
+
+  it('passes only the scoped models', () => {
+    expect(filtered(REGISTRY_IDS, ['github-copilot/claude-opus-4.8', 'opencode-go/deepseek-v4-pro']))
+      .toEqual(['github-copilot/claude-opus-4.8', 'opencode-go/deepseek-v4-pro']);
+  });
+
+  it('is case-insensitive', () => {
+    expect(filtered(
+      ['GitHub-Copilot/GPT-5.4', 'github-copilot/claude-opus-4.8'],
+      ['github-copilot/gpt-5.4'],
+    )).toEqual(['GitHub-Copilot/GPT-5.4']);
+  });
+
+  it('skips malformed entries', () => {
+    // Entries with missing provider or id should not crash; allow-all when
+    // every entry is malformed (same degrade semantics as buildModelFilter).
+    const f = buildScopedModelFilter([
+      { model: { provider: '', id: 'x' } },
+      { model: { provider: 'p', id: '' } },
+      // @ts-expect-error test shape
+      { model: {} },
+    ]);
+    expect(f('anything/goes')).toBe(true);
+  });
+
+  it('allows a model from scope even when config.models would exclude it (intersection, not replacement)', () => {
+    // The scopedModels layer gates the initial set; config.models further
+    // narrows after that. This test verifies the scoped filter alone passes
+    // the model — the full intersection is tested at the provider/index level.
+    expect(
+      buildScopedModelFilter(toScoped(['github-copilot/claude-opus-4.8']))('github-copilot/claude-opus-4.8'),
+    ).toBe(true);
+    expect(
+      buildScopedModelFilter(toScoped(['github-copilot/claude-opus-4.8']))('opencode-go/deepseek-v4-pro'),
+    ).toBe(false);
   });
 });

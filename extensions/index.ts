@@ -28,7 +28,7 @@ import { SubagentEscalationHooks } from './subagent-escalation-hooks.js';
 import { SubagentRoutingState } from './subagent-routing-state.js';
 import { extractMissingTools } from './gap-detector.js';
 import { collectSubagentResultText } from './subagent-results.js';
-import { loadModelFilter, buildExcludeFilter } from './allowlist.js';
+import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
 import { loadConfig } from './config.js';
 import { setSessionFile } from './sessionpaths.js';
 import { setConfigDebug } from './debuglog.js';
@@ -108,6 +108,11 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
     const blacklistedSet = getBlacklistedModels();
     const blacklistedProviders = getBlacklistedProviders();
+    // Pi's native session scoping (--models / enabledModels) is the
+    // authoritative user-intent signal for which models are usable.
+    const isScoped = buildScopedModelFilter(ctx?.scopedModels as
+      | readonly { model: { provider: string; id: string } }[]
+      | undefined);
     const allowedModels = models.filter((m) => {
       if (!m.provider || m.provider === 'router') return false;
       const registryId = `${m.provider}/${m.id}`;
@@ -115,7 +120,8 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
         isModelAllowed(registryId) &&
         !isBlacklisted(registryId) &&
         !blacklistedSet.has(registryId) &&
-        !blacklistedProviders.has(m.provider)
+        !blacklistedProviders.has(m.provider) &&
+        isScoped(registryId)
       );
     });
     if (allowedModels.length === 0) return;

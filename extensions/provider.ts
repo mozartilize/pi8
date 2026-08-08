@@ -28,7 +28,7 @@ import { DIMENSION_STRENGTH } from './classifier.js';
 import { DEFAULT_EMBEDDING_MIN_CONFIDENCE } from './constants.js';
 import { embedAndClassify } from './embedding.js';
 import { getTurnClassificationInput, buildRoleLabelledContext } from './continuation.js';
-import { loadModelFilter, buildExcludeFilter } from './allowlist.js';
+import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
 import { loadConfig } from './config.js';
 import { runAssessment, type AssessmentConfig } from './consult.js';
 import { adoptAssessment, shouldVetoLatch } from './assessment-adoption.js';
@@ -491,6 +491,13 @@ export function registerAutoRouterProvider(
             const isModelAllowed = loadModelFilter();
             const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
             const blacklistedProviders = getBlacklistedProviders();
+            // Pi's native session scoping (--models / enabledModels) is the
+            // authoritative user-intent signal for which models are usable.
+            const isScoped = buildScopedModelFilter(
+              extensionContext?.scopedModels as
+                | readonly { model: { provider: string; id: string } }[]
+                | undefined,
+            );
             const allCandidates = (regModels as unknown as RegistryModelInfo[])
               .filter(
                 (rm) =>
@@ -498,7 +505,8 @@ export function registerAutoRouterProvider(
                   rm.provider !== ROUTER_PROVIDER_ID &&
                   !blacklistedProviders.has(rm.provider) &&
                   isModelAllowed(`${rm.provider}/${rm.id}`) &&
-                  !isBlacklisted(`${rm.provider}/${rm.id}`),
+                  !isBlacklisted(`${rm.provider}/${rm.id}`) &&
+                  isScoped(`${rm.provider}/${rm.id}`),
               )
               .flatMap((rm) => expandModelCandidates(rm, rowsByModel.get(`${rm.provider}/${rm.id}`) ?? []));
             const candidates = allCandidates.filter(
