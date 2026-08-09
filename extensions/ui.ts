@@ -106,10 +106,16 @@ export function formatDecisionDetail(
   }
   if (decision.multiWork) {
     const mw = decision.multiWork;
-    lines.push(`  terminal:   ${mw.terminalBand} band, phase ${mw.phase} (invocation ${mw.providerInvocation})`);
+    lines.push(
+      `  terminal:   ${mw.terminal.kind}/${mw.terminal.complexity}, ${mw.terminalBand} band, phase ${mw.phase} (invocation ${mw.providerInvocation})`,
+    );
     if (mw.servedCapability) {
       const ratio = mw.servedCapability.taskRatio != null ? mw.servedCapability.taskRatio.toFixed(2) : 'unknown';
       lines.push(`  served-cap: ratio ${ratio}, clears floor: ${mw.servedCapability.clearsTerminalFloor}`);
+    }
+    if (mw.mutationGateEscaped) {
+      const degraded = mw.capabilityDegraded ? ' (capability degraded)' : '';
+      lines.push(`  gate:       blocked invocation ${mw.gateBlockedInvocation}, escaped${degraded}`);
     }
   }
   if (decision.switched) {

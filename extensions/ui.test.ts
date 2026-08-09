@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { clearRouterStatus, formatStatus, formatDecisionDetail, formatAssessmentSpend, formatEmbeddingStats } from './ui.js';
+import { multiWorkRoutingMeta } from './test-support/router-fixtures.js';
 import type { RoutingDecision } from './types.js';
 
 const decision: RoutingDecision = {
@@ -132,6 +133,62 @@ describe('formatDecisionDetail', () => {
 
     expect(lines).toContain('gate:       cheap/model promoted');
     expect(lines).toContain('gate:       weak/model below-task-floor');
+  });
+
+  it('shows terminal kind/band and phase for engaged multi-work decisions', () => {
+    const lines = formatDecisionDetail(
+      { ...decision, multiWork: multiWorkRoutingMeta({ phase: 'inspect', providerInvocation: 2 }) },
+      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
+    ).join('\n');
+    expect(lines).toContain('terminal:   implement/hard, frontier band, phase inspect (invocation 2)');
+  });
+
+  it('reports the actual served capability ratio, or unknown without a task ratio', () => {
+    const withRatio = formatDecisionDetail(
+      {
+        ...decision,
+        multiWork: multiWorkRoutingMeta({
+          servedCandidateKey: decision.chosen,
+          servedCapability: { taskRatio: 0.72, clearsTerminalFloor: true, viaInspectPromotion: false },
+        }),
+      },
+      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
+    ).join('\n');
+    expect(withRatio).toContain('served-cap: ratio 0.72, clears floor: true');
+
+    const withoutRatio = formatDecisionDetail(
+      {
+        ...decision,
+        multiWork: multiWorkRoutingMeta({
+          servedCandidateKey: decision.chosen,
+          servedCapability: { clearsTerminalFloor: 'unknown', viaInspectPromotion: false },
+        }),
+      },
+      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
+    ).join('\n');
+    expect(withoutRatio).toContain('served-cap: ratio unknown, clears floor: unknown');
+  });
+
+  it('reports a mutation-gate escape and capability degradation only when present', () => {
+    const escaped = formatDecisionDetail(
+      {
+        ...decision,
+        multiWork: multiWorkRoutingMeta({
+          gateBlockedInvocation: 2,
+          mutationGateEscaped: true,
+          capabilityDegraded: true,
+        }),
+      },
+      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
+    ).join('\n');
+    expect(escaped).toContain('gate:       blocked invocation 2, escaped (capability degraded)');
+
+    const clean = formatDecisionDetail(
+      { ...decision, multiWork: multiWorkRoutingMeta() },
+      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
+    ).join('\n');
+    expect(clean).not.toContain('escaped');
+    expect(clean).not.toContain('capability degraded');
   });
 
   it('adds advisory detail for context pressure', () => {

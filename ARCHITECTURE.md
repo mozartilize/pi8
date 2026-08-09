@@ -200,7 +200,54 @@ Parent-assisted respawn described in §4. User-pinned roles are never overridden
 
 ---
 
-## 7. Data flow
+## 7. Terminal work and multi-work routing
+
+Covers explicit compound implementation requests — "find X, then fix it" — where the terminal deliverable (a mutation) is harder than its own inspect phase. Ordinary intents are unaffected: this machinery only engages for `implement`-dimension turns whose terminal classification is compound and discount-eligible.
+
+### Terminal classification (`terminal-classifier.ts`)
+
+A pure, deterministic structural classifier — separate from the keyword/semantic dimension classifiers — extracts one `TerminalAssessment` per entry: `kind` (same vocabulary as `Dimension`), `complexity` (`trivial`|`routine`|`moderate`|`hard`|`frontier`), `scope` (`bounded`|`open-ended`), `compound`, `confidence`, and `discountEligible`. `compound` requires an explicit prerequisite → sequence → mutation structure (e.g. "investigate the race condition, then fix it"); anything defaulted (complexity or scope inferred rather than matched) withholds `discountEligible` — the inspect-phase discount is a licence, so only unambiguous evidence earns it.
+
+### Terminal requirement and capability band (`work-phase.ts`)
+
+```
+requirement = clamp01(KIND_BASE[kind] + 0.5 × COMPLEXITY[complexity] + (scope === 'open-ended' ? 0.1 : 0))
+```
+
+| Band | Requirement | Floor |
+|---|---|---|
+| `economy` | < 0.30 | none |
+| `standard` | < 0.50 | 0.45 |
+| `strong` | < 0.75 | 0.70 |
+| `frontier` | ≥ 0.75 | 0.85 |
+
+### Phase lifecycle
+
+Each intent owns one `WorkPhase`: `answer` (lightweight), `inspect` (gather, or an engaged compound implementation's opening phase), `reason` (plan/review), `mutate` (implement, or a compound implementation once it has left `inspect`). Multi-work only *engages* — granting the inspect-phase discount — when the terminal kind is compound-eligible implement, band is `strong` or `frontier`, confidence isn't low, the resolved dimension is `implement`, and no capability repick is active. Once engaged, phase advances `inspect` → `mutate` when a stronger routing owner takes over (dimension changes away from `implement`, or a capability repick activates) — never automatically downward, and never once the turn leaves `inspect`.
+
+### Scoring policy (`scorer.ts`)
+
+An engaged intent supplies a request-local `MultiWorkScoringPolicy` — `terminalFloor` (the terminal band's floor) and `inspectFloor` (one band below, while still in `inspect`) — instead of the ordinary live tier/promotion parameters. This is the *only* place quality can be measured below terminal preference: a bounded, deterministic economic promotion for the inspect phase, not an uncertainty downgrade. Every scored candidate also carries `CandidateCapabilityMeta` (`taskRatio`, `clearsTerminalFloor`, `viaInspectPromotion`) so the caller knows, per candidate, whether it actually clears the terminal floor or only the inspect floor.
+
+### Materializing served capability (`delegation.ts`)
+
+Capability is evaluated for the *candidate that actually serves* the turn, not the top-ranked pick — fallback can serve a weaker sibling. `ServedCapabilityMeta` (provider invocation, terminal floor, whether any candidate in the scoring set ever cleared it, and the served candidate's own capability) is materialized before decision state is published, so the mutation gate always reads settled evidence for the invocation that is actually streaming.
+
+### Mutation gate (`mutation-gate.ts`)
+
+Pure, fail-open, invocation-bounded state transitions gating `edit`/`write` tool calls. While engaged and still in `inspect`, a mutation call is blocked once per provider invocation unless served capability already clears the terminal floor (`clearsTerminalFloor === true`) or is genuinely unknown (`'unknown'` proceeds — unmeasured is not proof of insufficiency, and blocking on it would wait forever). A later invocation after a block always escapes — one bounded handoff, not a hard veto, since the router cannot guarantee a stronger model exists. Missing or incoherent served-capability evidence fails open immediately rather than stalling the turn. A blocked call returns as an error tool result, prompting the agent to request another provider turn (per Pi's tool-call/tool-result contract).
+
+### Assessor v2 contract (`assessment-prompt.ts`)
+
+`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. The assessor returns the same `{ kind, complexity, scope, compound, confidence, reasoning }` shape as the terminal classifier (`ParsedAssessment`/`RoutingAssessment`), replacing the prior `dimension`/`outcome`/`scope: AssessmentScope` contract. Shadow and active modes dispatch the identical prompt and parser — shadow logs an `assessment-shadow` decision-log record without influencing routing; active may adopt the verdict. The assessor's `complexity`/`compound` fields inform terminal classification only — they never gate routing directly, and there is no automatic verify-phase down-routing.
+
+### Decision surfacing
+
+`RoutingDecision.multiWork` (a `MultiWorkRoutingMeta`) is present only for engaged intents. `/router-status` and `/router-why` (`formatDecisionDetail` in `ui.ts`) print terminal kind/complexity/band and phase/invocation, the actual served capability ratio (or `unknown` without a measured ratio), and a gate line only when a block/escape actually occurred. Decisions without engaged multi-work metadata render exactly as before.
+
+---
+
+## 8. Data flow
 
 ### Benchmarks
 
@@ -226,7 +273,7 @@ Per-step millisecond timing (opt-in via the `debug` config): registry wait, clas
 
 ---
 
-## 8. Configuration reference
+## 9. Configuration reference
 
 Options in `~/.pi/agent/pi8/config.json`:
 
@@ -256,7 +303,7 @@ Options in `~/.pi/agent/pi8/config.json`:
 
 ---
 
-## 9. Non-goals
+## 10. Non-goals
 
 - Semantic answer grading or automatic retries on perceived quality
 - Replaying after visible text or a tool call, or replacing a running child in-place
@@ -265,7 +312,7 @@ Options in `~/.pi/agent/pi8/config.json`:
 
 ---
 
-## 10. Development
+## 11. Development
 
 ```bash
 npm run check   # tsc --noEmit + vitest run

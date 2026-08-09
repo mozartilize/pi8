@@ -51,6 +51,8 @@ Every turn the router automatically:
 
 Uncertainty always routes up: missing data, ambiguous prompts, and low confidence never make routing cheaper. Overserving is cheap; underserving costs a bad answer.
 
+All `router/auto` intents run through this same pipeline. For an explicit compound implementation request ("investigate X, then fix it"), the router automatically recognizes that its terminal deliverable — the fix — is harder than its own inspect phase, and lets one frontier-band intent open at a cheaper, standard/strong-band model for inspection before handing off to a model that clears the terminal requirement once mutation (`edit`/`write`) starts. This activates automatically whenever it applies — there's no configuration key or hidden switch for it. The handoff is bounded to one attempt per mutation call; if no stronger model is available, the router degrades to letting the mutation through rather than stalling the turn. This only ever governs `edit`/`write` calls — a mutating `bash` command is not parsed or gated. Concrete-model sessions (a specific model, not `router/auto`) are completely unaffected.
+
 ## Commands
 
 | Command | Purpose |

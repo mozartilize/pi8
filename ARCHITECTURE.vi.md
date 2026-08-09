@@ -203,7 +203,54 @@ Parent-assisted respawn được mô tả trong §4. Các role bị người dù
 
 ---
 
-## 7. Luồng dữ liệu
+## 7. Terminal work và multi-work routing
+
+Bao phủ các yêu cầu implement dạng compound tường minh — "tìm X, rồi sửa nó" — nơi deliverable cuối (một mutation) khó hơn chính inspect phase của nó. Các intent thông thường không bị ảnh hưởng: cơ chế này chỉ engage cho các turn dimension `implement` có terminal classification là compound và discount-eligible.
+
+### Terminal classification (`terminal-classifier.ts`)
+
+Một classifier cấu trúc thuần, deterministic — tách biệt với các classifier dimension theo keyword/semantic — trích một `TerminalAssessment` cho mỗi entry: `kind` (cùng từ vựng với `Dimension`), `complexity` (`trivial`|`routine`|`moderate`|`hard`|`frontier`), `scope` (`bounded`|`open-ended`), `compound`, `confidence`, và `discountEligible`. `compound` đòi hỏi cấu trúc tường minh prerequisite → sequence → mutation (vd. "điều tra race condition, rồi sửa nó"); bất kỳ giá trị nào bị suy ra mặc định (complexity hoặc scope không match trực tiếp) sẽ giữ lại `discountEligible = false` — discount của inspect phase là một giấy phép, nên chỉ bằng chứng rõ ràng mới được cấp.
+
+### Terminal requirement và capability band (`work-phase.ts`)
+
+```
+requirement = clamp01(KIND_BASE[kind] + 0.5 × COMPLEXITY[complexity] + (scope === 'open-ended' ? 0.1 : 0))
+```
+
+| Band | Requirement | Floor |
+|---|---|---|
+| `economy` | < 0.30 | none |
+| `standard` | < 0.50 | 0.45 |
+| `strong` | < 0.75 | 0.70 |
+| `frontier` | ≥ 0.75 | 0.85 |
+
+### Vòng đời phase
+
+Mỗi intent sở hữu một `WorkPhase`: `answer` (lightweight), `inspect` (gather, hoặc phase mở đầu của một compound implementation đã engage), `reason` (plan/review), `mutate` (implement, hoặc một compound implementation sau khi đã rời `inspect`). Multi-work chỉ *engage* — cấp discount cho inspect phase — khi terminal kind là implement compound-eligible, band là `strong` hoặc `frontier`, confidence không thấp, resolved dimension là `implement`, và không có capability repick đang active. Sau khi engage, phase tiến `inspect` → `mutate` khi một routing owner mạnh hơn tiếp quản (dimension đổi khỏi `implement`, hoặc một capability repick kích hoạt) — không bao giờ tự động lùi lại, và không bao giờ một khi turn đã rời `inspect`.
+
+### Scoring policy (`scorer.ts`)
+
+Một intent đã engage cung cấp một `MultiWorkScoringPolicy` request-local — `terminalFloor` (floor của terminal band) và `inspectFloor` (thấp hơn một band, khi còn ở `inspect`) — thay vì tham số tier/promotion sống thông thường. Đây là *nơi duy nhất* chất lượng có thể được đo dưới terminal preference: một economic promotion bị giới hạn, deterministic cho inspect phase, không phải một hạ cấp vì uncertainty. Mỗi candidate được chấm điểm cũng mang `CandidateCapabilityMeta` (`taskRatio`, `clearsTerminalFloor`, `viaInspectPromotion`) để caller biết, theo từng candidate, liệu nó thực sự đạt terminal floor hay chỉ đạt inspect floor.
+
+### Materialize served capability (`delegation.ts`)
+
+Capability được đánh giá cho *candidate thực sự phục vụ* turn, không phải candidate xếp hạng cao nhất — fallback có thể phục vụ một sibling yếu hơn. `ServedCapabilityMeta` (provider invocation, terminal floor, liệu có candidate nào trong scoring set từng đạt floor, và capability của candidate đang phục vụ) được materialize trước khi decision state được publish, để mutation gate luôn đọc bằng chứng đã settle cho invocation đang thực sự stream.
+
+### Mutation gate (`mutation-gate.ts`)
+
+Các state transition thuần, fail-open, giới hạn theo invocation, gate các tool call `edit`/`write`. Khi đã engage và còn ở `inspect`, một mutation call bị block đúng một lần mỗi provider invocation trừ khi served capability đã đạt terminal floor (`clearsTerminalFloor === true`) hoặc thực sự unknown (`'unknown'` được cho qua — chưa đo không phải bằng chứng thiếu năng lực, và block trên đó sẽ chờ vô thời hạn). Một invocation sau đó, sau khi bị block, luôn thoát gate — một handoff giới hạn, không phải veto cứng, vì router không thể đảm bảo tồn tại một model mạnh hơn. Bằng chứng served-capability thiếu hoặc không nhất quán sẽ fail-open ngay thay vì làm nghẽn turn. Một call bị block trả về như một tool result lỗi, khiến agent yêu cầu một provider turn khác (theo hợp đồng tool-call/tool-result của Pi).
+
+### Assessor v2 contract (`assessment-prompt.ts`)
+
+`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. Assessor trả về cùng shape `{ kind, complexity, scope, compound, confidence, reasoning }` như terminal classifier (`ParsedAssessment`/`RoutingAssessment`), thay thế contract `dimension`/`outcome`/`scope: AssessmentScope` trước đó. Shadow và active mode dispatch cùng một prompt và parser — shadow chỉ ghi một record `assessment-shadow` vào decision log mà không ảnh hưởng routing; active có thể adopt verdict. Các field `complexity`/`compound` của assessor chỉ cung cấp thông tin cho terminal classification — chúng không bao giờ gate routing trực tiếp, và không có down-routing tự động cho verify-phase.
+
+### Hiển thị decision
+
+`RoutingDecision.multiWork` (một `MultiWorkRoutingMeta`) chỉ có mặt cho các intent đã engage. `/router-status` và `/router-why` (`formatDecisionDetail` trong `ui.ts`) in terminal kind/complexity/band và phase/invocation, tỉ lệ served capability thực tế (hoặc `unknown` khi không có ratio đo được), và một dòng gate chỉ khi thực sự có block/escape xảy ra. Các decision không có multiWork metadata đã engage vẫn render y hệt như trước.
+
+---
+
+## 8. Luồng dữ liệu
 
 ### Benchmark
 
@@ -229,7 +276,7 @@ Timing từng bước theo mili-giây (opt-in qua config `debug`): chờ registr
 
 ---
 
-## 8. Tham chiếu cấu hình
+## 9. Tham chiếu cấu hình
 
 Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 
@@ -259,7 +306,7 @@ Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 
 ---
 
-## 9. Ngoài phạm vi
+## 10. Ngoài phạm vi
 
 - Chấm chất lượng câu trả lời theo ngữ nghĩa hoặc tự động retry dựa trên chất lượng cảm nhận
 - Replay sau khi đã có text hiển thị hoặc tool call, hoặc thay thế child đang chạy ngay tại chỗ
@@ -268,7 +315,7 @@ Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 
 ---
 
-## 10. Phát triển
+## 11. Phát triển
 
 ```bash
 npm run check   # tsc --noEmit + vitest run
