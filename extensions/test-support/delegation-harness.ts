@@ -16,6 +16,7 @@ import { resetRouterSession } from '../router-session-state.js';
 import { clearBlacklistedModels, clearBlacklistedProviders, getBlacklistedModels, getBlacklistedProviders } from '../blacklist.js';
 import { makeTerminalErrorEvent } from '../error-event.js';
 import { routingDecision, registryModel } from './router-fixtures.js';
+import type { RoutingDecision } from '../types.js';
 
 /** One registryId maps to an ordered list of attempt scripts (one per retry). */
 export interface DelegationScript {
@@ -98,6 +99,8 @@ interface RecordingStream {
 export interface DelegationHarnessOptions {
   chain: string[];
   scripts: DelegationScript;
+  /** Full routing decision override; defaults to a minimal decision over `chain`. */
+  decision?: RoutingDecision;
   signal?: AbortSignal;
   /** Turn-level reasoning option (the winning candidate's resolved effort). */
   reasoning?: string;
@@ -149,7 +152,7 @@ function buildRegistry(
 }
 
 export function createDelegationHarness(options: DelegationHarnessOptions): DelegationHarness {
-  const { chain, scripts, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth } = options;
+  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth } = options;
 
   // Per-model ordered attempt queues; each entry is consumed on one streamSimple call.
   type ScriptEntry = readonly unknown[] | Error | AsyncIterable<unknown>;
@@ -218,7 +221,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
       output.length = 0;
       recordingStream.ended = false;
 
-      const decision = routingDecision(chain);
+      const decision = decisionOverride ?? routingDecision(chain);
       const context = {
         messages: [{ role: 'user', content: 'hi' }],
       } as unknown as Context;

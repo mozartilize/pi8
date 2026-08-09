@@ -395,11 +395,11 @@ export async function runDelegationLoop(
           if (!servedTracked && isServedOutputEvent(event.type)) {
             servedTracked = true;
             const viaFallback = candidateIndex > 0;
-            finalDecision = viaFallback
+            const baseDecision = viaFallback
               ? {
                   ...decision,
                   chosen: candidateId,
-                  cause: 'error-fallback',
+                  cause: 'error-fallback' as const,
                   reason: `${decision.reason}; fallback served after an earlier candidate failed`,
                   fallbackChain: [
                     ...new Set([
@@ -409,12 +409,36 @@ export async function runDelegationLoop(
                   ],
                 }
               : decision;
+            // Terminal capability is scored for every candidate up front, but only
+            // the model that actually streams the turn's output has "served"
+            // capability — fallback can substitute a lower-tier sibling.
+            const servedCandidateCapability = baseDecision.multiWork?.candidateCapability[candidateId];
+            const finalMultiWork = baseDecision.multiWork && servedCandidateCapability
+              ? {
+                  ...baseDecision.multiWork,
+                  servedCandidateKey: candidateId,
+                  servedCapability: servedCandidateCapability,
+                }
+              : baseDecision.multiWork;
+            finalDecision = finalMultiWork
+              ? { ...baseDecision, multiWork: finalMultiWork }
+              : baseDecision;
             lastServed = {
               registryId: candidateId,
               thinkingLevel: (effectiveReasoning ?? opts.options?.reasoning) as string | undefined,
               viaFallback,
               fallbackRank: viaFallback ? candidateIndex + 1 : undefined,
               accumulatedCost: getAccumulatedCost(),
+              ...(finalMultiWork?.servedCapability
+                ? {
+                    capability: {
+                      providerInvocation: finalMultiWork.providerInvocation,
+                      terminalFloor: finalMultiWork.terminalFloor,
+                      terminalCapableInScoringSet: finalMultiWork.terminalCapableInScoringSet,
+                      candidate: finalMultiWork.servedCapability,
+                    },
+                  }
+                : {}),
             };
             // First assignment must use the setter, not `updateLastServed`:
             // the turn starts with `setLastServed(undefined)`, and

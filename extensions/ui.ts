@@ -6,7 +6,7 @@
  * /router status and the per-session widget.
  */
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { RoutingDecision } from './types.js';
+import type { RoutingDecision, ServedCapabilityMeta } from './types.js';
 import type { EmbeddingStats } from './router-session-state.js';
 
 export interface ServedInfo {
@@ -21,6 +21,8 @@ export interface ServedInfo {
   fallbackRank?: number;
   /** Session cost accumulated across routed turns, in USD. */
   accumulatedCost: number;
+  /** Terminal capability evidence for the candidate that actually served, when known. */
+  capability?: ServedCapabilityMeta;
 }
 
 function formatServedModel(served: ServedInfo): string {
@@ -100,6 +102,14 @@ export function formatDecisionDetail(
   for (const diagnostic of decision.candidateDiagnostics ?? []) {
     if (diagnostic.excludedReason) {
       lines.push(`  gate:       ${diagnostic.candidateKey} ${diagnostic.excludedReason}`);
+    }
+  }
+  if (decision.multiWork) {
+    const mw = decision.multiWork;
+    lines.push(`  terminal:   ${mw.terminalBand} band, phase ${mw.phase} (invocation ${mw.providerInvocation})`);
+    if (mw.servedCapability) {
+      const ratio = mw.servedCapability.taskRatio != null ? mw.servedCapability.taskRatio.toFixed(2) : 'unknown';
+      lines.push(`  served-cap: ratio ${ratio}, clears floor: ${mw.servedCapability.clearsTerminalFloor}`);
     }
   }
   if (decision.switched) {
