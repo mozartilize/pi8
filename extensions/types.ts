@@ -128,6 +128,56 @@ export type AssessmentConfidence = 'high' | 'medium' | 'low';
 export type AssessmentScope = 'bounded' | 'open-ended';
 export type AssessmentOutcome = 'extract' | 'investigate' | 'plan' | 'implement' | 'review';
 
+/** Terminal-axis kind is the same vocabulary as routing dimensions. */
+export type TaskKind = Dimension;
+export type TaskScope = 'bounded' | 'open-ended';
+export type ComplexityBand = 'trivial' | 'routine' | 'moderate' | 'hard' | 'frontier';
+export type WorkPhase = 'answer' | 'inspect' | 'reason' | 'mutate';
+export type CapabilityBand = 'economy' | 'standard' | 'strong' | 'frontier';
+
+export interface TerminalAssessment {
+  kind: TaskKind;
+  complexity: ComplexityBand;
+  scope: TaskScope;
+  compound: boolean;
+  confidence: AssessmentConfidence;
+  discountEligible: boolean;
+}
+
+export interface CandidateCapabilityMeta {
+  taskRatio?: number;
+  clearsTerminalFloor: boolean | 'unknown';
+  viaInspectPromotion: boolean;
+}
+
+export interface MultiWorkScoringPolicy {
+  terminal: TerminalAssessment;
+  terminalRequirement: number;
+  terminalBand: CapabilityBand;
+  phase: WorkPhase;
+  phaseReason: string;
+  terminalFloor: number;
+  inspectFloor: number;
+  providerInvocation: number;
+}
+
+export interface MultiWorkRoutingMeta extends MultiWorkScoringPolicy {
+  candidateCapability: Record<string, CandidateCapabilityMeta>;
+  terminalCapableInScoringSet: boolean;
+  servedCandidateKey?: string;
+  servedCapability?: CandidateCapabilityMeta;
+  capabilityDegraded?: boolean;
+  mutationGateEscaped?: boolean;
+  gateBlockedInvocation?: number;
+}
+
+export interface ServedCapabilityMeta {
+  providerInvocation: number;
+  terminalFloor: number;
+  terminalCapableInScoringSet: boolean;
+  candidate: CandidateCapabilityMeta;
+}
+
 /** `shadow` logs a counterfactual only; `active` may adopt the verdict. */
 export type AssessmentMode = 'shadow' | 'active';
 
@@ -223,6 +273,8 @@ export interface RoutingDecision {
     threshold: number;
     suggestion: string;
   };
+  /** Multi-work routing metadata when an eligible compound intent is engaged. */
+  multiWork?: MultiWorkRoutingMeta;
 }
 
 export type Role = 'researcher' | 'planner' | 'worker' | 'reviewer' | 'advisor';

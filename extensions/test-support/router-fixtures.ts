@@ -12,7 +12,7 @@
 import type { Api } from '@earendil-works/pi-ai';
 
 import type { RegistryModelInfo } from '../scorer.js';
-import type { BenchModel, Candidate, RoutingDecision } from '../types.js';
+import type { BenchModel, Candidate, RoutingDecision, TerminalAssessment } from '../types.js';
 import type { SubagentResultRow } from '../subagent-results.js';
 
 /** A minimal, hand-filled routing decision across `chain`. */
@@ -26,6 +26,21 @@ export function routingDecision(chain: string[]): RoutingDecision {
     routedDown: false,
     cause: 'heuristic',
     fallbackChain: [...chain],
+  };
+}
+
+/** Default terminal assessment matching the canonical compound work fixture. */
+export function terminalAssessment(
+  overrides: Partial<TerminalAssessment> = {},
+): TerminalAssessment {
+  return {
+    kind: 'implement',
+    complexity: 'hard',
+    scope: 'open-ended',
+    compound: true,
+    confidence: 'high',
+    discountEligible: true,
+    ...overrides,
   };
 }
 
