@@ -4,11 +4,14 @@
  * Once multi-work routing has engaged an inspect phase (rule: an inspect-tier
  * candidate serves the turn), a mutation call (`edit`/`write`) that arrives
  * before the served candidate is known to clear the terminal capability floor
- * is blocked exactly once per provider invocation. A later invocation (the
- * model retried after the block, or a stronger routing owner took over)
- * always escapes the gate — this is a bounded handoff, not a hard veto: the
- * router does not have a way to guarantee a stronger model exists, so it
- * degrades to "let it through" rather than stalling the turn forever.
+ * is blocked exactly once per provider invocation. The block itself advances
+ * the phase to `mutate`, so the next invocation scores against the terminal
+ * floor instead of the inspect floor — that transition is the whole point of
+ * the gate. Siblings of the blocked invocation still get the same block,
+ * because the served capability cannot change until the provider is invoked
+ * again. A later invocation always escapes: the router cannot guarantee a
+ * stronger model exists, so it degrades to "let it through" rather than
+ * stalling the turn forever.
  *
  * Pure state transitions only: no I/O, no registry/session access. `state`
  * is never mutated in place — every branch returns a fresh object (or the
@@ -19,6 +22,7 @@ import type { ServedInfo } from './ui.js';
 import type { WorkPhaseState } from './work-phase.js';
 
 const MUTATION_TOOLS = new Set(['edit', 'write']);
+const BLOCK_REASON = 'mutation blocked pending stronger capability for this invocation';
 
 export interface MutationCallInput {
   toolName: string;
@@ -58,13 +62,35 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
   if (!MUTATION_TOOLS.has(toolName)) return { block: false };
   if (!state) return { block: false };
 
-  // Not engaged, or already past the gate this invocation: track the call for
-  // result correlation, but the capability gate never applies.
+  const capability: ServedCapabilityMeta | undefined = served?.capability;
+
+  // The gate already fired for this intent. Siblings of the blocked
+  // invocation repeat the block (nothing about the served capability can have
+  // changed yet); anything later passes exactly once, whether because a
+  // terminal owner took over or because the escape has to fire.
+  if (state.mutationGateTriggered) {
+    const invocation = capability?.providerInvocation;
+    if (invocation !== undefined && state.gateBlockedInvocation === invocation) {
+      return { block: true, reason: BLOCK_REASON, nextState: state, metadata: { clearance: false } };
+    }
+    const clearance = capability?.candidate.clearsTerminalFloor ?? 'unknown';
+    const cleared = clearance === true;
+    return {
+      block: false,
+      nextState: withPendingId(state, toolCallId, {
+        phaseReason: cleared ? 'terminal-cleared' : 'gate-escape',
+      }),
+      metadata: cleared
+        ? { clearance }
+        : { clearance, capabilityDegraded: true, mutationGateEscaped: true },
+    };
+  }
+
+  // Not engaged, or already past the gate: track the call for result
+  // correlation, but the capability gate never applies.
   if (!state.multiWorkEngaged || state.phase === 'mutate') {
     return { block: false, nextState: withPendingId(state, toolCallId) };
   }
-
-  const capability: ServedCapabilityMeta | undefined = served?.capability;
 
   // Missing or incoherent served-capability evidence must never stall a
   // turn — fail open, advance to mutate, and record genuine uncertainty
@@ -100,37 +126,16 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
     };
   }
 
-  const invocation = capability.providerInvocation;
-
-  // A prior invocation was already blocked and this is a later one (a retry,
-  // or a stronger routing owner took over): the bounded escape fires
-  // exactly once per block, regardless of this invocation's own clearance.
-  if (state.mutationGateTriggered && state.gateBlockedInvocation !== invocation) {
-    return {
-      block: false,
-      nextState: withPendingId(state, toolCallId, { phaseReason: 'gate-escape' }),
-      metadata: { clearance: false, capabilityDegraded: true, mutationGateEscaped: true },
-    };
-  }
-
-  // Same invocation already blocked: every sibling call gets the same
-  // intentional block, without incrementing the block counter again.
-  if (state.gateBlockedInvocation === invocation) {
-    return {
-      block: true,
-      reason: 'mutation blocked pending stronger capability for this invocation',
-      nextState: state,
-      metadata: { clearance: false },
-    };
-  }
-
-  // First block for this invocation.
+  // First block. Advancing to `mutate` is the handoff: the next invocation
+  // scores against the terminal floor rather than the inspect floor.
   return {
     block: true,
-    reason: 'mutation blocked pending stronger capability for this invocation',
+    reason: BLOCK_REASON,
     nextState: {
       ...state,
-      gateBlockedInvocation: invocation,
+      phase: 'mutate',
+      phaseReason: 'gate-handoff',
+      gateBlockedInvocation: capability.providerInvocation,
       mutationGateTriggered: true,
       mutationGateBlocks: state.mutationGateBlocks + 1,
     },

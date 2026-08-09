@@ -266,14 +266,17 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   }
 
   // Step 5: score with the configured active-dimension weights.
-  const pickOpts: ScoreOpts = {
+  // The multi-work phase floors are request-local to the primary pick: a
+  // capability repick and the routed-pick counterfactual answer different
+  // questions, so they score with ordinary options.
+  const baseOpts: ScoreOpts = {
     estimatedContextTokens,
     incumbentRegistryId,
     needsVision,
     isSubagentSpawn: false,
     switchMargin: config.switchMargin,
-    ...(multiWorkPolicy ? { multiWorkPolicy } : {}),
   };
+  const pickOpts: ScoreOpts = multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
   let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
 
   // Step 6: repick away from the source model when scoring would keep it, or
@@ -292,7 +295,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
       candidates,
       dimension,
       repick.fromModel,
-      pickOpts,
+      baseOpts,
     );
     if (escalationDecision) {
       decision = escalationDecision;
@@ -338,7 +341,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
       candidates,
       classifyResult.dimension,
       config.dimensionWeights[classifyResult.dimension],
-      pickOpts,
+      baseOpts,
     );
     decision.routedPickChanged = heuristicPick.chosen !== decision.chosen;
   }

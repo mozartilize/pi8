@@ -757,6 +757,40 @@ describe('resolveRoutingDecision — multiWorkPolicy threading', () => {
     expect(result.decision.multiWork?.phase).toBe('inspect');
   });
 
+  it('keeps the request-local floors out of the routed-pick counterfactual', () => {
+    const policy = {
+      terminal: terminalAssessment(),
+      terminalRequirement: 0.85,
+      terminalBand: 'frontier' as const,
+      phase: 'inspect' as const,
+      phaseReason: 'test-inspect',
+      terminalFloor: 0.85,
+      inspectFloor: 0.70,
+      providerInvocation: 1,
+    };
+    const withPolicy = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        estimatedContextTokens: 90_000,
+        multiWorkPolicy: policy,
+      }),
+    );
+    const withoutPolicy = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        estimatedContextTokens: 90_000,
+      }),
+    );
+
+    expect(withPolicy.decision.routedUp).toBe(true);
+    expect(withPolicy.decision.chosen).toBe(withoutPolicy.decision.chosen);
+    expect(withPolicy.decision.routedPickChanged).toBe(withoutPolicy.decision.routedPickChanged);
+  });
+
   it('leaves decision.multiWork undefined when no multiWorkPolicy is supplied', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({

@@ -311,11 +311,12 @@ export function registerCommands(pi: ExtensionAPI): void {
         lines.push(formatEmbeddingStats(embStats));
       }
       // M4: show recent routing history, surfacing any real fallbacks.
-      // Shadow counterfactual records join decisions by intentKey offline and
-      // must never be aggregated into routing history.
+      // Only actual routing decisions belong here: shadow counterfactuals and
+      // mutation-gate signals join decisions by intentKey offline, and letting
+      // them through would push real turns out of the recent window.
       const history = readRecentDecisions(20);
       const routingHistory = history.filter(
-        (e) => e.cause !== 'self-healing-gap' && e.kind !== 'assessment-shadow',
+        (e) => e.cause !== 'self-healing-gap' && (e.kind === undefined || e.kind === 'decision'),
       );
       const fallbacks = routingHistory.filter((e) => e.viaFallback);
       if (routingHistory.length > 0) {

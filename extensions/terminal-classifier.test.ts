@@ -22,6 +22,21 @@ describe('terminal classifier', () => {
     expect(assessTerminal(prompt).discountEligible).toBe(false);
   });
 
+  it.each([
+    'review the auth flow, then fix it',
+    'design the solution, then implement it',
+  ])('takes the last stated deliverable as terminal: %s', (prompt) => {
+    expect(assessTerminal(prompt).kind).toBe('implement');
+  });
+
+  it.each([
+    ['review the auth flow', 'review'],
+    ['plan the migration', 'plan'],
+    ["review the auth flow, but don't fix anything", 'review'],
+  ])('keeps a non-mutating deliverable: %s', (prompt, kind) => {
+    expect(assessTerminal(prompt).kind).toBe(kind);
+  });
+
   it('lets compound structure be positive moderate-complexity evidence', () => {
     expect(assessTerminal('investigate the auth flow, then fix it')).toMatchObject({
       complexity: 'moderate',

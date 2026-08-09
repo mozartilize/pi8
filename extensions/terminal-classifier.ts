@@ -77,6 +77,18 @@ const indexAfter = (text: string, cues: readonly RegExp[], from: number): number
   return found === -1 ? -1 : from + found;
 };
 
+const lastIndex = (text: string, cues: readonly RegExp[]): number => {
+  let latest = -1;
+  for (const cue of cues) {
+    const scan = new RegExp(cue.source, `${cue.flags}g`);
+    for (let match = scan.exec(text); match; match = scan.exec(text)) {
+      if (match.index > latest) latest = match.index;
+      if (match.index === scan.lastIndex) scan.lastIndex += 1;
+    }
+  }
+  return latest;
+};
+
 const matches = (text: string, cues: readonly RegExp[]): boolean => firstIndex(text, cues) !== -1;
 
 export function assessTerminal(prompt: string): TerminalAssessment {
@@ -129,6 +141,12 @@ export function assessTerminal(prompt: string): TerminalAssessment {
 
 function terminalKind(text: string, compound: boolean, mutates: boolean): TaskKind {
   if (compound) return 'implement';
+  // The terminal deliverable is the last one stated: "review the auth flow,
+  // then fix it" ends in a mutation even though it opens with a review cue.
+  // This decides `kind` only — compound discount eligibility stays narrow.
+  if (mutates && lastIndex(text, MUTATION_RE) > Math.max(lastIndex(text, REVIEW_RE), lastIndex(text, PLAN_RE))) {
+    return 'implement';
+  }
   if (matches(text, REVIEW_RE)) return 'review';
   if (matches(text, PLAN_RE)) return 'plan';
   if (mutates) return 'implement';

@@ -109,7 +109,7 @@ async function bindSession() {
 }
 
 describe('multi-work routing acceptance', () => {
-  it('serves inspect cheaply across a tool-loop, blocks one mutation, then escapes on retry', async () => {
+  it('serves inspect cheaply across a tool-loop, blocks one mutation, then hands off to terminal capability', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
       config: { consultRouter: false },
@@ -133,26 +133,28 @@ describe('multi-work routing acceptance', () => {
     expect(session.getLastServed()?.capability?.candidate.clearsTerminalFloor).toBe(false);
 
     // The under-terminal candidate attempts an edit: blocked exactly once for
-    // this invocation. A capability upgrade is not guaranteed — the gate is a
-    // bounded degrade, not a re-routing decision.
+    // this invocation, and the block itself advances the phase so the next
+    // invocation scores against the terminal floor.
     const blocked = session.preflightMutation('edit', 'edit-1');
     expect(blocked).toEqual({ block: true, reason: expect.any(String) });
     expect(session.getWorkPhaseState()).toMatchObject({
       gateBlockedInvocation: 2,
       mutationGateTriggered: true,
       mutationGateBlocks: 1,
-      phase: 'inspect',
+      phase: 'mutate',
     });
 
-    // The model retries the provider (a later invocation); the retried edit
-    // now escapes the gate regardless of clearance, and phase advances.
+    // The model retries the provider (a later invocation): the terminal floor
+    // now owns scoring, so the terminal-capable candidate serves and its edit
+    // proceeds on measured clearance rather than the bounded escape.
     harness.resetEventStream();
-    harness.scriptReply([{ type: 'text_delta', delta: 'inspecting again' }, { type: 'done' }]);
+    harness.scriptReply([{ type: 'text_delta', delta: 'mutating' }, { type: 'done' }]);
     await harness.serve(compoundContext);
-    expect(session.getWorkPhaseState()).toMatchObject({ phase: 'inspect', providerInvocation: 3 });
+    expect(session.getWorkPhaseState()).toMatchObject({ phase: 'mutate', providerInvocation: 3 });
+    expect(session.getLastServed()?.registryId).not.toBe(firstServed);
+    expect(session.getLastServed()?.capability?.candidate.clearsTerminalFloor).toBe(true);
 
-    const escaped = session.preflightMutation('edit', 'edit-2');
-    expect(escaped).toBeUndefined();
+    expect(session.preflightMutation('edit', 'edit-2')).toBeUndefined();
     expect(session.getWorkPhaseState()).toMatchObject({ phase: 'mutate', mutationGateBlocks: 1 });
   });
 

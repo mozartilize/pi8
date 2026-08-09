@@ -116,6 +116,10 @@ export function formatDecisionDetail(
     if (mw.mutationGateEscaped) {
       const degraded = mw.capabilityDegraded ? ' (capability degraded)' : '';
       lines.push(`  gate:       blocked invocation ${mw.gateBlockedInvocation}, escaped${degraded}`);
+    } else if (mw.gateBlockedInvocation !== undefined) {
+      lines.push(`  gate:       mutation blocked at invocation ${mw.gateBlockedInvocation}, awaiting terminal capability`);
+    } else if (mw.capabilityDegraded) {
+      lines.push('  gate:       mutation allowed with degraded capability');
     }
   }
   if (decision.switched) {

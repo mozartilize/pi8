@@ -1289,6 +1289,9 @@ describe('latch veto', () => {
     expect(session.shadowRecordCount).toBe(2);
     expect(session.lastShadowRecord?.latchTransition).toBe(true);
     expect(session.lastShadowRecord?.wouldVetoLatch).toBe(true);
+    // Both records come from one bounded egress: the latch asks the same
+    // question the entry-level assessment already asked.
+    expect(session.assessmentDispatchCount).toBe(1);
   });
 
   it('active mode vetoes the first latch on a bounded high-confidence verdict', async () => {
@@ -1325,6 +1328,8 @@ describe('latch veto', () => {
       assessorNeverResponds: true,
     });
     expect(result?.cause).toBe('context-depth');
+    // An unavailable verdict is not a licence for a second dispatch.
+    expect(session.assessmentDispatchCount).toBe(1);
   });
 
   it('bumps the latch generation exactly once per session, whichever way it resolves', async () => {

@@ -37,6 +37,8 @@ import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from './types.js';
 import { appendMutationGateSignal, appendSubagentGapSignal } from './decisionlog.js';
 import { clearRouterStatus } from './ui.js';
 import {
+  getLastDecision,
+  setLastDecision,
   getLastServed,
   getWorkPhaseState,
   commitWorkPhaseState,
@@ -322,6 +324,23 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
       if (decision.nextState) commitWorkPhaseState(decision.nextState);
       if (decision.metadata) {
         const capability = served?.capability;
+        // `/router-status` and `/router-why` read the in-memory decision, so
+        // gate outcomes have to land there too, not only in the log.
+        const last = getLastDecision();
+        const committed = decision.nextState ?? state;
+        if (last?.multiWork && committed) {
+          setLastDecision({
+            ...last,
+            multiWork: {
+              ...last.multiWork,
+              phase: committed.phase,
+              phaseReason: committed.phaseReason,
+              gateBlockedInvocation: committed.gateBlockedInvocation,
+              capabilityDegraded: decision.metadata.capabilityDegraded,
+              mutationGateEscaped: decision.metadata.mutationGateEscaped,
+            },
+          });
+        }
         appendMutationGateSignal({
           intentKey: (decision.nextState ?? state)?.intentKey ?? 'unknown',
           served: served?.registryId ?? 'unknown/unknown',

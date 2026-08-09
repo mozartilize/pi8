@@ -30,7 +30,7 @@ import { embedAndClassify } from './embedding.js';
 import { getTurnClassificationInput, buildRoleLabelledContext } from './continuation.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
 import { loadConfig } from './config.js';
-import { runAssessment, type AssessmentConfig } from './consult.js';
+import { runAssessment, type AssessmentAttempt, type AssessmentConfig } from './consult.js';
 import { adoptAssessment, shouldVetoLatch } from './assessment-adoption.js';
 import { latestSummaryText, countToolActivity } from './message-provenance.js';
 import { applyEscalation, appendRouteUpGuidance, ROUTE_UP_TOOL } from './escalation.js';
@@ -557,11 +557,17 @@ export function registerAutoRouterProvider(
 
             let assessment = cacheHit ? cachedIntent.assessment : undefined;
             let fallbackReason = cacheHit ? cachedIntent.fallbackReason : undefined;
+            // One bounded assessment per real user entry, whatever asks for it
+            // (privacy/egress rule). A cache hit means the entry already spent
+            // its one dispatch, successful or not.
+            let assessmentDispatched = cacheHit;
+            let shadowAssessment: Promise<AssessmentAttempt> | undefined;
 
             if (!cacheHit && assessmentConfig.enabled) {
               const evidence = evidenceForAssessment(context, config, pi);
 
               if (assessmentConfig.mode === 'active') {
+                assessmentDispatched = true;
                 const attempt = await runAssessment(
                   assessmentConfig,
                   registry,
@@ -584,13 +590,15 @@ export function registerAutoRouterProvider(
                 // deterministic path.
                 const intentKey = turnInput.key;
                 const heuristicDimension = classifyResult.dimension;
-                void runAssessment(
+                assessmentDispatched = true;
+                shadowAssessment = runAssessment(
                   assessmentConfig,
                   registry,
                   routableCandidates,
                   evidence,
                   getAssessorStrikes(),
-                )
+                );
+                void shadowAssessment
                   .then((attempt) => {
                     recordAssessorOutcome(attempt);
                     if (attempt.ok) {
@@ -692,7 +700,8 @@ export function registerAutoRouterProvider(
                 // Reuse the ordinary entry verdict for the latch question;
                 // a dedicated dispatch would ask the same thing.
                 let latchVerdict = assessment;
-                if (!latchVerdict && assessmentConfig.mode === 'active') {
+                if (!latchVerdict && !assessmentDispatched && assessmentConfig.mode === 'active') {
+                  assessmentDispatched = true;
                   const attempt = await runAssessment(
                     assessmentConfig,
                     registry,
@@ -730,8 +739,32 @@ export function registerAutoRouterProvider(
                       wouldVetoLatch: vetoDepthEscalation,
                       assessment: latchVerdict,
                     });
-                  } else {
-                    // No ordinary verdict ran; dispatch detached.
+                  } else if (shadowAssessment) {
+                    // The entry's own detached assessment answers the latch
+                    // question too, so chain the latch record onto it rather
+                    // than paying a second egress. Cost is accounted by the
+                    // entry-level handler.
+                    void shadowAssessment
+                      .then((attempt) => {
+                        appendShadowAssessment({
+                          intentKey: turnInput.key,
+                          heuristicDimension: baseDimension,
+                          latchTransition: true,
+                          wouldVetoLatch: attempt.ok
+                            ? shouldVetoLatch(attempt.assessment)
+                            : false,
+                          assessment: attempt.ok ? attempt.assessment : undefined,
+                          fallbackReason: attempt.ok ? undefined : attempt.fallbackReason,
+                        });
+                      })
+                      .catch(() => {
+                        // A detached assessment must never surface into the turn.
+                      });
+                  } else if (!assessmentDispatched) {
+                    // No entry-level assessment ran for this intent (the latch
+                    // fired on a later invocation), so this is the entry's one
+                    // dispatch.
+                    assessmentDispatched = true;
                     const latchEvidence = evidenceForAssessment(context, config, pi);
                     void runAssessment(
                       assessmentConfig,

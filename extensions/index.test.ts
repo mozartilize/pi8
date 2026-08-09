@@ -7,7 +7,8 @@ import autoModelRouterExtension from './index.js';
 import { buildSubagentProviderAuthFilter } from './provider.js';
 import { applyEscalation, requestEscalation, resetEscalation } from './escalation.js';
 import { computeRoleModels } from './subagents.js';
-import { terminalAssessment } from './test-support/router-fixtures.js';
+import { multiWorkRoutingMeta, routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
+import { formatDecisionDetail } from './ui.js';
 import {
   addAssessmentCost,
   bumpLatchGeneration,
@@ -15,11 +16,13 @@ import {
   getActiveSkillNames,
   getAssessmentCost,
   getCachedRoutingIntent,
+  getLastDecision,
   getLatchGeneration,
   getWorkPhaseState,
   resetRouterSession,
   setActiveSkillNames,
   setCachedRoutingIntent,
+  setLastDecision,
   setLastServed,
 } from './router-session-state.js';
 import type { WorkPhaseState } from './work-phase.js';
@@ -734,6 +737,71 @@ describe('mutation gate hooks', () => {
     const result = await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
     expect(result).toEqual({ block: true, reason: expect.any(String) });
     expect(result).not.toHaveProperty('terminate');
+  });
+
+  it('projects the block onto the live decision so the commands can show it', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    setLastServed({
+      registryId: 'test/inspect',
+      viaFallback: false,
+      accumulatedCost: 0,
+      capability: {
+        providerInvocation: 1,
+        terminalFloor: 0.85,
+        terminalCapableInScoringSet: true,
+        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
+      },
+    });
+    const decision = routingDecision(['test/inspect']);
+    decision.multiWork = multiWorkRoutingMeta({ phase: 'inspect' });
+    setLastDecision(decision);
+
+    await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
+
+    expect(getLastDecision()?.multiWork).toMatchObject({
+      phase: 'mutate',
+      phaseReason: 'gate-handoff',
+      gateBlockedInvocation: 1,
+    });
+    expect(formatDecisionDetail(getLastDecision(), undefined).join('\n')).toContain(
+      'mutation blocked at invocation 1',
+    );
+  });
+
+  it('projects the escape and its degradation onto the live decision', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState({
+      phase: 'mutate',
+      mutationGateTriggered: true,
+      mutationGateBlocks: 1,
+      gateBlockedInvocation: 1,
+    }));
+    setLastServed({
+      registryId: 'test/inspect',
+      viaFallback: false,
+      accumulatedCost: 0,
+      capability: {
+        providerInvocation: 2,
+        terminalFloor: 0.85,
+        terminalCapableInScoringSet: true,
+        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
+      },
+    });
+    const decision = routingDecision(['test/inspect']);
+    decision.multiWork = multiWorkRoutingMeta({ phase: 'inspect' });
+    setLastDecision(decision);
+
+    const result = await toolCall({ toolName: 'edit', toolCallId: 'e2', input: {} }, routerAutoCtx);
+
+    expect(result).toBeUndefined();
+    expect(getLastDecision()?.multiWork).toMatchObject({
+      mutationGateEscaped: true,
+      capabilityDegraded: true,
+    });
+    expect(formatDecisionDetail(getLastDecision(), undefined).join('\n')).toContain('escaped');
   });
 
   it('fails open without changing state when the gate throws', async () => {
