@@ -4,6 +4,7 @@ import {
   addAccumulatedCost,
   addAssessmentCost,
   bumpLatchGeneration,
+  commitWorkPhaseState,
   consumePendingUserEscalation,
   getAccumulatedCost,
   getActiveSkillNames,
@@ -12,6 +13,7 @@ import {
   getLastChosenRegistryId,
   getLastResolvedThinkingLevel,
   getLatchGeneration,
+  getWorkPhaseState,
   peekPendingUserEscalation,
   resetRouterSession,
   setActiveSkillNames,
@@ -108,5 +110,30 @@ describe('assessment session state', () => {
     expect(getLatchGeneration()).toBe(0);
     expect(getAssessmentCost()).toBe(0);
     expect(getActiveSkillNames()).toEqual([]);
+  });
+
+  it('clears phase, invocation, and pending mutation state on reset', () => {
+    commitWorkPhaseState({
+      intentKey: 'intent-a',
+      terminal: terminalAssessment(),
+      terminalRequirement: 0.775,
+      terminalBand: 'frontier',
+      phase: 'inspect',
+      phaseReason: 'explicit-compound-inspect',
+      multiWorkEngaged: true,
+      providerInvocation: 2,
+      gateBlockedInvocation: 1,
+      mutationGateBlocks: 1,
+      mutationGateTriggered: true,
+      mutationCompleted: false,
+      pendingMutationToolCallIds: new Set(['call-1']),
+      observedReadTools: 1,
+      observedMutationTools: 1,
+    });
+    expect(getWorkPhaseState()?.phase).toBe('inspect');
+
+    resetRouterSession();
+
+    expect(getWorkPhaseState()).toBeUndefined();
   });
 });

@@ -57,6 +57,8 @@ import {
   getLastServed,
   getLastExtensionContext,
   getCurrentModelRegistry,
+  getWorkPhaseState,
+  commitWorkPhaseState,
   peekPendingUserEscalation,
   consumePendingUserEscalation,
   addAssessmentCost,
@@ -78,6 +80,15 @@ import { debugLog, startTimer } from './debuglog.js';
 import { runDelegationLoop } from './delegation.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import { resolveRoutingDecision, wouldDepthEscalate, applyEscalationPrecedence } from './routing-policy.js';
+import {
+  advanceForRoutingOwner,
+  capabilityBandFor,
+  deriveInitialPhase,
+  inheritThinContinuation,
+  nextProviderInvocation,
+  scoringPolicyForState,
+  terminalRequirement,
+} from './work-phase.js';
 import {
   getBlacklistedModels,
   getBlacklistedProviders,
@@ -167,6 +178,7 @@ export const getProviderState = () => ({
   embeddingStats: getEmbeddingStats(),
   blacklistedModels: [...getBlacklistedModels()].sort(),
   blacklistedProviders: [...getBlacklistedProviders()].sort(),
+  workPhaseState: getWorkPhaseState(),
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -756,6 +768,70 @@ export function registerAutoRouterProvider(
               // is evaluated once per session either way.
             }
 
+            // ── Per-intent multi-work phase lifecycle ──────────────────────
+            // Mirrors resolveRoutingDecision's own precedence/depth-escalation
+            // computation so the phase engine and the scorer agree on which
+            // dimension actually owns this invocation, without a second
+            // resolveRoutingDecision call (rule 12: score once per invocation).
+            const resolvedDimensionForPhase: Dimension =
+              !vetoDepthEscalation &&
+              wouldDepthEscalate({
+                dimension: preDepth.dimension,
+                cause: preDepth.cause,
+                estimatedContextTokens: estContextTokens,
+                config,
+              })
+                ? (preDepth.dimension === 'lightweight' ? 'gather' : 'implement')
+                : preDepth.dimension;
+            const capabilityRepickActive =
+              (preDepth.userApplied && !preDepth.userRaised) ||
+              (preDepth.escalationApplied && !preDepth.escalationRaised);
+
+            let workPhaseState = getWorkPhaseState();
+            if (!cacheHit) {
+              workPhaseState =
+                workPhaseState && turnInput.thin
+                  ? inheritThinContinuation(turnInput.key, workPhaseState)
+                  : (() => {
+                      const terminal = classifyResult.terminal;
+                      const requirement = terminalRequirement(terminal);
+                      const band = capabilityBandFor(requirement);
+                      const initial = deriveInitialPhase(terminal, band, {
+                        resolvedDimension: resolvedDimensionForPhase,
+                        capabilityRepickActive,
+                      });
+                      return {
+                        intentKey: turnInput.key,
+                        terminal,
+                        terminalRequirement: requirement,
+                        terminalBand: band,
+                        phase: initial.phase,
+                        phaseReason: initial.phaseReason,
+                        multiWorkEngaged: initial.multiWorkEngaged,
+                        providerInvocation: 1,
+                        mutationGateBlocks: 0,
+                        mutationGateTriggered: false,
+                        mutationCompleted: false,
+                        pendingMutationToolCallIds: new Set<string>(),
+                        observedReadTools: 0,
+                        observedMutationTools: 0,
+                      };
+                    })();
+            } else if (workPhaseState) {
+              workPhaseState = nextProviderInvocation(workPhaseState);
+            }
+            if (workPhaseState) {
+              workPhaseState = advanceForRoutingOwner(
+                workPhaseState,
+                resolvedDimensionForPhase,
+                capabilityRepickActive,
+              );
+            }
+            const multiWorkPolicy = workPhaseState
+              ? scoringPolicyForState(workPhaseState, resolvedDimensionForPhase, capabilityRepickActive)
+              : undefined;
+            commitWorkPhaseState(workPhaseState);
+
             const policy = resolveRoutingDecision({
               candidates: routableCandidates,
               classifyResult,
@@ -767,6 +843,7 @@ export function registerAutoRouterProvider(
               needsVision,
               incumbentRegistryId: getLastChosenRegistryId(),
               vetoDepthEscalation,
+              ...(multiWorkPolicy ? { multiWorkPolicy } : {}),
               config,
             });
             const decision = policy.decision;

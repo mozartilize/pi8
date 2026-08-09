@@ -27,6 +27,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import type { BenchModel, RoutingDecision } from '../types.js';
 import type { ServedInfo } from '../ui.js';
 import type { EmbeddingStats } from '../router-session-state.js';
+import type { WorkPhaseState } from '../work-phase.js';
 import { registryModel } from './router-fixtures.js';
 
 // ─── Event stream ────────────────────────────────────────────────────
@@ -121,6 +122,7 @@ export interface ProviderStateSnapshot {
   embeddingStats: EmbeddingStats;
   blacklistedModels: string[];
   blacklistedProviders: string[];
+  workPhaseState: WorkPhaseState | undefined;
 }
 
 export interface ProviderHarnessOptions {

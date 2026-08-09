@@ -14,6 +14,7 @@ import type {
   RoutingDecision,
 } from './types.js';
 import type { ServedInfo } from './ui.js';
+import type { WorkPhaseState } from './work-phase.js';
 
 export interface CachedRoutingIntent {
   key: string;
@@ -72,6 +73,8 @@ interface RouterSessionState {
   assessorStrikes: Map<string, number>;
   /** Per-session embedding-classifier outcome tallies for `/router-status`. */
   embeddingStats: EmbeddingStats;
+  /** Per-intent multi-work phase lifecycle. Undefined outside an active intent. */
+  workPhaseState: WorkPhaseState | undefined;
 }
 
 /** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */
@@ -109,6 +112,7 @@ const state: RouterSessionState = {
   activeSkillNames: [],
   assessorStrikes: new Map(),
   embeddingStats: { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 },
+  workPhaseState: undefined,
 };
 
 export const getLastDecision = (): RoutingDecision | undefined => state.lastDecision;
@@ -236,6 +240,13 @@ export const setLastRegisteredModels = (key: string): void => {
   state.lastRegisteredModels = key;
 };
 
+export const getWorkPhaseState = (): WorkPhaseState | undefined => state.workPhaseState;
+
+/** Replaces the whole state object in one assignment — no partial patches. */
+export const commitWorkPhaseState = (next: WorkPhaseState | undefined): void => {
+  state.workPhaseState = next;
+};
+
 export const resetRouterSession = (): void => {
   state.lastDecision = undefined;
   state.lastChosenRegistryId = undefined;
@@ -250,6 +261,7 @@ export const resetRouterSession = (): void => {
   state.activeSkillNames = [];
   state.assessorStrikes.clear();
   state.embeddingStats = { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 };
+  state.workPhaseState = undefined;
   latchVetoIntentKey = undefined;
   // lastExtensionContext and currentModelRegistry are intentionally preserved
   // — they are tied to the Pi runtime / session manager, not per-turn state.
