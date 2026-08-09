@@ -593,6 +593,18 @@ describe('routing direction', () => {
     expect(result.decision.routedDown).toBe(false);
   });
 
+  it('leaves routedPickChanged false when a raise re-selects the same model', () => {
+    // The reported case: dimension raised (gather→implement) but the heuristic
+    // dimension would have picked the same model, so nothing stronger was
+    // served. routedUp stays true (dimension-level truth for the log/cause),
+    // but the pick did not move — the UI must not claim "routed-up".
+    const result = resolveRoutingDecision(
+      makePolicyInput({ classifyDimension: 'gather', baseDimension: 'implement' }),
+    );
+    expect(result.decision.routedUp).toBe(true);
+    expect(result.decision.routedPickChanged).toBe(false);
+  });
+
   it('does not attach context-pressure advice to a downward route', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({

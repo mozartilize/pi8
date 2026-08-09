@@ -180,6 +180,15 @@ export interface RoutingDecision {
    * same question, and context-pressure advice is only meaningful upward.
    */
   routedDown: boolean;
+  /**
+   * True only when a routedUp/routedDown actually changed the served model
+   * versus the model the un-escalated (heuristic) dimension would have picked.
+   * A dimension raise that re-selects the same model served nothing stronger,
+   * so the status UI suppresses the "routed-up"/"routed-down" label when this
+   * is false. Undefined when neither direction fired. `routedUp`/`routedDown`
+   * keep their dimension-level meaning for the decision log and `cause`.
+   */
+  routedPickChanged?: boolean;
   /** Present when an assessment ran for this intent, adopted or not. */
   assessment?: RoutingAssessment;
   /** Why the assessment was unavailable. Never changes `cause`. */

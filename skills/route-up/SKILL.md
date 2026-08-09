@@ -1,10 +1,11 @@
 ---
 name: route-up
-description: Use when you are serving a conversation through router/auto and the
-current task appears to need deeper reasoning, planning, architecture, design
-research, or open-ended investigation than the current model is suited for.
-Also use when the user expresses dissatisfaction with answer depth, or
-when a task that looked trivial turns out to require multi-step analysis.
+description: >-
+  Use when you are serving a conversation through router/auto and the
+  current task appears to need deeper reasoning, planning, architecture, design
+  research, or open-ended investigation than the current model is suited for.
+  Also use when the user expresses dissatisfaction with answer depth, or
+  when a task that looked trivial turns out to require multi-step analysis.
 ---
 
 # Route Up

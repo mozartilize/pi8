@@ -38,8 +38,8 @@ export function formatStatus(
     const rank = served.fallbackRank && served.fallbackRank > 1 ? ` ${served.fallbackRank}` : '';
     parts.push(`(FALLBACK${rank}!)`);
   }
-  if (decision.routedUp) parts.push('(routed-up)');
-  if (decision.routedDown) parts.push('(routed-down)');
+  if (decision.routedUp && decision.routedPickChanged) parts.push('(routed-up)');
+  if (decision.routedDown && decision.routedPickChanged) parts.push('(routed-down)');
   if (decision.contextPressure) parts.push('(context-pressure)');
   return parts.join(' ');
 }
@@ -67,10 +67,18 @@ export function formatDecisionDetail(
     lines.push(`  note:       top pick failed; served by a fallback candidate${rank}`);
   }
   if (decision.routedUp) {
-    lines.push('  note:       routed up (dimension was raised; see cause for why)');
+    lines.push(
+      decision.routedPickChanged
+        ? '  note:       routed up (dimension raised and a stronger model was served; see cause)'
+        : '  note:       dimension raised (see cause), but the served model was already the top pick — no stronger model available',
+    );
   }
   if (decision.routedDown) {
-    lines.push('  note:       routed down (dimension was lowered; see assessment)');
+    lines.push(
+      decision.routedPickChanged
+        ? '  note:       routed down (dimension lowered and a cheaper model was served; see assessment)'
+        : '  note:       dimension lowered (see assessment), but the served model was unchanged',
+    );
   }
   if (decision.assessment) {
     const a = decision.assessment;
@@ -161,7 +169,7 @@ export function notifyRouting(
     const parts = [`🚥 pi8 → ${served.registryId}${level}`];
     if (decision) parts.push(`(${decision.dimension})`);
     if (served.viaFallback) parts.push('· fallback');
-    if (decision?.routedUp) parts.push('· routed-up');
+    if (decision?.routedUp && decision.routedPickChanged) parts.push('· routed-up');
     ctx?.ui?.notify?.(parts.join(' '), 'info');
   } catch {
     // Notifications are cosmetic; never break a turn.

@@ -232,6 +232,7 @@ describe('assessment in /router-why', () => {
       decisionWith({
         dimension: 'lightweight',
         routedDown: true,
+        routedPickChanged: true,
         cause: 'router-consult',
         assessment: validAssessment(),
       }),
@@ -261,6 +262,28 @@ describe('assessment in /router-why', () => {
   });
 
   it('marks a downward route in the status widget', () => {
-    expect(formatStatus(decisionWith({ routedDown: true }), served())).toContain('routed-down');
+    expect(formatStatus(decisionWith({ routedDown: true, routedPickChanged: true }), served())).toContain('routed-down');
+  });
+
+  it('suppresses the routed-up label when the raise did not change the served model', () => {
+    // Dimension was raised (routedUp) but the heuristic dimension would have
+    // picked the same model, so nothing stronger was served: no label.
+    const status = formatStatus(
+      decisionWith({ routedUp: true, routedPickChanged: false }),
+      served(),
+    );
+    expect(status).not.toContain('routed-up');
+    const detail = formatDecisionDetail(
+      decisionWith({ routedUp: true, routedPickChanged: false, cause: 'context-depth' }),
+      served(),
+    ).join('\n');
+    expect(detail).not.toContain('routed up');
+    expect(detail).toContain('served model was already the top pick');
+  });
+
+  it('shows the routed-up label when the raise changed the served model', () => {
+    expect(
+      formatStatus(decisionWith({ routedUp: true, routedPickChanged: true }), served()),
+    ).toContain('routed-up');
   });
 });

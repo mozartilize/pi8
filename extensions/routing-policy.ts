@@ -318,6 +318,21 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   decision.routedDown =
     DIMENSION_STRENGTH[dimension] < DIMENSION_STRENGTH[classifyResult.dimension];
 
+  // The status widgets promise "routed-up/down = a different-strength model was
+  // actually served", not merely "the dimension label moved". A raise that
+  // re-selects the model the heuristic dimension would have picked served
+  // nothing stronger, so record whether the pick truly moved and let the UI
+  // suppress a misleading label. Bounded to turns where a direction fired.
+  if (decision.routedUp || decision.routedDown) {
+    const heuristicPick = pickBest(
+      candidates,
+      classifyResult.dimension,
+      config.dimensionWeights[classifyResult.dimension],
+      pickOpts,
+    );
+    decision.routedPickChanged = heuristicPick.chosen !== decision.chosen;
+  }
+
   const chosenCandidateForContext = candidates.find(
     (c) => candidateKey(c) === decision.chosen,
   );
