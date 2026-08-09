@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 
 import {
   appendDecision,
+  appendMutationGateSignal,
   appendShadowAssessment,
   appendSubagentGapSignal,
   readRecentEntries,
@@ -373,6 +374,69 @@ describe('appendShadowAssessment', () => {
     writeFileSync(blocker, 'x', 'utf8');
     expect(() =>
       appendShadowAssessment({ intentKey: 'k', heuristicDimension: 'gather' }, join(blocker, 'sub')),
+    ).not.toThrow();
+  });
+});
+
+describe('appendMutationGateSignal', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ar-decisionlog-'));
+  });
+  afterEach(() => {
+    setSessionFile(undefined);
+    setDecisionLogBase(undefined);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('writes a joinable mutation-gate record without touching decisions', () => {
+    appendMutationGateSignal(
+      {
+        intentKey: 'k1',
+        served: 'test/inspect',
+        providerInvocation: 3,
+        gateBlockedInvocation: 3,
+        terminalFloor: 0.85,
+        servedTaskRatio: 0.7,
+        clearance: false,
+        action: 'block',
+      },
+      dir,
+    );
+
+    const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
+    expect(entry.kind).toBe('mutation-gate');
+    expect(entry.intentKey).toBe('k1');
+    expect(entry.served).toBe('test/inspect');
+    expect(entry.mutationGate).toMatchObject({
+      providerInvocation: 3,
+      gateBlockedInvocation: 3,
+      terminalFloor: 0.85,
+      servedTaskRatio: 0.7,
+      clearance: false,
+      action: 'block',
+    });
+  });
+
+  it('never serializes tool arguments or payload content', () => {
+    appendMutationGateSignal(
+      { intentKey: 'k2', served: 'test/model', providerInvocation: 1, clearance: 'unknown', action: 'allow' },
+      dir,
+    );
+    const raw = readFileSync(join(dir, DECISION_LOG_FILE), 'utf8');
+    expect(raw).not.toContain('toolArgs');
+    expect(raw).not.toContain('payload');
+  });
+
+  it('never throws when the log path is unwritable', () => {
+    const blocker = join(dir, 'blocker.txt');
+    writeFileSync(blocker, 'x', 'utf8');
+    expect(() =>
+      appendMutationGateSignal(
+        { intentKey: 'k3', served: 'test/model', providerInvocation: 1, clearance: 'unknown', action: 'allow' },
+        join(blocker, 'sub'),
+      ),
     ).not.toThrow();
   });
 });

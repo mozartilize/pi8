@@ -11,16 +11,25 @@ import { terminalAssessment } from './test-support/router-fixtures.js';
 import {
   addAssessmentCost,
   bumpLatchGeneration,
+  commitWorkPhaseState,
   getActiveSkillNames,
   getAssessmentCost,
   getCachedRoutingIntent,
   getLatchGeneration,
+  getWorkPhaseState,
   resetRouterSession,
   setActiveSkillNames,
   setCachedRoutingIntent,
+  setLastServed,
 } from './router-session-state.js';
+import type { WorkPhaseState } from './work-phase.js';
+import { evaluateMutationCall } from './mutation-gate.js';
 
 vi.mock('./commands.js', () => ({ registerCommands: vi.fn() }));
+vi.mock('./mutation-gate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./mutation-gate.js')>();
+  return { ...actual, evaluateMutationCall: vi.fn(actual.evaluateMutationCall) };
+});
 const mockBlacklist = new Set<string>();
 
 vi.mock('./provider.js', () => ({
@@ -655,5 +664,103 @@ describe('assessment lifecycle resets', () => {
       } as unknown as ExtensionContext,
     );
     expect(getActiveSkillNames()).toEqual(['writing-plans', 'systematic-debugging']);
+  });
+});
+
+describe('mutation gate hooks', () => {
+  const concreteCtx = { model: { provider: 'openai-codex', id: 'gpt-5.3' } } as unknown as ExtensionContext;
+  const routerAutoCtx = { model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } } as unknown as ExtensionContext;
+
+  function inspectState(overrides: Partial<WorkPhaseState> = {}): WorkPhaseState {
+    return {
+      intentKey: 'intent-a',
+      terminal: terminalAssessment(),
+      terminalRequirement: 0.775,
+      terminalBand: 'frontier',
+      phase: 'inspect',
+      phaseReason: 'explicit-compound-inspect',
+      multiWorkEngaged: true,
+      providerInvocation: 1,
+      mutationGateBlocks: 0,
+      mutationGateTriggered: false,
+      mutationCompleted: false,
+      pendingMutationToolCallIds: new Set(),
+      observedReadTools: 0,
+      observedMutationTools: 0,
+      ...overrides,
+    };
+  }
+
+  async function makeToolHandlers() {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const pi = {
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool: vi.fn(),
+    } as unknown as ExtensionAPI;
+    await autoModelRouterExtension(pi);
+    return handlers;
+  }
+
+  afterEach(() => {
+    resetRouterSession();
+    vi.mocked(evaluateMutationCall).mockRestore();
+  });
+
+  it('keeps concrete-model sessions a complete mutation-gate no-op', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    const before = getWorkPhaseState();
+    expect(toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, concreteCtx)).toBeUndefined();
+    expect(getWorkPhaseState()).toEqual(before);
+  });
+
+  it('returns a non-terminating intentional block for router/auto', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    setLastServed({
+      registryId: 'test/inspect',
+      viaFallback: false,
+      accumulatedCost: 0,
+      capability: {
+        providerInvocation: 1,
+        terminalFloor: 0.85,
+        terminalCapableInScoringSet: true,
+        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
+      },
+    });
+
+    const result = await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
+    expect(result).toEqual({ block: true, reason: expect.any(String) });
+    expect(result).not.toHaveProperty('terminate');
+  });
+
+  it('fails open without changing state when the gate throws', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    const before = getWorkPhaseState();
+    vi.mocked(evaluateMutationCall).mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+
+    const result = await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
+    expect(result).toBeUndefined();
+    expect(getWorkPhaseState()).toEqual(before);
+  });
+
+  it('correlates a mutation result back to its pending call', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    const toolResult = handlers.get('tool_result')!;
+    commitWorkPhaseState(inspectState({ multiWorkEngaged: false, phase: 'mutate' }));
+
+    await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
+    expect(getWorkPhaseState()?.pendingMutationToolCallIds.has('e1')).toBe(true);
+
+    await toolResult({ toolName: 'edit', toolCallId: 'e1', content: [], isError: false }, routerAutoCtx);
+    expect(getWorkPhaseState()?.pendingMutationToolCallIds.has('e1')).toBe(false);
+    expect(getWorkPhaseState()?.mutationCompleted).toBe(true);
   });
 });

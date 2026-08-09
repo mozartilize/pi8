@@ -34,12 +34,16 @@ import { setSessionFile } from './sessionpaths.js';
 import { setConfigDebug } from './debuglog.js';
 import type { RegistryModelInfo } from './scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from './types.js';
-import { appendSubagentGapSignal } from './decisionlog.js';
+import { appendMutationGateSignal, appendSubagentGapSignal } from './decisionlog.js';
 import { clearRouterStatus } from './ui.js';
 import {
+  getLastServed,
+  getWorkPhaseState,
+  commitWorkPhaseState,
   resetRouterSession,
   setActiveSkillNames,
 } from './router-session-state.js';
+import { evaluateMutationCall, recordMutationResult } from './mutation-gate.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
 const SUBAGENT_TOOL = 'subagent';
@@ -271,72 +275,133 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
   // get pi-subagents' own default model selection untouched — this extension
   // must not silently reach into a session that never opted into routing.
   pi.on('tool_call', (event, ctx) => {
-    if (event.toolName !== SUBAGENT_TOOL) return;
     if (!isRouterAutoActive(ctx?.model)) return;
-    try {
-      // Resolve each role's model against the LIVE session blacklist: a model
-      // assigned at session_start may have since failed and been blacklisted
-      // by a main-session turn, and must not be injected into a spawn. A
-      // usage-limit-blacklisted provider excludes every model on it the same
-      // way.
-      const blacklisted = getBlacklistedModels();
-      const blacklistedProviders = getBlacklistedProviders();
-      const isExcluded = (id: string): boolean => {
-        const slash = id.indexOf('/');
-        return (
-          blacklisted.has(id) ||
-          (slash > 0 ? blacklistedProviders.has(id.slice(0, slash)) : false)
+
+    if (event.toolName === SUBAGENT_TOOL) {
+      try {
+        // Resolve each role's model against the LIVE session blacklist: a model
+        // assigned at session_start may have since failed and been blacklisted
+        // by a main-session turn, and must not be injected into a spawn. A
+        // usage-limit-blacklisted provider excludes every model on it the same
+        // way.
+        const blacklisted = getBlacklistedModels();
+        const blacklistedProviders = getBlacklistedProviders();
+        const isExcluded = (id: string): boolean => {
+          const slash = id.indexOf('/');
+          return (
+            blacklisted.has(id) ||
+            (slash > 0 ? blacklistedProviders.has(id.slice(0, slash)) : false)
+          );
+        };
+        const live = routingState.resolveLive(isExcluded);
+        subagentEscalationHooks.toolCall(
+          event.toolCallId,
+          event.input,
+          live.roleModels,
+          live.roleFallbacks,
+          isExcluded,
         );
-      };
-      const live = routingState.resolveLive(isExcluded);
-      subagentEscalationHooks.toolCall(
-        event.toolCallId,
-        event.input,
-        live.roleModels,
-        live.roleFallbacks,
-        isExcluded,
-      );
+      } catch {
+        // Never block or break a subagent spawn because of routing.
+      }
+      return;
+    }
+
+    // Bounded mutation handoff (rule 2: an internal failure here must fail
+    // open, not fail the tool call). Returning `undefined` allows execution;
+    // only an intentional `{ block: true, reason }` stops it.
+    try {
+      const state = getWorkPhaseState();
+      const served = getLastServed();
+      const decision = evaluateMutationCall({
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        state,
+        served,
+      });
+      if (decision.nextState) commitWorkPhaseState(decision.nextState);
+      if (decision.metadata) {
+        const capability = served?.capability;
+        appendMutationGateSignal({
+          intentKey: (decision.nextState ?? state)?.intentKey ?? 'unknown',
+          served: served?.registryId ?? 'unknown/unknown',
+          providerInvocation: capability?.providerInvocation ?? 0,
+          gateBlockedInvocation: decision.nextState?.gateBlockedInvocation,
+          terminalFloor: capability?.terminalFloor,
+          servedTaskRatio: capability?.candidate.taskRatio,
+          clearance: decision.metadata.clearance,
+          action: decision.block
+            ? 'block'
+            : decision.metadata.mutationGateEscaped
+              ? 'escape'
+              : 'allow',
+          capabilityDegraded: decision.metadata.capabilityDegraded,
+        });
+      }
+      if (decision.block) return { block: true, reason: decision.reason };
     } catch {
-      // Never block or break a subagent spawn because of routing.
+      // An internal gate failure must never block a mutation call.
     }
   });
 
   pi.on('tool_result', (event, ctx) => {
-    if (event.toolName !== SUBAGENT_TOOL) return;
-    // Same gate as tool_call: with no pending call recorded (because tool_call
-    // was gated out above), subagentEscalationHooks.toolResult would already
-    // no-op, but skipping outright avoids doing any observability/blacklist
-    // work for a spawn this extension never touched.
     if (!isRouterAutoActive(ctx?.model)) return;
-    try {
-      const snapshot = routingState.snapshot();
-      const plan = subagentEscalationHooks.toolResult(
-        event.toolCallId,
-        event,
-        snapshot.roleFallbacks,
-        blacklistModel,
-      );
 
-      // Harvest tool-gap signals independently of model ownership: explicit
-      // children remain visible for observability but never gain router retry
-      // or blacklist ownership.
-      const missingTools = extractMissingTools(collectSubagentResultText(event));
-      if (missingTools.length > 0) {
-        const role = plan.observedRoles[0];
-        const model = plan.blacklistModels[0] ?? plan.observedModels[0];
-        for (const tool of missingTools) {
-          appendSubagentGapSignal({ role, tool, model });
+    if (event.toolName === SUBAGENT_TOOL) {
+      try {
+        const snapshot = routingState.snapshot();
+        const plan = subagentEscalationHooks.toolResult(
+          event.toolCallId,
+          event,
+          snapshot.roleFallbacks,
+          blacklistModel,
+        );
+
+        // Harvest tool-gap signals independently of model ownership: explicit
+        // children remain visible for observability but never gain router retry
+        // or blacklist ownership.
+        const missingTools = extractMissingTools(collectSubagentResultText(event));
+        if (missingTools.length > 0) {
+          const role = plan.observedRoles[0];
+          const model = plan.blacklistModels[0] ?? plan.observedModels[0];
+          for (const tool of missingTools) {
+            appendSubagentGapSignal({ role, tool, model });
+          }
         }
-      }
 
-      // Only recompute role assignments when a blacklist actually changed them.
-      // The refresh is generation-guarded: if a newer refresh started while we
-      // were processing this result, this refresh is ignored rather than
-      // overwriting newer maps.
-      if (plan.blacklistModels.length > 0) void refreshRoleModels(ctx.modelRegistry, ctx);
-      if (plan.content) return { content: plan.content };
+        // Only recompute role assignments when a blacklist actually changed them.
+        // The refresh is generation-guarded: if a newer refresh started while we
+        // were processing this result, this refresh is ignored rather than
+        // overwriting newer maps.
+        if (plan.blacklistModels.length > 0) void refreshRoleModels(ctx.modelRegistry, ctx);
+        if (plan.content) return { content: plan.content };
+      } catch {
+        // A routing/observability failure must never surface as a tool error.
+      }
+      return;
+    }
+
+    // Correlate a mutation result back to its pending call, if this extension
+    // recorded one. Installed Pi does not invoke this hook for a blocked
+    // preflight, so only allowed calls ever reach here.
+    try {
+      const state = getWorkPhaseState();
+      if (!state?.pendingMutationToolCallIds.has(event.toolCallId)) return;
+      const isError = (event as { isError?: boolean }).isError === true;
+      const next = recordMutationResult({ state, toolCallId: event.toolCallId, isError });
+      commitWorkPhaseState(next);
+      const served = getLastServed();
+      appendMutationGateSignal({
+        intentKey: state.intentKey,
+        served: served?.registryId ?? 'unknown/unknown',
+        providerInvocation: served?.capability?.providerInvocation ?? state.providerInvocation,
+        terminalFloor: served?.capability?.terminalFloor,
+        servedTaskRatio: served?.capability?.candidate.taskRatio,
+        clearance: served?.capability?.candidate.clearsTerminalFloor ?? 'unknown',
+        action: isError ? 'error' : 'complete',
+      });
     } catch {
-      // A routing/observability failure must never surface as a tool error.
+      // A gate-observability failure must never surface as a tool error.
     }
   });
 }

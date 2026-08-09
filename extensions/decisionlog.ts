@@ -54,7 +54,7 @@ function decisionLogPath(storageBase?: string): string {
 export interface DecisionLogEntry {
   ts: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'assessment-shadow';
+  kind?: 'decision' | 'assessment-shadow' | 'mutation-gate';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -134,6 +134,30 @@ export interface DecisionLogEntry {
     allowedTools?: string[];
     workaroundTool?: string;
   };
+  /** Mutation-gate secondary observability record. */
+  mutationGate?: {
+    providerInvocation: number;
+    gateBlockedInvocation?: number;
+    terminalFloor?: number;
+    servedTaskRatio?: number;
+    clearance: boolean | 'unknown';
+    action: 'block' | 'allow' | 'escape' | 'complete' | 'error';
+    capabilityDegraded?: boolean;
+  };
+}
+
+/** A durable, joinable secondary record of one mutation-gate transition. Never
+ *  serializes tool arguments or payload content — identity and clearance only. */
+export interface MutationGateSignal {
+  intentKey: string;
+  served: string;
+  providerInvocation: number;
+  gateBlockedInvocation?: number;
+  terminalFloor?: number;
+  servedTaskRatio?: number;
+  clearance: boolean | 'unknown';
+  action: 'block' | 'allow' | 'escape' | 'complete' | 'error';
+  capabilityDegraded?: boolean;
 }
 
 function serializeAssessment(
@@ -151,6 +175,44 @@ function serializeAssessment(
     ms: assessment.ms,
     costUsd: assessment.costUsd,
   };
+}
+
+/** Append a mutation-gate transition. Best-effort; never throws into the tool call/result path. */
+export function appendMutationGateSignal(
+  signal: MutationGateSignal,
+  storageBase?: string,
+): void {
+  try {
+    const path = decisionLogPath(storageBase);
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const entry: DecisionLogEntry = {
+      ts: Date.now(),
+      kind: 'mutation-gate',
+      dimension: 'implement',
+      chosen: signal.served,
+      served: signal.served,
+      viaFallback: false,
+      confidence: 1,
+      routedUp: false,
+      cause: 'heuristic',
+      reason: `mutation gate ${signal.action}`,
+      chain: [signal.served],
+      intentKey: signal.intentKey,
+      mutationGate: {
+        providerInvocation: signal.providerInvocation,
+        gateBlockedInvocation: signal.gateBlockedInvocation,
+        terminalFloor: signal.terminalFloor,
+        servedTaskRatio: signal.servedTaskRatio,
+        clearance: signal.clearance,
+        action: signal.action,
+        capabilityDegraded: signal.capabilityDegraded,
+      },
+    };
+    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+  } catch {
+    // A logging failure must never fail the user's turn.
+  }
 }
 
 /**
