@@ -4,7 +4,8 @@
  * Ported from LiteLLM's complexity_router.py (Apache-2.0, see docs/findings.md §5.1).
  * Exports: classify()
  */
-import type { Dimension } from './types.js';
+import type { Dimension, TerminalAssessment } from './types.js';
+import { assessTerminal } from './terminal-classifier.js';
 import {
   DEFAULT_COMPLEXITY_DIMENSION_WEIGHTS,
   DEFAULT_LOW_CONFIDENCE_THRESHOLD,
@@ -150,6 +151,8 @@ export interface ClassifyOptions {
 export interface ClassifyResult {
   dimension: Dimension;
   confidence: number;
+  /** Deterministic terminal metadata — the only authority for phase routing. */
+  terminal: TerminalAssessment;
   /** Which signals triggered */
   signals: string[];
   /**
@@ -370,6 +373,7 @@ export function classify(
   return {
     dimension,
     confidence: reportedConfidence,
+    terminal: assessTerminal(prompt),
     signals,
     // hasCategoricalEvidence means a keyword, intent, or pattern matched —
     // the length-only tiny-prompt boost does NOT count. An English system

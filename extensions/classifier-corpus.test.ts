@@ -83,6 +83,24 @@ const CORPUS: Array<{ prompt: string; expected: Dimension | Dimension[] }> = [
   { prompt: 'compare my two branches and tell me which is cleaner', expected: ['review', 'plan'] },
 ];
 
+const TERMINAL_CASES = [
+  { prompt: 'investigate the cache miss, then fix it', kind: 'implement', compound: true },
+  { prompt: 'review and improve this', kind: 'review', compound: false },
+  { prompt: 'điều tra lỗi đăng nhập rồi sửa nó', kind: 'implement', compound: true },
+  { prompt: 'research the API, then add webhook support', kind: 'implement', compound: true },
+] as const;
+
+describe('terminal corpus', () => {
+  for (const { prompt, kind, compound } of TERMINAL_CASES) {
+    it(`reads "${prompt.slice(0, 50)}" as terminal ${kind}`, () => {
+      const terminal = classify(prompt).terminal;
+      expect(terminal.kind).toBe(kind);
+      expect(terminal.compound).toBe(compound);
+      expect(terminal.discountEligible).toBe(compound);
+    });
+  }
+});
+
 describe('classifier corpus', () => {
   const failures: string[] = [];
 

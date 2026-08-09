@@ -7,6 +7,7 @@ import autoModelRouterExtension from './index.js';
 import { buildSubagentProviderAuthFilter } from './provider.js';
 import { applyEscalation, requestEscalation, resetEscalation } from './escalation.js';
 import { computeRoleModels } from './subagents.js';
+import { terminalAssessment } from './test-support/router-fixtures.js';
 import {
   addAssessmentCost,
   bumpLatchGeneration,
@@ -603,7 +604,8 @@ describe('assessment lifecycle resets', () => {
           dimension: 'gather',
           confidence: 0.8,
           signals: [],
-          hasCategoricalEvidence: true,
+          terminal: terminalAssessment(),
+      hasCategoricalEvidence: true,
         },
         dimension: 'gather',
         cause: 'heuristic',

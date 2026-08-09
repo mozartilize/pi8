@@ -8,6 +8,7 @@ import {
 } from './routing-policy.js';
 import type { Candidate, Dimension } from './types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from './constants.js';
+import { terminalAssessment } from './test-support/router-fixtures.js';
 
 // ─── Fixtures ───────────────────────────────────────────────────────
 
@@ -118,6 +119,7 @@ function makePolicyInput(overrides: PolicyInputOverrides = {}): RoutingPolicyInp
       dimension: classifyDimension ?? 'gather',
       confidence: confidence ?? 0.8,
       signals: [],
+      terminal: terminalAssessment(),
       hasCategoricalEvidence: false,
     },
     baseDimension: 'gather',
@@ -228,7 +230,8 @@ describe('resolveRoutingDecision', () => {
         dimension: 'implement',
         confidence: 0.8,
         signals: [],
-        hasCategoricalEvidence: true,
+        terminal: terminalAssessment(),
+      hasCategoricalEvidence: true,
       },
       candidates: [strongPaid, adequateFree],
       config: makePolicyConfig({
@@ -244,7 +247,8 @@ describe('resolveRoutingDecision', () => {
         dimension: 'implement',
         confidence: 0.8,
         signals: [],
-        hasCategoricalEvidence: true,
+        terminal: terminalAssessment(),
+      hasCategoricalEvidence: true,
       },
       candidates: [strongPaid, adequateFree],
       config: makePolicyConfig({
@@ -272,7 +276,8 @@ describe('resolveRoutingDecision', () => {
             dimension: 'gather',
             confidence: 0.05,
             signals: [],
-            hasCategoricalEvidence: false,
+            terminal: terminalAssessment(),
+      hasCategoricalEvidence: false,
           },
           candidates: [makeCandidate({ registryId: 'test/alpha', contextWindow: 200_000 })],
         }),
@@ -293,7 +298,8 @@ describe('resolveRoutingDecision', () => {
             dimension: 'gather',
             confidence: 0.05,
             signals: [],
-            hasCategoricalEvidence: false,
+            terminal: terminalAssessment(),
+      hasCategoricalEvidence: false,
           },
           candidates: [makeCandidate({ registryId: 'test/alpha', contextWindow: 200_000 })],
         }),
@@ -439,7 +445,8 @@ describe('resolveRoutingDecision', () => {
             dimension: 'gather',
             confidence: 0.8,
             signals: [],
-            hasCategoricalEvidence: false,
+            terminal: terminalAssessment(),
+      hasCategoricalEvidence: false,
           },
           baseDimension: 'gather',
           baseCause: 'heuristic',
@@ -507,7 +514,8 @@ describe('resolveRoutingDecision', () => {
             dimension: 'plan',
             confidence: 0.8,
             signals: [],
-            hasCategoricalEvidence: true,
+            terminal: terminalAssessment(),
+      hasCategoricalEvidence: true,
           },
           userEscalation: { target: undefined, fromModel: benchmarkCandidates[0]!.registryId },
           candidates: benchmarkCandidates,
@@ -526,7 +534,8 @@ describe('resolveRoutingDecision', () => {
             dimension: 'plan',
             confidence: 0.8,
             signals: [],
-            hasCategoricalEvidence: true,
+            terminal: terminalAssessment(),
+      hasCategoricalEvidence: true,
           },
           userEscalation: { target: 'plan', fromModel },
           candidates: benchmarkCandidates,

@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest';
+import { terminalAssessment } from './test-support/router-fixtures.js';
 import {
   addAccumulatedCost,
   addAssessmentCost,
@@ -40,7 +41,8 @@ describe('router session state', () => {
         dimension: 'plan',
         confidence: 0.8,
         signals: ['plan (1)'],
-        hasCategoricalEvidence: true,
+        terminal: terminalAssessment(),
+      hasCategoricalEvidence: true,
       },
       dimension: 'plan',
       cause: 'continuation-context',
