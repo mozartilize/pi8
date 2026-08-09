@@ -11,13 +11,13 @@
  */
 import type {
   AssessmentConfidence,
-  AssessmentOutcome,
-  AssessmentScope,
-  Dimension,
+  ComplexityBand,
+  TaskKind,
+  TaskScope,
 } from './types.js';
 
 /** Bump on any wording, ontology or field change. Semver: major = ontology. */
-export const ASSESSMENT_PROMPT_VERSION = '1.0.0';
+export const ASSESSMENT_PROMPT_VERSION = '2.0.0';
 
 export interface AssessmentEvidence {
   /** Role-labelled conversation; labels come from provenance, not raw role. */
@@ -33,28 +33,17 @@ export interface AssessmentEvidence {
 }
 
 export type ParsedAssessment = {
-  dimension: Dimension;
-  scope: AssessmentScope;
-  outcome: AssessmentOutcome;
+  kind: TaskKind;
+  complexity: ComplexityBand;
+  scope: TaskScope;
+  compound: boolean;
   confidence: AssessmentConfidence;
   reasoning: string;
 };
 
-const DIMENSIONS: readonly Dimension[] = [
-  'lightweight',
-  'gather',
-  'plan',
-  'implement',
-  'review',
-];
-const SCOPES: readonly AssessmentScope[] = ['bounded', 'open-ended'];
-const OUTCOMES: readonly AssessmentOutcome[] = [
-  'extract',
-  'investigate',
-  'plan',
-  'implement',
-  'review',
-];
+const KINDS: readonly TaskKind[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
+const COMPLEXITIES: readonly ComplexityBand[] = ['trivial', 'routine', 'moderate', 'hard', 'frontier'];
+const SCOPES: readonly TaskScope[] = ['bounded', 'open-ended'];
 const CONFIDENCES: readonly AssessmentConfidence[] = ['high', 'medium', 'low'];
 
 const MAX_REASONING_CHARS = 240;
@@ -99,26 +88,38 @@ function tail(text: string, maxChars: number): string {
 const INSTRUCTIONS = `You are a routing assessor for a coding agent. Read the request below and
 classify the work the user is asking for.
 
-Classify by the requested DELIVERABLE, not by the first phase of the work:
+Classify by the requested terminal DELIVERABLE, not by the first phase of the work:
 - "investigate and fix X" is implement, because a fix is requested.
 - "research and recommend an architecture" is plan, because a recommendation is requested.
 - "inspect this diff for bugs" is review.
 - "list the main features of <one file>" is lightweight, because it is a bounded extraction.
 
-Dimensions:
+Kinds:
 - lightweight: small, bounded, self-contained answers and extractions
 - gather: multi-source reading, search, open-ended investigation
 - plan: architecture, design, tradeoff analysis, recommendations
 - implement: writing or modifying code toward a known outcome
 - review: critiquing or verifying existing work
 
-Scope is bounded when the deliverable is a small, enumerable amount of work
-over named material, and open-ended otherwise.`;
+Complexity bands:
+- trivial: mechanical, no judgement needed
+- routine: familiar work with an obvious method
+- moderate: several interacting parts or a non-obvious method
+- hard: subtle correctness, concurrency, cross-component or migration work
+- frontier: novel design with no established method
 
-const OUTPUT_CONTRACT = `Return exactly five lines and nothing else:
-Dimension: [lightweight|gather|plan|implement|review]
+Scope is bounded when the deliverable is a small, enumerable amount of work
+over named material, and open-ended otherwise.
+
+Compound is yes only when the request states an explicit prerequisite or
+exploration step that must precede a terminal mutation deliverable, and no
+otherwise.`;
+
+const OUTPUT_CONTRACT = `Return exactly six lines and nothing else:
+Kind: [lightweight|gather|plan|implement|review]
+Complexity: [trivial|routine|moderate|hard|frontier]
 Scope: [bounded|open-ended]
-Outcome: [extract|investigate|plan|implement|review]
+Compound: [yes|no]
 Confidence: [high|medium|low]
 Reasoning: [one short sentence]`;
 
@@ -188,18 +189,20 @@ function oneOf<T extends string>(
 export function parseAssessment(text: string): ParsedAssessment | undefined {
   if (typeof text !== 'string' || !text.trim()) return undefined;
 
-  const dimension = oneOf(fieldValue(text, 'Dimension'), DIMENSIONS);
+  const kind = oneOf(fieldValue(text, 'Kind'), KINDS);
+  const complexity = oneOf(fieldValue(text, 'Complexity'), COMPLEXITIES);
   const scope = oneOf(fieldValue(text, 'Scope'), SCOPES);
-  const outcome = oneOf(fieldValue(text, 'Outcome'), OUTCOMES);
+  const compoundRaw = oneOf(fieldValue(text, 'Compound'), ['yes', 'no'] as const);
   const confidence = oneOf(fieldValue(text, 'Confidence'), CONFIDENCES);
   const reasoningRaw = fieldValue(text, 'Reasoning');
 
-  if (!dimension || !scope || !outcome || !confidence || !reasoningRaw) return undefined;
+  if (!kind || !complexity || !scope || !compoundRaw || !confidence || !reasoningRaw) return undefined;
 
   return {
-    dimension,
+    kind,
+    complexity,
     scope,
-    outcome,
+    compound: compoundRaw === 'yes',
     confidence,
     reasoning: reasoningRaw.slice(0, MAX_REASONING_CHARS),
   };

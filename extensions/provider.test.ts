@@ -1121,7 +1121,7 @@ describe('assessment orchestration', () => {
             type: 'text_delta',
             delta:
               opts.assessorReply ??
-              'Dimension: gather\nScope: bounded\nOutcome: investigate\nConfidence: high\nReasoning: ok',
+              'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: ok',
           },
         ]);
       }
@@ -1192,7 +1192,7 @@ describe('assessment orchestration', () => {
     const session = await newSession({ assessmentMode: 'active', consultRouter: true });
     const decision = await session.routeTurn('list the main features of docs/plan.md', {
       assessorReply:
-        'Dimension: lightweight\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: bounded extraction',
+        'Kind: lightweight\nComplexity: trivial\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded extraction',
     });
     expect(decision?.dimension).toBe('lightweight');
     expect(decision?.cause).toBe('router-consult');
@@ -1219,7 +1219,7 @@ describe('assessment orchestration', () => {
 
     const decision = await session.routeTurn('list the main features of docs/plan.md', {
       assessorReply:
-        'Dimension: lightweight\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: x',
+        'Kind: lightweight\nComplexity: trivial\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: x',
     });
     expect(decision?.dimension).toBe('plan');
     expect(decision?.cause).toBe('user-escalation');
@@ -1232,7 +1232,7 @@ describe('assessment orchestration', () => {
 
     const decision = await session.routeTurn('list the main features of docs/plan.md', {
       assessorReply:
-        'Dimension: lightweight\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: x',
+        'Kind: lightweight\nComplexity: trivial\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: x',
     });
     expect(decision?.dimension).toBe('implement');
     expect(decision?.cause).toBe('model-escalation');
@@ -1242,7 +1242,7 @@ describe('assessment orchestration', () => {
     const session = await newSession({ assessmentMode: 'active', consultRouter: true });
     const first = await session.routeTurn('list the main features of docs/plan.md', {
       assessorReply:
-        'Dimension: lightweight\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: bounded extraction',
+        'Kind: lightweight\nComplexity: trivial\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded extraction',
     });
     const second = await session.routeTurnAgainWithSameUserEntry();
 
@@ -1278,7 +1278,7 @@ describe('latch veto', () => {
     const result = await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 90_000,
       assessorReply:
-        'Dimension: gather\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: bounded',
+        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
     });
 
     expect(result?.dimension).toBe('implement');
@@ -1296,7 +1296,7 @@ describe('latch veto', () => {
     const result = await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 90_000,
       assessorReply:
-        'Dimension: gather\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: bounded',
+        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
     });
     expect(result?.dimension).toBe('gather');
     expect(result?.cause).toBe('heuristic');
@@ -1308,7 +1308,7 @@ describe('latch veto', () => {
     const result = await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 90_000,
       assessorReply:
-        'Dimension: gather\nScope: open-ended\nOutcome: investigate\nConfidence: high\nReasoning: broad',
+        'Kind: gather\nComplexity: routine\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: broad',
     });
     expect(result?.cause).toBe('context-depth');
     expect((result?.assessment as { vetoedLatch?: boolean } | undefined)?.vetoedLatch).toBe(false);
@@ -1353,7 +1353,7 @@ describe('latch veto', () => {
     await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 90_000,
       assessorReply:
-        'Dimension: gather\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: bounded',
+        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
     });
     const after = await session.routeTurnAgainWithSameUserEntry();
     // The veto holds: dimension stays gather, cause stays heuristic.
@@ -1370,12 +1370,12 @@ describe('latch veto', () => {
     await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 90_000,
       assessorReply:
-        'Dimension: gather\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: bounded',
+        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
     });
     const next = await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 95_000,
       assessorReply:
-        'Dimension: gather\nScope: open-ended\nOutcome: investigate\nConfidence: high\nReasoning: broad',
+        'Kind: gather\nComplexity: routine\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: broad',
     });
     // The veto applied only to the first latch evaluation; the next real user
     // entry escalates through the ordinary depth path again.
@@ -1398,7 +1398,7 @@ describe('latch veto', () => {
     await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 90_000,
       assessorReply:
-        'Dimension: gather\nScope: bounded\nOutcome: extract\nConfidence: high\nReasoning: bounded',
+        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
     });
     // The next invocation in the same tool loop must reuse the veto — the
     // dimension stays gather (not bumped to implement by depth escalation)

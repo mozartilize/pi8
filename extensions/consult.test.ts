@@ -371,9 +371,10 @@ async function capturePromptSentFor(customEvidence: AssessmentEvidence): Promise
   await runAssessmentWithStream(
     asTextStream(
       [
-        'Dimension: lightweight',
+        'Kind: lightweight',
+        'Complexity: trivial',
         'Scope: bounded',
-        'Outcome: extract',
+        'Compound: no',
         'Confidence: high',
         'Reasoning: ok',
       ].join('\n'),
@@ -383,6 +384,29 @@ async function capturePromptSentFor(customEvidence: AssessmentEvidence): Promise
   );
   return lastSentPrompt;
 }
+
+describe('assessment contract', () => {
+  it.each(['shadow', 'active'] as const)('uses one v2 contract in %s mode', async (mode) => {
+    const { streamSimple } = await import('@earendil-works/pi-ai/compat');
+    vi.mocked(streamSimple).mockClear();
+    await runAssessmentWithStream(
+      asTextStream([
+        'Kind: implement',
+        'Complexity: hard',
+        'Scope: open-ended',
+        'Compound: yes',
+        'Confidence: high',
+        'Reasoning: ok',
+      ].join('\n')),
+      { mode },
+    );
+    expect(vi.mocked(streamSimple).mock.calls.length).toBe(1);
+    expect(lastSentPrompt).toContain('Kind: [lightweight|gather|plan|implement|review]');
+    expect(lastSentPrompt).toContain('Complexity: [trivial|routine|moderate|hard|frontier]');
+    expect(lastSentPrompt).not.toContain('Dimension:');
+    expect(lastSentPrompt).not.toContain('Outcome:');
+  });
+});
 
 describe('runAssessment', () => {
   it('returns no-assessor when no candidate clears the floor', async () => {
@@ -439,16 +463,19 @@ describe('runAssessment', () => {
   it('returns a fully populated assessment on a valid reply', async () => {
     const result = await runAssessmentWithStreamText(
       [
-        'Dimension: lightweight',
+        'Kind: lightweight',
+        'Complexity: trivial',
         'Scope: bounded',
-        'Outcome: extract',
+        'Compound: no',
         'Confidence: high',
         'Reasoning: a bounded extraction from one named file',
       ].join('\n'),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.assessment.dimension).toBe('lightweight');
+    expect(result.assessment.kind).toBe('lightweight');
+    expect(result.assessment.complexity).toBe('trivial');
+    expect(result.assessment.compound).toBe(false);
     expect(result.assessment.scope).toBe('bounded');
     expect(result.assessment.confidence).toBe('high');
     expect(result.assessment.model).toBe('test/a');
@@ -553,9 +580,10 @@ describe('runAssessment', () => {
     const result = await runAssessmentWithStream(
       asStreamWithUsage(
         [
-          'Dimension: gather',
+          'Kind: gather',
+          'Complexity: routine',
           'Scope: bounded',
-          'Outcome: investigate',
+          'Compound: no',
           'Confidence: high',
           'Reasoning: reading a few files',
         ].join('\n'),

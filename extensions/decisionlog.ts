@@ -83,16 +83,15 @@ export interface DecisionLogEntry {
   provenance?: Record<string, number>;
   /** Verdict metadata when an assessment ran for this intent, adopted or not. */
   assessment?: {
-    dimension: string;
+    kind: string;
+    complexity: string;
     scope: string;
-    outcome: string;
+    compound: boolean;
     confidence: string;
     reasoning: string;
     model: string;
     ms: number;
-    usage: { input: number; output: number; cacheRead?: number };
     costUsd: number;
-    vetoedLatch?: boolean;
   };
   /** Shadow-record fields: the heuristic the verdict is measured against. */
   heuristicDimension?: string;
@@ -137,6 +136,23 @@ export interface DecisionLogEntry {
   };
 }
 
+function serializeAssessment(
+  assessment: RoutingAssessment | undefined,
+): DecisionLogEntry['assessment'] {
+  if (!assessment) return undefined;
+  return {
+    kind: assessment.kind,
+    complexity: assessment.complexity,
+    scope: assessment.scope,
+    compound: assessment.compound,
+    confidence: assessment.confidence,
+    reasoning: assessment.reasoning,
+    model: assessment.model,
+    ms: assessment.ms,
+    costUsd: assessment.costUsd,
+  };
+}
+
 /**
  * Append a decision to the log. Never throws into the routing path — a logging
  * failure must not fail the user's turn.
@@ -168,7 +184,7 @@ export function appendDecision(
       assessmentMode: decision.assessmentMode,
       fallbackReason: decision.fallbackReason,
       provenance: decision.provenanceCounts,
-      assessment: decision.assessment,
+      assessment: serializeAssessment(decision.assessment),
       assessmentPromptVersion: decision.assessment ? ASSESSMENT_PROMPT_VERSION : undefined,
       escalation: decision.escalation,
       contextPressure: decision.contextPressure,
@@ -304,7 +320,7 @@ export function appendShadowAssessment(
       heuristicDimension: record.heuristicDimension,
       counterfactualDimension: record.counterfactualDimension,
       dimensionDelta: delta,
-      assessment: record.assessment,
+      assessment: serializeAssessment(record.assessment),
       assessmentPromptVersion: ASSESSMENT_PROMPT_VERSION,
       fallbackReason: record.fallbackReason,
       latchTransition: record.latchTransition,

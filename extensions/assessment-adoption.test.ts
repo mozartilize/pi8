@@ -1,21 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { adoptAssessment, shouldVetoLatch, oneTierAbove, oneTierBelow } from './assessment-adoption.js';
-import type { AssessmentConfidence, AssessmentScope, Dimension, RoutingAssessment } from './types.js';
+import type { AssessmentConfidence, Dimension, RoutingAssessment, TaskScope } from './types.js';
 
 const verdict = (
-  dimension: Dimension,
+  kind: Dimension,
   confidence: AssessmentConfidence,
-  scope: AssessmentScope,
+  scope: TaskScope,
+  over: Partial<RoutingAssessment> = {},
 ): RoutingAssessment => ({
-  dimension,
+  kind,
+  complexity: 'moderate',
   scope,
-  outcome: 'extract',
+  compound: false,
   confidence,
   reasoning: 'test',
   model: 'test/assessor',
   ms: 100,
   usage: { input: 100, output: 20 },
   costUsd: 0.0001,
+  ...over,
 });
 
 const active = (over: Partial<Parameters<typeof adoptAssessment>[0]>) =>
@@ -59,6 +62,14 @@ describe('adoptAssessment — shadow mode', () => {
 describe('adoptAssessment — unavailable', () => {
   it('keeps the heuristic when no assessment exists', () => {
     expect(active({ assessment: undefined })).toEqual({ dimension: 'gather', changed: false });
+  });
+});
+
+describe('adoptAssessment — diagnostic fields', () => {
+  it('ignores complexity and compound: only kind, scope and confidence route', () => {
+    const base = verdict('implement', 'high', 'bounded', { complexity: 'trivial', compound: false });
+    const opposite = verdict('implement', 'high', 'bounded', { complexity: 'frontier', compound: true });
+    expect(active({ assessment: base })).toEqual(active({ assessment: opposite }));
   });
 });
 

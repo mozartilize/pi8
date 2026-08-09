@@ -238,9 +238,10 @@ describe('assessment telemetry', () => {
       decision({
         assessmentMode: 'active',
         assessment: {
-          dimension: 'lightweight',
+          kind: 'lightweight',
+          complexity: 'trivial',
           scope: 'bounded',
-          outcome: 'extract',
+          compound: false,
           confidence: 'high',
           reasoning: 'bounded extraction',
           model: 'test/assessor',
@@ -287,9 +288,10 @@ describe('appendShadowAssessment', () => {
         heuristicDimension: 'gather',
         counterfactualDimension: 'lightweight',
         assessment: {
-          dimension: 'lightweight',
+          kind: 'lightweight',
+          complexity: 'trivial',
           scope: 'bounded',
-          outcome: 'extract',
+          compound: false,
           confidence: 'high',
           reasoning: 'bounded extraction',
           model: 'test/assessor',
@@ -317,9 +319,10 @@ describe('appendShadowAssessment', () => {
         heuristicDimension: 'lightweight',
         counterfactualDimension: 'gather',
         assessment: {
-          dimension: 'gather',
+          kind: 'gather',
+          complexity: 'routine',
           scope: 'open-ended',
-          outcome: 'investigate',
+          compound: false,
           confidence: 'high',
           reasoning: 'broader scope',
           model: 'test/assessor',

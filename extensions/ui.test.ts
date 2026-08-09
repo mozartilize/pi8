@@ -216,9 +216,10 @@ describe('assessment in /router-why', () => {
   });
 
   const validAssessment = () => ({
-    dimension: 'lightweight' as const,
+    kind: 'lightweight' as const,
+    complexity: 'trivial' as const,
     scope: 'bounded' as const,
-    outcome: 'extract' as const,
+    compound: false,
     confidence: 'high' as const,
     reasoning: 'a bounded extraction from one named file',
     model: 'test/assessor',
@@ -239,7 +240,7 @@ describe('assessment in /router-why', () => {
       served(),
     );
 
-    expect(lines.join('\n')).toContain('assessment: bounded/extract, high');
+    expect(lines.join('\n')).toContain('assessment: lightweight/trivial/bounded, compound=no, high');
     expect(lines.join('\n')).toContain('a bounded extraction from one named file');
     expect(lines.join('\n')).toContain('routed down');
   });

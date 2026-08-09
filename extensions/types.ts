@@ -125,8 +125,6 @@ export type MessageProvenance =
   | 'tool-result';
 
 export type AssessmentConfidence = 'high' | 'medium' | 'low';
-export type AssessmentScope = 'bounded' | 'open-ended';
-export type AssessmentOutcome = 'extract' | 'investigate' | 'plan' | 'implement' | 'review';
 
 /** Terminal-axis kind is the same vocabulary as routing dimensions. */
 export type TaskKind = Dimension;
@@ -190,9 +188,10 @@ export type AssessmentFallbackReason =
   | 'disabled';
 
 export interface RoutingAssessment {
-  dimension: Dimension;
-  scope: AssessmentScope;
-  outcome: AssessmentOutcome;
+  kind: TaskKind;
+  complexity: ComplexityBand;
+  scope: TaskScope;
+  compound: boolean;
   confidence: AssessmentConfidence;
   reasoning: string;
   /** Canonical `provider/id` of the model that answered. */

@@ -65,7 +65,7 @@ export function adoptAssessment(input: AdoptionInput): AdoptionResult {
   if (mode !== 'active') return unchanged;
   if (!assessment) return unchanged;
 
-  const verdict = assessment.dimension;
+  const verdict = assessment.kind;
 
   if (assessment.confidence === 'low') {
     // Uncertainty is monotonically non-decreasing against the heuristic:

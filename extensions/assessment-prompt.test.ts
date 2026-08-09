@@ -28,9 +28,23 @@ describe('buildAssessmentPrompt', () => {
     for (const dim of ['lightweight', 'gather', 'plan', 'implement', 'review']) {
       expect(prompt).toContain(dim);
     }
-    for (const field of ['Dimension:', 'Scope:', 'Outcome:', 'Confidence:', 'Reasoning:']) {
+    for (const field of ['Kind:', 'Complexity:', 'Scope:', 'Compound:', 'Confidence:', 'Reasoning:']) {
       expect(prompt).toContain(field);
     }
+  });
+
+  it('replaces the assessor with the strict six-line v2 contract', () => {
+    expect(ASSESSMENT_PROMPT_VERSION).toBe('2.0.0');
+    const prompt = buildAssessmentPrompt({
+      conversation: '[user] investigate X then fix it',
+      toolNames: ['read', 'edit'],
+      skillNames: [],
+      toolActivity: [],
+    }, 6000);
+    expect(prompt).toContain('Kind: [lightweight|gather|plan|implement|review]');
+    expect(prompt).toContain('Complexity: [trivial|routine|moderate|hard|frontier]');
+    expect(prompt).toContain('Compound: [yes|no]');
+    expect(prompt).not.toContain('InitialPhase');
   });
 
   it('labels a compaction summary as a summary and never as user speech', () => {
@@ -89,7 +103,7 @@ describe('buildAssessmentPrompt', () => {
     );
     expect(prompt.length).toBeLessThanOrEqual(2000);
     // The parseable reply contract must survive even a hard truncation.
-    for (const field of ['Dimension:', 'Scope:', 'Outcome:', 'Confidence:', 'Reasoning:']) {
+    for (const field of ['Kind:', 'Complexity:', 'Scope:', 'Compound:', 'Confidence:', 'Reasoning:']) {
       expect(prompt).toContain(field);
     }
   });
@@ -142,27 +156,53 @@ describe('redactSecrets', () => {
 
 describe('parseAssessment', () => {
   const wellFormed = [
-    'Dimension: gather',
+    'Kind: gather',
+    'Complexity: routine',
     'Scope: bounded',
-    'Outcome: extract',
+    'Compound: no',
     'Confidence: high',
     'Reasoning: the user wants a feature list from one named file',
   ].join('\n');
 
   it('parses a well-formed reply', () => {
     expect(parseAssessment(wellFormed)).toEqual({
-      dimension: 'gather',
+      kind: 'gather',
+      complexity: 'routine',
       scope: 'bounded',
-      outcome: 'extract',
+      compound: false,
       confidence: 'high',
       reasoning: 'the user wants a feature list from one named file',
     });
   });
 
+  it('accepts only complete v2 and rejects old v1 output', () => {
+    const validV2 = [
+      'Kind: implement',
+      'Complexity: hard',
+      'Scope: open-ended',
+      'Compound: yes',
+      'Confidence: high',
+      'Reasoning: terminal mutation requested',
+    ].join('\n');
+    expect(parseAssessment(validV2)).toMatchObject({
+      kind: 'implement', complexity: 'hard', scope: 'open-ended', compound: true,
+    });
+    expect(parseAssessment(validV2.replace('Complexity: hard\n', ''))).toBeUndefined();
+    expect(parseAssessment(validV2.replace('Compound: yes', 'Compound: maybe'))).toBeUndefined();
+    expect(parseAssessment([
+      'Dimension: implement',
+      'Scope: open-ended',
+      'Outcome: implement',
+      'Confidence: high',
+      'Reasoning: old response',
+    ].join('\n'))).toBeUndefined();
+  });
+
   it('tolerates surrounding prose and case differences', () => {
-    const noisy = `Sure!\n\ndimension: IMPLEMENT\nscope: Open-Ended\noutcome: implement\nconfidence: Medium\nreasoning: it asks for a code change\n\nHope that helps.`;
-    expect(parseAssessment(noisy)?.dimension).toBe('implement');
+    const noisy = `Sure!\n\nkind: IMPLEMENT\ncomplexity: Hard\nscope: Open-Ended\ncompound: No\nconfidence: Medium\nreasoning: it asks for a code change\n\nHope that helps.`;
+    expect(parseAssessment(noisy)?.kind).toBe('implement');
     expect(parseAssessment(noisy)?.scope).toBe('open-ended');
+    expect(parseAssessment(noisy)?.compound).toBe(false);
     expect(parseAssessment(noisy)?.confidence).toBe('medium');
   });
 
@@ -172,12 +212,12 @@ describe('parseAssessment', () => {
   });
 
   it('rejects a reply missing a field — partial adoption is not permitted', () => {
-    const missing = wellFormed.split('\n').filter((l) => !l.startsWith('Outcome')).join('\n');
+    const missing = wellFormed.split('\n').filter((l) => !l.startsWith('Complexity')).join('\n');
     expect(parseAssessment(missing)).toBeUndefined();
   });
 
-  it('rejects an unknown dimension', () => {
-    expect(parseAssessment(wellFormed.replace('gather', 'research'))).toBeUndefined();
+  it('rejects an unknown kind', () => {
+    expect(parseAssessment(wellFormed.replace('Kind: gather', 'Kind: research'))).toBeUndefined();
   });
 
   it('rejects empty or non-string input without throwing', () => {
@@ -186,17 +226,17 @@ describe('parseAssessment', () => {
   });
 
   it('strips surrounding brackets from a field value', () => {
-    const bracketed = wellFormed.replace('Dimension: gather', 'Dimension: [gather]');
-    expect(parseAssessment(bracketed)?.dimension).toBe('gather');
+    const bracketed = wellFormed.replace('Kind: gather', 'Kind: [gather]');
+    expect(parseAssessment(bracketed)?.kind).toBe('gather');
   });
 
   it('uses the first occurrence when a field repeats', () => {
     const duplicated = [
-      'Dimension: gather',
-      'Dimension: plan',
+      'Kind: gather',
+      'Kind: plan',
       ...wellFormed.split('\n').slice(1),
     ].join('\n');
-    expect(parseAssessment(duplicated)?.dimension).toBe('gather');
+    expect(parseAssessment(duplicated)?.kind).toBe('gather');
   });
 
   it('captures only the first line of a multi-line reasoning', () => {

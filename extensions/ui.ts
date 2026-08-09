@@ -83,7 +83,8 @@ export function formatDecisionDetail(
   if (decision.assessment) {
     const a = decision.assessment;
     lines.push(
-      `  assessment: ${a.scope}/${a.outcome}, ${a.confidence} → ${a.dimension} (${a.model}, ${a.ms}ms, $${a.costUsd.toFixed(5)})`,
+      `  assessment: ${a.kind}/${a.complexity}/${a.scope}, ` +
+      `compound=${a.compound ? 'yes' : 'no'}, ${a.confidence} (${a.model}, ${a.ms}ms, $${a.costUsd.toFixed(5)})`,
     );
     lines.push(`  rationale:  ${a.reasoning}`);
     if (a.vetoedLatch) {

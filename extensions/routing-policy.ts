@@ -364,7 +364,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     decision.reason += ` [user escalation → ${dimension}]`;
   } else if (cause === 'router-consult' && decision.assessment) {
     decision.reason +=
-      ` [assessment ${decision.assessment.dimension} ` +
+      ` [assessment ${decision.assessment.kind} ` +
       `${decision.assessment.scope}/${decision.assessment.confidence}]`;
   }
 
