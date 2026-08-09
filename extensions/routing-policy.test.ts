@@ -732,3 +732,40 @@ describe('depth-escalation probe and veto', () => {
     expect(result.decision.cause).toBe('context-depth');
   });
 });
+
+describe('resolveRoutingDecision — multiWorkPolicy threading', () => {
+  it('threads multiWorkPolicy onto the primary scoring call and attaches decision.multiWork', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'implement',
+        baseDimension: 'implement',
+        baseCause: 'heuristic',
+        multiWorkPolicy: {
+          terminal: terminalAssessment(),
+          terminalRequirement: 0.85,
+          terminalBand: 'standard',
+          phase: 'inspect',
+          phaseReason: 'test-inspect',
+          terminalFloor: 0.85,
+          inspectFloor: 0.70,
+          providerInvocation: 1,
+        },
+      }),
+    );
+    expect(result.decision.multiWork).toBeDefined();
+    expect(result.decision.multiWork?.phase).toBe('inspect');
+  });
+
+  it('leaves decision.multiWork undefined when no multiWorkPolicy is supplied', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'implement',
+        baseDimension: 'implement',
+        baseCause: 'heuristic',
+      }),
+    );
+    expect(result.decision.multiWork).toBeUndefined();
+  });
+});

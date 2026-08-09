@@ -11,7 +11,7 @@
  * classification/consult cache, candidate construction, thinking resolution,
  * guidance injection, and delegation.
  */
-import type { Candidate, DecisionCause, Dimension, RoutingDecision } from './types.js';
+import type { Candidate, DecisionCause, Dimension, MultiWorkScoringPolicy, RoutingDecision } from './types.js';
 import type { ClassifyResult } from './classifier.js';
 import type { AutoRouterConfig } from './types.js';
 import type { PendingUserEscalation } from './router-session-state.js';
@@ -40,6 +40,14 @@ export interface RoutingPolicyInput {
   incumbentRegistryId?: string;
   /** True when a bounded high-confidence assessment refused the first latch. */
   vetoDepthEscalation?: boolean;
+  /**
+   * Request-local terminal/inspect floors for an eligible compound-implement
+   * intent. Only the caller's latched-eligible work-phase state supplies
+   * this; its absence makes the shared scorer path use current live
+   * tier/promotion parameters for non-engaged, non-implement, and active-
+   * repick invocations.
+   */
+  multiWorkPolicy?: MultiWorkScoringPolicy;
   config: Pick<
     AutoRouterConfig,
     | 'dimensionWeights'
@@ -217,6 +225,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     needsVision,
     incumbentRegistryId,
     config,
+    multiWorkPolicy,
   } = input;
 
   // Step 1-3: start from base dimension/cause then apply user and model
@@ -263,6 +272,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     needsVision,
     isSubagentSpawn: false,
     switchMargin: config.switchMargin,
+    ...(multiWorkPolicy ? { multiWorkPolicy } : {}),
   };
   let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
 

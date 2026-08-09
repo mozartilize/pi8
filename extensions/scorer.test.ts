@@ -14,7 +14,7 @@ import {
 } from './scorer.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from './constants.js';
 import { benchRow, candidate, registryModel } from './test-support/router-fixtures.js';
-import type { Candidate } from './types.js';
+import type { Candidate, MultiWorkScoringPolicy } from './types.js';
 
 const cheapModel = candidate('test/cheap', {
   bench: {
@@ -1276,5 +1276,96 @@ describe('scorer — relative quality (economy calculation core)', () => {
     expect(decision.fallbackChain.indexOf('test/zzz-strong-general')).toBeLessThan(
       decision.fallbackChain.indexOf('test/aaa-weak-general'),
     );
+  });
+});
+
+describe('scorer — multiWorkPolicy request-local floors', () => {
+  const frontierInspectPolicy: MultiWorkScoringPolicy = {
+    terminal: {
+      kind: 'implement',
+      complexity: 'moderate',
+      scope: 'bounded',
+      compound: true,
+      confidence: 'high',
+      discountEligible: true,
+    },
+    terminalRequirement: 0.85,
+    terminalBand: 'standard',
+    phase: 'inspect',
+    phaseReason: 'test-inspect',
+    terminalFloor: 0.85,
+    inspectFloor: 0.70,
+    providerInvocation: 1,
+  };
+
+  const frontier = candidate('test/mw-frontier', {
+    bench: benchRow('test/mw-frontier', { quality: { intelligence: 90, agenticCoding: 100 } }),
+    cost: { input: 10, output: 50 },
+  });
+  const inspectCheap = candidate('test/mw-inspect-cheap', {
+    bench: benchRow('test/mw-inspect-cheap', { quality: { intelligence: 80, agenticCoding: 70 } }),
+    cost: { input: 2, output: 8 },
+  });
+  const belowInspect = candidate('test/mw-below-inspect', {
+    bench: benchRow('test/mw-below-inspect', { quality: { intelligence: 70, agenticCoding: 50 } }),
+    cost: { input: 1, output: 2 },
+  });
+  const unknown = candidate('test/mw-unknown', { bench: undefined });
+
+  it('promotes only the economically justified inspect-band candidate', () => {
+    const decision = pickBest([frontier, inspectCheap, belowInspect], 'implement', undefined, {
+      estimatedContextTokens: 100,
+      multiWorkPolicy: frontierInspectPolicy,
+    });
+    expect(decision.chosen).toBe(inspectCheap.registryId);
+    expect(decision.multiWork?.candidateCapability[inspectCheap.registryId]).toEqual({
+      taskRatio: 0.70,
+      clearsTerminalFloor: false,
+      viaInspectPromotion: true,
+    });
+    expect(decision.fallbackChain).toEqual(expect.arrayContaining([
+      frontier.registryId,
+      inspectCheap.registryId,
+      belowInspect.registryId,
+    ]));
+  });
+
+  it('removes inspect promotion in mutate while preserving the full chain', () => {
+    const decision = pickBest([frontier, inspectCheap], 'implement', undefined, {
+      estimatedContextTokens: 100,
+      multiWorkPolicy: { ...frontierInspectPolicy, phase: 'mutate', inspectFloor: 0.85 },
+    });
+    expect(decision.chosen).toBe(frontier.registryId);
+    expect(decision.fallbackChain).toContain(inspectCheap.registryId);
+    expect(decision.multiWork?.candidateCapability[inspectCheap.registryId]?.viaInspectPromotion).toBe(false);
+  });
+
+  it('never grants inspect promotion to unknown quality', () => {
+    const decision = pickBest([frontier, unknown], 'implement', undefined, {
+      estimatedContextTokens: 100,
+      multiWorkPolicy: frontierInspectPolicy,
+    });
+    expect(decision.multiWork?.candidateCapability[unknown.registryId]).toEqual({
+      clearsTerminalFloor: 'unknown',
+      viaInspectPromotion: false,
+    });
+  });
+
+  it('attaches multiWork.terminalCapableInScoringSet and leaves no policy identical to the current live path', () => {
+    const withoutPolicy = pickBest([frontier, inspectCheap, belowInspect], 'implement', undefined, {
+      estimatedContextTokens: 100,
+    });
+    const withUndefinedPolicy = pickBest([frontier, inspectCheap, belowInspect], 'implement', undefined, {
+      estimatedContextTokens: 100,
+      multiWorkPolicy: undefined,
+    });
+    expect(withoutPolicy).toEqual(withUndefinedPolicy);
+    expect(withoutPolicy.multiWork).toBeUndefined();
+
+    const withPolicy = pickBest([frontier, inspectCheap, belowInspect], 'implement', undefined, {
+      estimatedContextTokens: 100,
+      multiWorkPolicy: frontierInspectPolicy,
+    });
+    expect(withPolicy.multiWork?.terminalCapableInScoringSet).toBe(true);
   });
 });
