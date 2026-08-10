@@ -430,7 +430,7 @@ export async function runDelegationLoop(
               ? { ...baseDecision, multiWork: finalMultiWork }
               : baseDecision;
             lastServed = {
-              registryId: candidateId,
+              registryId: `${provider}/${modelId}`,
               thinkingLevel: (effectiveReasoning ?? opts.options?.reasoning) as string | undefined,
               viaFallback,
               fallbackRank: viaFallback ? candidateIndex + 1 : undefined,
