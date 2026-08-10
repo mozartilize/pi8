@@ -247,7 +247,13 @@ export async function runAssessment(
       messages: [{ role: 'user', content: prompt, timestamp: Date.now() }],
     };
 
-    const stream = streamSimple(selected.model, assessmentContext, {
+    // A provider registered with its own `streamSimple` (e.g. an OAuth/SDK-backed
+    // virtual provider with a non-standard `api` value) must be dispatched through
+    // that registered implementation. The generic compat `streamSimple` only
+    // resolves built-in `api` types and throws "No API provider registered for
+    // api: <custom>" for anything else.
+    const providerStreamSimple = registry?.getProvider?.(selected.model.provider)?.streamSimple ?? streamSimple;
+    const stream = providerStreamSimple(selected.model, assessmentContext, {
       apiKey: auth.apiKey,
       headers: auth.headers,
       signal: controller.signal,
@@ -364,6 +370,8 @@ export async function runAssessment(
       fallbackReason: 'error',
       costUsd: 0,
       ms,
+      model: selectedRegistryId,
+      producedOutput: false,
       ...(usageLimitProvider ? { usageLimitProvider } : {}),
     };
   } finally {

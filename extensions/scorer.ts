@@ -21,7 +21,7 @@ import type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from '@earen
 // ─── Candidate identity ─────────────────────────────────────────────
 
 /** Every level a bench row can be measured at; also the key-suffix alphabet. */
-const MODEL_THINKING_LEVELS: readonly ModelThinkingLevel[] = [
+export const MODEL_THINKING_LEVELS: readonly ModelThinkingLevel[] = [
   'off',
   'minimal',
   'low',
@@ -486,9 +486,16 @@ export function pickBest(
   const inspectPromoted = new Set<string>();
 
   // Request-local cost scale, chosen once for this pickBest call. Task cost is
-  // used only when every candidate carries it; otherwise the whole set
-  // compares on blended $/1M.
-  const costBasis = costSignal(filtered);
+  // used only when every candidate in the pool that can actually win carries
+  // it; otherwise that pool compares on blended $/1M. Scoped to the
+  // pre-promotion tier-0 pool (not the full filtered set) so a low-quality
+  // candidate that never competes for the win — tier 2, e.g. a below-floor
+  // model missing costPerTask — can't blind an otherwise task-cost-covered
+  // competitive group to effort-aware pricing (same-model higher-effort
+  // variants share the same $/1M rate, so a per-1M fallback can't tell them
+  // apart even though costPerTask does).
+  const tierZeroPool = filtered.filter((c) => eligibility.get(candidateKey(c))?.tier === 0);
+  const costBasis = costSignal(tierZeroPool.length > 0 ? tierZeroPool : filtered);
   const costOf = (c: Candidate): number | undefined =>
     costBasis === 'task' ? c.bench?.costPerTask : blendedPricePer1M(c);
 
@@ -526,6 +533,11 @@ export function pickBest(
         if (
           current.tier === 2
           && quality != null
+          // Promotion relaxes the capability floor on economic grounds. An
+          // estimated row already claims capability it was never measured at;
+          // relaxing the floor for it too would stack one inference on
+          // another, so promotion stays measured-evidence only.
+          && c.bench?.qualityEstimated !== true
           && quality.taskRatio >= activePromotionPolicy.qualityRatio
           && sanitySatisfied
           && price != null

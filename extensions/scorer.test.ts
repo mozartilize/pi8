@@ -201,6 +201,44 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
     // canonical-key tie-break decides. Both a and b must beat c.
     expect(decision.chosen).toBe('test/a');
   });
+
+  it('a non-competing candidate missing costPerTask does not blind the tier-0 pool to task-basis pricing', () => {
+    // Same base model at two efforts, both with real per-task costs (max
+    // effort burns more thinking tokens -> higher costPerTask), same $/1M
+    // rate (effort does not change the price-per-token). A third, distinctly
+    // lower-quality candidate lacks costPerTask entirely and never clears the
+    // quality floor, so it can never win — it must not force the winning
+    // pair down to an effort-blind per-1M comparison.
+    const medium = candidate('test/a', {
+      bench: benchRow('test/a', {
+        effort: 'medium',
+        quality: { intelligence: 80 },
+        priceInputPer1M: 1,
+        priceOutputPer1M: 3,
+        costPerTask: 1.0,
+      }),
+      cost: { input: 1, output: 3 },
+      effort: 'medium',
+    });
+    const max = candidate('test/a', {
+      bench: benchRow('test/a', {
+        effort: 'max',
+        quality: { intelligence: 82 },
+        priceInputPer1M: 1,
+        priceOutputPer1M: 3,
+        costPerTask: 8.0,
+      }),
+      cost: { input: 1, output: 3 },
+      effort: 'max',
+    });
+    const weak = candidate('test/b', {
+      bench: benchRow('test/b', { quality: { intelligence: 20 } }),
+      cost: { input: 0.1, output: 0.1 },
+    });
+    const decision = pickBest([medium, max, weak], 'gather');
+    expect(decision.reason).toContain('[cost-basis: task]');
+    expect(decision.chosen).toBe('test/a:medium');
+  });
 });
 
 describe('scorer', () => {
@@ -962,6 +1000,30 @@ describe('scorer — promotion and tier ordering', () => {
     expect(decision.candidateDiagnostics).toContainEqual({
       candidateKey: 'test/promotion-candidate',
       excludedReason: 'promoted',
+    });
+  });
+
+  it('does not promote a candidate whose quality was estimated rather than measured', () => {
+    // Same shape as the promotion case above, but the cheap candidate's
+    // quality is an estimate. Promotion relaxes the capability floor on
+    // economic grounds; stacking that on inferred capability would let a
+    // variant win on evidence that was never observed.
+    const frontier = make('test/estimated-frontier', { intelligence: 100 }, 20);
+    const estimated = candidate('test/estimated-candidate', {
+      bench: benchRow('test/estimated-candidate', {
+        quality: { intelligence: 70 },
+        outputSpeedTps: 50,
+        qualityEstimated: true,
+      }),
+      cost: { input: 1, output: 1 },
+    });
+
+    const decision = pickBest([frontier, estimated], 'gather');
+
+    expect(decision.chosen).toBe('test/estimated-frontier');
+    expect(decision.candidateDiagnostics).toContainEqual({
+      candidateKey: 'test/estimated-candidate',
+      excludedReason: 'below-task-floor',
     });
   });
 

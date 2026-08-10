@@ -91,7 +91,10 @@ describe('candidate expansion — model × measured effort', () => {
     expect(low?.bench?.quality.intelligence).toBe(20);
   });
 
-  it('does not emit an effort the model supports but has no row for (rule 3)', () => {
+  // Estimation is opt-in on the caller supplying a per-step drop: with no
+  // drop there is nothing to step down by, so an unmeasured effort stays out
+  // of the candidate set rather than being emitted at its anchor's quality.
+  it('emits no unmeasured effort when the store supplied no per-step drop', () => {
     const model = registryModel('p/model', {
       reasoning: true,
       thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', max: 'max' },
@@ -99,6 +102,38 @@ describe('candidate expansion — model × measured effort', () => {
     const candidates = expandModelCandidates(model, [benchRow('low', 30)]);
     expect(candidates).toHaveLength(1);
     expect(candidates[0]?.effort).toBe('low');
+  });
+
+  it('estimates a supported effort below a measured row, marked as estimated', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    });
+    const candidates = expandModelCandidates(model, [benchRow('high', 50)], {
+      intelligence: 6,
+    });
+    const byEffort = new Map(candidates.map((c) => [c.effort, c]));
+
+    expect(byEffort.get('high')?.bench?.quality.intelligence).toBe(50);
+    expect(byEffort.get('high')?.bench?.qualityEstimated).toBeUndefined();
+    // One step down from the measured `high`, two steps for `low`.
+    expect(byEffort.get('medium')?.bench?.quality.intelligence).toBeCloseTo(44, 5);
+    expect(byEffort.get('medium')?.bench?.qualityEstimated).toBe(true);
+    expect(byEffort.get('low')?.bench?.quality.intelligence).toBeCloseTo(38, 5);
+    // `max` sits above every measured row, so nothing is invented for it.
+    expect(byEffort.has('max')).toBe(false);
+  });
+
+  it('never estimates an effort the model cannot serve', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: { off: 'off', low: 'low', medium: null, high: 'high', max: 'max' },
+    });
+    const candidates = expandModelCandidates(model, [benchRow('high', 50)], {
+      intelligence: 6,
+    });
+    expect(candidates.some((c) => c.effort === 'medium')).toBe(false);
+    expect(candidates.some((c) => c.effort === 'low')).toBe(true);
   });
 
   it('does not emit a measured effort the model cannot serve (map entry null)', () => {
@@ -153,6 +188,82 @@ describe('candidate expansion — model × measured effort', () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0]?.effort).toBeUndefined();
     // Quality row is still bound so the scorer can use it.
+    expect(candidates[0]?.bench?.quality.intelligence).toBe(60);
+  });
+
+  it('fills an empty-quality pricing stub without losing target-level metadata', () => {
+    // Sources can publish exact-level price/speed data without quality indices.
+    // That row is the metadata authority while quality comes from an anchor.
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    });
+    const candidates = expandModelCandidates(model, [
+      benchRow('max', 60),
+      { ...benchRow('medium', 0), quality: {}, latencyMsTtft: 1234 },
+    ], { intelligence: 6 });
+    const byEffort = new Map(candidates.map((c) => [c.effort, c]));
+
+    expect(byEffort.get('max')?.bench?.quality.intelligence).toBe(60);
+    expect(byEffort.get('max')?.bench?.qualityEstimated).toBeUndefined();
+    // medium is estimated from max (3 steps down at 6/step), while its own
+    // exact-level latency remains attached.
+    expect(byEffort.get('medium')?.bench?.qualityEstimated).toBe(true);
+    expect(byEffort.get('medium')?.bench?.quality.intelligence).toBeCloseTo(42, 5);
+    expect(byEffort.get('medium')?.bench?.latencyMsTtft).toBe(1234);
+  });
+
+  it('fills missing axes on a measured off row while preserving measured intelligence', () => {
+    // DeepSeek-style rows measure intelligence at off but publish coding and
+    // agentic quality only at high. Missing axes can step down independently.
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: {
+        off: 'off',
+        minimal: null,
+        low: null,
+        medium: null,
+        high: 'high',
+        xhigh: null,
+        max: 'max',
+      },
+    });
+    const candidates = expandModelCandidates(model, [
+      { ...benchRow('off', 29.3), quality: { intelligence: 29.3 } },
+      {
+        ...benchRow('high', 39),
+        quality: { intelligence: 39, coding: 52, agenticCoding: 30.3 },
+      },
+      {
+        ...benchRow('max', 42.1),
+        quality: { intelligence: 42.1, coding: 56.2, agenticCoding: 33.7 },
+      },
+    ], { intelligence: 5.95, coding: 7.4, agenticCoding: 7.6 });
+    const byEffort = new Map(candidates.map((c) => [c.effort, c]));
+
+    // The registry serves only off/high/max, so unsupported intermediate
+    // estimates must not be emitted.
+    expect([...byEffort.keys()].sort()).toEqual(['high', 'max', 'off']);
+    expect(byEffort.get('off')?.bench?.quality).toEqual({
+      intelligence: 29.3,
+      coding: 22.4,
+      agenticCoding: 0,
+    });
+    expect(byEffort.get('off')?.bench?.qualityEstimated).toBe(true);
+  });
+
+  it('prefers a quality-bearing row for an effort-less fallback', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: { off: 'off', medium: null, max: null },
+    });
+    const candidates = expandModelCandidates(model, [
+      { ...benchRow('medium', 0), quality: {} },
+      benchRow('max', 60),
+    ]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.effort).toBeUndefined();
     expect(candidates[0]?.bench?.quality.intelligence).toBe(60);
   });
 });

@@ -665,3 +665,65 @@ describe('consult integration with classifier', () => {
     expect(result.dimension).not.toBe('lightweight');
   });
 });
+
+describe('runAssessment custom provider streamSimple dispatch', () => {
+  it('dispatches through a provider-registered streamSimple instead of the generic compat one', async () => {
+    const { streamSimple } = await import('@earendil-works/pi-ai/compat');
+    vi.mocked(streamSimple).mockClear();
+
+    const responseText = [
+      'Kind: gather',
+      'Complexity: routine',
+      'Scope: bounded',
+      'Compound: no',
+      'Confidence: high',
+      'Reasoning: reading a few files',
+    ].join('\n');
+    const customStreamSimple = vi.fn().mockReturnValue({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'text_delta', delta: responseText };
+        yield { type: 'done', message: { stopReason: 'stop' } };
+      },
+    });
+
+    const candidates: Candidate[] = [
+      {
+        registryId: 'bridge/model',
+        provider: 'bridge',
+        id: 'model',
+        bench: {
+          registryId: 'bridge/model',
+          benchSlug: 'model',
+          active: true,
+          quality: { intelligence: 90 },
+          source: 'test',
+        },
+        cost: { input: 1, output: 3, cacheRead: 0, cacheWrite: 0 },
+        available: true,
+      },
+    ];
+    const registry = {
+      find: () => ({ id: 'model', provider: 'bridge' } as unknown as Model<Api>),
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'k', headers: {} }),
+      getProvider: (provider: string) =>
+        (provider === 'bridge' ? ({ streamSimple: customStreamSimple } as never) : undefined),
+    } as unknown as ExtensionContext['modelRegistry'];
+
+    const result = await runAssessment(
+      {
+        enabled: true,
+        mode: 'active',
+        deadlineMs: 500,
+        maxInputChars: 4000,
+        assessorQualityRatio: 0.5,
+      },
+      registry,
+      candidates,
+      evidence,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(customStreamSimple).toHaveBeenCalledTimes(1);
+    expect(streamSimple).not.toHaveBeenCalled();
+  });
+});

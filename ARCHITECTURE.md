@@ -60,7 +60,15 @@ Set `consultRouter: false` to keep routing fully local with no assessment dispat
 
 ### Candidate expansion
 
-Candidates are expanded per measured and supported (model, effort) pair. One registry model may produce several routable candidates when bench rows exist at different effort levels — each with its own quality/cost/speed measurement. An effort level with no measurement is never synthesized (unmeasured is unknown quality). `off` rows are emitted even for non-reasoning models (their only serveable mode). When all measured efforts are unsupported by the model's `thinkingLevelMap`, the model falls back to a single effort-less candidate.
+Candidates are expanded per supported (model, effort) pair. One registry model may produce several routable candidates when bench rows exist at different effort levels — each with its own quality/cost/speed measurement. A supported level the source never measured is covered by an estimate stepped down from the nearest measured level above it, marked `qualityEstimated` (see "Effort estimation"). `off` rows are emitted even for non-reasoning models (their only serveable mode). When all measured efforts are unsupported by the model's `thinkingLevelMap`, the model falls back to a single effort-less candidate.
+
+### Effort estimation
+
+Sources publish rows only for the effort levels they measured, so a fully serveable level (e.g. `sonnet-5:medium`) can have no row while `high` and `max` do. Such a level is estimated from the nearest measured level **above** it, minus a per-step quality drop; estimation is strictly downward, so nothing above the highest measured row is ever invented.
+
+The per-step drop is derived from the store on each sync — the p90 of observed adjacent-level drops, computed per quality axis — rather than fixed. p90 rather than the median is the point: at the median an estimate lands above the true value roughly half the time, at p90 it under-shoots ~90% of the time, which is what lets an estimate compete for the pick at all. An axis with too few observations is left unestimated rather than extrapolated from noise.
+
+Estimated rows carry price and context window (registry facts that hold across effort levels) but never `costPerTask`, speed, or latency — those are per-run measurements of one specific level. Estimated quality is eligible on the normal capability floor, but **economic promotion requires measured evidence**: promotion relaxes the floor on price grounds, and relaxing it for inferred capability too would stack one inference on another.
 
 ### Capability tiers
 
@@ -100,7 +108,7 @@ Promotion is evaluated for `gather`, `implement`, and `review` only. `plan` is n
 
 ### Cost signal
 
-Per-call cost basis: `costPerTask` when every candidate carries it; otherwise blended `$/1M` tokens (input×0.25 + output×0.75). Registry pricing is authoritative when present; benchmark pricing is a fallback. Free models with benchmark data are real (zero-cost is deliberate); free models without benchmark data are treated as unknown (no cost credit).
+Per-call cost basis: `costPerTask` when every candidate in the pre-promotion tier-0 pool carries it (the full filtered set when no candidate reaches tier 0); otherwise blended `$/1M` tokens (input×0.25 + output×0.75). Scoping to the pool that can actually win keeps a low-quality candidate missing task cost from forcing an otherwise covered set onto the coarser basis — which matters because effort variants of one model share a `$/1M` rate and are only distinguishable by task cost. Registry pricing is authoritative when present; benchmark pricing is a fallback. Free models with benchmark data are real (zero-cost is deliberate); free models without benchmark data are treated as unknown (no cost credit).
 
 ### Switch penalty
 

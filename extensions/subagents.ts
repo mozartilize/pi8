@@ -34,6 +34,7 @@ import { DEFAULT_DIMENSION_WEIGHTS } from './constants.js';
 import { activeModels, loadStore } from './store.js';
 import { pickBest, candidateKey, type RegistryModelInfo } from './scorer.js';
 import { expandModelCandidates } from './provider.js';
+import { effortDropsPerStep } from './effort-estimate.js';
 import { loadModelFilter } from './allowlist.js';
 import { identityKey } from './matcher.js';
 import { appendSubagentEscalationContract } from './subagent-escalation.js';
@@ -102,6 +103,10 @@ export function buildSubagentCandidates(
     list.push(b);
     rowsByModel.set(b.registryId, list);
   }
+  // Derived from the whole store, so it re-tunes on every sync instead of
+  // pinning a constant that a new model generation invalidates.
+  const drops = effortDropsPerStep(benchModels);
+
   const candidates: Candidate[] = [];
   let skippedUnauthenticated = 0;
   let skippedNotAllowed = 0;
@@ -119,7 +124,7 @@ export function buildSubagentCandidates(
       skippedUnauthenticated++;
       continue;
     }
-    candidates.push(...expandModelCandidates(rm, rowsByModel.get(rid) ?? []));
+    candidates.push(...expandModelCandidates(rm, rowsByModel.get(rid) ?? [], drops));
   }
   return { candidates, skippedUnauthenticated, skippedNotAllowed };
 }

@@ -46,6 +46,14 @@ export interface BenchModel {
   latencyMsTtfa?: number;
   /** Reasoning-effort level the row was measured at; absent when the source published none. */
   effort?: ModelThinkingLevel;
+  /**
+   * True when `quality` was estimated by stepping down the effort ladder from
+   * a measured row of the same model rather than published by the source. The
+   * estimate is a conservative lower bound, but it is still not an
+   * observation: mechanisms that relax a floor (economic promotion) require
+   * measured evidence and must check this flag.
+   */
+  qualityEstimated?: boolean;
   /** Measured cost per task (AA intelligence-index cost block); absent when unpublished. */
   costPerTask?: number;
   /** Prefer registry value; adapter value is fallback. */

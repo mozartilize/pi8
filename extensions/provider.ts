@@ -41,8 +41,15 @@ import {
   candidateKey,
   isThinkingSupportedByRegistryModel,
   resolveThinkingLevel,
+  MODEL_THINKING_LEVELS,
   type RegistryModelInfo,
 } from './scorer.js';
+import {
+  completeMeasuredRow,
+  effortDropsPerStep,
+  estimateRow,
+  type EffortDrops,
+} from './effort-estimate.js';
 import {
   getAccumulatedCost,
   getActiveSkillNames,
@@ -284,12 +291,19 @@ function recordAssessorOutcome(attempt: Awaited<ReturnType<typeof runAssessment>
 // ─── Candidate expansion ───────────────────────────────────────────────
 
 /**
- * Expand one registry model into its routable candidates: one per effort
- * level that is BOTH supported by the model's thinkingLevelMap AND present as
- * an active bench row. A model with no effort-labelled rows emits exactly one
- * candidate with no effort, as before. An effort level with no measurement is
- * never synthesized — unmeasured is unknown quality (rule 3), and a cheap
- * unmeasured variant must not become the pick.
+ * Expand one registry model into its routable candidates: one per effort level
+ * that is BOTH supported by the model's thinkingLevelMap AND covered by an
+ * active bench row. A model with no effort-labelled rows emits exactly one
+ * candidate with no effort, as before.
+ *
+ * A supported level the source never measured is covered by an estimate
+ * stepped down from the nearest measured level above it (see
+ * effort-estimate.ts). The estimate is a conservative lower bound on
+ * capability, so a variant it makes eligible is one the evidence already
+ * supports at that level or better — which is what earns it a place in the
+ * candidate set rather than being written off as unknown quality. Estimation
+ * is strictly downward: nothing above the highest measured row is ever
+ * invented.
  *
  * `off` is universally serveable: non-reasoning registry models run exactly
  * the mode an off row measures, so an off row never drops a model's only
@@ -298,22 +312,38 @@ function recordAssessorOutcome(attempt: Awaited<ReturnType<typeof runAssessment>
 export function expandModelCandidates(
   rm: RegistryModelInfo,
   rows: readonly BenchModel[],
+  drops: EffortDrops = {},
 ): Candidate[] {
+  const qualityBearing = (r: BenchModel): boolean =>
+    Object.values(r.quality).some((v) => v !== undefined);
+
   const labelled = rows.filter(
-    (r): r is BenchModel & { effort: ModelThinkingLevel } => r.effort != null,
+    (r): r is BenchModel & { effort: ModelThinkingLevel } =>
+      r.effort != null,
   );
   if (labelled.length === 0) return [buildCandidate(rm, rows[0])];
-  const supported = labelled
-    .filter(
-      (row) => row.effort === 'off' || isThinkingSupportedByRegistryModel(rm, row.effort),
-    )
+
+  const byLevel = new Map(labelled.map((row) => [row.effort, row]));
+  const supported = MODEL_THINKING_LEVELS.filter(
+    (level) => level === 'off' || isThinkingSupportedByRegistryModel(rm, level),
+  )
+    .map((level) => {
+      const measured = byLevel.get(level);
+      // A source may publish a target-level pricing/performance row with only
+      // some (or none) of the quality axes. Preserve its measured axes and
+      // exact-level metadata while filling only the missing axes from above.
+      return measured
+        ? completeMeasuredRow(measured, labelled, drops)
+        : estimateRow(level, labelled, drops);
+    })
+    .filter((row): row is BenchModel => row != null)
     .map((row) => buildCandidate(rm, row));
   if (supported.length > 0) return supported;
-  // All measured efforts are unsupported by this model's thinkingLevelMap.
-  // Rather than dropping the model entirely (which would make it unroutable),
-  // fall back to an effort-less candidate bound to the best available row.
-  // Quality still counts; the dimension floor applies at delegation time.
-  return [buildCandidate(rm, { ...labelled[0], effort: undefined })];
+  // All measured efforts are unsupported by this model's thinkingLevelMap, or
+  // the source supplied only quality-empty rows. Keep the model routable with
+  // an effort-less candidate, preferring any row the scorer can actually use.
+  const fallback = labelled.find(qualityBearing) ?? labelled[0];
+  return [buildCandidate(rm, { ...fallback, effort: undefined })];
 }
 
 // ─── Provider registration ──────────────────────────────────────────
@@ -499,6 +529,10 @@ export function registerAutoRouterProvider(
               list.push(b);
               rowsByModel.set(b.registryId, list);
             }
+            // Derived from the whole store, so it re-tunes on every sync
+            // instead of pinning a constant that a new model generation
+            // invalidates.
+            const effortDrops = effortDropsPerStep(benchModels);
 
             const isModelAllowed = loadModelFilter();
             const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
@@ -520,7 +554,9 @@ export function registerAutoRouterProvider(
                   !isBlacklisted(`${rm.provider}/${rm.id}`) &&
                   isScoped(`${rm.provider}/${rm.id}`),
               )
-              .flatMap((rm) => expandModelCandidates(rm, rowsByModel.get(`${rm.provider}/${rm.id}`) ?? []));
+              .flatMap((rm) =>
+                expandModelCandidates(rm, rowsByModel.get(`${rm.provider}/${rm.id}`) ?? [], effortDrops),
+              );
             const candidates = allCandidates.filter(
               (candidate) => !getBlacklistedModels().has(candidateKey(candidate)),
             );
