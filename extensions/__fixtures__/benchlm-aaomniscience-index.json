@@ -1,0 +1,1094 @@
+[
+  {
+    "rank": 1,
+    "benchSlug": "claude-fable",
+    "model": "Claude Fable 5",
+    "provider": "Anthropic",
+    "omniscienceIndex": 40.2
+  },
+  {
+    "rank": 2,
+    "benchSlug": "gemini-3-1-pro",
+    "model": "Gemini 3.1 Pro",
+    "provider": "Google",
+    "omniscienceIndex": 32.9
+  },
+  {
+    "rank": 3,
+    "benchSlug": "claude-opus-5",
+    "model": "Claude Opus 5",
+    "provider": "Anthropic",
+    "omniscienceIndex": 31.3
+  },
+  {
+    "rank": 4,
+    "benchSlug": "claude-opus-4-8",
+    "model": "Claude Opus 4.8",
+    "provider": "Anthropic",
+    "omniscienceIndex": 27.4
+  },
+  {
+    "rank": 5,
+    "benchSlug": "grok-4-5",
+    "model": "Grok 4.5",
+    "provider": "xAI",
+    "omniscienceIndex": 26.4
+  },
+  {
+    "rank": 6,
+    "benchSlug": "claude-opus-4-7-adaptive",
+    "model": "Claude Opus 4.7 (Adaptive)",
+    "provider": "Anthropic",
+    "omniscienceIndex": 26.2
+  },
+  {
+    "rank": 7,
+    "benchSlug": "gemini-3-6-flash",
+    "model": "Gemini 3.6 Flash",
+    "provider": "Google",
+    "omniscienceIndex": 23.5
+  },
+  {
+    "rank": 8,
+    "benchSlug": "gemini-3-5-flash",
+    "model": "Gemini 3.5 Flash",
+    "provider": "Google",
+    "omniscienceIndex": 22.7
+  },
+  {
+    "rank": 9,
+    "benchSlug": "gpt-5-6-sol",
+    "model": "GPT-5.6 Sol",
+    "provider": "OpenAI",
+    "omniscienceIndex": 21.7
+  },
+  {
+    "rank": 10,
+    "benchSlug": "gpt-5-5",
+    "model": "GPT-5.5",
+    "provider": "OpenAI",
+    "omniscienceIndex": 20.1
+  },
+  {
+    "rank": 11,
+    "benchSlug": "kimi-3",
+    "model": "Kimi K3",
+    "provider": "Moonshot AI",
+    "omniscienceIndex": 18.4
+  },
+  {
+    "rank": 12,
+    "benchSlug": "grok-4-3",
+    "model": "Grok 4.3",
+    "provider": "xAI",
+    "omniscienceIndex": 18.3
+  },
+  {
+    "rank": 13,
+    "benchSlug": "muse-spark-1-1",
+    "model": "Muse Spark 1.1",
+    "provider": "Meta",
+    "omniscienceIndex": 18
+  },
+  {
+    "rank": 14,
+    "benchSlug": "gemini-3-pro",
+    "model": "Gemini 3 Pro",
+    "provider": "Google",
+    "omniscienceIndex": 15.8
+  },
+  {
+    "rank": 15,
+    "benchSlug": "claude-sonnet-5",
+    "model": "Claude Sonnet 5",
+    "provider": "Anthropic",
+    "omniscienceIndex": 15.3
+  },
+  {
+    "rank": 16,
+    "benchSlug": "claude-opus-4-7",
+    "model": "Claude Opus 4.7",
+    "provider": "Anthropic",
+    "omniscienceIndex": 14.2
+  },
+  {
+    "rank": 17,
+    "benchSlug": "qwen3-7-max",
+    "model": "Qwen3.7 Max",
+    "provider": "Alibaba",
+    "omniscienceIndex": 14.1
+  },
+  {
+    "rank": 18,
+    "benchSlug": "claude-opus-4-6-thinking",
+    "model": "Claude Opus 4.6 (Adaptive)",
+    "provider": "Anthropic",
+    "omniscienceIndex": 13.5
+  },
+  {
+    "rank": 19,
+    "benchSlug": "claude-opus-4-5-thinking",
+    "model": "Claude Opus 4.5 Thinking",
+    "provider": "Anthropic",
+    "omniscienceIndex": 13.3
+  },
+  {
+    "rank": 20,
+    "benchSlug": "qwen3-6-max-preview",
+    "model": "Qwen 3.6 Max (preview)",
+    "provider": "Alibaba",
+    "omniscienceIndex": 10.2
+  },
+  {
+    "rank": 21,
+    "benchSlug": "gpt-5-3-codex",
+    "model": "GPT-5.3 Codex",
+    "provider": "OpenAI",
+    "omniscienceIndex": 9.9
+  },
+  {
+    "rank": 22,
+    "benchSlug": "gpt-5-3-codex-spark",
+    "model": "GPT-5.3-Codex-Spark",
+    "provider": "OpenAI",
+    "omniscienceIndex": 9.9
+  },
+  {
+    "rank": 23,
+    "benchSlug": "gemini-3-5-flash-lite",
+    "model": "Gemini 3.5 Flash-Lite",
+    "provider": "Google",
+    "omniscienceIndex": 6.9
+  },
+  {
+    "rank": 24,
+    "benchSlug": "kimi-2-6",
+    "model": "Kimi K2.6",
+    "provider": "Moonshot AI",
+    "omniscienceIndex": 6.4
+  },
+  {
+    "rank": 25,
+    "benchSlug": "gpt-5-4",
+    "model": "GPT-5.4",
+    "provider": "OpenAI",
+    "omniscienceIndex": 5.7
+  },
+  {
+    "rank": 26,
+    "benchSlug": "gpt-5-1",
+    "model": "GPT-5.1",
+    "provider": "OpenAI",
+    "omniscienceIndex": 5.6
+  },
+  {
+    "rank": 27,
+    "benchSlug": "mimo-v2-pro",
+    "model": "MiMo-V2-Pro",
+    "provider": "Xiaomi",
+    "omniscienceIndex": 4.9
+  },
+  {
+    "rank": 28,
+    "benchSlug": "muse-spark",
+    "model": "Muse Spark",
+    "provider": "Meta",
+    "omniscienceIndex": 4.1
+  },
+  {
+    "rank": 29,
+    "benchSlug": "glm-5-2",
+    "model": "GLM-5.2",
+    "provider": "Z.AI",
+    "omniscienceIndex": 4
+  },
+  {
+    "rank": 30,
+    "benchSlug": "grok-4",
+    "model": "Grok 4",
+    "provider": "xAI",
+    "omniscienceIndex": 3.8
+  },
+  {
+    "rank": 31,
+    "benchSlug": "mimo-v2-5-pro",
+    "model": "MiMo-V2.5-Pro",
+    "provider": "Xiaomi",
+    "omniscienceIndex": 3.6
+  },
+  {
+    "rank": 32,
+    "benchSlug": "claude-opus-4-6",
+    "model": "Claude Opus 4.6",
+    "provider": "Anthropic",
+    "omniscienceIndex": 3.5
+  },
+  {
+    "rank": 33,
+    "benchSlug": "qwen3-6-plus",
+    "model": "Qwen3.6 Plus",
+    "provider": "Alibaba",
+    "omniscienceIndex": 2.7
+  },
+  {
+    "rank": 34,
+    "benchSlug": "qwen3-7-plus",
+    "model": "Qwen3.7 Plus",
+    "provider": "Alibaba",
+    "omniscienceIndex": 2.4
+  },
+  {
+    "rank": 35,
+    "benchSlug": "inkling",
+    "model": "Inkling",
+    "provider": "Thinking Machines Lab",
+    "omniscienceIndex": 2.1
+  },
+  {
+    "rank": 36,
+    "benchSlug": "glm-5",
+    "model": "GLM-5",
+    "provider": "Z.AI",
+    "omniscienceIndex": 2
+  },
+  {
+    "rank": 37,
+    "benchSlug": "glm-5-1",
+    "model": "GLM-5.1",
+    "provider": "Z.AI",
+    "omniscienceIndex": 1.9
+  },
+  {
+    "rank": 38,
+    "benchSlug": "minimax-m3",
+    "model": "MiniMax M3",
+    "provider": "MiniMax",
+    "omniscienceIndex": 1.4
+  },
+  {
+    "rank": 39,
+    "benchSlug": "minimax-m2-7",
+    "model": "MiniMax M2.7",
+    "provider": "MiniMax",
+    "omniscienceIndex": 0.7
+  },
+  {
+    "rank": 40,
+    "benchSlug": "gpt-5-6-terra",
+    "model": "GPT-5.6 Terra",
+    "provider": "OpenAI",
+    "omniscienceIndex": -0.2
+  },
+  {
+    "rank": 41,
+    "benchSlug": "nemotron-3-ultra",
+    "model": "Nemotron 3 Ultra",
+    "provider": "NVIDIA",
+    "omniscienceIndex": -0.8
+  },
+  {
+    "rank": 42,
+    "benchSlug": "gpt-5-2",
+    "model": "GPT-5.2",
+    "provider": "OpenAI",
+    "omniscienceIndex": -1
+  },
+  {
+    "rank": 43,
+    "benchSlug": "gpt-5-2-codex",
+    "model": "GPT-5.2-Codex",
+    "provider": "OpenAI",
+    "omniscienceIndex": -2.5
+  },
+  {
+    "rank": 44,
+    "benchSlug": "claude-sonnet-4-6",
+    "model": "Claude Sonnet 4.6",
+    "provider": "Anthropic",
+    "omniscienceIndex": -2.9
+  },
+  {
+    "rank": 45,
+    "benchSlug": "gemini-3-flash",
+    "model": "Gemini 3 Flash",
+    "provider": "Google",
+    "omniscienceIndex": -3.6
+  },
+  {
+    "rank": 46,
+    "benchSlug": "claude-opus-4-5",
+    "model": "Claude Opus 4.5",
+    "provider": "Anthropic",
+    "omniscienceIndex": -3.9
+  },
+  {
+    "rank": 47,
+    "benchSlug": "command-a-plus",
+    "model": "Command A+",
+    "provider": "Cohere",
+    "omniscienceIndex": -4
+  },
+  {
+    "rank": 48,
+    "benchSlug": "gpt-5-1-codex-max",
+    "model": "GPT-5.1-Codex-Max",
+    "provider": "OpenAI",
+    "omniscienceIndex": -6
+  },
+  {
+    "rank": 49,
+    "benchSlug": "gpt-5-1-codex",
+    "model": "GPT-5.1-Codex",
+    "provider": "OpenAI",
+    "omniscienceIndex": -6
+  },
+  {
+    "rank": 50,
+    "benchSlug": "kimi-k2-5",
+    "model": "Kimi K2.5",
+    "provider": "Moonshot AI",
+    "omniscienceIndex": -8.1
+  },
+  {
+    "rank": 51,
+    "benchSlug": "kimi-k2-5-reasoning",
+    "model": "Kimi K2.5 (Reasoning)",
+    "provider": "Moonshot AI",
+    "omniscienceIndex": -8.1
+  },
+  {
+    "rank": 52,
+    "benchSlug": "gpt-5-high",
+    "model": "GPT-5 (high)",
+    "provider": "OpenAI",
+    "omniscienceIndex": -8.1
+  },
+  {
+    "rank": 53,
+    "benchSlug": "inkling-small",
+    "model": "Inkling-Small",
+    "provider": "Thinking Machines Lab",
+    "omniscienceIndex": -9
+  },
+  {
+    "rank": 54,
+    "benchSlug": "claude-4-sonnet",
+    "model": "Claude 4 Sonnet",
+    "provider": "Anthropic",
+    "omniscienceIndex": -9.2
+  },
+  {
+    "rank": 55,
+    "benchSlug": "deepseek-v4-pro-high",
+    "model": "DeepSeek V4 Pro (High)",
+    "provider": "DeepSeek",
+    "omniscienceIndex": -9.7
+  },
+  {
+    "rank": 56,
+    "benchSlug": "deepseek-v4-pro-max",
+    "model": "DeepSeek V4 Pro (Max)",
+    "provider": "DeepSeek",
+    "omniscienceIndex": -10
+  },
+  {
+    "rank": 57,
+    "benchSlug": "gpt-5-medium",
+    "model": "GPT-5 (medium)",
+    "provider": "OpenAI",
+    "omniscienceIndex": -10.1
+  },
+  {
+    "rank": 58,
+    "benchSlug": "o1",
+    "model": "o1",
+    "provider": "OpenAI",
+    "omniscienceIndex": -10.5
+  },
+  {
+    "rank": 59,
+    "benchSlug": "gpt-4o",
+    "model": "GPT-4o",
+    "provider": "OpenAI",
+    "omniscienceIndex": -10.7
+  },
+  {
+    "rank": 60,
+    "benchSlug": "kimi-k2-7-code",
+    "model": "Kimi K2.7 Code",
+    "provider": "Moonshot AI",
+    "omniscienceIndex": -10.7
+  },
+  {
+    "rank": 61,
+    "benchSlug": "gpt-5-6-luna",
+    "model": "GPT-5.6 Luna",
+    "provider": "OpenAI",
+    "omniscienceIndex": -11.2
+  },
+  {
+    "rank": 62,
+    "benchSlug": "gemini-2-5-pro",
+    "model": "Gemini 2.5 Pro",
+    "provider": "Google",
+    "omniscienceIndex": -14.3
+  },
+  {
+    "rank": 63,
+    "benchSlug": "glm-5-turbo",
+    "model": "GLM-5-Turbo",
+    "provider": "Z.AI",
+    "omniscienceIndex": -15.1
+  },
+  {
+    "rank": 64,
+    "benchSlug": "o3",
+    "model": "o3",
+    "provider": "OpenAI",
+    "omniscienceIndex": -15.3
+  },
+  {
+    "rank": 65,
+    "benchSlug": "gemini-3-1-flash-lite",
+    "model": "Gemini 3.1 Flash-Lite",
+    "provider": "Google",
+    "omniscienceIndex": -15.5
+  },
+  {
+    "rank": 66,
+    "benchSlug": "deepseek-v4-flash-max",
+    "model": "DeepSeek V4 Flash (Max)",
+    "provider": "DeepSeek",
+    "omniscienceIndex": -15.7
+  },
+  {
+    "rank": 67,
+    "benchSlug": "gpt-5-mini",
+    "model": "GPT-5 mini",
+    "provider": "OpenAI",
+    "omniscienceIndex": -17.2
+  },
+  {
+    "rank": 68,
+    "benchSlug": "llama-3-1-405b",
+    "model": "Llama 3.1 405B",
+    "provider": "Meta",
+    "omniscienceIndex": -17.3
+  },
+  {
+    "rank": 69,
+    "benchSlug": "mimo-v2-omni",
+    "model": "MiMo-V2-Omni",
+    "provider": "Xiaomi",
+    "omniscienceIndex": -17.4
+  },
+  {
+    "rank": 70,
+    "benchSlug": "hy3-preview",
+    "model": "Hy3 Preview",
+    "provider": "Tencent",
+    "omniscienceIndex": -18.5
+  },
+  {
+    "rank": 71,
+    "benchSlug": "hy3",
+    "model": "Hy3",
+    "provider": "Tencent",
+    "omniscienceIndex": -18.5
+  },
+  {
+    "rank": 72,
+    "benchSlug": "gpt-5-4-mini",
+    "model": "GPT-5.4 mini",
+    "provider": "OpenAI",
+    "omniscienceIndex": -18.7
+  },
+  {
+    "rank": 73,
+    "benchSlug": "glm-5v-turbo",
+    "model": "GLM-5V-Turbo",
+    "provider": "Z.AI",
+    "omniscienceIndex": -19
+  },
+  {
+    "rank": 74,
+    "benchSlug": "qwen3-6-27b",
+    "model": "Qwen3.6-27B",
+    "provider": "Alibaba",
+    "omniscienceIndex": -19.8
+  },
+  {
+    "rank": 75,
+    "benchSlug": "gemma-4-e4b",
+    "model": "Gemma 4 E4B",
+    "provider": "Google",
+    "omniscienceIndex": -20
+  },
+  {
+    "rank": 76,
+    "benchSlug": "qwen3-6-35b-a3b",
+    "model": "Qwen3.6-35B-A3B",
+    "provider": "Alibaba",
+    "omniscienceIndex": -21.4
+  },
+  {
+    "rank": 77,
+    "benchSlug": "gemma-4-e2b",
+    "model": "Gemma 4 E2B",
+    "provider": "Google",
+    "omniscienceIndex": -24
+  },
+  {
+    "rank": 78,
+    "benchSlug": "deepseek-r1",
+    "model": "DeepSeek-R1",
+    "provider": "DeepSeek",
+    "omniscienceIndex": -27.1
+  },
+  {
+    "rank": 79,
+    "benchSlug": "kimi-k2",
+    "model": "Kimi K2",
+    "provider": "Moonshot AI",
+    "omniscienceIndex": -27.5
+  },
+  {
+    "rank": 80,
+    "benchSlug": "gpt-5-nano",
+    "model": "GPT-5 nano",
+    "provider": "OpenAI",
+    "omniscienceIndex": -27.7
+  },
+  {
+    "rank": 81,
+    "benchSlug": "deepseek-v3-1-reasoning",
+    "model": "DeepSeek V3.1 (Reasoning)",
+    "provider": "DeepSeek",
+    "omniscienceIndex": -28.4
+  },
+  {
+    "rank": 82,
+    "benchSlug": "grok-4-fast-reasoning",
+    "model": "Grok 4 Fast (Reasoning)",
+    "provider": "xAI",
+    "omniscienceIndex": -28.4
+  },
+  {
+    "rank": 83,
+    "benchSlug": "grok-4-1-fast-reasoning",
+    "model": "Grok 4.1 Fast (Reasoning)",
+    "provider": "xAI",
+    "omniscienceIndex": -28.7
+  },
+  {
+    "rank": 84,
+    "benchSlug": "gpt-5-4-nano",
+    "model": "GPT-5.4 nano",
+    "provider": "OpenAI",
+    "omniscienceIndex": -29.5
+  },
+  {
+    "rank": 85,
+    "benchSlug": "lfm2-5-2-6b",
+    "model": "LFM2.5-2.6B",
+    "provider": "LiquidAI",
+    "omniscienceIndex": -29.5
+  },
+  {
+    "rank": 86,
+    "benchSlug": "qwen3-5-397b",
+    "model": "Qwen3.5 397B",
+    "provider": "Alibaba",
+    "omniscienceIndex": -29.8
+  },
+  {
+    "rank": 87,
+    "benchSlug": "qwen3-5-397b-reasoning",
+    "model": "Qwen3.5 397B (Reasoning)",
+    "provider": "Alibaba",
+    "omniscienceIndex": -29.8
+  },
+  {
+    "rank": 88,
+    "benchSlug": "mistral-small-4",
+    "model": "Mistral Small 4",
+    "provider": "Mistral",
+    "omniscienceIndex": -29.9
+  },
+  {
+    "rank": 89,
+    "benchSlug": "mistral-small-4-reasoning",
+    "model": "Mistral Small 4 (Reasoning)",
+    "provider": "Mistral",
+    "omniscienceIndex": -29.9
+  },
+  {
+    "rank": 90,
+    "benchSlug": "mistral-medium-3",
+    "model": "Mistral Medium 3",
+    "provider": "Mistral",
+    "omniscienceIndex": -31.5
+  },
+  {
+    "rank": 91,
+    "benchSlug": "glm-4-6",
+    "model": "GLM-4.6",
+    "provider": "Z.AI",
+    "omniscienceIndex": -31.6
+  },
+  {
+    "rank": 92,
+    "benchSlug": "lfm2-5-8b-a1b",
+    "model": "LFM2.5-8B-A1B",
+    "provider": "LiquidAI",
+    "omniscienceIndex": -33.3
+  },
+  {
+    "rank": 93,
+    "benchSlug": "mistral-large-2",
+    "model": "Mistral Large 2",
+    "provider": "Mistral",
+    "omniscienceIndex": -34
+  },
+  {
+    "rank": 94,
+    "benchSlug": "glm-4-7",
+    "model": "GLM-4.7",
+    "provider": "Z.AI",
+    "omniscienceIndex": -34.6
+  },
+  {
+    "rank": 95,
+    "benchSlug": "grok-code-fast-1",
+    "model": "Grok Code Fast 1",
+    "provider": "xAI",
+    "omniscienceIndex": -36
+  },
+  {
+    "rank": 96,
+    "benchSlug": "gpt-4-1",
+    "model": "GPT-4.1",
+    "provider": "OpenAI",
+    "omniscienceIndex": -36.2
+  },
+  {
+    "rank": 97,
+    "benchSlug": "mistral-medium-3-5-128b",
+    "model": "Mistral Medium 3.5 128B",
+    "provider": "Mistral",
+    "omniscienceIndex": -36.3
+  },
+  {
+    "rank": 98,
+    "benchSlug": "step-3-7-flash",
+    "model": "Step 3.7 Flash",
+    "provider": "StepFun",
+    "omniscienceIndex": -37.5
+  },
+  {
+    "rank": 99,
+    "benchSlug": "mistral-large-3",
+    "model": "Mistral Large 3",
+    "provider": "Mistral",
+    "omniscienceIndex": -39.4
+  },
+  {
+    "rank": 100,
+    "benchSlug": "qwen3-5-122b-a10b",
+    "model": "Qwen3.5-122B-A10B",
+    "provider": "Alibaba",
+    "omniscienceIndex": -39.6
+  },
+  {
+    "rank": 101,
+    "benchSlug": "minimax-m2-5",
+    "model": "MiniMax M2.5",
+    "provider": "MiniMax",
+    "omniscienceIndex": -39.7
+  },
+  {
+    "rank": 102,
+    "benchSlug": "deepseek-v3-1",
+    "model": "DeepSeek V3.1",
+    "provider": "DeepSeek",
+    "omniscienceIndex": -41.1
+  },
+  {
+    "rank": 103,
+    "benchSlug": "deepseek-v3",
+    "model": "DeepSeek V3",
+    "provider": "DeepSeek",
+    "omniscienceIndex": -41.3
+  },
+  {
+    "rank": 104,
+    "benchSlug": "llama-4-maverick",
+    "model": "Llama 4 Maverick",
+    "provider": "Meta",
+    "omniscienceIndex": -41.8
+  },
+  {
+    "rank": 105,
+    "benchSlug": "qwen3-5-27b",
+    "model": "Qwen3.5-27B",
+    "provider": "Alibaba",
+    "omniscienceIndex": -42
+  },
+  {
+    "rank": 106,
+    "benchSlug": "gemini-2-5-flash",
+    "model": "Gemini 2.5 Flash",
+    "provider": "Google",
+    "omniscienceIndex": -42
+  },
+  {
+    "rank": 107,
+    "benchSlug": "nemotron-3-super-120b-a12b",
+    "model": "Nemotron 3 Super 120B A12B",
+    "provider": "NVIDIA",
+    "omniscienceIndex": -42.1
+  },
+  {
+    "rank": 108,
+    "benchSlug": "qwen3-max",
+    "model": "Qwen3 Max",
+    "provider": "Alibaba",
+    "omniscienceIndex": -43.1
+  },
+  {
+    "rank": 109,
+    "benchSlug": "step-3-5-flash",
+    "model": "Step 3.5 Flash",
+    "provider": "StepFun",
+    "omniscienceIndex": -43.7
+  },
+  {
+    "rank": 110,
+    "benchSlug": "trinity-large-preview",
+    "model": "Trinity-Large-Preview",
+    "provider": "Arcee AI",
+    "omniscienceIndex": -44.2
+  },
+  {
+    "rank": 111,
+    "benchSlug": "trinity-large-thinking",
+    "model": "Trinity-Large-Thinking",
+    "provider": "Arcee AI",
+    "omniscienceIndex": -44.2
+  },
+  {
+    "rank": 112,
+    "benchSlug": "gemma-4-31b",
+    "model": "Gemma 4 31B",
+    "provider": "Google",
+    "omniscienceIndex": -45.4
+  },
+  {
+    "rank": 113,
+    "benchSlug": "nemotron-ultra-253b",
+    "model": "Nemotron Ultra 253B",
+    "provider": "NVIDIA",
+    "omniscienceIndex": -45.5
+  },
+  {
+    "rank": 114,
+    "benchSlug": "qwen3-5-35b-a3b",
+    "model": "Qwen3.5-35B-A3B",
+    "provider": "Alibaba",
+    "omniscienceIndex": -46.4
+  },
+  {
+    "rank": 115,
+    "benchSlug": "deepseek-v3-2",
+    "model": "DeepSeek V3.2",
+    "provider": "DeepSeek",
+    "omniscienceIndex": -46.7
+  },
+  {
+    "rank": 116,
+    "benchSlug": "minimax-m1-80k",
+    "model": "MiniMax M1 80k",
+    "provider": "MiniMax",
+    "omniscienceIndex": -47.4
+  },
+  {
+    "rank": 117,
+    "benchSlug": "claude-3-haiku",
+    "model": "Claude 3 Haiku",
+    "provider": "Anthropic",
+    "omniscienceIndex": -47.6
+  },
+  {
+    "rank": 118,
+    "benchSlug": "nova-pro",
+    "model": "Nova Pro",
+    "provider": "Amazon",
+    "omniscienceIndex": -47.6
+  },
+  {
+    "rank": 119,
+    "benchSlug": "gemma-4-26b-a4b",
+    "model": "Gemma 4 26B A4B",
+    "provider": "Google",
+    "omniscienceIndex": -48.1
+  },
+  {
+    "rank": 120,
+    "benchSlug": "mimo-v2-flash",
+    "model": "MiMo-V2-Flash",
+    "provider": "Xiaomi",
+    "omniscienceIndex": -48.5
+  },
+  {
+    "rank": 121,
+    "benchSlug": "gpt-oss-120b",
+    "model": "GPT-OSS 120B",
+    "provider": "OpenAI",
+    "omniscienceIndex": -50
+  },
+  {
+    "rank": 122,
+    "benchSlug": "gpt-4-1-mini",
+    "model": "GPT-4.1 mini",
+    "provider": "OpenAI",
+    "omniscienceIndex": -50.1
+  },
+  {
+    "rank": 123,
+    "benchSlug": "grok-4-1-fast",
+    "model": "Grok 4.1 Fast",
+    "provider": "xAI",
+    "omniscienceIndex": -50.9
+  },
+  {
+    "rank": 124,
+    "benchSlug": "nemotron-3-nano-30b",
+    "model": "Nemotron 3 Nano 30B",
+    "provider": "NVIDIA",
+    "omniscienceIndex": -51.6
+  },
+  {
+    "rank": 125,
+    "benchSlug": "gemma-4-12b",
+    "model": "Gemma 4 12B",
+    "provider": "Google",
+    "omniscienceIndex": -51.9
+  },
+  {
+    "rank": 126,
+    "benchSlug": "mercury-2",
+    "model": "Mercury 2",
+    "provider": "Inception",
+    "omniscienceIndex": -52.3
+  },
+  {
+    "rank": 127,
+    "benchSlug": "llama-4-scout",
+    "model": "Llama 4 Scout",
+    "provider": "Meta",
+    "omniscienceIndex": -52.4
+  },
+  {
+    "rank": 128,
+    "benchSlug": "nemotron-3-nano-omni-30b-a3b",
+    "model": "Nemotron 3 Nano Omni 30B A3B",
+    "provider": "NVIDIA",
+    "omniscienceIndex": -56
+  },
+  {
+    "rank": 129,
+    "benchSlug": "gpt-4-1-nano",
+    "model": "GPT-4.1 nano",
+    "provider": "OpenAI",
+    "omniscienceIndex": -56.4
+  },
+  {
+    "rank": 130,
+    "benchSlug": "phi-4",
+    "model": "Phi-4",
+    "provider": "Microsoft",
+    "omniscienceIndex": -56.7
+  },
+  {
+    "rank": 131,
+    "benchSlug": "k-exaone",
+    "model": "K-Exaone",
+    "provider": "LG AI Research",
+    "omniscienceIndex": -57.9
+  },
+  {
+    "rank": 132,
+    "benchSlug": "lfm2-24b-a2b",
+    "model": "LFM2-24B-A2B",
+    "provider": "LiquidAI",
+    "omniscienceIndex": -59.1
+  },
+  {
+    "rank": 133,
+    "benchSlug": "glm-4-7-flash",
+    "model": "GLM-4.7-Flash",
+    "provider": "Z.AI",
+    "omniscienceIndex": -59.3
+  },
+  {
+    "rank": 134,
+    "benchSlug": "sarvam-105b",
+    "model": "Sarvam 105B",
+    "provider": "Sarvam",
+    "omniscienceIndex": -59.5
+  },
+  {
+    "rank": 135,
+    "benchSlug": "solar-pro-2",
+    "model": "Solar Pro 2",
+    "provider": "Upstage",
+    "omniscienceIndex": -61.7
+  },
+  {
+    "rank": 136,
+    "benchSlug": "exaone-4-0-32b",
+    "model": "Exaone 4.0 32B",
+    "provider": "LG AI Research",
+    "omniscienceIndex": -62.3
+  },
+  {
+    "rank": 137,
+    "benchSlug": "glm-4-5-air",
+    "model": "GLM-4.5-Air",
+    "provider": "Z.AI",
+    "omniscienceIndex": -62.5
+  },
+  {
+    "rank": 138,
+    "benchSlug": "gpt-oss-20b",
+    "model": "GPT-OSS 20B",
+    "provider": "OpenAI",
+    "omniscienceIndex": -63.9
+  },
+  {
+    "rank": 139,
+    "benchSlug": "ministral-3-3b-reasoning",
+    "model": "Ministral 3 3B (Reasoning)",
+    "provider": "Mistral",
+    "omniscienceIndex": -64.1
+  },
+  {
+    "rank": 140,
+    "benchSlug": "ministral-3-3b",
+    "model": "Ministral 3 3B",
+    "provider": "Mistral",
+    "omniscienceIndex": -64.1
+  },
+  {
+    "rank": 141,
+    "benchSlug": "ling-2-6-flash",
+    "model": "Ling 2.6 Flash",
+    "provider": "InclusionAI",
+    "omniscienceIndex": -65.7
+  },
+  {
+    "rank": 142,
+    "benchSlug": "gemma-3-27b",
+    "model": "Gemma 3 27B",
+    "provider": "Google",
+    "omniscienceIndex": -65.9
+  },
+  {
+    "rank": 143,
+    "benchSlug": "ministral-3-14b-reasoning",
+    "model": "Ministral 3 14B (Reasoning)",
+    "provider": "Mistral",
+    "omniscienceIndex": -66.8
+  },
+  {
+    "rank": 144,
+    "benchSlug": "ministral-3-14b",
+    "model": "Ministral 3 14B",
+    "provider": "Mistral",
+    "omniscienceIndex": -66.8
+  },
+  {
+    "rank": 145,
+    "benchSlug": "ministral-3-8b-reasoning",
+    "model": "Ministral 3 8B (Reasoning)",
+    "provider": "Mistral",
+    "omniscienceIndex": -67.8
+  },
+  {
+    "rank": 146,
+    "benchSlug": "ministral-3-8b",
+    "model": "Ministral 3 8B",
+    "provider": "Mistral",
+    "omniscienceIndex": -67.8
+  },
+  {
+    "rank": 147,
+    "benchSlug": "sarvam-30b",
+    "model": "Sarvam 30B",
+    "provider": "Sarvam",
+    "omniscienceIndex": -72
+  },
+  {
+    "rank": 148,
+    "benchSlug": "granite-4-0-350m",
+    "model": "Granite-4.0-350M",
+    "provider": "IBM",
+    "omniscienceIndex": -72.1
+  },
+  {
+    "rank": 149,
+    "benchSlug": "celeris-1",
+    "model": "Celeris-1",
+    "provider": "Celeris",
+    "omniscienceIndex": -72.6
+  },
+  {
+    "rank": 150,
+    "benchSlug": "granite-4-0-h-1b",
+    "model": "Granite-4.0-H-1B",
+    "provider": "IBM",
+    "omniscienceIndex": -73.6
+  },
+  {
+    "rank": 151,
+    "benchSlug": "lfm2-5-1-2b-instruct",
+    "model": "LFM2.5-1.2B-Instruct",
+    "provider": "LiquidAI",
+    "omniscienceIndex": -73.8
+  },
+  {
+    "rank": 152,
+    "benchSlug": "granite-4-0-1b",
+    "model": "Granite-4.0-1B",
+    "provider": "IBM",
+    "omniscienceIndex": -81.8
+  },
+  {
+    "rank": 153,
+    "benchSlug": "exaone-4-0-1-2b",
+    "model": "Exaone 4.0 1.2B",
+    "provider": "LG AI Research",
+    "omniscienceIndex": -82.6
+  },
+  {
+    "rank": 154,
+    "benchSlug": "lfm2-5-vl-1-6b-extract",
+    "model": "LFM2.5-VL-1.6B-Extract",
+    "provider": "LiquidAI",
+    "omniscienceIndex": -83.9
+  },
+  {
+    "rank": 155,
+    "benchSlug": "lfm2-5-1-2b-thinking",
+    "model": "LFM2.5-1.2B-Thinking",
+    "provider": "LiquidAI",
+    "omniscienceIndex": -83.9
+  },
+  {
+    "rank": 156,
+    "benchSlug": "granite-4-0-h-350m",
+    "model": "Granite-4.0-H-350M",
+    "provider": "IBM",
+    "omniscienceIndex": -87.2
+  }
+]

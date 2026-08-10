@@ -157,7 +157,7 @@ describe('malformed config values are normalized to defaults', () => {
     writeFileSync(getConfigPath(), '[]', 'utf8');
     // Must return the default config, not treat the array as an object.
     const config = loadConfig();
-    expect(config.sources).toEqual(['artificial-analysis']);
+    expect(config.sources).toEqual(['artificial-analysis', 'benchlm']);
   });
 
   it('rejects a top-level string as config', () => {

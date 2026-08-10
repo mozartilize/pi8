@@ -49,6 +49,10 @@ describe('store', () => {
       'gpt-5-1-codex': 'opencode/gpt-5.1-codex-max',
       'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
       'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
+      'claude-fable': 'opencode/claude-fable-5',
+      'kimi-3': 'opencode/kimi-k3',
+      'kimi-2-6': 'opencode/kimi-k2.6',
+      'claude-4-sonnet': 'opencode/claude-sonnet-4',
     });
   });
 
@@ -64,6 +68,10 @@ describe('store', () => {
       'gpt-5-1-codex': 'custom/gpt-5.1-codex',
       'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
       'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
+      'claude-fable': 'opencode/claude-fable-5',
+      'kimi-3': 'opencode/kimi-k3',
+      'kimi-2-6': 'opencode/kimi-k2.6',
+      'claude-4-sonnet': 'opencode/claude-sonnet-4',
     });
   });
 
@@ -210,6 +218,35 @@ describe('store', () => {
       coding: 90,
       agenticCoding: 85,
     });
+  });
+
+  it('keeps the knowledge axis alongside headline axes when sources overlap', () => {
+    const rows = [
+      {
+        registryId: 'a/b',
+        active: true,
+        benchSlug: 'x',
+        quality: { intelligence: 80, coding: 70 },
+        priceInputPer1M: 2,
+        source: 'aa',
+      },
+      {
+        registryId: 'a/b',
+        active: true,
+        benchSlug: 'y',
+        quality: { knowledge: 31.3 },
+        source: 'benchlm',
+      },
+    ] as any;
+    const merged = mergeBenchRows(rows);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].quality).toEqual({
+      intelligence: 80,
+      coding: 70,
+      knowledge: 31.3,
+    });
+    // The headline row carries the economics; the knowledge row adds none.
+    expect(merged[0].priceInputPer1M).toBe(2);
   });
 
   it('preserves unresolved rows after merge', () => {

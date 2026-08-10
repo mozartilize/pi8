@@ -34,6 +34,13 @@ export interface BenchModel {
     intelligence?: number;
     coding?: number;
     agenticCoding?: number;
+    /**
+     * Display-only factual-knowledge signal (benchlm's AA-Omniscience Index).
+     * A relative index on its own scale that can go negative; the scorer
+     * never blends it into intelligence/coding ratios or uses it as an
+     * eligibility axis.
+     */
+    knowledge?: number;
   };
   priceInputPer1M?: number;
   priceOutputPer1M?: number;

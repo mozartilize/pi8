@@ -1,13 +1,15 @@
 import type { BenchModel, ExtensionContext } from '../types.js';
 import { loadConfig } from '../config.js';
 import * as artificialAnalysis from './artificial-analysis.js';
+import * as benchlm from './benchlm.js';
 
-export type AdapterName = 'artificial-analysis';
+export type AdapterName = 'artificial-analysis' | 'benchlm';
 
 export interface AdapterConfig {
   'artificial-analysis': {
     apiKey?: string;
   };
+  'benchlm': Record<string, never>;
 }
 
 export interface Adapter {
@@ -22,8 +24,18 @@ const artificialAnalysisAdapter: Adapter = {
   fetch: (config) => artificialAnalysis.fetchAndNormalize({ apiKey: config['artificial-analysis']?.apiKey }),
 };
 
+// BenchLM's AA-Omniscience Index page is public — no key, no auth. Keeping it
+// available by default means a sync without an AA key still lands knowledge
+// rows instead of failing outright.
+const benchlmAdapter: Adapter = {
+  name: 'benchlm',
+  isAvailable: () => true,
+  fetch: () => benchlm.fetchAndNormalize({}),
+};
+
 export const ADAPTERS: Adapter[] = [
   artificialAnalysisAdapter,
+  benchlmAdapter,
 ];
 
 export function getEnabledAdapters(
@@ -48,7 +60,8 @@ export function buildAdapterConfig(ctx?: ExtensionContext): AdapterConfig {
   }
   return {
     'artificial-analysis': { apiKey: fromCtx || fromEnv || fromDisk },
+    'benchlm': {},
   };
 }
 
-export { artificialAnalysis };
+export { artificialAnalysis, benchlm };

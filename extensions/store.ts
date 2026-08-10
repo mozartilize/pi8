@@ -39,6 +39,14 @@ export const DEFAULT_BENCHMARK_ALIASES: Readonly<Record<string, string>> = {
   'gpt-5-1-codex': 'opencode/gpt-5.1-codex-max',
   'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
   'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
+  // benchlm slugs where the version digit is dropped (`claude-fable` = Claude
+  // Fable 5) or letter/number order differs (`kimi-3` vs registry `kimi-k3`).
+  // The matcher binds every provider copy of the target identity, so the
+  // anchor provider is arbitrary.
+  'claude-fable': 'opencode/claude-fable-5',
+  'kimi-3': 'opencode/kimi-k3',
+  'kimi-2-6': 'opencode/kimi-k2.6',
+  'claude-4-sonnet': 'opencode/claude-sonnet-4',
 };
 
 /** All levels a bench row may be measured at, for load-time validation. */
@@ -109,6 +117,7 @@ function sanitizeBenchModel(value: unknown): BenchModel | undefined {
     intelligence: optionalFinite(quality.intelligence),
     coding: optionalFinite(quality.coding),
     agenticCoding: optionalFinite(quality.agenticCoding),
+    knowledge: optionalFinite(quality.knowledge),
   });
   const base: Omit<BenchModel, 'quality'> & { quality: BenchModel['quality'] } = {
     registryId: row.registryId,
@@ -209,6 +218,7 @@ export const mergeActiveBenchRows = (models: BenchModel[]): BenchModel[] => {
       intelligence: rows.map((r) => r.quality.intelligence).find((v) => v !== undefined),
       coding: rows.map((r) => r.quality.coding).find((v) => v !== undefined),
       agenticCoding: rows.map((r) => r.quality.agenticCoding).find((v) => v !== undefined),
+      knowledge: rows.map((r) => r.quality.knowledge).find((v) => v !== undefined),
     };
     const nonEmpty = rows.find((r) => Object.values(r.quality).some((v) => v !== undefined)) ?? rows[0];
     result.push({

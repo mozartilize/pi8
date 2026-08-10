@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import { syncBenchmarks, syncSummary } from './sync.js';
 import { loadStore, saveStore, emptyStore } from './store.js';
 import * as adapters from './adapters/index.js';
 import type { ExtensionContext } from './types.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('syncBenchmarks', () => {
   let tmpDir: string;
@@ -32,6 +35,7 @@ describe('syncBenchmarks', () => {
     rmSync(tmpDir, { recursive: true, force: true });
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('never writes to the real user storage directory', () => {
@@ -40,10 +44,36 @@ describe('syncBenchmarks', () => {
   });
 
   it('reports a clear error when no source is usable', async () => {
-    // No AA key => nothing enabled.
-    const results = await syncBenchmarks(fakeCtx, {});
+    // AA needs a key and the request excludes the keyless benchlm source.
+    const results = await syncBenchmarks(fakeCtx, { sources: ['artificial-analysis'] });
     expect(results[0].ok).toBe(false);
     expect(results[0].error).toMatch(/artificialanalysis/i);
+  });
+
+  it('syncs the keyless benchlm source into the store', async () => {
+    const fixtureHtml = readFileSync(join(__dirname, '__fixtures__/benchlm-aaomniscience.html'), 'utf8');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(fixtureHtml, { status: 200 })));
+    const ctx = {
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: 'claude-bridge', id: 'claude-fable-5' },
+          { provider: 'github-copilot', id: 'claude-fable-5' },
+          { provider: 'opencode', id: 'claude-fable-5' },
+        ],
+      },
+    } as unknown as ExtensionContext;
+
+    const results = await syncBenchmarks(ctx, { sources: ['benchlm'] });
+    expect(results[0]).toMatchObject({ source: 'benchlm', ok: true, matched: 3 });
+    const store = loadStore();
+    const fable = store?.models.filter((m) => m.benchSlug === 'claude-fable');
+    expect(fable?.map((m) => m.registryId).sort()).toEqual([
+      'claude-bridge/claude-fable-5',
+      'github-copilot/claude-fable-5',
+      'opencode/claude-fable-5',
+    ]);
+    expect(fable?.every((m) => m.active && m.quality.knowledge === 40.2)).toBe(true);
+    expect(store?.syncedAt).toBeGreaterThan(0);
   });
 
   it('preserves the previous store when a selected adapter fails', async () => {

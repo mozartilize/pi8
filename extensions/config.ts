@@ -176,7 +176,7 @@ export function loadConfig(): AutoRouterConfig {
       typeof persisted.artificialAnalysisApiKey === 'string'
         ? persisted.artificialAnalysisApiKey
         : undefined,
-    sources: stringList(persisted.sources) ?? ['artificial-analysis'],
+    sources: stringList(persisted.sources) ?? ['artificial-analysis', 'benchlm'],
     dimensionWeights: normalizeDimensionWeights(persisted.dimensionWeights),
     switchMargin: finiteInRange(persisted.switchMargin, DEFAULT_SWITCH_MARGIN, 0, 1),
     lowConfidenceThreshold: finiteInRange(

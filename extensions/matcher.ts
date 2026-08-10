@@ -72,6 +72,13 @@ const isDatePart = (t: string): boolean => /^\d{2}$/.test(t);
  * rows. Other `-high` slugs are ordinary effort variants, stripped by
  * {@link EFFORT_SUFFIXES} with the level carried on the row.
  *
+ * The `-max` entries are the benchlm naming of max-effort runs: benchlm
+ * appends `-max` to the base slug (`deepseek-v4-pro-max`) where AA publishes
+ * the bare base slug. `max` is deliberately absent from
+ * {@link EFFORT_SUFFIXES} because it is a real tier token in model
+ * identities (`qwen3.7-max`), so max-effort run variants are listed here
+ * explicitly, matching only when the full slug unit is known.
+ *
  * Keep this source-backed: a generic four-digit suffix may be part of a
  * registry model's identity. A stale list is not benign — every unrecognized
  * variant produces an unmatched row, which lands in tier 1 (quality-unknown)
@@ -82,6 +89,8 @@ const isDatePart = (t: string): boolean => /^\d{2}$/.test(t);
 const BENCHMARK_RUN_VARIANTS = new Set([
   'deepseek-v4-flash-0420',
   'deepseek-v4-flash-0420-high',
+  'deepseek-v4-pro-max',
+  'deepseek-v4-flash-max',
   'o3-mini-high',
 ]);
 
@@ -160,12 +169,12 @@ export function resolveSlugAll(
   // single-target alias would silently strip measured quality from the
   // siblings that already matched, demoting them to the unknown-quality tier.
   const bindings: string[] = [];
+  const variants = buildRefVariants(registryModels);
   const aliasTarget = aliases[slug];
-  if (aliasTarget) {
-    const variants = buildRefVariants(registryModels);
-    const m = variants.get(aliasTarget) ?? variants.get(aliasTarget.split('/').pop() ?? '');
-    if (m) bindings.push(`${m.provider}/${m.id}`);
-  }
+  const aliasModel = aliasTarget
+    ? variants.get(aliasTarget) ?? variants.get(aliasTarget.split('/').pop() ?? '')
+    : undefined;
+  if (aliasModel) bindings.push(`${aliasModel.provider}/${aliasModel.id}`);
 
   // 2. Exact "provider/id" reference pins to that one entry.
   if (slug.includes('/')) {
@@ -175,10 +184,29 @@ export function resolveSlugAll(
 
   // 3. Identity-key equality, across every provider.
   const key = identityKey(slug, true);
-  if (!key) return [...new Set(bindings)].sort();
+  const identityMatches: string[] = [];
+  if (key) {
+    for (const m of registryModels) {
+      if (identityKey(m.id) === key) identityMatches.push(`${m.provider}/${m.id}`);
+    }
+  }
+  bindings.push(...identityMatches);
 
-  for (const m of registryModels) {
-    if (identityKey(m.id) === key) bindings.push(`${m.provider}/${m.id}`);
+  // 4. When the alias is the only thing naming the model, the row still
+  // describes one underlying model — the alias target just spelled its name
+  // differently (e.g. benchlm's `claude-fable` for the registry's
+  // `claude-fable-5`). Bind every provider copy of the target's identity so
+  // the one-to-many invariant holds for aliased models too. When identity
+  // matching already bound siblings, the alias is a supplementary
+  // provider-specific pin (e.g. a spark/free variant) and binds only its own
+  // copy.
+  if (aliasModel && identityMatches.length === 0) {
+    const targetKey = identityKey(aliasModel.id);
+    if (targetKey) {
+      for (const r of registryModels) {
+        if (identityKey(r.id) === targetKey) bindings.push(`${r.provider}/${r.id}`);
+      }
+    }
   }
 
   return [...new Set(bindings)].sort();

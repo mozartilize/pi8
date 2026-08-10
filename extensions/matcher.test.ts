@@ -203,6 +203,51 @@ describe('resolveSlugAll — identity is preserved', () => {
     expect(all).toEqual(['a/gpt-5.3-codex', 'b/gpt-5.3-codex', 'c/gpt-5.3-codex-spark']);
   });
 
+  it('expands an alias across every provider copy of the target identity', () => {
+    const reg = [
+      { provider: 'claude-bridge', id: 'claude-fable-5' },
+      { provider: 'github-copilot', id: 'claude-fable-5' },
+      { provider: 'opencode', id: 'claude-fable-5' },
+    ];
+    // benchlm names Claude Fable 5 with the version digit dropped; the alias
+    // target is arbitrary because the expansion binds all provider copies.
+    const all = resolveSlugAll('claude-fable', reg, {
+      'claude-fable': 'opencode/claude-fable-5',
+    });
+    expect(all).toEqual([
+      'claude-bridge/claude-fable-5',
+      'github-copilot/claude-fable-5',
+      'opencode/claude-fable-5',
+    ]);
+  });
+
+  it('leaves a supplementary alias provider-specific when identity already bound the model', () => {
+    const reg = [
+      { provider: 'opencode-go', id: 'mimo-v2.5-pro' },
+      { provider: 'opencode-go', id: 'mimo-v2.5' },
+      { provider: 'opencode', id: 'mimo-v2.5-free' },
+    ];
+    const all = resolveSlugAll('mimo-v2-5-pro', reg, {
+      'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
+    });
+    // Identity matching already bound the .pro copy, so the alias stays a
+    // single provider pin and does not drag the .free copy in with the .pro
+    // score.
+    expect(all).toEqual(['opencode-go/mimo-v2.5', 'opencode-go/mimo-v2.5-pro']);
+  });
+
+  it('matches max-effort run variants to the base model across providers', () => {
+    const reg = [
+      { provider: 'deepseek', id: 'deepseek-v4-pro' },
+      { provider: 'opencode', id: 'deepseek-v4-pro' },
+      { provider: 'opencode', id: 'deepseek-v4-pro-lite' },
+    ];
+    expect(resolveSlugAll('deepseek-v4-pro-max', reg)).toEqual([
+      'deepseek/deepseek-v4-pro',
+      'opencode/deepseek-v4-pro',
+    ]);
+  });
+
   it('strips :free suffix from openrouter-style model ids', () => {
     const reg = [
       { provider: 'openrouter', id: 'deepseek/deepseek-r1:free' },
