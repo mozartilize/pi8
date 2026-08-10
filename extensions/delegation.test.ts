@@ -14,6 +14,7 @@ import type { Model, Api } from '@earendil-works/pi-ai';
 
 import { multiWorkRoutingMeta, routingDecision, registryModel } from './test-support/router-fixtures.js';
 import { createDelegationHarness, rejectingReturnStream, hangingReturnStream } from './test-support/delegation-harness.js';
+import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { setDecisionLogBase } from './decisionlog.js';
 import { getLastDecision, resetRouterSession } from './router-session-state.js';
 import { clearBlacklistedModels } from './blacklist.js';
@@ -850,5 +851,58 @@ describe('runDelegationLoop usage-limit provider blacklist', () => {
     expect(result.lastServed?.capability?.candidate.clearsTerminalFloor).toBe(false);
     expect(getLastDecision()?.cause).toBe('error-fallback');
     expect(getLastDecision()?.multiWork?.servedCandidateKey).toBe('test/inspect');
+  });
+});
+
+describe('runDelegationLoop custom provider streamSimple dispatch', () => {
+  it('dispatches through a provider-registered streamSimple instead of the generic compat one', async () => {
+    // A virtual provider with a non-standard `api` (e.g. an OAuth/SDK-backed
+    // subscription bridge) registers its own streamSimple via pi.registerProvider.
+    // The generic compat streamSimple only knows built-in `api` types and throws
+    // "No API provider registered for api: <custom>" for anything else.
+    const customStreamSimple = vi.fn().mockReturnValue({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'text_delta', delta: 'served' };
+        yield { type: 'done', message: { stopReason: 'stop' } };
+      },
+    });
+
+    const h = createDelegationHarness({
+      chain: ['bridge/model'],
+      scripts: {},
+      registry: {
+        getProvider: (provider: string) =>
+          (provider === 'bridge' ? ({ streamSimple: customStreamSimple } as never) : undefined),
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.success).toBe(true);
+    expect(customStreamSimple).toHaveBeenCalledTimes(1);
+    expect(customStreamSimple.mock.calls[0]?.[0]).toMatchObject({ provider: 'bridge', id: 'model' });
+    expect(streamSimple).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the generic compat streamSimple when the provider has none registered', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/model'],
+      scripts: {
+        'alpha/model': [
+          [
+            { type: 'text_delta', delta: 'served' },
+            { type: 'done', message: { stopReason: 'stop' } },
+          ],
+        ],
+      },
+      registry: {
+        getProvider: () => undefined,
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/model']);
   });
 });

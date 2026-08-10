@@ -233,6 +233,12 @@ export async function runDelegationLoop(
     const modelForStream = (resolvedBaseUrl
       ? { ...(chosen as Model<Api>), baseUrl: resolvedBaseUrl }
       : chosen) as Model<Api>;
+    // A provider registered with its own `streamSimple` (e.g. an OAuth/SDK-backed
+    // virtual provider with a non-standard `api` value) must be dispatched through
+    // that registered implementation. The generic compat `streamSimple` only
+    // resolves built-in `api` types and throws "No API provider registered for
+    // api: <custom>" for anything else.
+    const providerStreamSimple = registry?.getProvider?.(provider)?.streamSimple ?? streamSimple;
 
     // A candidate may be retried in place on a transient/generic provider
     // error before we fall over to the next model. `served` breaks the outer
@@ -307,7 +313,7 @@ export async function runDelegationLoop(
       // Lifecycle heartbeats may arrive, but cannot renew the provider's
       // opportunity to produce text, thinking, or a tool call.
       const meaningfulOutputDeadline = Date.now() + firstEventTimeoutMs;
-      const delegatedStream = streamSimple(modelForStream, context, {
+      const delegatedStream = providerStreamSimple(modelForStream, context, {
         ...options,
         ...(effectiveReasoning && effectiveReasoning !== 'off'
           ? { reasoning: effectiveReasoning }
