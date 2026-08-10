@@ -157,7 +157,12 @@ export function completeMeasuredRow(
   drops: EffortDrops,
 ): BenchModel | undefined {
   const result = estimateQuality(row.effort, measured, drops, row.quality);
-  if (!AXES.some((axis) => result.quality[axis] != null)) return undefined;
+  // Knowledge is measured on its own signed scale and is never estimated, but
+  // an effort-labelled knowledge-only row still represents real evidence at
+  // that exact level and must remain a distinct routable candidate.
+  if (!AXES.some((axis) => result.quality[axis] != null) && result.quality.knowledge == null) {
+    return undefined;
+  }
   if (!result.estimated) return row;
   return { ...row, quality: result.quality, qualityEstimated: true };
 }

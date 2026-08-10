@@ -266,6 +266,132 @@ describe('candidate expansion — model × measured effort', () => {
     expect(candidates[0]?.effort).toBeUndefined();
     expect(candidates[0]?.bench?.quality.intelligence).toBe(60);
   });
+
+  it('applies model-wide knowledge to every supported reasoning effort', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        max: 'max',
+      },
+    });
+    const modelWideKnowledge: BenchModel = {
+      ...benchRow('max', 0),
+      benchSlug: 'model',
+      effort: undefined,
+      quality: { knowledge: -11.2 },
+      source: 'benchlm',
+    };
+
+    const candidates = expandModelCandidates(model, [
+      benchRow('high', 50),
+      benchRow('max', 60),
+      modelWideKnowledge,
+    ]);
+    const byEffort = new Map(candidates.map((candidate) => [candidate.effort, candidate]));
+
+    expect(byEffort.get('max')?.bench?.quality.knowledge).toBe(-11.2);
+    expect(byEffort.get('high')?.bench?.quality.knowledge).toBe(-11.2);
+    expect(byEffort.get('high')?.knowledgeByEffort).toEqual({
+      low: -11.2,
+      medium: -11.2,
+      high: -11.2,
+      xhigh: -11.2,
+      max: -11.2,
+    });
+  });
+
+  it('serves an unlabelled flagship knowledge-only row at max', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        max: 'max',
+      },
+    });
+    const row: BenchModel = {
+      ...benchRow('max', 0),
+      effort: undefined,
+      quality: { knowledge: -11.2 },
+      source: 'benchlm',
+    };
+
+    const candidates = expandModelCandidates(model, [row]);
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.effort).toBe('max');
+    expect(candidates[0]?.bench?.quality).toEqual({ knowledge: -11.2 });
+    expect(candidates[0]?.knowledgeByEffort).toEqual({
+      low: -11.2,
+      medium: -11.2,
+      high: -11.2,
+      xhigh: -11.2,
+      max: -11.2,
+    });
+  });
+
+  it('prefers an exact effort knowledge score over the model-wide score', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        xhigh: 'xhigh',
+        max: 'max',
+      },
+    });
+    const candidates = expandModelCandidates(model, [
+      { ...benchRow('high', 50), quality: { intelligence: 50, knowledge: -9.7 } },
+      benchRow('max', 60),
+      {
+        ...benchRow('max', 0),
+        effort: undefined,
+        quality: { knowledge: -11.2 },
+        source: 'benchlm',
+      },
+    ]);
+
+    expect(candidates[0]?.knowledgeByEffort).toEqual({
+      low: -11.2,
+      medium: -11.2,
+      high: -9.7,
+      xhigh: -11.2,
+      max: -11.2,
+    });
+  });
+
+  it('keeps effort-labelled knowledge-only rows distinct', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: { off: 'off', high: 'high', max: 'max' },
+    });
+    const rows = [
+      { ...benchRow('high', 0), quality: { knowledge: -9.7 }, source: 'benchlm' },
+      { ...benchRow('max', 0), quality: { knowledge: -10 }, source: 'benchlm' },
+    ];
+
+    const candidates = expandModelCandidates(model, rows);
+
+    expect(candidates.map((candidate) => candidate.effort)).toEqual(['high', 'max']);
+    expect(candidates.map((candidate) => candidate.bench?.quality.knowledge)).toEqual([-9.7, -10]);
+    expect(candidates.every((candidate) =>
+      candidate.knowledgeByEffort?.high === -9.7
+      && candidate.knowledgeByEffort.max === -10,
+    )).toBe(true);
+  });
 });
 
 // Every test starts with a fresh, empty config/store/log directory so no test

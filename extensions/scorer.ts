@@ -118,6 +118,13 @@ export const ECONOMY_QUALITY_RATIO = 0.7;
 export const SANITY_QUALITY_RATIO = 0.45;
 
 /**
+ * AA-Omniscience's meaningful zero: correct answers equal incorrect answers.
+ * A negative expected factual utility is unsafe for judgment-heavy work even
+ * when broad capability benchmarks are strong.
+ */
+export const KNOWLEDGE_QUALITY_FLOOR = 0;
+
+/**
  * Eligibility axis: the measurement the dimension's work directly depends on.
  * Deliberately does NOT fall back — eligibility requires direct evidence on
  * the work's axis. Contrast with `qualityForDimension`, which falls back so
@@ -211,6 +218,8 @@ type QualityTier = 0 | 1 | 2;
 interface TierPolicy {
   /** Minimum task-axis ratio a known candidate must reach to stay in tier 0. */
   qualityRatio: number;
+  /** Absolute AA-Omniscience floor when factual reliability is task-critical. */
+  knowledgeFloor?: number;
   /** Whether unknown capability ranks with the eligible group or behind it. */
   unknownQualityTier: 'eligible' | 'after-known';
   /** Whether trivial work is also gated on the capability floor. */
@@ -244,12 +253,51 @@ const unknownEligibility = (policy: TierPolicy): Eligibility => ({
   excludedReason: 'unknown-quality',
 });
 
+/**
+ * Knowledge must describe the effort delegation will actually serve. A lower
+ * nominal entry can be raised by the dimension floor (plan always reaches
+ * max), so use an exact-effort sibling's measurement before the entry's own.
+ */
+function effectiveKnowledge(
+  candidate: Candidate,
+  candidates: readonly Candidate[],
+  dimension: Dimension,
+): number | undefined {
+  const floor = MIN_THINKING_BY_DIMENSION[dimension];
+  const effectiveEffort = candidate.effort != null
+    ? levelFrom(clampEffortToFloor(candidate.effort, dimension), candidate)
+    : floor === 'off' ? undefined : levelFrom(floor, candidate);
+  if (effectiveEffort != null) {
+    const retained = candidate.knowledgeByEffort?.[effectiveEffort];
+    if (retained != null) return retained;
+    const exact = candidates.find((peer) =>
+      peer.registryId === candidate.registryId
+      && peer.effort === effectiveEffort
+      && peer.bench?.quality.knowledge != null,
+    );
+    if (exact?.bench?.quality.knowledge != null) return exact.bench.quality.knowledge;
+    // A nominal-effort measurement cannot stand in for a higher effort chosen
+    // by the dimension floor; knowledge is never extrapolated across levels.
+    if (candidate.effort != null && candidate.effort !== effectiveEffort) return undefined;
+  }
+  // No named effective effort means delegation uses the model's fixed/default
+  // mode. A model-wide score describes that mode directly, including reasoning
+  // models without effort controls; this is not cross-effort extrapolation.
+  return candidate.bench?.quality.knowledge;
+}
+
 function eligibilityOf(
   relative: RelativeQuality | undefined,
   dimension: Dimension,
   policy: TierPolicy,
+  knowledge: number | undefined,
 ): Eligibility {
   if (dimension === 'lightweight' && !policy.applyFloorToLightweight) return { tier: 0 };
+  // A known failure on any required axis remains measured weak even when a
+  // different required axis is missing. Uncertainty cannot erase evidence.
+  if (policy.knowledgeFloor != null && knowledge != null && knowledge < policy.knowledgeFloor) {
+    return { tier: 2, excludedReason: 'below-knowledge-floor' };
+  }
   if (!relative) return unknownEligibility(policy);
   if (relative.taskRatio < policy.qualityRatio) {
     return { tier: 2, excludedReason: 'below-task-floor' };
@@ -260,6 +308,7 @@ function eligibilityOf(
       return { tier: 2, excludedReason: 'below-sanity-floor' };
     }
   }
+  if (policy.knowledgeFloor != null && knowledge == null) return unknownEligibility(policy);
   return { tier: 0 };
 }
 
@@ -459,9 +508,23 @@ export function pickBest(
   // `multiWorkPolicy` changes only which parameters feed this single
   // eligibility/promotion implementation; its absence selects the current
   // live constants unchanged (rule: one filtering/ranking/fallback path).
-  const activeTierPolicy: TierPolicy = opts.multiWorkPolicy
-    ? { ...LIVE_TIER_POLICY, qualityRatio: opts.multiWorkPolicy.terminalFloor }
-    : LIVE_TIER_POLICY;
+  // Knowledge is task-critical for planning/review and for the terminal phase
+  // of compound implementation. Activate its floor only when the scoring pool
+  // has at least one measurement: absent coverage is uncertainty, not proof
+  // that every model is weak.
+  const knowledgeCritical = dimension === 'plan'
+    || dimension === 'review'
+    || (dimension === 'implement' && opts.multiWorkPolicy != null);
+  const knowledgeByCandidate = new Map(filtered.map((candidate) => [
+    candidateKey(candidate),
+    effectiveKnowledge(candidate, filtered, dimension),
+  ]));
+  const knowledgeAvailable = [...knowledgeByCandidate.values()].some((value) => value != null);
+  const activeTierPolicy: TierPolicy = {
+    ...LIVE_TIER_POLICY,
+    ...(opts.multiWorkPolicy ? { qualityRatio: opts.multiWorkPolicy.terminalFloor } : {}),
+    ...(knowledgeCritical && knowledgeAvailable ? { knowledgeFloor: KNOWLEDGE_QUALITY_FLOOR } : {}),
+  };
   const activePromotionPolicy = opts.multiWorkPolicy
     ? {
         enabled: dimension === 'implement'
@@ -479,7 +542,12 @@ export function pickBest(
   const eligibility = new Map<string, Eligibility>(
     filtered.map((c) => [
       candidateKey(c),
-      eligibilityOf(relative.get(candidateKey(c)), dimension, activeTierPolicy),
+      eligibilityOf(
+        relative.get(candidateKey(c)),
+        dimension,
+        activeTierPolicy,
+        knowledgeByCandidate.get(candidateKey(c)),
+      ),
     ]),
   );
   const terminalEligibility = new Map(eligibility);
@@ -517,6 +585,9 @@ export function pickBest(
         const task = taskAxis(c, dimension);
         const sanitySatisfied = !needsGeneralSanity(dimension)
           || (quality?.generalRatio != null && quality.generalRatio >= SANITY_QUALITY_RATIO);
+        const knowledge = knowledgeByCandidate.get(candidateKey(c));
+        const knowledgeSatisfied = activeTierPolicy.knowledgeFloor == null
+          || (knowledge != null && knowledge >= activeTierPolicy.knowledgeFloor);
         const dominated = task == null || price == null || filtered.some((peer) => {
           if (candidateKey(peer) === candidateKey(c)) return false;
           // A sibling provider entry of the same benchmark row is a substitute,
@@ -540,6 +611,7 @@ export function pickBest(
           && c.bench?.qualityEstimated !== true
           && quality.taskRatio >= activePromotionPolicy.qualityRatio
           && sanitySatisfied
+          && knowledgeSatisfied
           && price != null
           && price <= cheapestEligiblePrice / PROMOTION_PRICE_DIVISOR
           && !dominated
@@ -657,9 +729,10 @@ export function pickBest(
         candidateCapability: Object.fromEntries(filtered.map((c): [string, CandidateCapabilityMeta] => {
           const key = candidateKey(c);
           const quality = relative.get(key);
-          const clears: boolean | 'unknown' = quality == null
-            ? 'unknown'
-            : terminalEligibility.get(key)?.tier === 0;
+          const terminalTier = terminalEligibility.get(key)?.tier;
+          const clears: boolean | 'unknown' = terminalTier === 0
+            ? true
+            : terminalTier === 1 ? 'unknown' : false;
           return [key, {
             ...(quality ? { taskRatio: quality.taskRatio } : {}),
             clearsTerminalFloor: clears,

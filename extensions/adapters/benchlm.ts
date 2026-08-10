@@ -11,11 +11,11 @@
  *
  *   { model, slug, creator, score, sourceModelId, ... }
  *
- * `score` is the index percentage on a relative scale that can go negative
- * (below the reference model). The adapter publishes it as the
- * `quality.knowledge` axis: a separate signal the scorer never blends into
- * intelligence/coding ratios, which live on their own scales (see scorer.ts's
- * cross-source prohibition). Reasoning-effort labels appear only in the
+ * `score` is 100 * (correct - incorrect) / questions, bounded to [-100, 100].
+ * Negative values mean wrong answers outnumber correct ones; abstentions and
+ * partial answers contribute zero. The adapter publishes it as the separate
+ * `quality.knowledge` axis, never blended into intelligence/coding ratios.
+ * Reasoning-effort labels appear only in the
  * display name's parenthetical ("DeepSeek V4 Pro (Max)"), parsed by the same
  * rule as the Artificial Analysis adapter.
  */

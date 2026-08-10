@@ -317,11 +317,59 @@ export function expandModelCandidates(
   const qualityBearing = (r: BenchModel): boolean =>
     Object.values(r.quality).some((v) => v !== undefined);
 
-  const labelled = rows.filter(
+  const modelWideKnowledge = rows.find(
+    (row) => row.effort == null && row.quality.knowledge != null,
+  )?.quality.knowledge;
+  const supportedReasoningLevels = MODEL_THINKING_LEVELS.filter(
+    (level) => level !== 'off' && isThinkingSupportedByRegistryModel(rm, level),
+  );
+  const modelWideKnowledgeByEffort: Candidate['knowledgeByEffort'] = {};
+  if (modelWideKnowledge != null) {
+    for (const level of supportedReasoningLevels) {
+      modelWideKnowledgeByEffort[level] = modelWideKnowledge;
+    }
+  }
+  const rawLabelled = rows.filter(
     (r): r is BenchModel & { effort: ModelThinkingLevel } =>
       r.effort != null,
   );
-  if (labelled.length === 0) return [buildCandidate(rm, rows[0])];
+  if (rawLabelled.length === 0) {
+    const fallback = rows.find(qualityBearing) ?? rows[0];
+    // BenchLM's unlabelled Omniscience entry represents the flagship run. If
+    // max is serveable, preserve that evidence/serving contract explicitly;
+    // otherwise keep the ordinary effort-less fallback.
+    const flagship = fallback && modelWideKnowledge != null
+      && isThinkingSupportedByRegistryModel(rm, 'max')
+      ? {
+          ...fallback,
+          effort: 'max' as const,
+          quality: { ...fallback.quality, knowledge: modelWideKnowledge },
+        }
+      : fallback;
+    const candidate = buildCandidate(rm, flagship);
+    return Object.keys(modelWideKnowledgeByEffort).length > 0
+      ? [{ ...candidate, knowledgeByEffort: modelWideKnowledgeByEffort }]
+      : [candidate];
+  }
+
+  // AA-Omniscience measures model-level factual reliability rather than a
+  // reasoning-effort curve. Apply an unlabelled model-wide score to every
+  // reasoning level; exact effort-labelled scores remain authoritative.
+  const labelled = rawLabelled.map((row) =>
+    row.effort !== 'off' && row.quality.knowledge == null && modelWideKnowledge != null
+      ? { ...row, quality: { ...row.quality, knowledge: modelWideKnowledge } }
+      : row,
+  );
+  const knowledgeByEffort: Candidate['knowledgeByEffort'] = {
+    ...modelWideKnowledgeByEffort,
+  };
+  for (const row of labelled) {
+    if (row.quality.knowledge != null) knowledgeByEffort[row.effort] = row.quality.knowledge;
+  }
+  const hasEffortKnowledge = Object.keys(knowledgeByEffort).length > 0;
+  const attachKnowledge = (candidate: Candidate): Candidate => hasEffortKnowledge
+    ? { ...candidate, knowledgeByEffort }
+    : candidate;
 
   const byLevel = new Map(labelled.map((row) => [row.effort, row]));
   const supported = MODEL_THINKING_LEVELS.filter(
@@ -337,13 +385,13 @@ export function expandModelCandidates(
         : estimateRow(level, labelled, drops);
     })
     .filter((row): row is BenchModel => row != null)
-    .map((row) => buildCandidate(rm, row));
+    .map((row) => attachKnowledge(buildCandidate(rm, row)));
   if (supported.length > 0) return supported;
   // All measured efforts are unsupported by this model's thinkingLevelMap, or
   // the source supplied only quality-empty rows. Keep the model routable with
   // an effort-less candidate, preferring any row the scorer can actually use.
   const fallback = labelled.find(qualityBearing) ?? labelled[0];
-  return [buildCandidate(rm, { ...fallback, effort: undefined })];
+  return [attachKnowledge(buildCandidate(rm, { ...fallback, effort: undefined }))];
 }
 
 // ─── Provider registration ──────────────────────────────────────────

@@ -1341,6 +1341,195 @@ describe('scorer — relative quality (economy calculation core)', () => {
   });
 });
 
+describe('scorer — AA-Omniscience reliability floor', () => {
+  const make = (
+    registryId: string,
+    quality: NonNullable<Candidate['bench']>['quality'],
+    price: number,
+  ) => candidate(registryId, {
+    bench: benchRow(registryId, { quality, outputSpeedTps: 50 }),
+    cost: { input: price, output: price },
+  });
+
+  const reliable = make(
+    'test/reliable',
+    { intelligence: 100, coding: 100, agenticCoding: 100, knowledge: 15.3 },
+    8,
+  );
+  const unreliable = make(
+    'test/unreliable',
+    { intelligence: 99, coding: 99, agenticCoding: 99, knowledge: -11.2 },
+    0.01,
+  );
+
+  it.each(['plan', 'review'] as const)(
+    'uses the index zero crossing as the %s reliability floor',
+    (dimension) => {
+      const decision = pickBest([reliable, unreliable], dimension);
+
+      expect(decision.chosen).toBe(reliable.registryId);
+      expect(decision.candidateDiagnostics).toContainEqual({
+        candidateKey: unreliable.registryId,
+        excludedReason: 'below-knowledge-floor',
+      });
+      expect(decision.fallbackChain).toContain(unreliable.registryId);
+    },
+  );
+
+  it('keeps missing knowledge ahead of measured negative reliability', () => {
+    const unknown = make(
+      'test/knowledge-unknown',
+      { intelligence: 98, coding: 98, agenticCoding: 98 },
+      0.005,
+    );
+    const decision = pickBest([reliable, unknown, unreliable], 'review');
+
+    expect(decision.fallbackChain.indexOf(unknown.registryId)).toBeLessThan(
+      decision.fallbackChain.indexOf(unreliable.registryId),
+    );
+    expect(decision.candidateDiagnostics).toEqual(expect.arrayContaining([
+      { candidateKey: unknown.registryId, excludedReason: 'unknown-quality' },
+      { candidateKey: unreliable.registryId, excludedReason: 'below-knowledge-floor' },
+    ]));
+  });
+
+  it('keeps measured negative knowledge weak when the task axis is missing', () => {
+    const negativeOnly = candidate('test/negative-only', {
+      bench: {
+        ...benchRow('test/negative-only'),
+        quality: { knowledge: -11.2 },
+      },
+      cost: { input: 0.001, output: 0.001 },
+    });
+    const decision = pickBest([reliable, negativeOnly], 'plan');
+
+    expect(decision.candidateDiagnostics).toContainEqual({
+      candidateKey: negativeOnly.registryId,
+      excludedReason: 'below-knowledge-floor',
+    });
+  });
+
+  it('retains effective-effort evidence when the measured sibling is filtered out', () => {
+    const high = candidate('test/effort-bypass', {
+      effort: 'high',
+      reasoning: true,
+      thinkingLevelMap: { off: 'off', high: 'high', max: 'max' },
+      knowledgeByEffort: { max: -11.2 },
+      bench: benchRow('test/effort-bypass', {
+        effort: 'high',
+        benchSlug: 'effort-bypass-high',
+        quality: { intelligence: 99 },
+      }),
+      cost: { input: 0.001, output: 0.001 },
+    });
+    // The max sibling is absent, as it would be after an effort-specific
+    // blacklist, but plan still clamps this high entry to max at delegation.
+    const decision = pickBest([reliable, high], 'plan');
+
+    expect(decision.chosen).toBe(reliable.registryId);
+    expect(decision.candidateDiagnostics).toContainEqual({
+      candidateKey: 'test/effort-bypass:high',
+      excludedReason: 'below-knowledge-floor',
+    });
+  });
+
+  it('does not reuse nominal knowledge for an unmeasured higher effective effort', () => {
+    const high = candidate('test/effort-unknown-max', {
+      effort: 'high',
+      reasoning: true,
+      thinkingLevelMap: { off: 'off', high: 'high', max: 'max' },
+      bench: benchRow('test/effort-unknown-max', {
+        effort: 'high',
+        quality: { intelligence: 99, knowledge: 15.3 },
+      }),
+      cost: { input: 0.001, output: 0.001 },
+    });
+    const decision = pickBest([reliable, high], 'plan');
+
+    expect(decision.candidateDiagnostics).toContainEqual({
+      candidateKey: 'test/effort-unknown-max:high',
+      excludedReason: 'unknown-quality',
+    });
+  });
+
+  it('uses model-wide knowledge for a fixed reasoning mode without effort controls', () => {
+    const fixed = candidate('test/fixed-reasoning', {
+      reasoning: true,
+      bench: benchRow('test/fixed-reasoning', {
+        quality: { intelligence: 99, knowledge: -10.7 },
+      }),
+      cost: { input: 0.001, output: 0.001 },
+    });
+    const decision = pickBest([reliable, fixed], 'plan');
+
+    expect(decision.candidateDiagnostics).toContainEqual({
+      candidateKey: fixed.registryId,
+      excludedReason: 'below-knowledge-floor',
+    });
+  });
+
+  it('leaves ordinary bounded implementation ungated', () => {
+    const decision = pickBest([reliable, unreliable], 'implement');
+
+    expect(decision.chosen).toBe(unreliable.registryId);
+    expect(decision.candidateDiagnostics ?? []).not.toContainEqual({
+      candidateKey: unreliable.registryId,
+      excludedReason: 'below-knowledge-floor',
+    });
+  });
+
+  it('blocks negative reliability from compound terminal and inspect promotion', () => {
+    const policy: MultiWorkScoringPolicy = {
+      terminal: {
+        kind: 'implement',
+        complexity: 'moderate',
+        scope: 'bounded',
+        compound: true,
+        confidence: 'high',
+        discountEligible: false,
+      },
+      terminalRequirement: 0.85,
+      terminalBand: 'standard',
+      phase: 'inspect',
+      phaseReason: 'test',
+      terminalFloor: 0.85,
+      inspectFloor: 0.70,
+      providerInvocation: 0,
+    };
+    const decision = pickBest([reliable, unreliable], 'implement', undefined, {
+      estimatedContextTokens: 100,
+      multiWorkPolicy: policy,
+    });
+
+    expect(decision.chosen).toBe(reliable.registryId);
+    expect(decision.candidateDiagnostics).toContainEqual({
+      candidateKey: unreliable.registryId,
+      excludedReason: 'below-knowledge-floor',
+    });
+    expect(decision.multiWork?.candidateCapability[unreliable.registryId]).toEqual({
+      taskRatio: 0.99,
+      clearsTerminalFloor: false,
+      viaInspectPromotion: false,
+    });
+
+    const negativeOnly = candidate('test/compound-negative-only', {
+      bench: {
+        ...benchRow('test/compound-negative-only'),
+        quality: { knowledge: -11.2 },
+      },
+      cost: { input: 0.001, output: 0.001 },
+    });
+    const missingTask = pickBest([reliable, negativeOnly], 'implement', undefined, {
+      estimatedContextTokens: 100,
+      multiWorkPolicy: policy,
+    });
+    expect(missingTask.multiWork?.candidateCapability[negativeOnly.registryId]).toEqual({
+      clearsTerminalFloor: false,
+      viaInspectPromotion: false,
+    });
+  });
+});
+
 describe('scorer — multiWorkPolicy request-local floors', () => {
   const frontierInspectPolicy: MultiWorkScoringPolicy = {
     terminal: {

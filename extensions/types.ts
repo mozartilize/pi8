@@ -35,10 +35,10 @@ export interface BenchModel {
     coding?: number;
     agenticCoding?: number;
     /**
-     * Display-only factual-knowledge signal (benchlm's AA-Omniscience Index).
-     * A relative index on its own scale that can go negative; the scorer
-     * never blends it into intelligence/coding ratios or uses it as an
-     * eligibility axis.
+     * BenchLM's AA-Omniscience Index: 100 * (correct - incorrect) / questions.
+     * Zero is the meaningful reliability boundary where correct and incorrect
+     * answers balance; negative values mean wrong answers outnumber correct
+     * ones. It remains separate from intelligence/coding ratios.
      */
     knowledge?: number;
   };
@@ -87,6 +87,7 @@ export interface ScoreWeights {
 export type QualityExclusionReason =
   | 'below-task-floor'
   | 'below-sanity-floor'
+  | 'below-knowledge-floor'
   | 'unknown-quality'
   | 'promoted';
 
@@ -108,6 +109,13 @@ export interface Candidate {
    * absent means "no measured effort" and the dimension floor applies.
    */
   effort?: ModelThinkingLevel;
+  /**
+   * Factual-reliability evidence applicable at each reasoning effort. BenchLM
+   * publishes AA-Omniscience as a model-wide score, so it applies to every
+   * supported reasoning level; exact effort-labelled rows override it.
+   * Every sibling retains the map so filtering cannot erase serving evidence.
+   */
+  knowledgeByEffort?: Partial<Record<ModelThinkingLevel, number>>;
   contextWindow?: number;
   maxTokens?: number;
   /** Whether the registry claims vision support (from input array). */
