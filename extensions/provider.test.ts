@@ -1210,6 +1210,8 @@ describe('assessment orchestration', () => {
     assessorReply?: string;
     assessorNeverResponds?: boolean;
     assessorUsageLimit?: boolean;
+    assessorDelayMs?: number;
+    assessorGate?: Promise<void>;
   }
 
   interface Session {
@@ -1353,12 +1355,24 @@ describe('assessment orchestration', () => {
             },
           ]);
         }
+        const reply = opts.assessorReply
+          ?? 'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: ok';
+        if (opts.assessorDelayMs != null || opts.assessorGate) {
+          return (async function* () {
+            if (opts.assessorGate) await opts.assessorGate;
+            else await new Promise((resolve) => setTimeout(resolve, opts.assessorDelayMs));
+            yield { type: 'text_delta', delta: reply };
+            yield {
+              type: 'done',
+              message: { usage: { input: 120, output: 30, cacheRead: 0 } },
+            };
+          })() as never;
+        }
         return asStream([
+          { type: 'text_delta', delta: reply },
           {
-            type: 'text_delta',
-            delta:
-              opts.assessorReply ??
-              'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: ok',
+            type: 'done',
+            message: { usage: { input: 120, output: 30, cacheRead: 0 } },
           },
         ]);
       }
@@ -1408,19 +1422,73 @@ describe('assessment orchestration', () => {
     expect(session.assessmentDispatchCount).toBe(2);
   });
 
+  it('updates assessor economics from successful reported usage', async () => {
+    const session = await newSession({ assessmentMode: 'active', consultRouter: true });
+    await session.routeTurn('investigate the flaky test');
+    const { getAssessorTokenEstimate } = await import('./router-session-state.js');
+    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+      input: 120,
+      output: 30,
+    });
+  });
+
+  it('discards a detached shadow result after the session resets', async () => {
+    const session = await newSession({ assessmentMode: 'shadow', consultRouter: true });
+    let release!: () => void;
+    const assessorGate = new Promise<void>((resolve) => { release = resolve; });
+    await session.routeTurn('old session request', { assessorGate });
+    const state = await import('./router-session-state.js');
+    state.resetRouterSession();
+    release();
+
+    await session.drainDetachedAssessments();
+
+    expect(state.getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+      input: 1_000,
+      output: 80,
+    });
+    expect(session.shadowRecordCount).toBe(0);
+  });
+
+  it('aborts an awaited active assessment after the session resets', async () => {
+    const session = await newSession({ assessmentMode: 'active', consultRouter: true });
+    let release!: () => void;
+    const assessorGate = new Promise<void>((resolve) => { release = resolve; });
+    const pendingTurn = session.routeTurn('old active request', { assessorGate });
+    while (session.assessmentDispatchCount === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    const state = await import('./router-session-state.js');
+    state.resetRouterSession();
+    release();
+    await pendingTurn;
+
+    expect(state.getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+      input: 1_000,
+      output: 80,
+    });
+    expect(state.getCachedRoutingIntent()).toBeUndefined();
+  });
+
   it('does not dispatch when consultRouter is false', async () => {
     const session = await newSession({ consultRouter: false });
     await session.routeTurn('anything at all');
     expect(session.assessmentDispatchCount).toBe(0);
   });
 
-  it('blacklists the assessor provider when the assessor hits a usage-limit error', async () => {
+  it('keeps shadow assessor failures byte-identical to deterministic routing', async () => {
     const session = await newSession({ assessmentMode: 'shadow', consultRouter: true });
     await session.routeTurn('investigate the flaky test', { assessorUsageLimit: true });
+    await session.drainDetachedAssessments();
 
-    // The assessor (cheapest candidate above the competence floor) is
-    // alpha/cheap, so the shared cap error excludes provider 'alpha' — the
-    // same provider the serving chain would have tried next.
+    const { getBlacklistedProviders } = await import('./blacklist.js');
+    expect([...getBlacklistedProviders()]).toEqual([]);
+  });
+
+  it('blacklists the assessor provider on an active usage-limit error', async () => {
+    const session = await newSession({ assessmentMode: 'active', consultRouter: true });
+    await session.routeTurn('investigate the flaky test', { assessorUsageLimit: true });
+
     const { getBlacklistedProviders } = await import('./blacklist.js');
     expect([...getBlacklistedProviders()]).toEqual(['alpha']);
   });

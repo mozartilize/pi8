@@ -8,6 +8,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ClassifyResult } from './classifier.js';
 import type {
   AssessmentFallbackReason,
+  AssessorTokenEstimate,
   DecisionCause,
   Dimension,
   RoutingAssessment,
@@ -43,6 +44,8 @@ export interface PendingUserEscalation {
 }
 
 interface RouterSessionState {
+  /** Monotonic guard for detached work that must not cross session resets. */
+  sessionGeneration: number;
   lastDecision: RoutingDecision | undefined;
   /** Last chosen candidate key (`provider/id` or `provider/id:effort`). */
   lastChosenRegistryId: string | undefined;
@@ -59,6 +62,8 @@ interface RouterSessionState {
   latchGeneration: number;
   /** USD spent on assessments, kept apart from routed spend. */
   assessmentCost: number;
+  /** Successful assessor input/output usage EMA for selection economics. */
+  assessorTokenEma: AssessorTokenEstimate | undefined;
   /** Skill names captured at before_agent_start; names only. */
   activeSkillNames: readonly string[];
   /**
@@ -96,6 +101,7 @@ type EmbeddingOutcome = keyof EmbeddingStats;
 let latchVetoIntentKey: string | undefined;
 
 const state: RouterSessionState = {
+  sessionGeneration: 0,
   lastDecision: undefined,
   lastChosenRegistryId: undefined,
   lastServed: undefined,
@@ -109,12 +115,14 @@ const state: RouterSessionState = {
   pendingUserEscalation: undefined,
   latchGeneration: 0,
   assessmentCost: 0,
+  assessorTokenEma: undefined,
   activeSkillNames: [],
   assessorStrikes: new Map(),
   embeddingStats: { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 },
   workPhaseState: undefined,
 };
 
+export const getSessionGeneration = (): number => state.sessionGeneration;
 export const getLastDecision = (): RoutingDecision | undefined => state.lastDecision;
 export const getLastChosenRegistryId = (): string | undefined => state.lastChosenRegistryId;
 export const getLastServed = (): ServedInfo | undefined => state.lastServed;
@@ -200,6 +208,36 @@ export const addAssessmentCost = (delta: number): void => {
   state.assessmentCost += delta;
 };
 
+/** EMA weight for the newest successful assessor usage observation. */
+export const ASSESSOR_USAGE_EMA_ALPHA = 0.2;
+
+export const getAssessorTokenEstimate = (
+  fallback: AssessorTokenEstimate,
+): AssessorTokenEstimate => state.assessorTokenEma
+  ? { ...state.assessorTokenEma }
+  : { ...fallback };
+
+/** Update only from a successful attempt that reported real input usage. */
+export const recordSuccessfulAssessorUsage = (
+  observed: AssessorTokenEstimate,
+): void => {
+  if (
+    !Number.isFinite(observed.input)
+    || observed.input <= 0
+    || !Number.isFinite(observed.output)
+    || observed.output < 0
+  ) return;
+  const previous = state.assessorTokenEma;
+  state.assessorTokenEma = previous
+    ? {
+        input: ASSESSOR_USAGE_EMA_ALPHA * observed.input
+          + (1 - ASSESSOR_USAGE_EMA_ALPHA) * previous.input,
+        output: ASSESSOR_USAGE_EMA_ALPHA * observed.output
+          + (1 - ASSESSOR_USAGE_EMA_ALPHA) * previous.output,
+      }
+    : { input: observed.input, output: observed.output };
+};
+
 /**
  * Skill names captured at `before_agent_start`. Pi exposes no runtime skills
  * getter — `systemPromptOptions` is the only source, and Pi's own docs mark
@@ -248,6 +286,7 @@ export const commitWorkPhaseState = (next: WorkPhaseState | undefined): void => 
 };
 
 export const resetRouterSession = (): void => {
+  state.sessionGeneration += 1;
   state.lastDecision = undefined;
   state.lastChosenRegistryId = undefined;
   state.lastServed = undefined;
@@ -258,6 +297,7 @@ export const resetRouterSession = (): void => {
   state.pendingUserEscalation = undefined;
   state.latchGeneration = 0;
   state.assessmentCost = 0;
+  state.assessorTokenEma = undefined;
   state.activeSkillNames = [];
   state.assessorStrikes.clear();
   state.embeddingStats = { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 };

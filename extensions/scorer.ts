@@ -315,11 +315,45 @@ function eligibilityOf(
 // ─── Cost estimation helpers ─────────────────────────────────────────
 
 /** Output-weighted blend (agents emit more than they read). */
+const isNonNegativeFinite = (value: number | undefined): value is number =>
+  value != null && Number.isFinite(value) && value >= 0;
+
 function blend(input: number | undefined, output: number | undefined): number | undefined {
   if (input == null && output == null) return undefined;
   if (input == null) return output!;
   if (output == null) return input;
   return input * 0.25 + output * 0.75;
+}
+
+/** Complete input/output pricing used by request-shape economics. */
+export function inputOutputPricePer1M(
+  c: Candidate,
+): { input: number; output: number } | undefined {
+  const benchInput = c.bench?.priceInputPer1M;
+  const benchOutput = c.bench?.priceOutputPer1M;
+  const benchmarkPrice = Number.isFinite(benchInput)
+    && Number.isFinite(benchOutput)
+    && benchInput! >= 0
+    && benchOutput! >= 0
+    ? { input: benchInput!, output: benchOutput! }
+    : undefined;
+
+  if (c.cost) {
+    const { input, output } = c.cost;
+    // Registry pricing is provider-specific and authoritative, including free
+    // variants of models whose provider-agnostic benchmark price is nonzero.
+    // A bare custom 0/0 without benchmark identity remains unknown.
+    if (
+      Number.isFinite(input)
+      && Number.isFinite(output)
+      && input! >= 0
+      && output! >= 0
+      && (input !== 0 || output !== 0 || c.bench != null)
+    ) {
+      return { input: input!, output: output! };
+    }
+  }
+  return benchmarkPrice;
 }
 
 /**
@@ -330,24 +364,17 @@ function blend(input: number | undefined, output: number | undefined): number | 
  * for models whose registry entry is incomplete or unpriced.
  */
 export function blendedPricePer1M(c: Candidate): number | undefined {
-  if (c.cost) {
-    const { input, output } = c.cost;
-    // Registry-sourced price data — including genuinely free (0/0) models from
-    // known providers (e.g. opencode/*-free, openrouter/*:free).
-    //
-    // A free model that also carries benchmark data is a real known entity;
-    // its zero cost is deliberate. A model with 0/0 cost but no benchmark data
-    // may be a custom endpoint that pi-core zero-filled, i.e. genuinely unknown
-    // — treat that case conservatively (return undefined, no cost credit).
-    if (
-      Number.isFinite(input) &&
-      Number.isFinite(output) &&
-      (input !== 0 || output !== 0 || c.bench != null)
-    ) {
-      return blend(input, output);
-    }
-  }
-  return c.bench ? blend(c.bench.priceInputPer1M, c.bench.priceOutputPer1M) : undefined;
+  const complete = inputOutputPricePer1M(c);
+  if (complete) return blend(complete.input, complete.output);
+  // Preserve partial benchmark fallback for generic serving economics. The
+  // assessor-shaped formula requires both prices and therefore uses only the
+  // complete helper above.
+  const partialInput = c.bench?.priceInputPer1M;
+  const partialOutput = c.bench?.priceOutputPer1M;
+  if (partialInput != null && !isNonNegativeFinite(partialInput)) return undefined;
+  if (partialOutput != null && !isNonNegativeFinite(partialOutput)) return undefined;
+  const partial = blend(partialInput, partialOutput);
+  return isNonNegativeFinite(partial) ? partial : undefined;
 }
 
 /**
@@ -359,9 +386,47 @@ export function blendedPricePer1M(c: Candidate): number | undefined {
  * silently comparing incomparable numbers.
  */
 export function costSignal(candidates: readonly Candidate[]): 'task' | 'per-1m' {
-  return candidates.length > 0 && candidates.every((c) => c.bench?.costPerTask != null)
+  return candidates.length > 0
+    && candidates.every((c) => isNonNegativeFinite(c.bench?.costPerTask))
     ? 'task'
     : 'per-1m';
+}
+
+/**
+ * Log-normalize non-negative costs so one extreme outlier cannot compress the
+ * useful differences among the rest. Unknown/invalid values stay undefined
+ * and receive no cost credit. A zero-price model is a real endpoint of the
+ * scale: shifting by the cheapest positive price keeps logs finite,
+ * scale-invariant, and makes free strictly better than every paid candidate.
+ */
+export function logCostUtilities(
+  costs: readonly (number | undefined)[],
+): (number | undefined)[] {
+  const known = costs.filter(
+    (cost): cost is number => cost != null && Number.isFinite(cost) && cost >= 0,
+  );
+  if (known.length === 0) return costs.map(() => undefined);
+
+  const min = Math.min(...known);
+  const max = Math.max(...known);
+  if (min === max) {
+    return costs.map((cost) =>
+      cost != null && Number.isFinite(cost) && cost >= 0 ? 1 : undefined,
+    );
+  }
+
+  const positiveMinimum = min === 0
+    ? Math.min(...known.filter((cost) => cost > 0))
+    : 0;
+  const shift = Number.isFinite(positiveMinimum) ? positiveMinimum : 0;
+  const logMin = Math.log(min + shift);
+  const logMax = Math.log(max + shift);
+  const span = logMax - logMin;
+
+  return costs.map((cost) => {
+    if (cost == null || !Number.isFinite(cost) || cost < 0) return undefined;
+    return clamp(1 - (Math.log(cost + shift) - logMin) / span, 0, 1);
+  });
 }
 
 // ─── Scoring ──────────────────────────────────────────────────────────
@@ -564,8 +629,10 @@ export function pickBest(
   // apart even though costPerTask does).
   const tierZeroPool = filtered.filter((c) => eligibility.get(candidateKey(c))?.tier === 0);
   const costBasis = costSignal(tierZeroPool.length > 0 ? tierZeroPool : filtered);
-  const costOf = (c: Candidate): number | undefined =>
-    costBasis === 'task' ? c.bench?.costPerTask : blendedPricePer1M(c);
+  const costOf = (c: Candidate): number | undefined => {
+    const cost = costBasis === 'task' ? c.bench?.costPerTask : blendedPricePer1M(c);
+    return isNonNegativeFinite(cost) ? cost : undefined;
+  };
 
   // A near-frontier candidate may earn tier 0 only when economics provide a
   // material benefit and no cheaper peer already offers at least its task axis.
@@ -626,23 +693,24 @@ export function pickBest(
   }
   const tierOf = (c: Candidate): QualityTier => eligibility.get(candidateKey(c))!.tier;
 
-  // Score all candidates, normalize cost across the set.
-  const maxCost = Math.max(
-    0.0001,
-    ...filtered.map((c) => costOf(c) ?? 0),
-  );
+  // Score all candidates. Cost is meaningful only among candidates in the
+  // same capability tier; weaker fallback prices must not distort the preferred
+  // tier. Economic promotion above deliberately continues to compare raw prices.
+  const costUtilities = new Map<string, number | undefined>();
+  for (const tier of [0, 1, 2] as const) {
+    const peers = filtered.filter((candidate) => tierOf(candidate) === tier);
+    const utilities = logCostUtilities(peers.map(costOf));
+    peers.forEach((candidate, index) => {
+      costUtilities.set(candidateKey(candidate), utilities[index]);
+    });
+  }
 
   const scored = filtered.map((c) => {
     const s = scoreCandidate(c, dimension, weights, opts);
     s.excludedReason = eligibility.get(candidateKey(s))?.excludedReason;
-    // Normalize cost: cheaper = higher score
-    const blended = costOf(c);
-    if (blended != null && maxCost > 0) {
-      const costRatio = 1 - clamp(blended / maxCost, 0, 1);
-      s.costComponent = costRatio * weights.cost;
-    } else {
-      s.costComponent = 0; // unknown price → no credit (asymmetric safe)
-    }
+    // Cheaper = higher score. Unknown/invalid price receives no credit.
+    const costUtility = costUtilities.get(candidateKey(c));
+    s.costComponent = costUtility == null ? 0 : costUtility * weights.cost;
     s.score = s.qualityComponent + s.costComponent + s.speedComponent;
     return s;
   });

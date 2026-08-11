@@ -9,12 +9,15 @@ import {
   getAccumulatedCost,
   getActiveSkillNames,
   getAssessmentCost,
+  getAssessorTokenEstimate,
   getCachedRoutingIntent,
   getLastChosenRegistryId,
   getLastResolvedThinkingLevel,
   getLatchGeneration,
+  getSessionGeneration,
   getWorkPhaseState,
   peekPendingUserEscalation,
+  recordSuccessfulAssessorUsage,
   resetRouterSession,
   setActiveSkillNames,
   setCachedRoutingIntent,
@@ -88,6 +91,12 @@ describe('assessment session state', () => {
     expect(getLatchGeneration()).toBe(0);
   });
 
+  it('advances the session generation on every reset', () => {
+    const before = getSessionGeneration();
+    resetRouterSession();
+    expect(getSessionGeneration()).toBe(before + 1);
+  });
+
   it('bumps the latch generation exactly once per call', () => {
     bumpLatchGeneration();
     expect(getLatchGeneration()).toBe(1);
@@ -102,13 +111,40 @@ describe('assessment session state', () => {
     expect(getAccumulatedCost()).toBe(0);
   });
 
-  it('clears latch generation and assessment cost on session reset', () => {
+  it('updates assessor usage with a 0.2 EMA and ignores missing usage', () => {
+    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+      input: 1_000,
+      output: 80,
+    });
+    recordSuccessfulAssessorUsage({ input: 500, output: 100 });
+    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+      input: 500,
+      output: 100,
+    });
+    recordSuccessfulAssessorUsage({ input: 1_000, output: 50 });
+    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+      input: 600,
+      output: 90,
+    });
+    recordSuccessfulAssessorUsage({ input: 0, output: 0 });
+    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+      input: 600,
+      output: 90,
+    });
+  });
+
+  it('clears latch generation, assessment cost, and assessor EMA on session reset', () => {
     bumpLatchGeneration();
     addAssessmentCost(0.01);
+    recordSuccessfulAssessorUsage({ input: 500, output: 100 });
     setActiveSkillNames(['systematic-debugging', 'writing-plans']);
     resetRouterSession();
     expect(getLatchGeneration()).toBe(0);
     expect(getAssessmentCost()).toBe(0);
+    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+      input: 1_000,
+      output: 80,
+    });
     expect(getActiveSkillNames()).toEqual([]);
   });
 

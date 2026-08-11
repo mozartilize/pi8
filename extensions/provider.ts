@@ -53,6 +53,7 @@ import {
 import {
   getAccumulatedCost,
   getActiveSkillNames,
+  getSessionGeneration,
   getCachedRoutingIntent,
   getLatchGeneration,
   getLatchVetoIntentKey,
@@ -74,6 +75,7 @@ import {
   getAssessorStrikes,
   strikeAssessor,
   clearAssessorStrikes,
+  recordSuccessfulAssessorUsage,
   bumpLatchGeneration,
   setCachedRoutingIntent,
   setCurrentModelRegistry,
@@ -271,14 +273,20 @@ function evidenceForAssessment(
  * stops repicking a model that structurally cannot deliver a verdict here.
  * auth/parse/no-assessor/disabled are not slowness signals and never strike.
  */
-function recordAssessorOutcome(attempt: Awaited<ReturnType<typeof runAssessment>>): void {
+function recordAssessorOutcome(
+  attempt: Awaited<ReturnType<typeof runAssessment>>,
+  affectServingHealth = true,
+): void {
   if (attempt.ok) {
+    recordSuccessfulAssessorUsage(attempt.assessment.usage);
     clearAssessorStrikes(attempt.assessment.model);
     return;
   }
   // The assessor hit the same shared usage cap the serving path would:
   // exclude the whole provider so later turns fail fast there too.
-  if (attempt.usageLimitProvider) blacklistProvider(attempt.usageLimitProvider);
+  if (affectServingHealth && attempt.usageLimitProvider) {
+    blacklistProvider(attempt.usageLimitProvider);
+  }
   if (
     attempt.model &&
     attempt.producedOutput === false &&
@@ -639,6 +647,9 @@ export function registerAutoRouterProvider(
               assessorQualityRatio: config.assessorQualityRatio,
             };
 
+            const assessmentSessionGeneration = getSessionGeneration();
+            const assessmentStillCurrent = (): boolean =>
+              getSessionGeneration() === assessmentSessionGeneration;
             let assessment = cacheHit ? cachedIntent.assessment : undefined;
             let fallbackReason = cacheHit ? cachedIntent.fallbackReason : undefined;
             // One bounded assessment per real user entry, whatever asks for it
@@ -659,6 +670,11 @@ export function registerAutoRouterProvider(
                   evidence,
                   getAssessorStrikes(),
                 );
+                if (!assessmentStillCurrent()) {
+                  stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
+                  stream.end();
+                  return;
+                }
                 recordAssessorOutcome(attempt);
                 if (attempt.ok) {
                   addAssessmentCost(attempt.assessment.costUsd);
@@ -684,7 +700,8 @@ export function registerAutoRouterProvider(
                 );
                 void shadowAssessment
                   .then((attempt) => {
-                    recordAssessorOutcome(attempt);
+                    if (!assessmentStillCurrent()) return;
+                    recordAssessorOutcome(attempt, false);
                     if (attempt.ok) {
                       const counterfactual = adoptAssessment({
                         heuristic: heuristicDimension,
@@ -793,6 +810,11 @@ export function registerAutoRouterProvider(
                     evidenceForAssessment(context, config, pi),
                     getAssessorStrikes(),
                   );
+                  if (!assessmentStillCurrent()) {
+                    stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
+                    stream.end();
+                    return;
+                  }
                   recordAssessorOutcome(attempt);
                   if (attempt.ok) {
                     addAssessmentCost(attempt.assessment.costUsd);
@@ -830,6 +852,7 @@ export function registerAutoRouterProvider(
                     // entry-level handler.
                     void shadowAssessment
                       .then((attempt) => {
+                        if (!assessmentStillCurrent()) return;
                         appendShadowAssessment({
                           intentKey: turnInput.key,
                           heuristicDimension: baseDimension,
@@ -858,7 +881,8 @@ export function registerAutoRouterProvider(
                       getAssessorStrikes(),
                     )
                       .then((attempt) => {
-                        recordAssessorOutcome(attempt);
+                        if (!assessmentStillCurrent()) return;
+                        recordAssessorOutcome(attempt, false);
                         if (attempt.ok) {
                           addAssessmentCost(attempt.assessment.costUsd);
                         } else {

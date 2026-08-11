@@ -44,10 +44,21 @@ export type ResolvedRequestAuth =
 export interface MockEvent {
   type: string;
   delta?: string;
-  error?: { stopReason?: string; errorMessage?: string; message?: string };
+  error?: {
+    stopReason?: string;
+    errorMessage?: string;
+    message?: string;
+    usage?: { input?: number; output?: number; cacheRead?: number };
+  };
+  usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number };
   message?: {
     stopReason?: string;
-    usage?: { cost?: { total: number } };
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cost?: { total: number };
+    };
   };
 }
 

@@ -4,6 +4,7 @@ import {
   pickEscalation,
   buildCandidate,
   blendedPricePer1M,
+  logCostUtilities,
   buildRouterThinkingLevelMap,
   chooseThinkingLevel,
   clampEffortToFloor,
@@ -179,6 +180,37 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
     expect(mixed.chosen).toBe('test/a');
   });
 
+  it('treats negative task and partial benchmark costs as unknown', () => {
+    const negativeTask = candidate('test/negative-task', {
+      bench: benchRow('test/negative-task', {
+        quality: { intelligence: 80 },
+        costPerTask: -1,
+      }),
+      cost: { input: 10, output: 10 },
+    });
+    const valid = candidate('test/valid', {
+      bench: benchRow('test/valid', {
+        quality: { intelligence: 80 },
+        costPerTask: 0.5,
+      }),
+      cost: { input: 1, output: 1 },
+    });
+    const taskDecision = pickBest([negativeTask, valid], 'gather');
+    expect(taskDecision.reason).toContain('[cost-basis: per-1m]');
+    expect(taskDecision.chosen).toBe(valid.registryId);
+
+    const negativePartial = candidate('test/negative-partial', {
+      bench: benchRow('test/negative-partial', {
+        quality: { intelligence: 80 },
+        priceInputPer1M: -10,
+        priceOutputPer1M: undefined,
+      }),
+      cost: undefined,
+    });
+    const partialDecision = pickBest([negativePartial, valid], 'gather');
+    expect(partialDecision.chosen).toBe(valid.registryId);
+  });
+
   it('never mixes the two scales inside one request-local ratio', () => {
     // Three candidates: two with costPerTask, one without. The mixed one must
     // drag the WHOLE set to per-1M (G3 rule applied to price), never a
@@ -249,15 +281,10 @@ describe('scorer', () => {
   describe('default policy snapshot', () => {
     it.each([
       ['lightweight', 'test/cheap'],
-      ['gather', 'test/mid'],
-      // Behavior test, not a contract: before the reasoning-axis removal
-      // (redundancy-report G3), `expensiveModel`'s reasoning:99 was the sole
-      // populated reasoning value in this set, so it alone set taskMaximum
-      // and only it cleared the 0.85 floor. That was the cross-source
-      // scale-mixing hazard in miniature, not a real capability gap: on the
-      // intelligence axis alone, mid's 80 is a genuine 88.9% of expensive's
-      // 90, so both are legitimately tier-0, and plan's cost weight (0.15)
-      // then prefers the far cheaper mid. See scorer.ts taskAxis/generalAxis.
+      ['gather', 'test/cheap'],
+      // Both mid and expensive clear plan's capability floor. Cost is
+      // normalized only within that comparable tier, where mid's large price
+      // advantage outweighs the modest quality gap.
       ['plan', 'test/mid'],
       ['implement', 'test/mid'],
       ['review', 'test/mid'],
@@ -329,6 +356,7 @@ describe('scorer', () => {
       const decision = pickBest(allCandidates, 'lightweight', undefined, {
         estimatedContextTokens: 80000,
         incumbentRegistryId: 'test/mid',
+        switchMargin: 0.5,
       });
       // On large context, switch penalty keeps us on mid (the incumbent)
       expect(decision.chosen).toBe('test/mid');
@@ -658,6 +686,40 @@ describe('pickEscalation', () => {
       { estimatedContextTokens: 0, needsVision: true },
     );
     expect(decision?.chosen).toBe('test/vision');
+  });
+});
+
+describe('scorer — log-cost normalization', () => {
+  it('maps positive geometric steps evenly in log space', () => {
+    expect(logCostUtilities([1, 10, 100])).toEqual([1, 0.5, 0]);
+  });
+
+  it('returns full utility when every known price is equal', () => {
+    expect(logCostUtilities([5, 5, undefined])).toEqual([1, 1, undefined]);
+    expect(logCostUtilities([0, 0])).toEqual([1, 1]);
+  });
+
+  it('makes free strictly best without sending zero through Math.log', () => {
+    const utilities = logCostUtilities([0, 1, 9]);
+    expect(utilities[0]).toBe(1);
+    expect(utilities[1]).toBeGreaterThan(utilities[2]!);
+    expect(utilities[1]).toBeLessThan(1);
+    expect(utilities[2]).toBe(0);
+  });
+
+  it('excludes unknown and invalid prices instead of treating them as free', () => {
+    expect(logCostUtilities([undefined, -1, Number.NaN, 2])).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      1,
+    ]);
+  });
+
+  it('is invariant to the price unit scale', () => {
+    const base = logCostUtilities([0, 1, 9, 81]);
+    const scaled = logCostUtilities([0, 1_000, 9_000, 81_000]);
+    scaled.forEach((value, index) => expect(value).toBeCloseTo(base[index]!, 12));
   });
 });
 
@@ -1568,6 +1630,8 @@ describe('scorer — multiWorkPolicy request-local floors', () => {
       estimatedContextTokens: 100,
       multiWorkPolicy: frontierInspectPolicy,
     });
+    // Once promoted, the inspect candidate competes in tier 0 and its large
+    // economic advantage earns the bounded cheap-first opening.
     expect(decision.chosen).toBe(inspectCheap.registryId);
     expect(decision.multiWork?.candidateCapability[inspectCheap.registryId]).toEqual({
       taskRatio: 0.70,

@@ -210,6 +210,12 @@ export type AssessmentFallbackReason =
   | 'no-assessor'
   | 'disabled';
 
+/** Expected assessor request shape used only for model-selection economics. */
+export interface AssessorTokenEstimate {
+  input: number;
+  output: number;
+}
+
 export interface RoutingAssessment {
   kind: TaskKind;
   complexity: ComplexityBand;
@@ -221,7 +227,7 @@ export interface RoutingAssessment {
   model: string;
   /** Wall-clock milliseconds, end to end. */
   ms: number;
-  usage: { input: number; output: number; cacheRead?: number };
+  usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
   costUsd: number;
   /** Set when this assessment was requested by the depth-latch transition. */
   vetoedLatch?: boolean;

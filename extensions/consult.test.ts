@@ -1,8 +1,9 @@
 /**
  * Unit tests for the always-on assessment layer (formerly the consult gate).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
+  expectedAssessorCost,
   runAssessment,
   selectAssessor,
   type AssessmentConfig,
@@ -13,10 +14,13 @@ import type { AssessmentEvidence } from './assessment-prompt.js';
 import type { Candidate } from './types.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { Model, Api, Context } from '@earendil-works/pi-ai';
+import { resetRouterSession } from './router-session-state.js';
 
 vi.mock('@earendil-works/pi-ai/compat', () => ({
   streamSimple: vi.fn(),
 }));
+
+beforeEach(() => resetRouterSession());
 
 const evidence: AssessmentEvidence = {
   conversation: 'User: list the main features of docs/plan.md',
@@ -59,6 +63,62 @@ describe('selectAssessor — competence floor', () => {
       ],
     );
     expect(chosen?.registryId).toBe('test/cheap');
+  });
+
+  it('ranks on the assessor input/output token shape', () => {
+    const inputCheap = {
+      ...candidate('test/input-cheap', 90),
+      cost: { input: 0.1, output: 100 },
+    };
+    const outputCheap = {
+      ...candidate('test/output-cheap', 90),
+      cost: { input: 1, output: 1 },
+    };
+    const registry = {
+      find: (provider: string, id: string) => ({ provider, id }),
+    } as never;
+
+    expect(selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      registry,
+      [outputCheap, inputCheap],
+      new Map(),
+      { input: 10_000, output: 1 },
+    )?.registryId).toBe('test/input-cheap');
+    expect(selectAssessor(
+      { assessorQualityRatio: 0.5 } as never,
+      registry,
+      [inputCheap, outputCheap],
+      new Map(),
+      { input: 1, output: 10_000 },
+    )?.registryId).toBe('test/output-cheap');
+  });
+
+  it('uses complete benchmark pricing when registry pricing is absent', () => {
+    const benchmarkPriced = candidate('test/benchmark-priced', 90, {
+      priceInputPer1M: 2,
+      priceOutputPer1M: 10,
+    });
+    benchmarkPriced.cost = undefined;
+    expect(expectedAssessorCost(benchmarkPriced, { input: 1_000, output: 80 }))
+      .toBeCloseTo((1_000 * 2 + 80 * 10) / 1_000_000, 12);
+  });
+
+  it('does not treat zero-filled custom pricing as free', () => {
+    const custom = candidate('test/custom', undefined);
+    custom.cost = { input: 0, output: 0 };
+    expect(expectedAssessorCost(custom, { input: 1_000, output: 80 })).toBeUndefined();
+    expect(expectedAssessorCost(candidate('test/known', 90), { input: -1, output: 80 }))
+      .toBeUndefined();
+  });
+
+  it('keeps provider-specific free pricing authoritative over benchmark rates', () => {
+    const freeVariant = candidate('test/free-variant', 90, {
+      priceInputPer1M: 2,
+      priceOutputPer1M: 10,
+    });
+    freeVariant.cost = { input: 0, output: 0 };
+    expect(expectedAssessorCost(freeVariant, { input: 1_000, output: 80 })).toBe(0);
   });
 
   // Expected behavior change, not a contract violation: TTFT still never gates
@@ -227,11 +287,32 @@ describe('selectAssessor — competence floor', () => {
 
 function asStreamWithUsage(
   text: string,
-  usage: { inputTokens: number; outputTokens: number },
+  usage: { inputTokens: number; outputTokens: number; costTotal?: number },
 ): AsyncIterable<{ type: string }> {
-  const events: Array<{ type: string; usage?: unknown; delta?: string }> = [
-    { type: 'usage', usage },
+  const events: Array<{
+    type: string;
+    delta?: string;
+    message?: {
+      usage: {
+        input: number;
+        output: number;
+        cacheRead: number;
+        cost?: { total: number };
+      };
+    };
+  }> = [
     { type: 'text_delta', delta: text },
+    {
+      type: 'done',
+      message: {
+        usage: {
+          input: usage.inputTokens,
+          output: usage.outputTokens,
+          cacheRead: 0,
+          ...(usage.costTotal == null ? {} : { cost: { total: usage.costTotal } }),
+        },
+      },
+    },
   ];
   return {
     [Symbol.asyncIterator]: () => {
@@ -271,6 +352,7 @@ async function runAssessmentWithStream(
   stream: AsyncIterable<{ type: string }>,
   over: Partial<AssessmentConfig> = {},
   sentEvidence: AssessmentEvidence = evidence,
+  candidateOverrides?: Candidate[],
 ): Promise<AssessmentAttempt> {
   const { streamSimple } = await import('@earendil-works/pi-ai/compat');
   vi.mocked(streamSimple).mockImplementation(((_model: Model<Api>, context: Context) => {
@@ -279,7 +361,7 @@ async function runAssessmentWithStream(
     return stream as never;
   }) as never);
 
-  const candidates: Candidate[] = [
+  const candidates: Candidate[] = candidateOverrides ?? [
     {
       registryId: 'test/a',
       provider: 'test',
@@ -566,7 +648,11 @@ describe('runAssessment', () => {
     const stream: AsyncIterable<{ type: string }> = (async function* () {
       yield {
         type: 'error',
-        error: { stopReason: 'length', errorMessage: 'max tokens reached for this request' },
+        error: {
+          stopReason: 'length',
+          errorMessage: 'max tokens reached for this request',
+          usage: { input: 120, output: 30, cacheRead: 0 },
+        },
       };
     })();
 
@@ -574,9 +660,12 @@ describe('runAssessment', () => {
 
     expect(result).toMatchObject({ ok: false, fallbackReason: 'parse', model: 'test/a' });
     expect('usageLimitProvider' in result).toBe(false);
+    if (!result.ok) {
+      expect(result.costUsd).toBeCloseTo(120 / 1e6 + (30 * 3) / 1e6, 10);
+    }
   });
 
-  it('extracts usage events and computes the cost against the candidate price', async () => {
+  it('extracts terminal protocol usage and computes exact candidate cost', async () => {
     const result = await runAssessmentWithStream(
       asStreamWithUsage(
         [
@@ -595,6 +684,52 @@ describe('runAssessment', () => {
     expect(result.assessment.usage).toEqual({ input: 120, output: 30 });
     // test/a costs 1 USD / 1M input and 3 USD / 1M output.
     expect(result.assessment.costUsd).toBeCloseTo(120 / 1e6 + (30 * 3) / 1e6, 10);
+  });
+
+  it('uses the provider terminal cost total when registry pricing is authoritative', async () => {
+    const result = await runAssessmentWithStream(
+      asStreamWithUsage(
+        [
+          'Kind: gather',
+          'Complexity: routine',
+          'Scope: bounded',
+          'Compound: no',
+          'Confidence: high',
+          'Reasoning: reading a few files',
+        ].join('\n'),
+        { inputTokens: 120, outputTokens: 30, costTotal: 0.123 },
+      ),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.assessment.costUsd).toBe(0.123);
+  });
+
+  it('uses benchmark pricing for actual spend when registry pricing is absent', async () => {
+    const benchmarkPriced = candidate('test/a', 90, {
+      priceInputPer1M: 2,
+      priceOutputPer1M: 10,
+    });
+    benchmarkPriced.cost = undefined;
+    const result = await runAssessmentWithStream(
+      asStreamWithUsage(
+        [
+          'Kind: gather',
+          'Complexity: routine',
+          'Scope: bounded',
+          'Compound: no',
+          'Confidence: high',
+          'Reasoning: reading a few files',
+        ].join('\n'),
+        { inputTokens: 120, outputTokens: 30 },
+      ),
+      {},
+      evidence,
+      [benchmarkPriced],
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.assessment.costUsd).toBeCloseTo((120 * 2 + 30 * 10) / 1e6, 10);
   });
 
   it('calls iterator.return() when the deadline expires mid-stream', async () => {

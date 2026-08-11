@@ -18,13 +18,17 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type {
   AssessmentFallbackReason,
   AssessmentMode,
+  AssessorTokenEstimate,
   Candidate,
   RoutingAssessment,
 } from './types.js';
 import { buildAssessmentPrompt, parseAssessment, type AssessmentEvidence } from './assessment-prompt.js';
 import { debugLog } from './debuglog.js';
-import { blendedPricePer1M } from './scorer.js';
+import { inputOutputPricePer1M } from './scorer.js';
+import { getAssessorTokenEstimate } from './router-session-state.js';
 import { isUsageLimitErrorMessage } from './usage-limit.js';
+
+export const DEFAULT_ASSESSOR_OUTPUT_TOKENS = 80;
 
 export interface AssessmentConfig {
   /** Mirrors `config.consultRouter`; false means fully deterministic routing. */
@@ -108,11 +112,28 @@ async function resolveAuth(
  * the row carries no answer measurement. Unmeasured latency never excludes —
  * absent data is not evidence of slowness.
  */
+export function expectedAssessorCost(
+  candidate: Candidate,
+  expectedUsage: AssessorTokenEstimate,
+): number | undefined {
+  if (
+    !Number.isFinite(expectedUsage.input)
+    || expectedUsage.input < 0
+    || !Number.isFinite(expectedUsage.output)
+    || expectedUsage.output < 0
+  ) return undefined;
+  const price = inputOutputPricePer1M(candidate);
+  if (!price) return undefined;
+  return (expectedUsage.input / 1_000_000) * price.input
+    + (expectedUsage.output / 1_000_000) * price.output;
+}
+
 export function selectAssessor(
   config: AssessmentConfig,
   registry: ExtensionContext['modelRegistry'] | undefined,
   candidates: Candidate[],
   strikes: ReadonlyMap<string, number> = new Map(),
+  expectedUsage?: AssessorTokenEstimate,
 ): { model: Model<Api>; registryId: string } | undefined {
   if (!registry?.find || candidates.length === 0) return undefined;
 
@@ -128,6 +149,10 @@ export function selectAssessor(
     if (override) return override;
   }
 
+  const shape = expectedUsage ?? {
+    input: Number.isFinite(config.maxInputChars) ? Math.max(0, config.maxInputChars / 4) : 0,
+    output: DEFAULT_ASSESSOR_OUTPUT_TOKENS,
+  };
   const best = candidates.reduce(
     (max, c) => Math.max(max, c.bench?.quality?.intelligence ?? 0),
     0,
@@ -150,8 +175,8 @@ export function selectAssessor(
       const strikeA = strikes.get(a.registryId) ?? 0;
       const strikeB = strikes.get(b.registryId) ?? 0;
       if (strikeA !== strikeB) return strikeA - strikeB;
-      const priceA = blendedPricePer1M(a) ?? Infinity;
-      const priceB = blendedPricePer1M(b) ?? Infinity;
+      const priceA = expectedAssessorCost(a, shape) ?? Infinity;
+      const priceB = expectedAssessorCost(b, shape) ?? Infinity;
       // Only subtract when prices differ — avoids NaN (Infinity - Infinity)
       // which silently corrupts sort ordering.
       if (priceA !== priceB) {
@@ -171,29 +196,74 @@ export function selectAssessor(
   return undefined;
 }
 
+interface ObservedAssessmentUsage {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  reportedCostUsd?: number;
+}
+
 function usageFromEvent(
   event: unknown,
-): { input: number; output: number; cacheRead?: number } | undefined {
-  const usage = (event as { usage?: Record<string, unknown> } | undefined)?.usage;
+): ObservedAssessmentUsage | undefined {
+  const record = event as {
+    usage?: Record<string, unknown>;
+    message?: { usage?: Record<string, unknown> };
+    error?: { usage?: Record<string, unknown> };
+  } | undefined;
+  // Pi's protocol reports terminal usage on done.message/error.error. Keep the
+  // top-level seam for compatibility with custom providers that emit it early.
+  const usage = record?.message?.usage ?? record?.error?.usage ?? record?.usage;
   if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return undefined;
-  const input = Number(usage.inputTokens ?? usage.input ?? 0);
-  const output = Number(usage.outputTokens ?? usage.output ?? 0);
+  const rawInput = usage.inputTokens ?? usage.input;
+  const rawOutput = usage.outputTokens ?? usage.output;
+  if (rawInput == null && rawOutput == null) return undefined;
+  const input = Number(rawInput ?? 0);
+  const output = Number(rawOutput ?? 0);
   if (!Number.isFinite(input) && !Number.isFinite(output)) return undefined;
   const cacheRead = Number(usage.cacheRead ?? usage.cacheReadTokens ?? 0);
+  const cacheWrite = Number(usage.cacheWrite ?? usage.cacheWriteTokens ?? 0);
+  const cost = usage.cost as { total?: unknown } | undefined;
+  const reportedCostUsd = Number(cost?.total);
   return {
     input: Number.isFinite(input) ? input : 0,
     output: Number.isFinite(output) ? output : 0,
     cacheRead: Number.isFinite(cacheRead) && cacheRead > 0 ? cacheRead : undefined,
+    cacheWrite: Number.isFinite(cacheWrite) && cacheWrite > 0 ? cacheWrite : undefined,
+    reportedCostUsd: Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0
+      ? reportedCostUsd
+      : undefined,
   };
 }
 
 function costFor(
   candidate: Candidate | undefined,
-  usage: { input: number; output: number },
+  usage: ObservedAssessmentUsage,
 ): number {
-  const inputPerM = candidate?.cost?.input ?? 0;
-  const outputPerM = candidate?.cost?.output ?? 0;
-  return (usage.input / 1_000_000) * inputPerM + (usage.output / 1_000_000) * outputPerM;
+  const price = candidate ? inputOutputPricePer1M(candidate) : undefined;
+  if (!price) return 0;
+  const registryInput = candidate?.cost?.input;
+  const registryOutput = candidate?.cost?.output;
+  const registryPricingIsAuthoritative = Number.isFinite(registryInput)
+    && Number.isFinite(registryOutput)
+    && registryInput! >= 0
+    && registryOutput! >= 0
+    && registryInput === price.input
+    && registryOutput === price.output;
+  if (registryPricingIsAuthoritative && usage.reportedCostUsd != null) {
+    return usage.reportedCostUsd;
+  }
+  const cacheReadPerM = registryPricingIsAuthoritative && Number.isFinite(candidate?.cost?.cacheRead)
+    ? Math.max(0, candidate!.cost!.cacheRead!)
+    : 0;
+  const cacheWritePerM = registryPricingIsAuthoritative && Number.isFinite(candidate?.cost?.cacheWrite)
+    ? Math.max(0, candidate!.cost!.cacheWrite!)
+    : 0;
+  return (usage.input / 1_000_000) * price.input
+    + (usage.output / 1_000_000) * price.output
+    + ((usage.cacheRead ?? 0) / 1_000_000) * cacheReadPerM
+    + ((usage.cacheWrite ?? 0) / 1_000_000) * cacheWritePerM;
 }
 
 /**
@@ -224,12 +294,17 @@ export async function runAssessment(
   const controller = new AbortController();
   const expiry = setTimeout(() => controller.abort(), config.deadlineMs);
   let iterator: AsyncIterator<{ type: string }> | undefined;
-  let usage = { input: 0, output: 0, cacheRead: undefined as number | undefined };
+  let usage: ObservedAssessmentUsage = { input: 0, output: 0 };
   let selectedRegistryId: string | undefined;
   let errorMessage: string | undefined;
 
   try {
-    const selected = selectAssessor(config, registry, candidates, strikes);
+    const prompt = buildAssessmentPrompt(evidence, config.maxInputChars);
+    const expectedUsage = getAssessorTokenEstimate({
+      input: prompt.length / 4,
+      output: DEFAULT_ASSESSOR_OUTPUT_TOKENS,
+    });
+    const selected = selectAssessor(config, registry, candidates, strikes, expectedUsage);
     if (!selected) {
       debugLog('assessment.skip', { reason: 'no-assessor' });
       return { ok: false, fallbackReason: 'no-assessor', costUsd: 0, ms: Date.now() - start };
@@ -242,7 +317,6 @@ export async function runAssessment(
       return { ok: false, fallbackReason: 'auth', costUsd: 0, ms: Date.now() - start };
     }
 
-    const prompt = buildAssessmentPrompt(evidence, config.maxInputChars);
     const assessmentContext: Context = {
       messages: [{ role: 'user', content: prompt, timestamp: Date.now() }],
     };
@@ -319,6 +393,12 @@ export async function runAssessment(
 
     const candidate = candidates.find((c) => c.registryId === selected.registryId);
     const costUsd = costFor(candidate, usage);
+    const reportedUsage = {
+      input: usage.input,
+      output: usage.output,
+      ...(usage.cacheRead == null ? {} : { cacheRead: usage.cacheRead }),
+      ...(usage.cacheWrite == null ? {} : { cacheWrite: usage.cacheWrite }),
+    };
     const ms = Date.now() - start;
     const parsed = parseAssessment(fullText);
 
@@ -352,7 +432,7 @@ export async function runAssessment(
         ...parsed,
         model: selected.registryId,
         ms,
-        usage,
+        usage: reportedUsage,
         costUsd,
       },
     };
