@@ -255,8 +255,9 @@ const unknownEligibility = (policy: TierPolicy): Eligibility => ({
 
 /**
  * Knowledge must describe the effort delegation will actually serve. A lower
- * nominal entry can be raised by the dimension floor (plan always reaches
- * max), so use an exact-effort sibling's measurement before the entry's own.
+ * nominal entry can be raised by the dimension floor (e.g. low reaches
+ * medium on plan), so use an exact-effort sibling's measurement before the
+ * entry's own.
  */
 function effectiveKnowledge(
   candidate: Candidate,
@@ -830,17 +831,16 @@ const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium'
 /**
  * Minimum reasoning effort per dimension — a FLOOR, not an assignment. The
  * scorer may serve any measured effort at or above it (rule 3: a scored
- * effort may raise the floor, never lower it; `plan` therefore stays at max,
- * and the freedom the measured axis buys is *which model* runs at max, not
- * how hard it thinks). A model with no measurement at or above the floor
- * keeps today's behavior: send the floor level, clamped by thinkingLevelMap.
+ * effort may raise the floor, never lower it). A model with no measurement
+ * at or above the floor keeps today's behavior: send the floor level,
+ * clamped by thinkingLevelMap.
  */
 const MIN_THINKING_BY_DIMENSION: Record<Dimension, ThinkingLevel | 'off'> = {
   lightweight: 'off',
   gather: 'low',
-  plan: 'max',
+  plan: 'medium',
   implement: 'medium',
-  review: 'high',
+  review: 'medium',
 };
 
 function isThinkingSupported(

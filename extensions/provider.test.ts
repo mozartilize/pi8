@@ -659,11 +659,12 @@ describe('provider orchestration', () => {
   it('re-adapts thinking level across dimension changes when Pi echoes back the last resolved level', async () => {
     // Pi's ctx.thinkingLevel mirrors whatever level the router actually used
     // last turn ("the current effective level"), not a dedicated flag for
-    // "the user explicitly changed this". A turn-1 resolved level of 'high'
+    // "the user explicitly changed this". A turn-1 resolved level
     // legitimately reappears as turn-2's incoming `options.reasoning` even
     // though the user never touched the thinking-level control — that must
     // still be treated as inherited, not as an explicit override, so a
-    // dimension change (review -> plan) still adapts the level (high -> max).
+    // dimension change (review -> plan) still resolves through the new
+    // dimension's own floor rather than pinning the echoed level.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
     const reviewContext = {
@@ -671,7 +672,7 @@ describe('provider orchestration', () => {
     } as unknown as Context;
     await harness.serve(reviewContext, {});
     const firstReasoning = harness.delegatedCall().options?.reasoning;
-    expect(firstReasoning).toBe('high');
+    expect(firstReasoning).toBe('medium');
 
     harness.resetEventStream();
     vi.mocked(streamSimple).mockClear();
@@ -685,7 +686,7 @@ describe('provider orchestration', () => {
     // Simulate Pi carrying forward the effective level it saw last turn.
     await harness.serve(planContext, { reasoning: firstReasoning });
     const secondReasoning = harness.delegatedCall().options?.reasoning;
-    expect(secondReasoning).toBe('max');
+    expect(secondReasoning).toBe('medium');
   });
 
   it('syncs Pi\'s own thinking-level state to the resolved level', async () => {
@@ -699,7 +700,7 @@ describe('provider orchestration', () => {
     } as unknown as Context;
     await harness.serve(reviewContext, {});
 
-    expect(setThinkingLevelSpy).toHaveBeenCalledWith('high');
+    expect(setThinkingLevelSpy).toHaveBeenCalledWith('medium');
   });
 
   it('never lets a footer-sync failure break the turn', async () => {

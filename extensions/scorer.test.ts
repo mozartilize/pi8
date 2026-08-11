@@ -483,12 +483,12 @@ describe('scorer', () => {
         effort: 'low',
         thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
       });
-      // plan floor is max: a cheap low measurement must never serve plan at low.
-      expect(chooseThinkingLevel(model, 'plan')).toBe('max');
+      // plan floor is medium: a cheap low measurement must never serve plan at low.
+      expect(chooseThinkingLevel(model, 'plan')).toBe('medium');
       // implement floor is medium: low is raised to medium.
       expect(chooseThinkingLevel(model, 'implement')).toBe('medium');
-      // review floor is high.
-      expect(chooseThinkingLevel(model, 'review')).toBe('high');
+      // review floor is medium: low is raised to medium.
+      expect(chooseThinkingLevel(model, 'review')).toBe('medium');
       // gather floor is low: measured low is at the floor and wins.
       expect(chooseThinkingLevel(model, 'gather')).toBe('low');
     });
@@ -1472,44 +1472,46 @@ describe('scorer — AA-Omniscience reliability floor', () => {
   });
 
   it('retains effective-effort evidence when the measured sibling is filtered out', () => {
-    const high = candidate('test/effort-bypass', {
-      effort: 'high',
+    const low = candidate('test/effort-bypass', {
+      effort: 'low',
       reasoning: true,
-      thinkingLevelMap: { off: 'off', high: 'high', max: 'max' },
-      knowledgeByEffort: { max: -11.2 },
+      thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', max: 'max' },
+      knowledgeByEffort: { medium: -11.2 },
       bench: benchRow('test/effort-bypass', {
-        effort: 'high',
-        benchSlug: 'effort-bypass-high',
+        effort: 'low',
+        benchSlug: 'effort-bypass-low',
         quality: { intelligence: 99 },
       }),
       cost: { input: 0.001, output: 0.001 },
     });
-    // The max sibling is absent, as it would be after an effort-specific
-    // blacklist, but plan still clamps this high entry to max at delegation.
-    const decision = pickBest([reliable, high], 'plan');
+    // The medium sibling is absent, as it would be after an effort-specific
+    // blacklist, but plan still clamps this low entry to medium at delegation.
+    const decision = pickBest([reliable, low], 'plan');
 
     expect(decision.chosen).toBe(reliable.registryId);
     expect(decision.candidateDiagnostics).toContainEqual({
-      candidateKey: 'test/effort-bypass:high',
+      candidateKey: 'test/effort-bypass:low',
       excludedReason: 'below-knowledge-floor',
     });
   });
 
   it('does not reuse nominal knowledge for an unmeasured higher effective effort', () => {
-    const high = candidate('test/effort-unknown-max', {
-      effort: 'high',
+    const low = candidate('test/effort-unknown-medium', {
+      effort: 'low',
       reasoning: true,
-      thinkingLevelMap: { off: 'off', high: 'high', max: 'max' },
-      bench: benchRow('test/effort-unknown-max', {
-        effort: 'high',
+      thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', max: 'max' },
+      bench: benchRow('test/effort-unknown-medium', {
+        effort: 'low',
         quality: { intelligence: 99, knowledge: 15.3 },
       }),
       cost: { input: 0.001, output: 0.001 },
     });
-    const decision = pickBest([reliable, high], 'plan');
+    // The low row's nominal knowledge cannot stand in for the unmeasured
+    // medium level that plan will actually serve via the floor.
+    const decision = pickBest([reliable, low], 'plan');
 
     expect(decision.candidateDiagnostics).toContainEqual({
-      candidateKey: 'test/effort-unknown-max:high',
+      candidateKey: 'test/effort-unknown-medium:low',
       excludedReason: 'unknown-quality',
     });
   });
