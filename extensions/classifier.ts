@@ -7,6 +7,7 @@
 import type { Dimension, TerminalAssessment } from './types.js';
 import { assessTerminal } from './terminal-classifier.js';
 import {
+  CONFIDENCE_FLOOR,
   DEFAULT_COMPLEXITY_DIMENSION_WEIGHTS,
   DEFAULT_LOW_CONFIDENCE_THRESHOLD,
   TIER_BOUNDARIES,
@@ -346,7 +347,7 @@ export function classify(
   const top = ordered[0].score;
   const second = ordered[1]?.score ?? 0;
   const confidence = top > 0 ? clamp(1 - second / top, 0, 1) : 0.5;
-  const reportedConfidence = Math.max(0.1, confidence);
+  const reportedConfidence = Math.max(CONFIDENCE_FLOOR, confidence);
 
   // Route up on low confidence: prefer the harder of the top two.
   if (reportedConfidence < lowConfidenceThreshold && top > 0 && ordered[1]) {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { classify, estimateTokenCount } from './classifier.js';
+import { CONFIDENCE_FLOOR } from './constants.js';
 
 describe('classifier', () => {
   // ─── Dimension classification ─────────────────────────────
@@ -84,7 +85,9 @@ describe('classifier', () => {
 
   it('uses the reported confidence for thresholds below the confidence floor', () => {
     const result = classify('thanks design', undefined, { lowConfidenceThreshold: 0.099 });
-    expect(result.confidence).toBe(0.1);
+    // Reported confidence is clamped to the floor, never below it, so a
+    // caller threshold under the floor cannot flip the routed dimension.
+    expect(result.confidence).toBe(CONFIDENCE_FLOOR);
     expect(result.dimension).toBe('lightweight');
   });
 

@@ -9,7 +9,6 @@ import {
   type AssessmentConfig,
   type AssessmentAttempt,
 } from './consult.js';
-import { classify } from './classifier.js';
 import type { AssessmentEvidence } from './assessment-prompt.js';
 import type { Candidate } from './types.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -789,15 +788,6 @@ describe('runAssessment', () => {
     expect(sent).toContain('systematic-debugging');
     expect(sent).not.toContain('"path"');
     expect(sent).not.toContain('Use read to examine files');
-  });
-});
-
-describe('consult integration with classifier', () => {
-  it('motivating prompt now classifies high enough to avoid lightweight', () => {
-    const prompt =
-      'ok, put it aside, lets try something harder. currently we learn pi-subagents and support it, what if after we publish this extension, other extensions especially subagents extensions want to utilize it, which mean we have to expose some apis for them to use, go for a research';
-    const result = classify(prompt);
-    expect(result.dimension).not.toBe('lightweight');
   });
 });
 

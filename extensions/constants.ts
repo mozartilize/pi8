@@ -36,6 +36,10 @@ export const DEFAULT_DIMENSION_WEIGHTS: Record<Dimension, ScoreWeights> = {
 
 export const DEFAULT_SWITCH_MARGIN = 0.15;
 export const DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.15;
+
+/** Reported confidence never drops below this floor, so a caller threshold
+ * below it cannot silently change the routed dimension. */
+export const CONFIDENCE_FLOOR = 0.1;
 /**
  * Minimum embedding-classifier confidence (the margin between the top two
  * prototype scores) for the blend to apply. Below it the embedding layer

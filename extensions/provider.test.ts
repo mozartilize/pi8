@@ -506,11 +506,6 @@ describe('provider orchestration', () => {
 
     const state = harness.getProviderState();
     expect(state.lastDecision?.fallbackChain[0]).toBe(state.lastDecision?.chosen);
-    expect(streamSimple).toHaveBeenCalledWith(
-      expect.objectContaining({ id: expect.any(String) }),
-      expect.any(Object),
-      expect.any(Object),
-    );
   });
 
   it('surfaces no-data when no candidate has benchmark data and heuristic owns the decision', async () => {

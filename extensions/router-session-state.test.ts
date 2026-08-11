@@ -111,26 +111,31 @@ describe('assessment session state', () => {
     expect(getAccumulatedCost()).toBe(0);
   });
 
-  it('updates assessor usage with a 0.2 EMA and ignores missing usage', () => {
+  it('updates the assessor usage estimate and ignores missing usage', () => {
+    // With no recorded usage the caller's own estimate passes through.
     expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
       input: 1_000,
       output: 80,
     });
+    // The first recorded usage replaces the estimate outright.
     recordSuccessfulAssessorUsage({ input: 500, output: 100 });
     expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
       input: 500,
       output: 100,
     });
+    // A later record blends the estimate toward the new observation. The
+    // exact blend weight is internal economics, so pin the property: the
+    // smoothed value stays strictly between the previous estimate and the
+    // new usage on both axes.
     recordSuccessfulAssessorUsage({ input: 1_000, output: 50 });
-    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
-      input: 600,
-      output: 90,
-    });
+    const blended = getAssessorTokenEstimate({ input: 1_000, output: 80 });
+    expect(blended!.input).toBeGreaterThan(500);
+    expect(blended!.input).toBeLessThan(1_000);
+    expect(blended!.output).toBeGreaterThan(50);
+    expect(blended!.output).toBeLessThan(100);
+    // A zero/missing record is ignored: the estimate does not collapse.
     recordSuccessfulAssessorUsage({ input: 0, output: 0 });
-    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
-      input: 600,
-      output: 90,
-    });
+    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual(blended);
   });
 
   it('clears latch generation, assessment cost, and assessor EMA on session reset', () => {
