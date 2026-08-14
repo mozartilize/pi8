@@ -39,7 +39,7 @@ export interface CachedRoutingIntent {
 export interface PendingUserEscalation {
   /** Explicit target dimension; absent means "one tier up". */
   target?: Dimension;
-  /** Model the user is escaping from, so the repick can exclude it. */
+  /** Candidate key the user is escaping from, so the exact attempt can be excluded. */
   fromModel?: string;
 }
 

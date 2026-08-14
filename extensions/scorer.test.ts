@@ -592,6 +592,143 @@ describe('pickEscalation', () => {
     expect(pickEscalation([only], 'plan', 'test/only', { estimatedContextTokens: 0 })).toBeUndefined();
   });
 
+  it('rejects the same effort of the same model through another provider', () => {
+    const githubMedium = candidate('github-copilot/gpt-5.6-luna', {
+      effort: 'medium',
+      bench: {
+        registryId: 'github-copilot/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-medium', active: true,
+        effort: 'medium', quality: { intelligence: 90, coding: 90 }, source: 'aa',
+      },
+    });
+    const codexMedium = candidate('openai-codex/gpt-5.6-luna', {
+      effort: 'medium',
+      bench: {
+        registryId: 'openai-codex/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-medium', active: true,
+        effort: 'medium', quality: { intelligence: 95, coding: 95 }, source: 'aa',
+      },
+    });
+
+    const decision = pickEscalation(
+      [githubMedium, codexMedium],
+      'plan',
+      'github-copilot/gpt-5.6-luna:medium',
+      { estimatedContextTokens: 0 },
+    );
+
+    expect(decision).toBeUndefined();
+  });
+
+  it('accepts a higher effort through another provider', () => {
+    const githubMedium = candidate('github-copilot/gpt-5.6-luna', {
+      effort: 'medium',
+      bench: {
+        registryId: 'github-copilot/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-medium', active: true,
+        effort: 'medium', quality: { intelligence: 90, coding: 90 }, source: 'aa',
+      },
+    });
+    const codexMax = candidate('openai-codex/gpt-5.6-luna', {
+      effort: 'max',
+      bench: {
+        registryId: 'openai-codex/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-max', active: true,
+        effort: 'max', quality: { intelligence: 95, coding: 95 }, source: 'aa',
+      },
+    });
+
+    const decision = pickEscalation(
+      [githubMedium, codexMax],
+      'plan',
+      'github-copilot/gpt-5.6-luna:medium',
+      { estimatedContextTokens: 0 },
+    );
+
+    expect(decision?.chosen).toBe('openai-codex/gpt-5.6-luna:max');
+  });
+
+  it('rejects lower effort through another provider', () => {
+    expect(pickEscalation(
+      [
+        candidate('github-copilot/gpt-5.6-luna', { effort: 'medium' }),
+        candidate('openai-codex/gpt-5.6-luna', { effort: 'low' }),
+      ],
+      'plan',
+      'github-copilot/gpt-5.6-luna:medium',
+      { estimatedContextTokens: 0 },
+    )).toBeUndefined();
+  });
+
+  it('fails closed when same-model effort is missing', () => {
+    expect(pickEscalation(
+      [
+        candidate('github-copilot/gpt-5.6-luna', { effort: 'medium' }),
+        candidate('openai-codex/gpt-5.6-luna'),
+      ],
+      'plan',
+      'github-copilot/gpt-5.6-luna:medium',
+      { estimatedContextTokens: 0 },
+    )).toBeUndefined();
+    expect(pickEscalation(
+      [
+        candidate('github-copilot/gpt-5.6-luna'),
+        candidate('openai-codex/gpt-5.6-luna', { effort: 'max' }),
+      ],
+      'plan',
+      'github-copilot/gpt-5.6-luna',
+      { estimatedContextTokens: 0 },
+    )).toBeUndefined();
+  });
+
+  it('rejects lower effort of the same provider/model', () => {
+    const githubMedium = candidate('github-copilot/gpt-5.6-luna', {
+      effort: 'medium',
+      bench: {
+        registryId: 'github-copilot/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-medium', active: true,
+        effort: 'medium', quality: { intelligence: 95, coding: 95 }, source: 'aa',
+      },
+    });
+    const githubLow = candidate('github-copilot/gpt-5.6-luna', {
+      effort: 'low',
+      bench: {
+        registryId: 'github-copilot/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-low', active: true,
+        effort: 'low', quality: { intelligence: 90, coding: 90 }, source: 'aa',
+      },
+    });
+
+    const decision = pickEscalation(
+      [githubMedium, githubLow],
+      'plan',
+      'github-copilot/gpt-5.6-luna:medium',
+      { estimatedContextTokens: 0 },
+    );
+
+    expect(decision).toBeUndefined();
+  });
+
+  it('accepts a higher effort of the same provider/model', () => {
+    const githubLow = candidate('github-copilot/gpt-5.6-luna', {
+      effort: 'low',
+      bench: {
+        registryId: 'github-copilot/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-low', active: true,
+        effort: 'low', quality: { intelligence: 90, coding: 90 }, source: 'aa',
+      },
+    });
+    const githubHigh = candidate('github-copilot/gpt-5.6-luna', {
+      effort: 'high',
+      bench: {
+        registryId: 'github-copilot/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-high', active: true,
+        effort: 'high', quality: { intelligence: 95, coding: 95 }, source: 'aa',
+      },
+    });
+
+    const decision = pickEscalation(
+      [githubLow, githubHigh],
+      'plan',
+      'github-copilot/gpt-5.6-luna:low',
+      { estimatedContextTokens: 0 },
+    );
+
+    expect(decision?.chosen).toBe('github-copilot/gpt-5.6-luna:high');
+  });
+
   it('quality beats cost during escalation', () => {
     // The source model is filtered out, but two real alternatives remain.
     // With normal cost-sensitive plan weights the cheap alternative would win;

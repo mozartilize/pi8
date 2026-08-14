@@ -36,7 +36,14 @@ import { renderRouterStatus, notifyRouting, type ServedInfo } from './ui.js';
 import { debugLog, startTimer } from './debuglog.js';
 import { appendDecision } from './decisionlog.js';
 import { makeTerminalErrorEvent } from './error-event.js';
-import { clampEffortToFloor, levelFrom, parseCandidateKey, resolveThinkingLevel } from './scorer.js';
+import { appendRouteUpGuidance } from './escalation.js';
+import {
+  clampEffortToFloor,
+  isValidEscalationCandidate,
+  levelFrom,
+  parseCandidateKey,
+  resolveThinkingLevel,
+} from './scorer.js';
 import { isUsageLimitErrorMessage } from './usage-limit.js';
 
 const AUTH_RESOLVE_TIMEOUT_MS = 5000;
@@ -118,6 +125,8 @@ export interface DelegationOptions {
   userReasoningOverride?: boolean;
   /** Per-session Pi extension context, for status widget updates. */
   extensionContext: ExtensionContext | undefined;
+  /** When true, add route_up guidance only to attempts with a valid target. */
+  enableRouteUpGuidance?: boolean;
   /** When true, show a TUI notification on a model pick/switch (config.prompt). */
   notifyOnRoute?: boolean;
   /** Total-turn timer, used for final debug log timestamps. */
@@ -313,7 +322,16 @@ export async function runDelegationLoop(
       // Lifecycle heartbeats may arrive, but cannot renew the provider's
       // opportunity to produce text, thinking, or a tool call.
       const meaningfulOutputDeadline = Date.now() + firstEventTimeoutMs;
-      const delegatedStream = providerStreamSimple(modelForStream, context, {
+      const effectiveSource = `${provider}/${modelId}:${effectiveReasoning ?? 'off'}`;
+      const attemptCanRouteUp =
+        opts.enableRouteUpGuidance === true &&
+        decision.fallbackChain.slice(candidateIndex + 1).some((candidate) =>
+          isValidEscalationCandidate(candidate, effectiveSource),
+        );
+      const attemptContext = attemptCanRouteUp
+        ? { ...context, systemPrompt: appendRouteUpGuidance(context.systemPrompt) }
+        : context;
+      const delegatedStream = providerStreamSimple(modelForStream, attemptContext, {
         ...options,
         ...(effectiveReasoning && effectiveReasoning !== 'off'
           ? { reasoning: effectiveReasoning }

@@ -509,6 +509,25 @@ export function scoreCandidate(
 // ─── pickEscalation ───────────────────────────────────────────────────
 
 /**
+ * Whether a candidate is a valid route-up destination from the source attempt.
+ * Same model ids may change provider, but only a strictly higher effort is a
+ * stronger destination; different model ids remain eligible as alternatives.
+ */
+export function isValidEscalationCandidate(candidate: string, fromModel: string): boolean {
+  if (candidate === fromModel) return false;
+  const source = parseCandidateKey(fromModel);
+  const destination = parseCandidateKey(candidate);
+  // Different model ids are valid alternatives regardless of effort; this
+  // policy is specifically about never replaying the same model at an equal
+  // or lower effort through another provider.
+  if (destination.id !== source.id) return true;
+  // Same-model comparisons require measured effort on both sides. Missing
+  // effort cannot prove a strict increase, so fail closed.
+  if (source.effort == null || destination.effort == null) return false;
+  return MODEL_THINKING_LEVELS.indexOf(destination.effort) > MODEL_THINKING_LEVELS.indexOf(source.effort);
+}
+
+/**
  * Pure same-dimension capability escalation: given the model that just
  * served the turn, pick a different candidate using quality-only weights.
  * This is intentionally narrow — it reuses `pickBest` for context/vision
@@ -519,8 +538,14 @@ export function pickEscalation(
   dimension: Dimension,
   fromModel: string,
   opts: ScoreOpts = { estimatedContextTokens: 0 },
+  strictEffort = true,
 ): RoutingDecision | undefined {
-  const alternatives = candidates.filter((c) => candidateKey(c) !== fromModel);
+  // Model route-up must increase capability, not merely change transport.
+  const alternatives = candidates.filter((c) =>
+    strictEffort
+      ? isValidEscalationCandidate(candidateKey(c), fromModel)
+      : candidateKey(c) !== fromModel,
+  );
   if (alternatives.length === 0) return undefined;
 
   const decision = pickBest(alternatives, dimension, { quality: 1, cost: 0, speed: 0 }, opts);

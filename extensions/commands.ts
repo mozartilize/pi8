@@ -473,9 +473,14 @@ export function registerCommands(pi: ExtensionAPI): void {
         return;
       }
 
-      // The served model is the one the user actually saw; fall back to the
-      // chosen model when delegation never recorded a serve.
-      const fromModel = getLastServed()?.registryId ?? last.chosen;
+      // The served model is the one the user actually saw; preserve its effort
+      // variant so an exact repeat is excluded while a higher-effort retry stays
+      // eligible. Fall back to the chosen candidate when delegation never
+      // recorded a serve.
+      const served = getLastServed();
+      const fromModel = served?.registryId
+        ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
+        : last.chosen;
       setPendingUserEscalation({ target, fromModel });
       // An explicit user request supersedes a model's pending route_up.
       clearActiveEscalation();

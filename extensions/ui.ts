@@ -26,7 +26,7 @@ export interface ServedInfo {
 }
 
 function formatServedModel(served: ServedInfo): string {
-  return served.registryId;
+  return served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId;
 }
 
 /** Compact one-line summary for the footer. */
@@ -34,7 +34,12 @@ export function formatStatus(
   decision: RoutingDecision | undefined,
   served: ServedInfo | undefined,
 ): string {
-  if (!decision || !served) return 'auto → waiting';
+  if (!decision) return 'auto → waiting';
+  if (!served) {
+    return decision.fallbackChain.length === 0
+      ? `auto:${decision.dimension} → unavailable (${decision.reason})`
+      : 'auto → waiting';
+  }
   const parts = [`auto:${decision.dimension}`, '→', formatServedModel(served)];
   if (served.viaFallback) {
     const rank = served.fallbackRank && served.fallbackRank > 1 ? ` ${served.fallbackRank}` : '';
@@ -54,7 +59,7 @@ export function formatDecisionDetail(
   if (!decision) {
     return ['Last routing decision: none yet (no turn has been routed in this session).'];
   }
-  const servedModel = served?.registryId ?? 'unknown';
+  const servedModel = served ? formatServedModel(served) : 'unknown';
   const lines = [
     `Last turn served by: ${servedModel}`,
     `  dimension:  ${decision.dimension} (confidence ${decision.confidence.toFixed(2)})`,

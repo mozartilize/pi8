@@ -106,6 +106,8 @@ export interface DelegationHarnessOptions {
   reasoning?: string;
   /** Marks `reasoning` as an explicit user request that entry efforts must not override. */
   userReasoningOverride?: boolean;
+  /** Enable per-attempt route_up guidance. */
+  enableRouteUpGuidance?: boolean;
   /** Extra registry methods to override the defaults. */
   registry?: Partial<ExtensionContext['modelRegistry']>;
   /** Per-model credential results keyed by `provider/id`. */
@@ -122,6 +124,8 @@ export interface DelegationHarness {
   streamedModels: { provider: string; id: string; baseUrl: string }[];
   /** Reasoning option passed to `streamSimple`, per call (undefined = omitted). */
   reasoningOptions: (string | undefined)[];
+  /** System prompt passed to each delegated attempt. */
+  systemPrompts: (string | undefined)[];
   blacklist: string[];
   /** Providers excluded for usage limits during this run. */
   blacklistedProviders: string[];
@@ -152,7 +156,7 @@ function buildRegistry(
 }
 
 export function createDelegationHarness(options: DelegationHarnessOptions): DelegationHarness {
-  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth } = options;
+  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, enableRouteUpGuidance, registry: registryOverrides, credentials, getProviderAuth } = options;
 
   // Per-model ordered attempt queues; each entry is consumed on one streamSimple call.
   type ScriptEntry = readonly unknown[] | Error | AsyncIterable<unknown>;
@@ -164,6 +168,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
   const attempts: string[] = [];
   const output: unknown[] = [];
   const reasoningOptions: (string | undefined)[] = [];
+  const systemPrompts: (string | undefined)[] = [];
   const streamedModels: { provider: string; id: string; baseUrl: string }[] = [];
   const recordingStream: RecordingStream = {
     push: (event: unknown) => {
@@ -175,10 +180,11 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     ended: false,
   };
 
-  vi.mocked(streamSimple).mockImplementation(((model: Model<Api>, _context: unknown, options: unknown) => {
+  vi.mocked(streamSimple).mockImplementation(((model: Model<Api>, delegatedContext: unknown, options: unknown) => {
     const id = `${model.provider}/${model.id}`;
     attempts.push(id);
     reasoningOptions.push((options as { reasoning?: string } | undefined)?.reasoning);
+    systemPrompts.push((delegatedContext as { systemPrompt?: string } | undefined)?.systemPrompt);
     streamedModels.push({ provider: model.provider, id: model.id, baseUrl: model.baseUrl });
     const queue = queuesByModel.get(id);
     const script = queue?.shift();
@@ -196,6 +202,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     attempts,
     output,
     reasoningOptions,
+    systemPrompts,
     streamedModels,
     registry,
     get blacklist(): string[] {
@@ -233,6 +240,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
           options: signal ? { signal } : undefined,
           reasoning,
           userReasoningOverride,
+          enableRouteUpGuidance,
           turnTimer: () => 0,
           extensionContext: undefined,
           notifyOnRoute: false,

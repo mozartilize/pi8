@@ -23,9 +23,19 @@ describe('formatStatus', () => {
       accumulatedCost: 0.0123,
     });
     expect(s).toContain('opencode-go/kimi-k2.7-code');
-    expect(s).not.toContain(':high');
+    expect(s).toContain(':high');
     expect(s).toContain('implement');
     expect(s).not.toContain('$0.0123');
+  });
+
+  it('shows a specific unavailable status for an empty escalation chain', () => {
+    const s = formatStatus({
+      ...decision,
+      reason: 'no valid escalation target from alpha/model:medium',
+      fallbackChain: [],
+    }, undefined);
+    expect(s).toContain('unavailable');
+    expect(s).toContain('no valid escalation target');
   });
 
   it('names the fallback, not the top pick, when the first choice failed', () => {
@@ -37,7 +47,7 @@ describe('formatStatus', () => {
       accumulatedCost: 0,
     });
     expect(s).toContain('github-copilot/gpt-5.4');
-    expect(s).not.toContain(':xmax');
+    expect(s).toContain(':xmax');
     expect(s).not.toContain('kimi');
     expect(s).toMatch(/\(FALLBACK 2!\)/);
   });
@@ -84,8 +94,7 @@ describe('formatDecisionDetail', () => {
       viaFallback: true,
       accumulatedCost: 0.5,
     }).join('\n');
-    expect(lines).toContain('Last turn served by: github-copilot/gpt-5.4');
-    expect(lines).not.toContain(':high');
+    expect(lines).toContain('Last turn served by: github-copilot/gpt-5.4:high');
     expect(lines).toContain('top pick:   opencode-go/kimi-k2.7-code');
     expect(lines).toContain('top pick failed');
     expect(lines).not.toContain('$0.5000');

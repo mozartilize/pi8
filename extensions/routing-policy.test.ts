@@ -8,7 +8,7 @@ import {
 } from './routing-policy.js';
 import type { Candidate, Dimension } from './types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from './constants.js';
-import { terminalAssessment } from './test-support/router-fixtures.js';
+import { candidate, terminalAssessment } from './test-support/router-fixtures.js';
 
 // ─── Fixtures ───────────────────────────────────────────────────────
 
@@ -332,6 +332,79 @@ describe('resolveRoutingDecision', () => {
         dimension: 'plan',
       });
       expect(result.decision.reason).toContain('escalated: needs deeper planning');
+    });
+
+    it('repicks the same model id through another provider at higher effort', () => {
+      const source = candidate('github-copilot/gpt-5.6-luna', {
+        effort: 'medium',
+        bench: {
+          registryId: 'github-copilot/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-medium', active: true,
+          effort: 'medium', quality: { intelligence: 95, coding: 95 }, source: 'aa',
+        },
+      });
+      const sibling = candidate('openai-codex/gpt-5.6-luna', {
+        effort: 'max',
+        bench: {
+          registryId: 'openai-codex/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-max', active: true,
+          effort: 'max', quality: { intelligence: 95, coding: 95 }, source: 'aa',
+        },
+      });
+      const result = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'gather',
+          escalation: {
+            dimension: 'plan',
+            cause: 'model-escalation',
+            reason: 'needs stronger planning',
+            fromModel: 'github-copilot/gpt-5.6-luna:medium',
+          },
+          candidates: [source, sibling],
+        }),
+      );
+
+      expect(result.decision.dimension).toBe('plan');
+      expect(result.decision.chosen).toBe('openai-codex/gpt-5.6-luna:max');
+    });
+
+    it('does not leak an equal-effort sibling when the source is unavailable', () => {
+      const result = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'gather',
+          escalation: {
+            dimension: 'plan',
+            cause: 'model-escalation',
+            reason: 'needs stronger planning',
+            fromModel: 'github-copilot/gpt-5.6-luna:medium',
+          },
+          candidates: [candidate('openai-codex/gpt-5.6-luna', { effort: 'medium' })],
+        }),
+      );
+
+      expect(result.decision.chosen).toBe('');
+      expect(result.decision.fallbackChain).toEqual([]);
+    });
+
+    it('uses only strictly higher effort when source effort is effective', () => {
+      const result = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'gather',
+          escalation: {
+            dimension: 'plan',
+            cause: 'model-escalation',
+            reason: 'needs stronger planning',
+            fromModel: 'github-copilot/gpt-5.6-luna:medium',
+          },
+          candidates: [
+            candidate('github-copilot/gpt-5.6-luna', { effort: 'medium' }),
+            candidate('openai-codex/gpt-5.6-luna', { effort: 'max' }),
+          ],
+        }),
+      );
+
+      expect(result.decision.chosen).toBe('openai-codex/gpt-5.6-luna:max');
     });
 
     it('applies pickEscalation when fromModel would remain chosen', () => {

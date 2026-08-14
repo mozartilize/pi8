@@ -126,6 +126,16 @@ describe('applyEscalation', () => {
     });
   });
 
+  it('preserves the effective served effort for route-up exclusion', () => {
+    setLastServed({ registryId: 'github-copilot/gpt-5.6-luna', thinkingLevel: 'medium', viaFallback: false, accumulatedCost: 0 });
+    setLastDecision({ chosen: 'github-copilot/gpt-5.6-luna:low' } as any);
+
+    expect(requestEscalation('plan', 'underpowered', 1).ok).toBe(true);
+    expect(applyEscalation('plan')).toMatchObject({
+      fromModel: 'github-copilot/gpt-5.6-luna:medium',
+    });
+  });
+
   it('returns undefined when heuristic already matches or exceeds the request', () => {
     requestEscalation('gather', 'read deeper', 2);
     const applied = applyEscalation('implement');
@@ -184,8 +194,8 @@ describe('route_up tool execute (notify + debug + decision log)', () => {
   });
 
   it('notifies, debug-logs, and decision-logs an accepted route_up call', async () => {
-    setLastServed({ registryId: 'beta/second', viaFallback: false, accumulatedCost: 0 });
-    setLastDecision({ dimension: 'gather', chosen: 'beta/second' } as any);
+    setLastServed({ registryId: 'beta/second', thinkingLevel: 'medium', viaFallback: false, accumulatedCost: 0 });
+    setLastDecision({ dimension: 'gather', chosen: 'beta/second:medium' } as any);
 
     const res = await toolDef.execute('id1', { dimension: 'plan', reason: 'needs architecture work' }, undefined, undefined, ctx());
     expect(res.details.ok).toBe(true);
@@ -205,7 +215,7 @@ describe('route_up tool execute (notify + debug + decision log)', () => {
     expect(esc!.cause).toBe('model-escalation');
     expect(esc!.routedUp).toBe(true);
     expect(esc!.dimension).toBe('plan');
-    expect(esc!.served).toBe('beta/second');
+    expect(esc!.served).toBe('beta/second:medium');
     expect(esc!.escalation?.requestedDimension).toBe('plan');
     expect(esc!.escalation?.heuristicDimension).toBe('gather');
   });

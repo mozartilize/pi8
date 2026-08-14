@@ -1843,10 +1843,17 @@ describe('capability escalation and plan-tier route-up', () => {
     await harness.serve(context);
 
     const decision = getProviderState().lastDecision;
-    expect(decision?.chosen).toBe('alpha/source');
+    // No valid escalation target exists, so the router must fail closed rather
+    // than replaying the source model after route_up.
+    expect(decision?.chosen).toBe('');
+    expect(decision?.fallbackChain).toEqual([]);
     expect(decision?.escalation?.requestedDimension).toBe('plan');
+    expect(decision?.cause).toBe('heuristic');
+    const error = harness.outStream.events.find((event) => event.type === 'error');
+    expect(JSON.stringify(error)).toContain('no valid escalation target');
     const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { chosen: 'alpha/source', cause: 'heuristic' } });
+    expect(handles.log.at(-1)?.chosen).toBe('');
+    expect(handles.ui.join('\n')).toContain('no valid escalation target');
   });
 
   it('does not derive any escalation cause from literal "!escalate" prompt text', async () => {
@@ -1868,6 +1875,44 @@ describe('capability escalation and plan-tier route-up', () => {
     expect(decision?.escalation).toBeDefined();
     expect(decision?.escalation?.reason).toContain('stronger model');
     expect(decision?.chosen).not.toBe('alpha/source');
+  });
+
+  it('omits route-up guidance when an effort floor makes the sibling equal to the served effort', async () => {
+    harness = await setupProviderTest({
+      dir: temp.path,
+      config: { consultRouter: false, escalationTool: true },
+      benchmarks: [
+        {
+          registryId: 'alpha/shared',
+          benchSlug: 'shared-alpha',
+          effort: 'low',
+          active: true,
+          quality: { intelligence: 90, coding: 90, agenticCoding: 90 },
+          source: 'test',
+        },
+        {
+          registryId: 'beta/shared',
+          benchSlug: 'shared-beta',
+          effort: 'medium',
+          active: true,
+          quality: { intelligence: 90, coding: 90, agenticCoding: 90 },
+          source: 'test',
+        },
+      ],
+      models: [
+        registryModel('alpha/shared', { contextWindow: 200000, maxTokens: 8192 }),
+        registryModel('beta/shared', { contextWindow: 200000, maxTokens: 8192 }),
+      ],
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+    const context = {
+      messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }],
+    } as unknown as Context;
+
+    await harness.serve(context);
+
+    expect(harness.delegatedCall().context.systemPrompt ?? '').not.toContain('[router/auto]');
   });
 
   it('omits plan-tier route-up guidance for a single-candidate pool', async () => {

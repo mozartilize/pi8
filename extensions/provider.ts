@@ -33,8 +33,9 @@ import { loadConfig } from './config.js';
 import { runAssessment, type AssessmentAttempt, type AssessmentConfig } from './consult.js';
 import { adoptAssessment, shouldVetoLatch } from './assessment-adoption.js';
 import { latestSummaryText, countToolActivity } from './message-provenance.js';
-import { applyEscalation, appendRouteUpGuidance, ROUTE_UP_TOOL } from './escalation.js';
-import { appendShadowAssessment } from './decisionlog.js';
+import { applyEscalation, ROUTE_UP_TOOL } from './escalation.js';
+import { appendDecision, appendShadowAssessment } from './decisionlog.js';
+import { renderRouterStatus } from './ui.js';
 import {
   buildCandidate,
   buildRouterThinkingLevelMap,
@@ -1053,26 +1054,37 @@ export function registerAutoRouterProvider(
               ? { ...(options ?? {}), reasoning: resolvedReasoning }
               : { ...(options ?? {}) };
 
-            // Inline route-up guidance whenever this pick has another candidate
-            // it can hand off to. Capability escalation can repick within `plan`,
-            // so dimension strength is not a proxy for alternative availability.
-            // Also require the tool to be enabled and present in this turn's
-            // toolset so we never instruct a model to call a tool it lacks.
-            const routeUpAvailable =
+            // Guidance is decided per delegation attempt because effort floors,
+            // model maps, and fallback can change the source effort actually
+            // shown in status. Never advertise route_up without a valid target
+            // from the attempt that receives the prompt.
+            const enableRouteUpGuidance =
               config.escalationTool !== false &&
-              routableCandidates.some((candidate) => candidateKey(candidate) !== decision.chosen) &&
               (!context.tools ||
                 context.tools.some((t) => (t as { name?: string }).name === ROUTE_UP_TOOL));
-            const delegatedContext: Context = routeUpAvailable
-              ? { ...context, systemPrompt: appendRouteUpGuidance(context.systemPrompt) }
-              : context;
+
+            if (decision.fallbackChain.length === 0) {
+              // A strict escalation can legitimately have no eligible target.
+              // Surface and persist that specific outcome instead of entering
+              // delegation and replacing it with a generic exhaustion error.
+              renderRouterStatus(extensionContext, decision, undefined);
+              appendDecision(decision, {
+                registryId: '',
+                viaFallback: false,
+                accumulatedCost: getAccumulatedCost(),
+              });
+              stream.push(makeTerminalErrorEvent('error', decision.reason));
+              stream.end();
+              return;
+            }
 
             const result = await runDelegationLoop(
               {
                 decision,
                 registry: registry!,
-                context: delegatedContext,
+                context,
                 options: delegatedOptions,
+                enableRouteUpGuidance,
                 reasoning: resolvedReasoning as string | undefined,
                 userReasoningOverride:
                   !inheritedReasoning && requestedReasoning != null,

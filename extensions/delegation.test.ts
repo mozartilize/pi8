@@ -53,6 +53,24 @@ afterAll(() => {
 });
 
 describe('runDelegationLoop contracts', () => {
+  it('does not advertise a failed earlier candidate as a route_up target to fallback', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/strong:high', 'beta/fallback:medium'],
+      enableRouteUpGuidance: true,
+      scripts: {
+        'alpha/strong': [new Error('stream exploded')],
+        'beta/fallback': [[
+          { type: 'text_delta', delta: 'served' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+
+    expect((await h.run()).success).toBe(true);
+    expect(h.systemPrompts[0]).toContain('[router/auto]');
+    expect(h.systemPrompts.at(-1) ?? '').not.toContain('[router/auto]');
+  });
+
   it('serves a fallback to a different effort of the same model with that entry\'s effort', async () => {
     // Two effort variants of one model are two chain entries: the xhigh entry
     // fails before content, and the high entry serves with ITS measured

@@ -59,7 +59,7 @@ export const ESCALATION_COOLDOWN_MS = 30 * 1000;
 interface EscalationOverride {
   dimension: Dimension;
   reason: string;
-  /** The model that requested escalation, when one was actually serving. */
+  /** Candidate key that requested escalation, when one was actually serving. */
   fromModel?: string;
   /** Number of future router/auto turns this override still applies to. */
   remainingTurns: number;
@@ -125,10 +125,16 @@ export function requestEscalation(
     };
   }
   lastAcceptedEscalationAt = Date.now();
+  const served = getLastServed();
+  // Use the effort actually sent to the provider, not the nominal candidate
+  // key. Route-up must compare against the status-reported effort.
+  const fromModel = served?.registryId
+    ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
+    : undefined;
   activeOverride = {
     dimension,
     reason: reason.slice(0, 200),
-    fromModel: getLastServed()?.registryId,
+    fromModel,
     remainingTurns: Math.max(1, ttlTurns),
     setAt: Date.now(),
   };
@@ -240,7 +246,12 @@ export function registerRouteUpTool(pi: ExtensionAPI): void {
         if (result.ok) {
           // Only accepted escalations change routing, so only they earn a
           // durable decision-log entry and a user-facing notification.
-          const servingModel = getLastServed()?.registryId;
+          const served = getLastServed();
+          const servingModel = served?.registryId
+            ? served.thinkingLevel
+              ? `${served.registryId}:${served.thinkingLevel}`
+              : served.registryId
+            : undefined;
           const effectiveDimension = getLastDecision()?.dimension;
           const routedUp = effectiveDimension !== undefined &&
             DIMENSION_STRENGTH[dim] > DIMENSION_STRENGTH[effectiveDimension];

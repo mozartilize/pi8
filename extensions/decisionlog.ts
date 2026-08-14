@@ -221,18 +221,21 @@ export function appendMutationGateSignal(
  */
 export function appendDecision(
   decision: RoutingDecision,
-  served: { registryId: string; viaFallback: boolean; fallbackRank?: number; accumulatedCost: number },
+  served: { registryId: string; thinkingLevel?: string; viaFallback: boolean; fallbackRank?: number; accumulatedCost: number },
   storageBase?: string,
 ): void {
   try {
     const path = decisionLogPath(storageBase);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const servedModel = served.thinkingLevel
+      ? `${served.registryId}:${served.thinkingLevel}`
+      : served.registryId;
     const entry: DecisionLogEntry = {
       ts: Date.now(),
       dimension: decision.dimension,
       chosen: decision.chosen,
-      served: served.registryId,
+      served: servedModel,
       viaFallback: served.viaFallback,
       fallbackRank: served.fallbackRank,
       confidence: decision.confidence,

@@ -16,7 +16,7 @@ import type { ClassifyResult } from './classifier.js';
 import type { AutoRouterConfig } from './types.js';
 import type { PendingUserEscalation } from './router-session-state.js';
 import { DIMENSION_STRENGTH } from './classifier-keywords.js';
-import { pickBest, pickEscalation, candidateKey, type ScoreOpts } from './scorer.js';
+import { pickBest, pickEscalation, isValidEscalationCandidate, candidateKey, type ScoreOpts } from './scorer.js';
 
 // ─── Public interfaces ───────────────────────────────────────────────
 
@@ -277,7 +277,49 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     switchMargin: config.switchMargin,
   };
   const pickOpts: ScoreOpts = multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
-  let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
+  // A model route-up is strict about the status-reported source attempt. Remove
+  // forbidden same-model equal/lower-effort candidates before ordinary scoring,
+  // so a stale or unavailable source cannot leak an invalid provider handoff.
+  const strictModelEscalation = precedence.escalationApplied && !precedence.userApplied && escalation?.fromModel;
+  const scoringCandidates = strictModelEscalation
+    ? candidates.filter((candidate) => isValidEscalationCandidate(candidateKey(candidate), escalation.fromModel!))
+    : candidates;
+  let decision: RoutingDecision;
+  if (scoringCandidates.length === 0) {
+    decision = {
+      dimension,
+      chosen: '',
+      reason: `no valid escalation target from ${escalation?.fromModel ?? 'unknown source'}`,
+      confidence: 0.8,
+      routedUp: true,
+      routedDown: false,
+      cause: 'model-escalation',
+      fallbackChain: [],
+    };
+  } else if (strictModelEscalation) {
+    // A model-requested route-up is a quality-first repick, including when
+    // the target dimension is unchanged or the source is not in this live
+    // candidate set. This prevents ordinary economics from retaining a
+    // weaker alternative after the strict effort filter.
+    decision = pickEscalation(
+      scoringCandidates,
+      dimension,
+      escalation.fromModel!,
+      baseOpts,
+      true,
+    ) ?? {
+      dimension,
+      chosen: '',
+      reason: `no valid escalation target from ${escalation.fromModel}`,
+      confidence: 0.8,
+      routedUp: true,
+      routedDown: false,
+      cause: 'model-escalation',
+      fallbackChain: [],
+    };
+  } else {
+    decision = pickBest(scoringCandidates, dimension, config.dimensionWeights[dimension], pickOpts);
+  }
 
   // Step 6: repick away from the source model when scoring would keep it, or
   // when the request is a same-dimension capability repick. The pure escalation
@@ -287,15 +329,21 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     : precedence.escalationApplied
       ? { fromModel: escalation?.fromModel, raisedDimension: precedence.escalationRaised }
       : undefined;
+  const invalidModelEscalation =
+    precedence.escalationApplied &&
+    !precedence.userApplied &&
+    repick?.fromModel != null &&
+    !isValidEscalationCandidate(decision.chosen, repick.fromModel);
   if (
     repick?.fromModel &&
-    (decision.chosen === repick.fromModel || !repick.raisedDimension)
+    (invalidModelEscalation || decision.chosen === repick.fromModel || !repick.raisedDimension)
   ) {
     const escalationDecision = pickEscalation(
       candidates,
       dimension,
       repick.fromModel,
       baseOpts,
+      !precedence.userApplied,
     );
     if (escalationDecision) {
       decision = escalationDecision;
@@ -306,6 +354,13 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
       // preserved.
       if (!repick.raisedDimension && POLICY_PASSIVE_CAUSES.has(cause)) {
         cause = 'capability-escalation';
+      }
+    } else if (invalidModelEscalation) {
+      // Do not silently serve an equal/lower-effort provider handoff when no
+      // valid destination exists. Retain the exact serving attempt instead.
+      const sourceCandidate = candidates.find((c) => candidateKey(c) === repick.fromModel);
+      if (sourceCandidate) {
+        decision = pickBest([sourceCandidate], dimension, config.dimensionWeights[dimension], baseOpts);
       }
     }
   }
