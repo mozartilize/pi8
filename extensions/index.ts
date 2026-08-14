@@ -23,7 +23,7 @@ import {
   blacklistModel,
 } from './provider.js';
 import { registerRouteUpTool, resetEscalationSession } from './escalation.js';
-import { computeRoleModels } from './subagents.js';
+import { computeRoleModels, pickSubagentDefaultModel } from './subagents.js';
 import { SubagentEscalationHooks } from './subagent-escalation-hooks.js';
 import { SubagentRoutingState } from './subagent-routing-state.js';
 import { extractMissingTools } from './gap-detector.js';
@@ -296,12 +296,14 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
           );
         };
         const live = routingState.resolveLive(isExcluded);
+        const defaultModel = pickSubagentDefaultModel(live.roleModels);
         subagentEscalationHooks.toolCall(
           event.toolCallId,
           event.input,
           live.roleModels,
           live.roleFallbacks,
           isExcluded,
+          defaultModel,
         );
       } catch {
         // Never block or break a subagent spawn because of routing.

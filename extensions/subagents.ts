@@ -77,9 +77,7 @@ export interface BuildCandidatesResult {
  * `isProviderUsable` gates candidates by credentials. This is NOT optional in
  * practice: pi-subagents does *not* validate model availability at spawn time —
  * it runs whatever model it is handed and hard-fails with "No API key found for
- * <provider>". An earlier version of this function deliberately skipped the
- * credential probe and assumed pi-subagents owned the final gate; that
- * assumption was wrong and caused every role to be pinned to the
+ * <provider>". Without the credential gate here, roles pin to the
  * highest-scoring model overall (e.g. `anthropic/claude-opus-*`) even with no
  * anthropic credentials, breaking every subagent run.
  *
@@ -402,6 +400,10 @@ interface SpecLike {
   chain?: unknown;
   parallel?: unknown;
   expand?: unknown;
+  /** Management/control calls (`action`) never spawn children. */
+  action?: unknown;
+  /** Children inside this string are invisible to the structured walker. */
+  workflowScript?: unknown;
   /** pi-subagents repeats a task spec `count` times. Must be integer >= 1. */
   count?: unknown;
 }
@@ -458,6 +460,16 @@ export const ROUTER_AUTO_SENTINEL = 'router/auto';
 export interface SubagentRoutingOptions {
   consumeOverride?: (role: Role, originalTask?: string) => string | undefined;
   appendEscalationContract?: boolean;
+  /**
+   * Tool-level model for workflow-scripted spawns. pi-subagents defines
+   * children inside the `workflowScript` string, which the structured walker
+   * cannot see; the tool schema's top-level `model` field is the one
+   * structured lever that still governs every scripted child. Applied only
+   * when the call carries a non-empty `workflowScript`, has no management
+   * `action`, and its `model` is absent, empty, or the `router/auto`
+   * sentinel.
+   */
+  defaultModel?: string;
 }
 
 export function isRole(value: unknown): value is Role {
@@ -583,7 +595,59 @@ export function injectSubagentRoutingWithMetadata(
   };
 
   visit(input, '$');
+
+  // Tool-level default model for workflow-scripted spawns. Children defined
+  // inside a `workflowScript` string never reach the walker above, but
+  // pi-subagents honors the tool schema's top-level `model` as the default
+  // for every child that does not set its own — and resolves it before
+  // agent-config pins, so the router's fill wins over settings pins here.
+  // A per-child `model` inside the script still outranks both. Role-shaped
+  // single-child calls are not scripted and already got their role-specific
+  // model above, so the default only ever fills genuinely empty slots.
+  if (opts.defaultModel) {
+    const root = input as SpecLike;
+    const hasScript = typeof root.workflowScript === 'string' && root.workflowScript.trim() !== '';
+    const hasAction = root.action !== undefined;
+    if (hasScript && !hasAction) {
+      const existing = root.model;
+      if (existing === undefined || existing === '' || existing === ROUTER_AUTO_SENTINEL) {
+        (root as Record<string, unknown>).model = opts.defaultModel;
+      }
+    }
+  }
+
   return { children, injected };
+}
+
+// ─── Tool-level default pick ─────────────────────────────────────────────
+
+/**
+ * Fixed role priority for the tool-level default model. The worker's
+ * implement pick is the natural default for general child work; the rest of
+ * the order is a stable fallback for sessions where some roles are
+ * user-pinned (and therefore absent from the map) or unroutable.
+ */
+const DEFAULT_MODEL_ROLE_ORDER: readonly Role[] = [
+  'worker',
+  'planner',
+  'researcher',
+  'advisor',
+  'reviewer',
+];
+
+/**
+ * Pick the concrete model to fill the subagent tool's top-level `model` slot
+ * on workflow-scripted spawns. Returns undefined when no role is routable,
+ * so the call passes through untouched (fail open).
+ */
+export function pickSubagentDefaultModel(
+  roleModels: ReadonlyMap<Role, string>,
+): string | undefined {
+  for (const role of DEFAULT_MODEL_ROLE_ORDER) {
+    const model = roleModels.get(role);
+    if (model) return model;
+  }
+  return undefined;
 }
 
 // ─── Thinking-level suffix stripping ───────────────────────────────────

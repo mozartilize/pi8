@@ -14,3 +14,4 @@ coverage/
 # Subagent scratch artifacts
 .pi-subagents/
 .worktrees/
+.pi/subagents/

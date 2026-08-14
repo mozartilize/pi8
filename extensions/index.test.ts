@@ -134,6 +134,32 @@ describe('registry-only role routing', () => {
     expect(input.model).toBe('alpha/cheap');
   });
 
+  it('fills the tool-level model on workflowScript spawns when the session is router/auto', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const pi = {
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool: vi.fn(),
+    } as unknown as ExtensionAPI;
+    await autoModelRouterExtension(pi);
+
+    const sessionStart = handlers.get('session_start');
+    const toolCall = handlers.get('tool_call');
+
+    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
+    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
+    await sessionStart!({ reason: 'new' }, ctx);
+
+    // Children defined inside a workflowScript string are invisible to the
+    // structured spec walker; the tool schema's top-level `model` slot is the
+    // one lever that still governs them, filled from the worker pick.
+    const input: { workflowScript: string; model?: string } = {
+      workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })",
+    };
+    toolCall!({ toolName: 'subagent', toolCallId: 'call-wf', input }, ctx);
+
+    expect(input.model).toBe('alpha/cheap');
+  });
+
   it('is completely inert for a subagent spawn when no ctx/model is available (matches a session that never opted into router/auto)', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {

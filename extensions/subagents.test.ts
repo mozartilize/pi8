@@ -18,6 +18,7 @@ import {
   computeRoleAssignments,
   computeRoleModels,
   injectSubagentRoutingWithMetadata,
+  pickSubagentDefaultModel,
   resolveLiveRoleModels,
   stripThinkingSuffix,
   sameFamily,
@@ -350,6 +351,9 @@ describe('injectSubagentRoutingWithMetadata — basic injection', () => {
   });
 
   it('ignores agents the router does not own', () => {
+    // Scoped to structured specs: a non-role agent here gets no per-role
+    // model. Scripted spawns of any agent are governed by the tool-level
+    // default instead (see the workflow-scripted describe below).
     const input: Record<string, unknown> = { agent: 'oracle', task: 'x' };
     const traversal = injectSubagentRoutingWithMetadata(input, roleModels);
     expect(traversal.injected).toHaveLength(0);
@@ -378,6 +382,105 @@ describe('injectSubagentRoutingWithMetadata — basic injection', () => {
     expect(injectSubagentRoutingWithMetadata(input, new Map()).injected).toHaveLength(0);
     expect(injectSubagentRoutingWithMetadata(null, roleModels).injected).toHaveLength(0);
     expect(input.model).toBeUndefined();
+  });
+});
+
+describe('tool-level default model for workflow-scripted spawns', () => {
+  const roleModels = new Map<Role, string>([
+    ['worker', 'deepseek/deepseek-v3'],
+    ['reviewer', 'openai/gpt-5'],
+  ]);
+  // Deliberately distinct from every role pick so a test can tell whether the
+  // tool-level default or the per-role pick applied.
+  const defaultModel = 'openai/root-default';
+
+  it('fills the top-level model on a workflowScript call with no model', () => {
+    const input: Record<string, unknown> = {
+      workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })",
+    };
+    const traversal = injectSubagentRoutingWithMetadata(input, roleModels, { defaultModel });
+    expect(input.model).toBe('openai/root-default');
+    // Scripted children are invisible to the structured walker; the tool-level
+    // slot is the only thing patched.
+    expect(traversal.injected).toHaveLength(0);
+  });
+
+  it('replaces the router/auto sentinel with the default', () => {
+    const input: Record<string, unknown> = {
+      workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })",
+      model: 'router/auto',
+    };
+    injectSubagentRoutingWithMetadata(input, roleModels, { defaultModel });
+    expect(input.model).toBe('openai/root-default');
+  });
+
+  it('preserves an explicit tool-level model', () => {
+    const input: Record<string, unknown> = {
+      workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })",
+      model: 'anthropic/claude-4',
+    };
+    injectSubagentRoutingWithMetadata(input, roleModels, { defaultModel });
+    expect(input.model).toBe('anthropic/claude-4');
+  });
+
+  it('leaves management actions alone', () => {
+    const input: Record<string, unknown> = { action: 'status', id: 'run-1' };
+    injectSubagentRoutingWithMetadata(input, roleModels, { defaultModel });
+    expect(input.model).toBeUndefined();
+  });
+
+  it('leaves an action call alone even when it also carries a script', () => {
+    // schedule.create is the one surface pi-subagents accepts with both an
+    // action and a workflowScript; it stores only the script and would drop a
+    // filled model, so the default must not touch it.
+    const input: Record<string, unknown> = {
+      action: 'schedule.create',
+      workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })",
+    };
+    injectSubagentRoutingWithMetadata(input, roleModels, { defaultModel });
+    expect(input.model).toBeUndefined();
+  });
+
+  it('does not fill a whitespace-only script', () => {
+    const input: Record<string, unknown> = { workflowScript: '   ' };
+    injectSubagentRoutingWithMetadata(input, roleModels, { defaultModel });
+    expect(input.model).toBeUndefined();
+  });
+
+  it('does not touch non-scripted calls, so role-specific injection stays authoritative', () => {
+    // A single-child structured call has no workflowScript: the per-role
+    // injection above already owns its model slot, and the tool-level default
+    // must not preempt it. The distinct default value makes a wrong fill
+    // observable (it would overwrite the worker pick).
+    const input: Record<string, unknown> = { agent: 'worker', task: 'build' };
+    injectSubagentRoutingWithMetadata(input, roleModels, { defaultModel });
+    expect(input.model).toBe('deepseek/deepseek-v3');
+  });
+
+  it('leaves a structured non-role call alone even with a default available', () => {
+    const input: Record<string, unknown> = { agent: 'oracle', task: 'second opinion' };
+    injectSubagentRoutingWithMetadata(input, roleModels, { defaultModel });
+    expect(input.model).toBeUndefined();
+  });
+
+  it('is a no-op without a default', () => {
+    const input: Record<string, unknown> = {
+      workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })",
+    };
+    injectSubagentRoutingWithMetadata(input, roleModels);
+    expect(input.model).toBeUndefined();
+  });
+});
+
+describe('pickSubagentDefaultModel', () => {
+  it('prefers the worker pick and falls back in a fixed order', () => {
+    expect(pickSubagentDefaultModel(new Map([['reviewer', 'a'], ['planner', 'b']]))).toBe('b');
+    expect(pickSubagentDefaultModel(new Map([['worker', 'w'], ['planner', 'b']]))).toBe('w');
+    expect(pickSubagentDefaultModel(new Map([['researcher', 'r'], ['advisor', 'v']]))).toBe('r');
+  });
+
+  it('returns undefined when no role is routable', () => {
+    expect(pickSubagentDefaultModel(new Map())).toBeUndefined();
   });
 });
 

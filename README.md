@@ -47,7 +47,7 @@ Every turn the router automatically:
 2. **Assesses** the task semantically with an optional LLM consultation for additional confidence.
 3. **Scores** every available model against live benchmarks and registry metadata (quality, cost, speed, context window). Models that aren't capable enough stay in the fallback chain but never win the top spot.
 4. **Streams** the best match. If it fails before producing output — missing credentials, timeout, provider error — the router moves to the next best model automatically. Once an answer or tool call starts streaming, it never replays.
-5. **Routes subagents too** — each subagent role gets a concrete model selected per spawn.
+5. **Routes subagents too** — each subagent role gets a concrete model selected per spawn. On workflow-scripted spawns (children defined inside a `workflowScript` string, where per-child model patching is impossible) the router fills the tool's top-level model slot with its worker-first pick (worker → planner → researcher → advisor → reviewer); a per-child `model` inside the script still wins, and the router's fill takes precedence over `agentOverrides` pins. Scripted spawns have no result-level feedback loop: a router-filled default that fails is reported as a plain tool error to the parent, not blacklisted or retried by role.
 
 Uncertainty always routes up: missing data, ambiguous prompts, and low confidence never make routing cheaper. Overserving is cheap; underserving costs a bad answer.
 

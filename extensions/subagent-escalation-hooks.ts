@@ -63,12 +63,14 @@ export class SubagentEscalationHooks {
     roleModels: ReadonlyMap<Role, string>,
     roleFallbacks: ReadonlyMap<Role, string[]>,
     isBlacklisted: (registryId: string) => boolean,
+    defaultModel?: string,
   ): PendingSubagentCall {
     const async = !!input && typeof input === 'object' &&
       (input as { async?: unknown }).async === true;
     const traversal = injectSubagentRoutingWithMetadata(input, roleModels, {
       consumeOverride: (role, originalTask) => this.state.consume(role, originalTask, roleFallbacks, isBlacklisted),
       appendEscalationContract: !async,
+      defaultModel,
     });
     const pending = { ...traversal, async };
     this.pendingCalls.set(toolCallId, pending);
