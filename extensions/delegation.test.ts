@@ -71,6 +71,80 @@ describe('runDelegationLoop contracts', () => {
     expect(h.systemPrompts.at(-1) ?? '').not.toContain('[router/auto]');
   });
 
+  it('never forwards a failed candidate\'s answerless done into the consumer stream', async () => {
+    // A provider that completes with a terminal `done` before any output (a
+    // bridge returning an empty completion) must not finalize the caller's
+    // turn: Pi ends the turn on the first `done` it receives, so leaking the
+    // failed attempt's would persist an empty assistant message and drop the
+    // fallback model's response.
+    const h = createDelegationHarness({
+      chain: ['alpha/broken', 'beta/fallback'],
+      scripts: {
+        'alpha/broken': [[{ type: 'done', message: { stopReason: 'stop' } }]],
+        'beta/fallback': [[
+          { type: 'start' },
+          { type: 'text_delta', delta: 'served' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+
+    expect((await h.run()).success).toBe(true);
+    expect(h.output.filter((e) => (e as { type: string }).type === 'done')).toHaveLength(1);
+    expect(h.output).toHaveLength(3);
+    expect(h.output[0]).toEqual({ type: 'start' });
+    expect(h.output[1]).toEqual({ type: 'text_delta', delta: 'served' });
+  });
+
+  it('falls back when a candidate spams events before meaningful output', async () => {
+    // The per-attempt buffer is capped so a provider that floods lifecycle
+    // events until the meaningful-output deadline fails the candidate
+    // instead of growing the buffer unboundedly — and none of its spam
+    // reaches the consumer stream.
+    const h = createDelegationHarness({
+      chain: ['alpha/spammy', 'beta/fallback'],
+      scripts: {
+        'alpha/spammy': [Array.from({ length: 10_001 }, () => ({ type: 'start' }))],
+        'beta/fallback': [[
+          { type: 'text_delta', delta: 'served' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.success).toBe(true);
+    expect(h.output).toEqual([
+      { type: 'text_delta', delta: 'served' },
+      { type: 'done', message: { stopReason: 'stop' } },
+    ]);
+    expect(h.blacklist).toContain('alpha/spammy');
+  });
+
+  it('serves when the first meaningful output arrives exactly at the cap boundary', async () => {
+    // The cap must only fail pre-output spam. A candidate whose (cap+1)th
+    // event is its first text has proven itself: it flushes its buffer and
+    // serves, rather than having its answer discarded by the cap check.
+    const h = createDelegationHarness({
+      chain: ['alpha/edge'],
+      scripts: {
+        'alpha/edge': [[
+          ...Array.from({ length: 10_000 }, () => ({ type: 'start' })),
+          { type: 'text_delta', delta: 'late' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.success).toBe(true);
+    expect(h.output.at(-2)).toEqual({ type: 'text_delta', delta: 'late' });
+    expect(h.output.at(-1)).toEqual({ type: 'done', message: { stopReason: 'stop' } });
+    expect(h.blacklist).toEqual([]);
+  });
+
   it('serves a fallback to a different effort of the same model with that entry\'s effort', async () => {
     // Two effort variants of one model are two chain entries: the xhigh entry
     // fails before content, and the high entry serves with ITS measured

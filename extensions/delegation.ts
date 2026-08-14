@@ -350,6 +350,46 @@ export async function runDelegationLoop(
       let networkTimeout = false;
       let errorMessageObj: { stopReason?: string; errorMessage?: string } | undefined;
       const streamTimer = startTimer();
+      // A failed candidate's events must never reach Pi's consumer stream.
+      // Pi finalizes the turn on the first terminal `done` it sees: if a
+      // candidate completes with an answerless `done` (e.g. a bridge provider
+      // that returns an empty completion), forwarding it would persist an
+      // empty assistant message and end the turn before the fallback model's
+      // response can stream — the user sees the turn stop with no output.
+      // Buffer each attempt's events and release them only once the candidate
+      // has produced meaningful output; a failed attempt's buffer is
+      // discarded with the attempt. Once meaningful output has streamed,
+      // forwarding is live: partial output is never replayed on another
+      // model, so nothing after that point is discarded.
+      // The buffer only ever holds non-output lifecycle events (an output
+      // event flips passthrough immediately), so a cap that never trips on a
+      // well-behaved provider still bounds memory if one spams events until
+      // the meaningful-output deadline.
+      const MAX_BUFFERED_EVENTS = 10_000;
+      const attemptBuffer: unknown[] = [];
+      let passthrough = false;
+      const forward = (ev: unknown): void => {
+        if (passthrough) {
+          stream.push(ev as never);
+          return;
+        }
+        // Output flips to live forwarding before the cap is consulted: a
+        // candidate whose first meaningful output arrives exactly at the
+        // boundary must serve (and flush its buffer), never be failed.
+        if (isServedOutputEvent((ev as { type: string }).type)) {
+          passthrough = true;
+          for (const buffered of attemptBuffer) stream.push(buffered as never);
+          attemptBuffer.length = 0;
+          stream.push(ev as never);
+          return;
+        }
+        if (attemptBuffer.length >= MAX_BUFFERED_EVENTS) {
+          throw new Error(
+            `candidate emitted more than ${MAX_BUFFERED_EVENTS} events before meaningful output: ${candidateId}`,
+          );
+        }
+        attemptBuffer.push(ev);
+      };
       try {
         for (;;) {
           let step: IteratorResult<{ type: string }>;
@@ -481,7 +521,7 @@ export async function runDelegationLoop(
             }
             setLastNotifiedModel(candidateId);
           }
-          stream.push(event as never);
+          forward(event);
         }
         // A clean stream end with no text, thinking, or tool-call output is
         // treated as an answerless completion, not success: a candidate that
