@@ -105,6 +105,16 @@ function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension)
   }
 }
 
+/**
+ * Measured capability of a candidate for a dimension, or undefined when the
+ * candidate carries no benchmark row on that dimension's axis. Exported so the
+ * routing policy can compare an incumbent against a fresh pick without
+ * duplicating the per-dimension axis mapping.
+ */
+export function capabilityForDimension(c: Candidate, dim: Dimension): number | undefined {
+  return c.bench ? qualityForDimension(c.bench, dim) : undefined;
+}
+
 /** Live task-axis floor: a candidate must reach 85% of the strongest peer. */
 export const FRONTIER_QUALITY_RATIO = 0.85;
 

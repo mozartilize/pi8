@@ -716,6 +716,215 @@ describe('routing direction', () => {
   });
 });
 
+describe('incumbent capability floor', () => {
+  // Contract: within one task the served model stays at or above the
+  // incumbent's measured capability. Uncertainty holds the floor; only a
+  // genuine new entry with a high-confidence trivial classification resets to a
+  // cheaper model. Sanctioned downward moves (user pick, escalation, inspect
+  // promotion, consult that lowered the dimension) stand the floor down.
+  it('baseline (no incumbent) picks the cheap model at gather', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        confidence: 0.1,
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.chosen).toBe('bench/cheap');
+  });
+
+  it('holds the floor under uncertainty: keeps the stronger incumbent', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        // Below lowConfidenceThreshold (0.15): not an off-topic reset, so the
+        // floor stands.
+        confidence: 0.1,
+        incumbentRegistryId: 'bench/strong',
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.chosen).toBe('bench/strong');
+    expect(result.decision.fallbackChain[0]).toBe('bench/strong');
+    expect(result.decision.reason).toContain('incumbent-floor');
+  });
+
+  it('stands down on a fresh, high-confidence trivial classification (off-topic reset)', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        // High confidence + trivial dimension = the user changed topic; a
+        // cheaper model is the correct step-1 route.
+        confidence: 0.9,
+        incumbentRegistryId: 'bench/strong',
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.chosen).toBe('bench/cheap');
+  });
+
+  it('never raises a weaker incumbent above the fresh pick', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        confidence: 0.1,
+        // Incumbent is the cheap model; the floor is a floor, never a ceiling.
+        incumbentRegistryId: 'bench/cheap',
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.chosen).toBe('bench/cheap');
+    expect(result.decision.reason).not.toContain('incumbent-floor');
+  });
+
+  it('stands down for an explicit user escalation', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        confidence: 0.1,
+        incumbentRegistryId: 'bench/strong',
+        userEscalation: { target: undefined },
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    // The user owns the pick; the floor must not append its marker.
+    expect(result.decision.reason).not.toContain('incumbent-floor');
+  });
+
+  it('holds the floor within the same intent even at high-confidence gather', () => {
+    // A cached high-confidence gather intent must not reset on every post-tool
+    // re-invocation: sameIntentAsLast keeps the stickiness across the loop.
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        confidence: 0.9,
+        incumbentRegistryId: 'bench/strong',
+        sameIntentAsLast: true,
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.chosen).toBe('bench/strong');
+    expect(result.decision.reason).toContain('incumbent-floor');
+  });
+
+  it('stands down for an active escalation and never restores the excluded source', () => {
+    // pickEscalation excludes the requesting model; the floor must not resurrect
+    // it, which would re-serve the requester under a model-escalation cause.
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        confidence: 0.1,
+        incumbentRegistryId: 'bench/strong',
+        escalation: {
+          dimension: 'implement',
+          cause: 'model-escalation',
+          reason: 'route_up',
+          fromModel: 'bench/strong',
+        },
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.chosen).not.toBe('bench/strong');
+    expect(result.decision.reason).not.toContain('incumbent-floor');
+  });
+
+  it('holds on a fresh entry whose heuristic gather was raised to an involved dimension', () => {
+    // Regression for keying offTopicReset on the heuristic instead of the final
+    // dimension: a fresh, high-confidence gather entry that an adopted consult
+    // raised to implement is involved work, so a measurably weaker economic
+    // pick must not stand the floor down.
+    const close: Candidate[] = [
+      makeCandidate({
+        registryId: 'bench/near', provider: 'bench', id: 'near',
+        bench: {
+          registryId: 'bench/near', benchSlug: 'near', active: true,
+          quality: { intelligence: 85, coding: 85 },
+          priceInputPer1M: 0.5, priceOutputPer1M: 2.0, source: 'aa',
+        },
+      }),
+      makeCandidate({
+        registryId: 'bench/top', provider: 'bench', id: 'top',
+        bench: {
+          registryId: 'bench/top', benchSlug: 'top', active: true,
+          quality: { intelligence: 90, coding: 88 },
+          priceInputPer1M: 15.0, priceOutputPer1M: 75.0, source: 'aa',
+        },
+      }),
+    ];
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: close,
+        classifyDimension: 'gather',
+        baseDimension: 'implement',
+        baseCause: 'router-consult',
+        confidence: 0.9,
+        incumbentRegistryId: 'bench/top',
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.dimension).toBe('implement');
+    expect(result.decision.chosen).toBe('bench/top');
+    expect(result.decision.reason).toContain('incumbent-floor');
+  });
+
+  it('stands down when a consult actually lowered the dimension', () => {
+    // A bounded high-confidence assessment lowering implement→gather is a
+    // sanctioned downgrade; the floor must not fight it.
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'implement',
+        baseDimension: 'gather',
+        baseCause: 'router-consult',
+        confidence: 0.9,
+        incumbentRegistryId: 'bench/strong',
+        sameIntentAsLast: true,
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.reason).not.toContain('incumbent-floor');
+  });
+
+  it('never reintroduces an incumbent the scorer filtered out of the chain', () => {
+    // The incumbent is present in `candidates` but its context window is too
+    // small for the estimate, so the long-context guard drops it from the
+    // scored chain. The floor must not inject it back and bypass that safety
+    // filter — exercises the incumbentInChain >= 0 guard, not the missing-
+    // candidate path.
+    const candidates = benchmarkCandidates.map((c) =>
+      c.registryId === 'bench/strong' ? { ...c, contextWindow: 1_000 } : c,
+    );
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        confidence: 0.1,
+        incumbentRegistryId: 'bench/strong',
+        // Above bench/strong's 1k window * 1.2; bench/cheap keeps its 200k.
+        estimatedContextTokens: 2_000,
+      }),
+    );
+    expect(result.decision.fallbackChain).not.toContain('bench/strong');
+    expect(result.decision.chosen).toBe('bench/cheap');
+    expect(result.decision.reason).not.toContain('incumbent-floor');
+  });
+});
+
 describe('depth-escalation probe and veto', () => {
   it('predicts exactly when step 4 would fire', () => {
     const base = {

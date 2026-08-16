@@ -16,7 +16,7 @@ import type { ClassifyResult } from './classifier.js';
 import type { AutoRouterConfig } from './types.js';
 import type { PendingUserEscalation } from './router-session-state.js';
 import { DIMENSION_STRENGTH } from './classifier-keywords.js';
-import { pickBest, pickEscalation, isValidEscalationCandidate, candidateKey, type ScoreOpts } from './scorer.js';
+import { pickBest, pickEscalation, isValidEscalationCandidate, candidateKey, capabilityForDimension, type ScoreOpts } from './scorer.js';
 
 // ─── Public interfaces ───────────────────────────────────────────────
 
@@ -38,6 +38,14 @@ export interface RoutingPolicyInput {
   estimatedContextTokens: number;
   needsVision: boolean;
   incumbentRegistryId?: string;
+  /**
+   * True when this invocation shares the previous decision's intent key — i.e.
+   * it is a continuation of the same user entry (a post-tool re-invocation),
+   * not a fresh user turn. The incumbent capability floor uses it so an
+   * off-topic reset can only fire on a genuine new entry, never on every
+   * re-invocation of one cached intent.
+   */
+  sameIntentAsLast?: boolean;
   /** True when a bounded high-confidence assessment refused the first latch. */
   vetoDepthEscalation?: boolean;
   /**
@@ -224,6 +232,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     estimatedContextTokens,
     needsVision,
     incumbentRegistryId,
+    sameIntentAsLast,
     config,
     multiWorkPolicy,
   } = input;
@@ -361,6 +370,61 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
       const sourceCandidate = candidates.find((c) => candidateKey(c) === repick.fromModel);
       if (sourceCandidate) {
         decision = pickBest([sourceCandidate], dimension, config.dimensionWeights[dimension], baseOpts);
+      }
+    }
+  }
+
+  // Step 6b: incumbent capability floor. The served model is sticky within one
+  // task: a per-invocation rescore must not fall below the incumbent's measured
+  // capability at the routed dimension. Only measured evidence promotes the
+  // incumbent, and only by reordering the already-scored fallback chain — an
+  // incumbent that the scorer filtered out (context/vision) or that never
+  // entered the chain is never reintroduced, so the floor cannot bypass a
+  // safety filter or capability tier.
+  //
+  // The floor stands down for the sanctioned downward moves, never widening
+  // them (R3): an explicit user pick and any active escalation own the model
+  // (an escalation repick deliberately excludes the source model, so the floor
+  // must not restore it); an inspect-phase compound-implement economic
+  // promotion; a consult that actually lowered the dimension; and a genuine
+  // new-entry, high-confidence trivial classification (an off-topic follow-up
+  // that resets to a cheap model). Same-intent re-invocations never reset, so
+  // the stickiness holds across a whole tool loop.
+  const inspectPhasePromotion = multiWorkPolicy?.phase === 'inspect';
+  const consultLoweredDimension =
+    cause === 'router-consult' &&
+    DIMENSION_STRENGTH[baseDimension] < DIMENSION_STRENGTH[classifyResult.dimension];
+  // Reset keys on the FINAL resolved dimension, not the heuristic: a fresh
+  // entry whose heuristic gather was raised to an involved dimension (adopted
+  // consult, depth, embedding) is not off-topic, so the floor must still hold.
+  const offTopicReset =
+    !sameIntentAsLast &&
+    classifyResult.confidence >= config.lowConfidenceThreshold &&
+    DIMENSION_STRENGTH[dimension] <= DIMENSION_STRENGTH['gather'];
+  if (
+    incumbentRegistryId != null &&
+    incumbentRegistryId !== decision.chosen &&
+    !precedence.userApplied &&
+    !precedence.escalationApplied &&
+    !inspectPhasePromotion &&
+    !consultLoweredDimension &&
+    !offTopicReset
+  ) {
+    const incumbentCandidate = candidates.find((c) => candidateKey(c) === incumbentRegistryId);
+    const chosenCandidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+    const incumbentInChain = decision.fallbackChain.indexOf(incumbentRegistryId);
+    if (incumbentCandidate && chosenCandidate && incumbentInChain >= 0) {
+      const incumbentQuality = capabilityForDimension(incumbentCandidate, dimension);
+      const chosenQuality = capabilityForDimension(chosenCandidate, dimension);
+      if (incumbentQuality != null && chosenQuality != null && incumbentQuality > chosenQuality) {
+        if (incumbentInChain > 0) {
+          const chain = decision.fallbackChain.slice();
+          chain.splice(incumbentInChain, 1);
+          chain.unshift(incumbentRegistryId);
+          decision.fallbackChain = chain;
+        }
+        decision.chosen = incumbentRegistryId;
+        decision.reason += ' [incumbent-floor]';
       }
     }
   }

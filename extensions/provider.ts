@@ -984,6 +984,7 @@ export function registerAutoRouterProvider(
               estimatedContextTokens: estContextTokens,
               needsVision,
               incumbentRegistryId: getLastChosenRegistryId(),
+              sameIntentAsLast: getLastDecision()?.intentKey === turnInput.key,
               vetoDepthEscalation,
               ...(multiWorkPolicy ? { multiWorkPolicy } : {}),
               config,

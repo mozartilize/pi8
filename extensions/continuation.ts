@@ -232,16 +232,29 @@ export function getTurnClassificationInput(
   // request. Only provenance-`user` messages are the human speaking.
   let latestUserIndex = -1;
   let userOrdinal = 0;
+  let latestAnyUserIndex = -1;
   for (let i = 0; i < source.length; i += 1) {
     const message = source[i];
     if (!message) continue;
     const provenance = classifyProvenance(message, syntheticPrefixes);
     provenanceCounts[provenance] += 1;
     if (provenance === 'user') {
-      latestUserIndex = i;
-      userOrdinal += 1;
+      latestAnyUserIndex = i;
+      // Ephemeral hook/reminder injections arrive as user-role messages with no
+      // numeric timestamp; pi-core stamps every genuine user turn. Excluding
+      // them from the intent key and ordinal keeps the key stable across a tool
+      // loop, so a post-tool re-invocation reuses the entry's cached routing
+      // instead of re-classifying a transient reminder that appears and then
+      // vanishes mid-loop.
+      if (typeof message.timestamp === 'number') {
+        latestUserIndex = i;
+        userOrdinal += 1;
+      }
     }
   }
+  // Fallback: a conversation whose only user-provenance messages lack a
+  // timestamp still routes on its latest one rather than degrading to "no user".
+  if (latestUserIndex < 0) latestUserIndex = latestAnyUserIndex;
 
   if (latestUserIndex < 0) {
     return {

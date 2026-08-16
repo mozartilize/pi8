@@ -86,6 +86,20 @@ describe('getTurnClassificationInput', () => {
     expect(next.classifyText).toBe('review the diff');
   });
 
+  it('ignores an ephemeral no-timestamp user injection for the key and ordinal', () => {
+    // A hook/reminder injected as a user-role message with no timestamp appears
+    // and vanishes mid tool-loop. It must not shift the intent key, or a
+    // post-tool re-invocation would miss the cache and re-route from scratch.
+    const withReminder = getTurnClassificationInput([
+      ...baseMessages,
+      { role: 'user', content: [{ type: 'text', text: 'SYSTEM REMINDER: mode active' }] },
+    ] as unknown as Message[]);
+    const first = getTurnClassificationInput(baseMessages);
+
+    expect(withReminder.key).toBe(first.key);
+    expect(withReminder.promptText).toBe('ok go for it');
+  });
+
   it('bounds enriched context while preserving the latest user cue', () => {
     const result = getTurnClassificationInput(baseMessages, 96);
 
