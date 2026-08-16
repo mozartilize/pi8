@@ -113,6 +113,7 @@ export {
   clearBlacklistedModels,
   clearBlacklistedProviders,
   clearSessionBlacklist,
+  getBlacklistDebugState,
   getBlacklistedModels,
   getBlacklistedProviders,
   getSessionBlacklistPatterns,
@@ -617,9 +618,19 @@ export function registerAutoRouterProvider(
             const candidates = allCandidates.filter(
               (candidate) => !getBlacklistedModels().has(candidateKey(candidate)),
             );
-            const routableCandidates = candidates.length > 0 ? candidates : [];
+            const applyRuntimeExclusions = (pool: readonly Candidate[]): Candidate[] => {
+              const liveModels = getBlacklistedModels();
+              const liveProviders = getBlacklistedProviders();
+              return pool.filter((candidate) => {
+                const slash = candidate.registryId.indexOf('/');
+                const provider = slash > 0 ? candidate.registryId.slice(0, slash) : candidate.registryId;
+                return !liveModels.has(candidateKey(candidate)) && !liveProviders.has(provider);
+              });
+            };
+            let routableCandidates = applyRuntimeExclusions(candidates);
 
-            if (routableCandidates.length === 0) {
+            const endIfNoRoutableCandidates = (): boolean => {
+              if (routableCandidates.length > 0) return false;
               const excludedProviders = getBlacklistedProviders();
               stream.push(
                 makeTerminalErrorEvent(
@@ -630,8 +641,9 @@ export function registerAutoRouterProvider(
                 ),
               );
               stream.end();
-              return;
-            }
+              return true;
+            };
+            if (endIfNoRoutableCandidates()) return;
 
             const assessmentConfig: AssessmentConfig = {
               enabled: config.consultRouter,
@@ -909,6 +921,14 @@ export function registerAutoRouterProvider(
               // Deterministic mode still consumes the generation so the latch
               // is evaluated once per session either way.
             }
+
+            // An awaited assessment can add a provider-wide usage-limit
+            // exclusion after this turn's initial candidate snapshot. Apply
+            // live runtime exclusions again before scoring/delegation so the
+            // assessor failure cannot immediately re-hit the same provider as
+            // the serving model in this turn.
+            routableCandidates = applyRuntimeExclusions(candidates);
+            if (endIfNoRoutableCandidates()) return;
 
             // ── Per-intent multi-work phase lifecycle ──────────────────────
             // Mirrors resolveRoutingDecision's own precedence/depth-escalation

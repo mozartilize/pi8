@@ -40,6 +40,7 @@ vi.mock('./provider.js', () => ({
   buildSubagentProviderAuthFilter: vi.fn(() => () => true),
   addSessionBlacklistPatterns: vi.fn(() => []),
   clearSessionBlacklist: vi.fn(() => mockBlacklist.clear()),
+  getBlacklistDebugState: vi.fn(() => ({ instance: 'test' })),
   getBlacklistedModels: vi.fn(() => new Set(mockBlacklist)),
   getBlacklistedProviders: vi.fn(() => new Set()),
   getSessionBlacklistPatterns: vi.fn(() => []),

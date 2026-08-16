@@ -1481,12 +1481,13 @@ describe('assessment orchestration', () => {
     expect([...getBlacklistedProviders()]).toEqual([]);
   });
 
-  it('blacklists the assessor provider on an active usage-limit error', async () => {
+  it('blacklists the assessor provider before scoring the active turn', async () => {
     const session = await newSession({ assessmentMode: 'active', consultRouter: true });
-    await session.routeTurn('investigate the flaky test', { assessorUsageLimit: true });
+    const decision = await session.routeTurn('investigate the flaky test', { assessorUsageLimit: true });
 
     const { getBlacklistedProviders } = await import('./blacklist.js');
     expect([...getBlacklistedProviders()]).toEqual(['alpha']);
+    expect(decision?.fallbackChain.some((id) => id.startsWith('alpha/'))).toBe(false);
   });
 
   it('active mode adopts a high-confidence bounded downward verdict', async () => {

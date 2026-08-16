@@ -17,6 +17,7 @@ import {
   buildSubagentProviderAuthFilter,
   clearSessionBlacklist,
   addSessionBlacklistPatterns,
+  getBlacklistDebugState,
   getBlacklistedModels,
   getBlacklistedProviders,
   getSessionBlacklistPatterns,
@@ -31,7 +32,7 @@ import { collectSubagentResultText } from './subagent-results.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
 import { loadConfig } from './config.js';
 import { setSessionFile } from './sessionpaths.js';
-import { setConfigDebug } from './debuglog.js';
+import { debugLog, setConfigDebug } from './debuglog.js';
 import type { RegistryModelInfo } from './scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from './types.js';
 import { appendMutationGateSignal, appendSubagentGapSignal } from './decisionlog.js';
@@ -146,6 +147,20 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
   };
 
   pi.on('session_start', async (event, ctx) => {
+    // Establish the log target before reset diagnostics so an automatic
+    // runtime replacement is visible in the session sidecar that triggered it.
+    try {
+      setSessionFile(ctx.sessionManager?.getSessionFile());
+      setConfigDebug(loadConfig().debug);
+    } catch {
+      // Ephemeral / no session manager: logs fall back to the shared store.
+    }
+    debugLog('lifecycle.session_start.begin', {
+      reason: event.reason,
+      previousSessionFile: event.previousSessionFile,
+      model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+      ...getBlacklistDebugState(),
+    });
     try {
       resetRouterSession();
       resetEscalationSession();
@@ -205,9 +220,29 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     } catch {
       // Advisory only.
     }
+    debugLog('lifecycle.session_start.end', {
+      reason: event.reason,
+      model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+      ...getBlacklistDebugState(),
+    });
+  });
+
+  pi.on('session_shutdown', (event) => {
+    debugLog('lifecycle.session_shutdown', {
+      reason: event.reason,
+      ...getBlacklistDebugState(),
+    });
   });
 
   pi.on('model_select', (event, ctx) => {
+    debugLog('lifecycle.model_select', {
+      source: event.source,
+      model: `${event.model.provider}/${event.model.id}`,
+      previousModel: event.previousModel
+        ? `${event.previousModel.provider}/${event.previousModel.id}`
+        : undefined,
+      ...getBlacklistDebugState(),
+    });
     // A concrete model selection makes the previous router decision stale.
     if (event.model.provider !== ROUTER_PROVIDER_ID) {
       clearRouterStatus(ctx);
@@ -256,6 +291,10 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     } catch {
       // ignore
     }
+    debugLog('lifecycle.turn_start', {
+      model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+      ...getBlacklistDebugState(),
+    });
     try {
       registerAutoRouterProvider(pi, ctx);
     } catch {
