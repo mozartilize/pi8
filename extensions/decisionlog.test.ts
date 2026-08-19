@@ -429,6 +429,27 @@ describe('appendMutationGateSignal', () => {
     expect(raw).not.toContain('payload');
   });
 
+  it('serializes enum classifier metadata and never command text', () => {
+    appendMutationGateSignal(
+      {
+        intentKey: 'k4',
+        served: 'test/model',
+        providerInvocation: 1,
+        clearance: 'unknown',
+        action: 'allow',
+        mutationSurface: 'bash-python-opaque',
+        mutationSignal: 'python-opaque',
+      },
+      dir,
+    );
+    const raw = readFileSync(join(dir, DECISION_LOG_FILE), 'utf8');
+    expect(raw).toContain('"mutationSurface":"bash-python-opaque"');
+    expect(raw).toContain('"mutationSignal":"python-opaque"');
+    expect(raw).not.toContain('script.py');
+    expect(raw).not.toContain('rm -rf');
+    expect(raw).not.toContain('command');
+  });
+
   it('never throws when the log path is unwritable', () => {
     const blocker = join(dir, 'blocker.txt');
     writeFileSync(blocker, 'x', 'utf8');

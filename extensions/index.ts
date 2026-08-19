@@ -47,6 +47,7 @@ import {
   setActiveSkillNames,
 } from './router-session-state.js';
 import { evaluateMutationCall, recordMutationResult } from './mutation-gate.js';
+import { classifyMutationCall } from './mutation-detector.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
 const SUBAGENT_TOOL = 'subagent';
@@ -352,15 +353,20 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
 
     // Bounded mutation handoff (rule 2: an internal failure here must fail
     // open, not fail the tool call). Returning `undefined` allows execution;
-    // only an intentional `{ block: true, reason }` stops it.
+    // only an intentional `{ block: true, reason }` stops it. Bash is
+    // classified best-effort: high-confidence write shapes feed the same
+    // bounded gate as `edit`/`write`; possible/opaque shapes stay observable
+    // but never block.
     try {
       const state = getWorkPhaseState();
       const served = getLastServed();
+      const detection = classifyMutationCall(event.toolName, event.input as Record<string, unknown>);
       const decision = evaluateMutationCall({
         toolName: event.toolName,
         toolCallId: event.toolCallId,
         state,
         served,
+        detection,
       });
       if (decision.nextState) commitWorkPhaseState(decision.nextState);
       if (decision.metadata) {
@@ -396,6 +402,8 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
               ? 'escape'
               : 'allow',
           capabilityDegraded: decision.metadata.capabilityDegraded,
+          mutationSurface: decision.metadata.mutationSurface,
+          mutationSignal: decision.metadata.mutationSignal,
         });
       }
       if (decision.block) return { block: true, reason: decision.reason };

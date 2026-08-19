@@ -2,21 +2,27 @@
  * Fail-open, invocation-bounded mutation gate.
  *
  * Once multi-work routing has engaged an inspect phase (rule: an inspect-tier
- * candidate serves the turn), a mutation call (`edit`/`write`) that arrives
- * before the served candidate is known to clear the terminal capability floor
- * is blocked exactly once per provider invocation. The block itself advances
- * the phase to `mutate`, so the next invocation scores against the terminal
- * floor instead of the inspect floor — that transition is the whole point of
- * the gate. Siblings of the blocked invocation still get the same block,
- * because the served capability cannot change until the provider is invoked
- * again. A later invocation always escapes: the router cannot guarantee a
- * stronger model exists, so it degrades to "let it through" rather than
- * stalling the turn forever.
+ * candidate serves the turn), a mutation call (`edit`/`write`, or a Bash call
+ * the classifier recognized as a high-confidence write) that arrives before
+ * the served candidate is known to clear the terminal capability floor is
+ * blocked exactly once per provider invocation. The block itself advances the
+ * phase to `mutate`, so the next invocation scores against the terminal floor
+ * instead of the inspect floor — that transition is the whole point of the
+ * gate. Siblings of the blocked invocation still get the same block, because
+ * the served capability cannot change until the provider is invoked again. A
+ * later invocation always escapes: the router cannot guarantee a stronger
+ * model exists, so it degrades to "let it through" rather than stalling the
+ * turn forever.
+ *
+ * A possible/opaque Bash detection is observability-only: the classifier could
+ * not prove a write, so the call proceeds without state change and the enum
+ * metadata is logged.
  *
  * Pure state transitions only: no I/O, no registry/session access. `state`
  * is never mutated in place — every branch returns a fresh object (or the
  * same reference untouched) so callers can commit atomically.
  */
+import type { MutationDetection, MutationSignal, MutationSurface } from './mutation-detector.js';
 import type { ServedCapabilityMeta } from './types.js';
 import type { ServedInfo } from './ui.js';
 import type { WorkPhaseState } from './work-phase.js';
@@ -29,12 +35,16 @@ export interface MutationCallInput {
   toolCallId: string;
   state: WorkPhaseState | undefined;
   served: ServedInfo | undefined;
+  /** Classifier output for non-native tools; native `edit`/`write` need none. */
+  detection?: MutationDetection;
 }
 
 export interface MutationCallMetadata {
   clearance: boolean | 'unknown';
   capabilityDegraded?: boolean;
   mutationGateEscaped?: boolean;
+  mutationSurface?: MutationSurface;
+  mutationSignal?: MutationSignal;
 }
 
 export interface MutationCallDecision {
@@ -57,10 +67,38 @@ function withPendingId(state: WorkPhaseState, toolCallId: string, patch: Partial
 }
 
 export function evaluateMutationCall(input: MutationCallInput): MutationCallDecision {
-  const { toolName, toolCallId, state, served } = input;
+  const { toolName, toolCallId, state, served, detection } = input;
 
-  if (!MUTATION_TOOLS.has(toolName)) return { block: false };
+  const nativeMutation = MUTATION_TOOLS.has(toolName);
+  const shellMutation = toolName === 'bash' && detection?.confidence === 'high';
+
+  // A possible/opaque shell mutation is observability-only: the classifier
+  // could not prove a write, so the call is allowed, leaves work-phase state
+  // untouched, and surfaces the enum metadata for the signal log.
+  if (toolName === 'bash' && detection?.confidence === 'possible') {
+    return {
+      block: false,
+      metadata: {
+        clearance: 'unknown',
+        mutationSurface: detection.surface,
+        mutationSignal: detection.signal,
+      },
+    };
+  }
+
+  if (!nativeMutation && !shellMutation) return { block: false };
   if (!state) return { block: false };
+
+  const surface: MutationSurface | undefined = nativeMutation ? 'native' : detection?.surface;
+  const signal: MutationSignal | undefined = nativeMutation
+    ? toolName === 'edit'
+      ? 'native-edit'
+      : 'native-write'
+    : detection?.signal;
+  const meta = (
+    clearance: boolean | 'unknown',
+    extra: Partial<MutationCallMetadata> = {},
+  ): MutationCallMetadata => ({ clearance, mutationSurface: surface, mutationSignal: signal, ...extra });
 
   const capability: ServedCapabilityMeta | undefined = served?.capability;
 
@@ -71,7 +109,7 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
   if (state.mutationGateTriggered) {
     const invocation = capability?.providerInvocation;
     if (invocation !== undefined && state.gateBlockedInvocation === invocation) {
-      return { block: true, reason: BLOCK_REASON, nextState: state, metadata: { clearance: false } };
+      return { block: true, reason: BLOCK_REASON, nextState: state, metadata: meta(false) };
     }
     const clearance = capability?.candidate.clearsTerminalFloor ?? 'unknown';
     const cleared = clearance === true;
@@ -81,8 +119,8 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
         phaseReason: cleared ? 'terminal-cleared' : 'gate-escape',
       }),
       metadata: cleared
-        ? { clearance }
-        : { clearance, capabilityDegraded: true, mutationGateEscaped: true },
+        ? meta(clearance)
+        : meta(clearance, { capabilityDegraded: true, mutationGateEscaped: true }),
     };
   }
 
@@ -99,7 +137,7 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
     return {
       block: false,
       nextState: withPendingId(state, toolCallId, { phaseReason: 'gate-fail-open' }),
-      metadata: { clearance: 'unknown' },
+      metadata: meta('unknown'),
     };
   }
 
@@ -112,7 +150,7 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
     return {
       block: false,
       nextState: withPendingId(state, toolCallId, { phaseReason: 'terminal-cleared' }),
-      metadata: { clearance },
+      metadata: meta(clearance),
     };
   }
 
@@ -122,7 +160,7 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
     return {
       block: false,
       nextState: withPendingId(state, toolCallId, { phaseReason: 'gate-no-candidate' }),
-      metadata: { clearance: false, capabilityDegraded: true },
+      metadata: meta(false, { capabilityDegraded: true }),
     };
   }
 
@@ -139,7 +177,7 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
       mutationGateTriggered: true,
       mutationGateBlocks: state.mutationGateBlocks + 1,
     },
-    metadata: { clearance: false },
+    metadata: meta(false),
   };
 }
 

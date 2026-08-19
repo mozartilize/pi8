@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { RegistryModelInfo } from './scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
@@ -9,6 +12,7 @@ import { applyEscalation, requestEscalation, resetEscalation } from './escalatio
 import { computeRoleModels } from './subagents.js';
 import { multiWorkRoutingMeta, routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
 import { formatDecisionDetail } from './ui.js';
+import { DECISION_LOG_FILE, setDecisionLogBase } from './decisionlog.js';
 import {
   addAssessmentCost,
   bumpLatchGeneration,
@@ -46,7 +50,12 @@ vi.mock('./provider.js', () => ({
   getSessionBlacklistPatterns: vi.fn(() => []),
   blacklistModel: vi.fn((model: string) => mockBlacklist.add(model)),
 }));
-vi.mock('./store.js', () => ({ loadStore: vi.fn(() => undefined) }));
+vi.mock('./store.js', () => ({
+  loadStore: vi.fn(() => undefined),
+  // The real decisionlog module resolves its log path through this; without it
+  // gate-observability writes throw inside their fail-open catch and never land.
+  resolveStoragePath: (base?: string) => base ?? '/tmp/pi8-test-store',
+}));
 vi.mock('./config.js', () => ({ loadConfig: vi.fn(() => ({ debug: false })) }));
 vi.mock('./allowlist.js', () => ({
   loadModelFilter: vi.fn(() => () => true),
@@ -701,6 +710,14 @@ describe('mutation gate hooks', () => {
   const concreteCtx = { model: { provider: 'openai-codex', id: 'gpt-5.3' } } as unknown as ExtensionContext;
   const routerAutoCtx = { model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } } as unknown as ExtensionContext;
 
+  let logDir: string;
+
+  beforeEach(() => {
+    // Keep gate-observability writes out of the real user-scope decision log.
+    logDir = mkdtempSync(join(tmpdir(), 'ar-index-log-'));
+    setDecisionLogBase(logDir);
+  });
+
   function inspectState(overrides: Partial<WorkPhaseState> = {}): WorkPhaseState {
     return {
       intentKey: 'intent-a',
@@ -734,6 +751,8 @@ describe('mutation gate hooks', () => {
   afterEach(() => {
     resetRouterSession();
     vi.mocked(evaluateMutationCall).mockRestore();
+    setDecisionLogBase(undefined);
+    rmSync(logDir, { recursive: true, force: true });
   });
 
   it('keeps concrete-model sessions a complete mutation-gate no-op', async () => {
@@ -857,5 +876,99 @@ describe('mutation gate hooks', () => {
     await toolResult({ toolName: 'edit', toolCallId: 'e1', content: [], isError: false }, routerAutoCtx);
     expect(getWorkPhaseState()?.pendingMutationToolCallIds.has('e1')).toBe(false);
     expect(getWorkPhaseState()?.mutationCompleted).toBe(true);
+  });
+
+  it('gates a high-confidence mutating bash call for router/auto', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    setLastServed({
+      registryId: 'test/inspect',
+      viaFallback: false,
+      accumulatedCost: 0,
+      capability: {
+        providerInvocation: 1,
+        terminalFloor: 0.85,
+        terminalCapableInScoringSet: true,
+        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
+      },
+    });
+
+    const result = await toolCall(
+      { toolName: 'bash', toolCallId: 'bash-1', input: { command: 'echo x > out.txt' } },
+      routerAutoCtx,
+    );
+    expect(result).toEqual({ block: true, reason: expect.any(String) });
+    expect(getWorkPhaseState()).toMatchObject({ phase: 'mutate', mutationGateTriggered: true });
+  });
+
+  it('allows opaque python and read-only bash without state change', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    setLastServed({
+      registryId: 'test/inspect',
+      viaFallback: false,
+      accumulatedCost: 0,
+      capability: {
+        providerInvocation: 1,
+        terminalFloor: 0.85,
+        terminalCapableInScoringSet: true,
+        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
+      },
+    });
+
+    expect(
+      await toolCall({ toolName: 'bash', toolCallId: 'bash-2', input: { command: 'python script.py' } }, routerAutoCtx),
+    ).toBeUndefined();
+    expect(
+      await toolCall({ toolName: 'bash', toolCallId: 'bash-3', input: { command: 'ls -la' } }, routerAutoCtx),
+    ).toBeUndefined();
+    expect(getWorkPhaseState()).toMatchObject({ phase: 'inspect', mutationGateBlocks: 0 });
+    expect(getWorkPhaseState()?.pendingMutationToolCallIds.size).toBe(0);
+  });
+
+  it('records bash gate outcomes as enums only, never command text', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    setLastServed({
+      registryId: 'test/inspect',
+      viaFallback: false,
+      accumulatedCost: 0,
+      capability: {
+        providerInvocation: 1,
+        terminalFloor: 0.85,
+        terminalCapableInScoringSet: true,
+        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
+      },
+    });
+
+    await toolCall(
+      { toolName: 'bash', toolCallId: 'bash-1', input: { command: 'echo secret > out.txt' } },
+      routerAutoCtx,
+    );
+    await toolCall(
+      { toolName: 'bash', toolCallId: 'bash-2', input: { command: 'python script.py' } },
+      routerAutoCtx,
+    );
+
+    const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8');
+    expect(raw).toContain('"mutationSignal":"shell-redirect"');
+    expect(raw).toContain('"mutationSignal":"python-opaque"');
+    expect(raw).not.toContain('out.txt');
+    expect(raw).not.toContain('secret');
+    expect(raw).not.toContain('script.py');
+  });
+
+  it('keeps concrete-model sessions a complete no-op for bash too', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    const before = getWorkPhaseState();
+    expect(
+      await toolCall({ toolName: 'bash', toolCallId: 'bash-1', input: { command: 'rm -rf x' } }, concreteCtx),
+    ).toBeUndefined();
+    expect(getWorkPhaseState()).toEqual(before);
   });
 });

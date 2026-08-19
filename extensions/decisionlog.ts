@@ -24,6 +24,7 @@ import { resolveStoragePath } from './store.js';
 import { sessionSidecarPath } from './sessionpaths.js';
 import { ASSESSMENT_PROMPT_VERSION } from './assessment-prompt.js';
 import { DIMENSION_STRENGTH } from './classifier-keywords.js';
+import type { MutationSignal, MutationSurface } from './mutation-detector.js';
 
 export const DECISION_LOG_FILE = 'decisions.jsonl';
 /** Sidecar suffix used when writing next to a persisted session file. */
@@ -143,6 +144,9 @@ export interface DecisionLogEntry {
     clearance: boolean | 'unknown';
     action: 'block' | 'allow' | 'escape' | 'complete' | 'error';
     capabilityDegraded?: boolean;
+    /** Enum classifier output; never command text or tool arguments. */
+    mutationSurface?: MutationSurface;
+    mutationSignal?: MutationSignal;
   };
 }
 
@@ -158,6 +162,9 @@ export interface MutationGateSignal {
   clearance: boolean | 'unknown';
   action: 'block' | 'allow' | 'escape' | 'complete' | 'error';
   capabilityDegraded?: boolean;
+  /** Enum classifier output; never command text or tool arguments. */
+  mutationSurface?: MutationSurface;
+  mutationSignal?: MutationSignal;
 }
 
 function serializeAssessment(
@@ -207,6 +214,8 @@ export function appendMutationGateSignal(
         clearance: signal.clearance,
         action: signal.action,
         capabilityDegraded: signal.capabilityDegraded,
+        mutationSurface: signal.mutationSurface,
+        mutationSignal: signal.mutationSignal,
       },
     };
     appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');

@@ -174,6 +174,107 @@ describe('evaluateMutationCall', () => {
   });
 });
 
+describe('bash detections in the gate', () => {
+  it('gates a high-confidence bash write like a native mutation', () => {
+    const result = evaluateMutationCall({
+      toolName: 'bash', toolCallId: 'bash-1', state: inspectState,
+      served: underTerminalServed(3, true),
+      detection: { confidence: 'high', surface: 'bash-shell', signal: 'shell-redirect' },
+    });
+    expect(result.block).toBe(true);
+    expect(result.nextState?.gateBlockedInvocation).toBe(3);
+    expect(result.metadata).toMatchObject({
+      clearance: false,
+      mutationSurface: 'bash-shell',
+      mutationSignal: 'shell-redirect',
+    });
+  });
+
+  it('blocks high-confidence bash siblings from the same invocation once', () => {
+    const first = evaluateMutationCall({
+      toolName: 'bash', toolCallId: 'bash-1', state: inspectState,
+      served: underTerminalServed(3, true),
+      detection: { confidence: 'high', surface: 'bash-python-inline', signal: 'python-write-api' },
+    });
+    expect(first.block).toBe(true);
+
+    const sibling = evaluateMutationCall({
+      toolName: 'bash', toolCallId: 'bash-2', state: first.nextState,
+      served: underTerminalServed(3, true),
+      detection: { confidence: 'high', surface: 'bash-shell', signal: 'shell-writer' },
+    });
+    expect(sibling.block).toBe(true);
+    expect(sibling.nextState?.mutationGateBlocks).toBe(1);
+  });
+
+  it('escapes on the later invocation with surface metadata intact', () => {
+    const result = evaluateMutationCall({
+      toolName: 'bash', toolCallId: 'bash-3', state: blockedState(3),
+      served: underTerminalServed(4, true),
+      detection: { confidence: 'high', surface: 'bash-shell', signal: 'shell-filesystem' },
+    });
+    expect(result.block).toBe(false);
+    expect(result.nextState?.pendingMutationToolCallIds.has('bash-3')).toBe(true);
+    expect(result.metadata).toMatchObject({
+      mutationGateEscaped: true,
+      capabilityDegraded: true,
+      mutationSurface: 'bash-shell',
+      mutationSignal: 'shell-filesystem',
+    });
+  });
+
+  it('allows possible/opaque bash without state change, logging enum metadata only', () => {
+    const result = evaluateMutationCall({
+      toolName: 'bash', toolCallId: 'bash-4', state: inspectState,
+      served: underTerminalServed(3, true),
+      detection: { confidence: 'possible', surface: 'bash-python-opaque', signal: 'python-opaque' },
+    });
+    expect(result).toEqual({
+      block: false,
+      metadata: {
+        clearance: 'unknown',
+        mutationSurface: 'bash-python-opaque',
+        mutationSignal: 'python-opaque',
+      },
+    });
+    expect(result.nextState).toBeUndefined();
+  });
+
+  it('ignores read-only bash entirely', () => {
+    const result = evaluateMutationCall({
+      toolName: 'bash', toolCallId: 'bash-5', state: inspectState,
+      served: underTerminalServed(3, true),
+      detection: { confidence: 'none' },
+    });
+    expect(result).toEqual({ block: false });
+  });
+
+  it('fails open for a high-confidence bash write with no intent state', () => {
+    const result = evaluateMutationCall({
+      toolName: 'bash', toolCallId: 'bash-6', state: undefined,
+      served: underTerminalServed(3, true),
+      detection: { confidence: 'high', surface: 'bash-shell', signal: 'shell-redirect' },
+    });
+    expect(result).toEqual({ block: false });
+  });
+
+  it('carries native surface metadata on edit and write', () => {
+    const edit = evaluateMutationCall({
+      toolName: 'edit', toolCallId: 'e2', state: inspectState,
+      served: underTerminalServed(3, true),
+    });
+    expect(edit.block).toBe(true);
+    expect(edit.metadata).toMatchObject({ mutationSurface: 'native', mutationSignal: 'native-edit' });
+
+    const write = evaluateMutationCall({
+      toolName: 'write', toolCallId: 'w2', state: inspectState,
+      served: underTerminalServed(3, true),
+    });
+    expect(write.block).toBe(true);
+    expect(write.metadata).toMatchObject({ mutationSurface: 'native', mutationSignal: 'native-write' });
+  });
+});
+
 describe('recordMutationResult', () => {
   it('clears the pending id and marks completion on success', () => {
     const state = baseState({ pendingMutationToolCallIds: new Set(['edit-1']) });

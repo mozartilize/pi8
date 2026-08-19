@@ -99,9 +99,16 @@ async function bindSession() {
   const { getWorkPhaseState, commitWorkPhaseState: commit, getLastServed: served, getLastDecision: decision } =
     await import('./router-session-state.js');
   const { evaluateMutationCall: evaluate } = await import('./mutation-gate.js');
+  const { classifyMutationCall: classify } = await import('./mutation-detector.js');
   /** Mirrors index.ts's `tool_call` mutation-gate hook exactly. */
-  function preflightMutation(toolName: string, toolCallId: string): MutationBlock | undefined {
-    const result = evaluate({ toolName, toolCallId, state: getWorkPhaseState(), served: served() });
+  function preflightMutation(toolName: string, toolCallId: string, input?: Record<string, unknown>): MutationBlock | undefined {
+    const result = evaluate({
+      toolName,
+      toolCallId,
+      state: getWorkPhaseState(),
+      served: served(),
+      detection: classify(toolName, input ?? {}),
+    });
     if (result.nextState) commit(result.nextState);
     return result.block ? { block: true, reason: result.reason! } : undefined;
   }
@@ -172,6 +179,39 @@ describe('multi-work routing acceptance', () => {
     expect(session.preflightMutation('edit', 'e1')).toMatchObject({ block: true });
     expect(session.preflightMutation('write', 'w1')).toMatchObject({ block: true });
     expect(session.getWorkPhaseState()?.mutationGateBlocks).toBe(1);
+  });
+
+  it('gates a high-confidence mutating bash call like edit, and leaves read-only bash alone', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { consultRouter: false },
+      benchmarks: multiWorkBenchmarks,
+    });
+    const session = await bindSession();
+    harness.scriptReply([{ type: 'text_delta', delta: 'inspecting' }, { type: 'done' }]);
+    await harness.serve(compoundContext);
+    expect(session.getWorkPhaseState()).toMatchObject({ phase: 'inspect', multiWorkEngaged: true });
+
+    expect(
+      session.preflightMutation('bash', 'bash-1', { command: 'echo x > out.txt' }),
+    ).toMatchObject({ block: true });
+    expect(session.getWorkPhaseState()?.mutationGateBlocks).toBe(1);
+
+    // A read-only bash call neither blocks nor advances the gate.
+    expect(session.preflightMutation('bash', 'bash-2', { command: 'ls -la' })).toBeUndefined();
+    expect(session.getWorkPhaseState()).toMatchObject({
+      phase: 'mutate',
+      mutationGateBlocks: 1,
+    });
+
+    // An opaque python call fails open: allowed, no block, no gate advance.
+    expect(
+      session.preflightMutation('bash', 'bash-3', { command: 'python script.py' }),
+    ).toBeUndefined();
+    expect(session.getWorkPhaseState()).toMatchObject({
+      phase: 'mutate',
+      mutationGateBlocks: 1,
+    });
   });
 
   it('gates an immediate edit using the actual under-terminal fallback candidate', async () => {
