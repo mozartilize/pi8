@@ -46,6 +46,27 @@ describe('decision log', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('round-trips usage totals and baseline spend fields', () => {
+    const decision: RoutingDecision = {
+      ...DECISION,
+      usage: { inputTokens: 100, outputTokens: 20, cacheRead: 5, cacheWrite: 0 },
+      baseline: { registryId: 'openai/gpt-5', source: 'auto', cost: { input: 10, output: 50 } },
+      spend: { routedCost: 0.002, baselineCost: 2.0 },
+    };
+    appendDecision(
+      decision,
+      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0.01 },
+      dir,
+    );
+    const path = join(dir, DECISION_LOG_FILE);
+    const entry = JSON.parse(readFileSync(path, 'utf8').trim().split('\n')[0]);
+    expect(entry.usage).toEqual({ inputTokens: 100, outputTokens: 20, cacheRead: 5, cacheWrite: 0 });
+    expect(entry.baselineModel).toBe('openai/gpt-5');
+    expect(entry.baselineSource).toBe('auto');
+    expect(entry.routedCost).toBe(0.002);
+    expect(entry.baselineCost).toBe(2.0);
+  });
+
   it('appends a JSONL line with the served model and no fallback', () => {
     appendDecision(
       DECISION,

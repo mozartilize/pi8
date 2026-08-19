@@ -19,6 +19,7 @@ import {
   appendMutationGateSignal,
   appendShadowAssessment,
   appendSubagentGapSignal,
+  appendSubagentSpend,
 } from './decisionlog.js';
 import { saveStore, emptyStore } from './store.js';
 import type { BenchmarkStore, RoutingDecision } from './types.js';
@@ -426,6 +427,152 @@ describe('/router-status history filtering', () => {
     const msg = messages[messages.length - 1] ?? '';
     expect(msg).toContain('→ beta/second');
     expect(msg).not.toContain('gamma/gate');
+  });
+});
+
+describe('/router-report', () => {
+  it('warns when no decisions have been recorded yet', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+
+    await handlers.get('router-report')!('', ctx);
+
+    expect(messages.at(-1)).toContain('No routing decisions recorded');
+  });
+
+  it('prints routed vs baseline spend, percent saved, and a dimension histogram', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+
+    const base: RoutingDecision = {
+      dimension: 'implement',
+      chosen: 'beta/cheap',
+      reason: 'scored',
+      confidence: 0.8,
+      routedUp: false,
+      routedDown: false,
+      cause: 'heuristic',
+      fallbackChain: ['beta/cheap'],
+      baseline: { registryId: 'alpha/strong', source: 'auto', cost: { input: 10, output: 50 } },
+      spend: { routedCost: 0.2, baselineCost: 2.0 },
+    };
+    appendDecision(base, { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.2 });
+    appendDecision(
+      { ...base, dimension: 'gather', spend: { routedCost: 0.1, baselineCost: 1.0 } },
+      { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.3 },
+    );
+
+    await handlers.get('router-report')!('', ctx);
+
+    const msg = messages.at(-1) ?? '';
+    expect(msg).toContain('Routed spend: $0.3000 across 2/2 priced turns');
+    expect(msg).toContain('Baseline spend (alpha/strong): $3.0000');
+    expect(msg).toContain('Saved: $2.7000 (90.0%)');
+    expect(msg).toContain('implement   1');
+    expect(msg).toContain('gather      1');
+  });
+
+  it('flags baseline drift when the counterfactual baseline changed mid-session', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+
+    const base: RoutingDecision = {
+      dimension: 'implement',
+      chosen: 'beta/cheap',
+      reason: 'scored',
+      confidence: 0.8,
+      routedUp: false,
+      routedDown: false,
+      cause: 'heuristic',
+      fallbackChain: ['beta/cheap'],
+      baseline: { registryId: 'alpha/strong', source: 'auto', cost: { input: 10, output: 50 } },
+      spend: { routedCost: 0.2, baselineCost: 2.0 },
+    };
+    appendDecision(base, { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.2 });
+    appendDecision(
+      {
+        ...base,
+        baseline: { registryId: 'gamma/other', source: 'auto', cost: { input: 5, output: 25 } },
+        spend: { routedCost: 0.1, baselineCost: 1.0 },
+      },
+      { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.3 },
+    );
+
+    await handlers.get('router-report')!('', ctx);
+
+    expect(messages.at(-1)).toContain('baseline changed mid-session');
+  });
+
+  it('folds foreground subagent spend into the totals as its own line', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+
+    appendDecision(
+      {
+        dimension: 'implement',
+        chosen: 'beta/cheap',
+        reason: 'scored',
+        confidence: 0.8,
+        routedUp: false,
+        routedDown: false,
+        cause: 'heuristic',
+        fallbackChain: ['beta/cheap'],
+        baseline: { registryId: 'alpha/strong', source: 'auto', cost: { input: 10, output: 50 } },
+        spend: { routedCost: 0.2, baselineCost: 2.0 },
+      },
+      { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.2 },
+    );
+    appendSubagentSpend({
+      role: 'worker',
+      model: 'beta/cheap',
+      routerOwned: true,
+      usage: { inputTokens: 100, outputTokens: 20, cacheRead: 0, cacheWrite: 0 },
+      routedCost: 0.3,
+      baselineModel: 'alpha/strong',
+      baselineSource: 'auto',
+      baselineCost: 3.0,
+    });
+
+    await handlers.get('router-report')!('', ctx);
+
+    const msg = messages.at(-1) ?? '';
+    expect(msg).toContain('Routed spend: $0.5000');
+    expect(msg).toContain('incl. subagents: $0.3000 across 1 foreground children');
+    expect(msg).toContain('Baseline spend (alpha/strong): $5.0000');
+    // The child is not a turn: it must not enter the turn count or histogram.
+    expect(msg).toContain('across 1/1 priced turns');
+    expect(msg).not.toContain('worker');
+  });
+
+  it('excludes turns with no resolved baseline from the spend totals', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+
+    const priced: RoutingDecision = {
+      dimension: 'implement',
+      chosen: 'beta/cheap',
+      reason: 'scored',
+      confidence: 0.8,
+      routedUp: false,
+      routedDown: false,
+      cause: 'heuristic',
+      fallbackChain: ['beta/cheap'],
+      baseline: { registryId: 'alpha/strong', source: 'auto', cost: { input: 10, output: 50 } },
+      spend: { routedCost: 0.2, baselineCost: 2.0 },
+    };
+    const unpriced: RoutingDecision = { ...priced, spend: undefined, baseline: undefined };
+    appendDecision(priced, { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.2 });
+    appendDecision(unpriced, { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.3 });
+
+    await handlers.get('router-report')!('', ctx);
+
+    const msg = messages.at(-1) ?? '';
+    expect(msg).toContain('across 1/2 priced turns');
   });
 });
 

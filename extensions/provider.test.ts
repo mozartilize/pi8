@@ -2570,3 +2570,101 @@ describe('multi-work phase engagement', () => {
     });
   });
 });
+
+describe('router-report counterfactual baseline', () => {
+  const benchmarks: BenchModel[] = [
+    {
+      registryId: 'alpha/strong',
+      benchSlug: 'strong',
+      active: true,
+      quality: { intelligence: 95, coding: 95, agenticCoding: 95 },
+      source: 'test',
+    },
+    {
+      registryId: 'beta/cheap',
+      benchSlug: 'cheap',
+      active: true,
+      quality: { intelligence: 60, coding: 60, agenticCoding: 60 },
+      source: 'test',
+    },
+  ];
+  const models = [
+    registryModel('alpha/strong', { contextWindow: 200000, maxTokens: 8192, cost: { input: 10, output: 50 } }),
+    registryModel('beta/cheap', { contextWindow: 200000, maxTokens: 8192, cost: { input: 1, output: 5 } }),
+  ];
+
+  it('auto-picks the highest measured-capability routable candidate when no baselineModel is pinned', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { consultRouter: false },
+      benchmarks,
+      models,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'implement the retry logic across the module' }] } as unknown as Context,
+    );
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.baseline?.registryId).toBe('alpha/strong');
+    expect(decision?.baseline?.source).toBe('auto');
+  });
+
+  it('uses config.baselineModel when it is still in the routable pool', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { consultRouter: false, baselineModel: 'beta/cheap' },
+      benchmarks,
+      models,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'implement the retry logic across the module' }] } as unknown as Context,
+    );
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.baseline?.registryId).toBe('beta/cheap');
+    expect(decision?.baseline?.source).toBe('config');
+  });
+
+  it('falls back to auto-pick when config.baselineModel is not in the routable pool', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { consultRouter: false, baselineModel: 'nonexistent/model' },
+      benchmarks,
+      models,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'implement the retry logic across the module' }] } as unknown as Context,
+    );
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.baseline?.registryId).toBe('alpha/strong');
+    expect(decision?.baseline?.source).toBe('auto');
+  });
+
+  it('prices routedCost and baselineCost from the same observed tokens onto the decision log', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { consultRouter: false, baselineModel: 'alpha/strong' },
+      benchmarks,
+      models,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+    harness.scriptReply([
+      { type: 'text_delta', delta: 'ok' },
+      { type: 'done', message: { usage: { input: 100, output: 20, cacheRead: 0, cost: { total: 0 } } } },
+    ]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'the cheapest possible one-liner change' }] } as unknown as Context,
+    );
+    const { readRecentEntries } = await import('./decisionlog.js');
+    const entry = readRecentEntries(1, temp.path)[0];
+    expect(entry?.baselineModel).toBe('alpha/strong');
+    expect(entry?.baselineSource).toBe('config');
+    expect(typeof entry?.routedCost).toBe('number');
+    // Registry rates are USD per 1M tokens, so priced spend divides by 1e6.
+    expect(entry?.baselineCost).toBe((10 * 100 + 50 * 20) / 1_000_000);
+  });
+});

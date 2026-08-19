@@ -30,6 +30,11 @@ export interface PersistedConfig {
   dimensionWeights?: Partial<Record<Dimension, { quality: number; cost: number; speed: number }>>;
   switchMargin?: number;
   /**
+   * Counterfactual baseline for `/router-report`, as `provider/id`. Absent
+   * means the router auto-picks the strongest routable candidate per turn.
+   */
+  baselineModel?: string;
+  /**
    * Advertise this context window for `router/auto` instead of the largest
    * routable model's. A smaller value makes Pi compact earlier, keeping
    * smaller-window (often cheaper) models eligible for longer. Absent =
@@ -186,6 +191,10 @@ export function loadConfig(): AutoRouterConfig {
     sources: stringList(persisted.sources) ?? ['artificial-analysis', 'benchlm'],
     dimensionWeights: normalizeDimensionWeights(persisted.dimensionWeights),
     switchMargin: finiteInRange(persisted.switchMargin, DEFAULT_SWITCH_MARGIN, 0, 1),
+    baselineModel:
+      typeof persisted.baselineModel === 'string' && persisted.baselineModel.trim()
+        ? persisted.baselineModel.trim()
+        : undefined,
     routerContextWindow:
       typeof persisted.routerContextWindow === 'number' &&
       Number.isFinite(persisted.routerContextWindow) &&

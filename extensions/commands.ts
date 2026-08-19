@@ -361,6 +361,70 @@ export function registerCommands(pi: ExtensionAPI): void {
     }),
   });
 
+  pi.registerCommand('router-report', {
+    description: 'Show routed vs baseline spend, percent saved, and dimension distribution for this session',
+    handler: safeCommand('/router-report', async (_args, ctx: ExtensionCommandContext) => {
+      const all = readRecentEntries(Number.MAX_SAFE_INTEGER);
+      const decisions = all.filter((e) => e.kind === undefined || e.kind === 'decision');
+      const childSpend = all.filter((e) => e.kind === 'subagent-spend');
+      if (decisions.length === 0) {
+        ctx.ui.notify('No routing decisions recorded yet this session.', 'warning');
+        return;
+      }
+      let routedTotal = 0;
+      let baselineTotal = 0;
+      let priced = 0;
+      let baselineDrift = false;
+      let firstBaseline: string | undefined;
+      const byDimension = new Map<string, number>();
+      for (const e of decisions) {
+        byDimension.set(e.dimension, (byDimension.get(e.dimension) ?? 0) + 1);
+        if (typeof e.routedCost === 'number' && typeof e.baselineCost === 'number') {
+          routedTotal += e.routedCost;
+          baselineTotal += e.baselineCost;
+          priced++;
+          if (e.baselineModel) {
+            if (!firstBaseline) firstBaseline = e.baselineModel;
+            else if (firstBaseline !== e.baselineModel) baselineDrift = true;
+          }
+        }
+      }
+      let childRouted = 0;
+      let childBaseline = 0;
+      let childPriced = 0;
+      for (const e of childSpend) {
+        if (typeof e.routedCost === 'number' && typeof e.baselineCost === 'number') {
+          childRouted += e.routedCost;
+          childBaseline += e.baselineCost;
+          childPriced++;
+        }
+      }
+      routedTotal += childRouted;
+      baselineTotal += childBaseline;
+
+      const saved = baselineTotal - routedTotal;
+      const pctSaved = baselineTotal > 0 ? (saved / baselineTotal) * 100 : 0;
+      const lines = [
+        `Routed spend: $${routedTotal.toFixed(4)} across ${priced}/${decisions.length} priced turns`,
+        ...(childPriced > 0
+          ? [`  incl. subagents: $${childRouted.toFixed(4)} across ${childPriced} foreground children`]
+          : []),
+        `Baseline spend (${firstBaseline ?? 'n/a'}${baselineDrift ? ', baseline changed mid-session' : ''}): $${baselineTotal.toFixed(4)}`,
+        `Saved: $${saved.toFixed(4)} (${pctSaved.toFixed(1)}%)`,
+        '',
+        'Dimension distribution:',
+        ...[...byDimension.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([dim, n]) => `  ${dim.padEnd(11)} ${n}`),
+        '',
+        "Counterfactual reprices observed token counts at the baseline model's registry " +
+          'rate — not a real historical bill. Async subagent spawns report no terminal ' +
+          'usage to the parent, so their spend is not included.',
+      ];
+      ctx.ui.notify(lines.join('\n'), 'info');
+    }),
+  });
+
   pi.registerCommand('router-fix', {
     description: 'Manually fix a benchmark-to-registry alias: /router-fix <bench-slug> <provider/id>',
     handler: safeCommand('/router-fix', async (args, ctx: ExtensionCommandContext) => {

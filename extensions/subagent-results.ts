@@ -8,6 +8,31 @@ export interface SubagentResultRow {
   exitCode?: number;
   error?: string;
   modelAttempts: Array<{ model?: string; success?: boolean }>;
+  /**
+   * Terminal usage for one foreground child. `cost` is pi-subagents'
+   * provider-reported billing and is kept only as a cross-check — spend
+   * accounting reprices the token counts at registry rates so parent turns
+   * and children stay on one comparable basis.
+   */
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    cost: number;
+  };
+}
+
+function parseUsage(value: unknown): SubagentResultRow['usage'] {
+  if (!isRecord(value)) return undefined;
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    input: num(value.input),
+    output: num(value.output),
+    cacheRead: num(value.cacheRead),
+    cacheWrite: num(value.cacheWrite),
+    cost: num(value.cost),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -32,6 +57,7 @@ export function parseSubagentResultRows(details: unknown): SubagentResultRow[] {
         finalOutput: typeof value.finalOutput === 'string' ? value.finalOutput : undefined,
         exitCode: typeof value.exitCode === 'number' ? value.exitCode : undefined,
         error: typeof value.error === 'string' ? value.error : undefined,
+        usage: parseUsage(value.usage),
         modelAttempts: Array.isArray(value.modelAttempts)
           ? value.modelAttempts
               .filter(isRecord)

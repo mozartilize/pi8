@@ -55,7 +55,7 @@ function decisionLogPath(storageBase?: string): string {
 export interface DecisionLogEntry {
   ts: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'assessment-shadow' | 'mutation-gate';
+  kind?: 'decision' | 'assessment-shadow' | 'mutation-gate' | 'subagent-spend';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -74,6 +74,25 @@ export interface DecisionLogEntry {
   chain: string[];
   /** Session cost accumulated at decision time, USD. */
   accumulatedCost?: number;
+  /** Per-turn token totals, summed across every attempt including failed ones. */
+  usage?: { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number };
+  /** Counterfactual baseline this turn was priced against, and how it was picked. */
+  baselineModel?: string;
+  baselineSource?: 'config' | 'auto';
+  /**
+   * Actual vs counterfactual spend for `/router-report`, both priced from
+   * registry $/token at the same observed `usage` — never `cost.total`
+   * billing, which is a different scale. `baselineCost` absent means no
+   * baseline resolved for this turn.
+   */
+  routedCost?: number;
+  baselineCost?: number;
+  /** Set on `kind: 'subagent-spend'` records only. */
+  subagentSpend?: {
+    role?: string;
+    routerOwned: boolean;
+    reportedCost?: number;
+  };
   /** Intent cache key, so a detached shadow verdict can be joined offline. */
   intentKey?: string;
   assessmentMode?: string;
@@ -254,6 +273,11 @@ export function appendDecision(
       reason: decision.reason,
       chain: decision.fallbackChain,
       accumulatedCost: served.accumulatedCost,
+      usage: decision.usage,
+      baselineModel: decision.baseline?.registryId,
+      baselineSource: decision.baseline?.source,
+      routedCost: decision.spend?.routedCost,
+      baselineCost: decision.spend?.baselineCost,
       intentKey: decision.intentKey,
       assessmentMode: decision.assessmentMode,
       fallbackReason: decision.fallbackReason,
@@ -351,6 +375,62 @@ export function appendSubagentGapSignal(
         requestedTools: event.requestedTools,
         allowedTools: event.allowedTools,
         workaroundTool: event.workaroundTool,
+      },
+    };
+    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+  } catch {
+    // Best-effort logging only.
+  }
+}
+
+/**
+ * One foreground subagent child's spend, joinable with the turn that spawned
+ * it. Kept out of `kind: 'decision'` because a child is not a routing turn:
+ * folding it into decisions would distort `/router-status` history and the
+ * dimension histogram, both of which count turns. Async spawns return before
+ * their child finishes and report no terminal usage here, so they are absent
+ * by construction rather than counted as zero.
+ */
+export function appendSubagentSpend(
+  record: {
+    role?: string;
+    model: string;
+    routerOwned: boolean;
+    usage: { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number };
+    routedCost?: number;
+    baselineModel?: string;
+    baselineSource?: 'config' | 'auto';
+    baselineCost?: number;
+    /** pi-subagents' provider-reported billing, kept only as a cross-check. */
+    reportedCost?: number;
+  },
+  storageBase?: string,
+): void {
+  try {
+    const path = decisionLogPath(storageBase);
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const entry: DecisionLogEntry = {
+      ts: Date.now(),
+      kind: 'subagent-spend',
+      dimension: record.role ?? 'subagent',
+      chosen: record.model,
+      served: record.model,
+      viaFallback: false,
+      confidence: 1,
+      routedUp: false,
+      cause: 'heuristic',
+      reason: `subagent spend (${record.routerOwned ? 'router-owned' : 'explicit model'})`,
+      chain: [record.model],
+      usage: record.usage,
+      routedCost: record.routedCost,
+      baselineModel: record.baselineModel,
+      baselineSource: record.baselineSource,
+      baselineCost: record.baselineCost,
+      subagentSpend: {
+        role: record.role,
+        routerOwned: record.routerOwned,
+        reportedCost: record.reportedCost,
       },
     };
     appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');

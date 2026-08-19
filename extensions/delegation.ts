@@ -45,6 +45,7 @@ import {
   resolveThinkingLevel,
 } from './scorer.js';
 import { isUsageLimitErrorMessage } from './usage-limit.js';
+import { priceTokens } from './baseline.js';
 
 const AUTH_RESOLVE_TIMEOUT_MS = 5000;
 const FIRST_EVENT_TIMEOUT_MS = 30000;
@@ -166,6 +167,19 @@ export async function runDelegationLoop(
   let attemptIndex = -1;
   let lastServed: ServedInfo | undefined;
   let finalDecision = decision;
+
+  // Per-turn spend accumulators, summed across every attempt including
+  // failed ones (a failed attempt can still have spent tokens before it
+  // errored). Both routedCost and the token totals are priced/observed on
+  // the SAME registry $/token basis so a later baseline repricing (in
+  // provider.ts's chosen baseline) compares like with like — never mixed
+  // with provider-reported billing (`cost.total`), which is a different
+  // scale and absent for subscription providers.
+  let turnRoutedCost = 0;
+  let turnInputTokens = 0;
+  let turnOutputTokens = 0;
+  let turnCacheReadTokens = 0;
+  let turnCacheWriteTokens = 0;
 
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
@@ -472,10 +486,36 @@ export async function runDelegationLoop(
 
           if (event.type === 'done') {
             const message = (event as unknown as {
-              message?: { stopReason?: string; usage?: { cost?: { total?: number } } };
+              message?: {
+                stopReason?: string;
+                usage?: {
+                  input?: number;
+                  output?: number;
+                  cacheRead?: number;
+                  cacheWrite?: number;
+                  cost?: { total?: number };
+                };
+              };
             }).message;
             if (message?.usage?.cost?.total) {
               addAccumulatedCost(message.usage.cost.total);
+            }
+            if (message?.usage) {
+              const u = message.usage;
+              const attemptCost = priceTokens(
+                (chosen as unknown as { cost?: Candidate['cost'] }).cost,
+                {
+                  inputTokens: u.input ?? 0,
+                  outputTokens: u.output ?? 0,
+                  cacheRead: u.cacheRead ?? 0,
+                  cacheWrite: u.cacheWrite ?? 0,
+                },
+              );
+              if (attemptCost != null) turnRoutedCost += attemptCost;
+              turnInputTokens += u.input ?? 0;
+              turnOutputTokens += u.output ?? 0;
+              turnCacheReadTokens += u.cacheRead ?? 0;
+              turnCacheWriteTokens += u.cacheWrite ?? 0;
             }
             if (
               message?.stopReason === 'length' &&
@@ -674,6 +714,20 @@ export async function runDelegationLoop(
     totalMs: turnTimer(),
   });
   if (lastServed) {
+    const turnUsage = {
+      inputTokens: turnInputTokens,
+      outputTokens: turnOutputTokens,
+      cacheRead: turnCacheReadTokens,
+      cacheWrite: turnCacheWriteTokens,
+    };
+    finalDecision = {
+      ...finalDecision,
+      usage: turnUsage,
+      spend: {
+        routedCost: turnRoutedCost,
+        baselineCost: priceTokens(finalDecision.baseline?.cost, turnUsage),
+      },
+    };
     appendDecision(finalDecision, lastServed);
   }
   return { success: true, streamFinalized: false, lastServed };

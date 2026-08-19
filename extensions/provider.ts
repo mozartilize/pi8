@@ -45,6 +45,7 @@ import {
   MODEL_THINKING_LEVELS,
   type RegistryModelInfo,
 } from './scorer.js';
+import { pickBaseline } from './baseline.js';
 import {
   completeMeasuredRow,
   effortDropsPerStep,
@@ -1075,6 +1076,18 @@ export function registerAutoRouterProvider(
             decision.intentKey = turnInput.key;
             decision.assessmentMode = config.assessmentMode;
             decision.provenanceCounts = turnInput.provenanceCounts;
+            try {
+              // Counterfactual baseline for /router-report. Never blocks
+              // routing (rule 2): a failure here only omits baseline
+              // telemetry for the turn.
+              decision.baseline = pickBaseline(
+                routableCandidates,
+                decision.dimension,
+                config.baselineModel,
+              );
+            } catch {
+              // Best-effort telemetry only.
+            }
             setLastDecision(decision);
             if (userEscalation) consumePendingUserEscalation();
 

@@ -28,14 +28,19 @@ import { computeRoleModels, pickSubagentDefaultModel } from './subagents.js';
 import { SubagentEscalationHooks } from './subagent-escalation-hooks.js';
 import { SubagentRoutingState } from './subagent-routing-state.js';
 import { extractMissingTools } from './gap-detector.js';
-import { collectSubagentResultText } from './subagent-results.js';
+import { collectSubagentResultText, parseSubagentResultRows } from './subagent-results.js';
+import { computeSubagentSpend } from './subagent-spend.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
 import { loadConfig } from './config.js';
 import { setSessionFile } from './sessionpaths.js';
 import { debugLog, setConfigDebug } from './debuglog.js';
 import type { RegistryModelInfo } from './scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from './types.js';
-import { appendMutationGateSignal, appendSubagentGapSignal } from './decisionlog.js';
+import {
+  appendMutationGateSignal,
+  appendSubagentGapSignal,
+  appendSubagentSpend,
+} from './decisionlog.js';
 import { clearRouterStatus } from './ui.js';
 import {
   getLastDecision,
@@ -455,6 +460,22 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
           for (const tool of missingTools) {
             appendSubagentGapSignal({ role, tool, model });
           }
+        }
+
+        // Foreground child spend, recorded on the same registry-price basis
+        // as parent turns so `/router-report` can add them without mixing
+        // cost scales. Explicitly-pinned children are recorded too, marked
+        // not-router-owned, so the report never claims credit for spend it
+        // did not route.
+        const candidates = snapshot.routingSnapshot?.candidates;
+        if (candidates && candidates.length > 0) {
+          const records = computeSubagentSpend(parseSubagentResultRows(event.details), {
+            candidates,
+            configBaselineModel: loadConfig().baselineModel,
+            ...(plan.observedRoles.length === 1 ? { role: plan.observedRoles[0] } : {}),
+            routerOwnedModels: plan.observedModels,
+          });
+          for (const record of records) appendSubagentSpend(record);
         }
 
         // Only recompute role assignments when a blacklist actually changed them.

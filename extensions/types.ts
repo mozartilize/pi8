@@ -313,6 +313,28 @@ export interface RoutingDecision {
   };
   /** Multi-work routing metadata when an eligible compound intent is engaged. */
   multiWork?: MultiWorkRoutingMeta;
+  /**
+   * Counterfactual baseline this turn is priced against for `/router-report`.
+   * `source: 'config'` means `config.baselineModel` was routable this turn;
+   * `'auto'` means it was picked from the same candidate pool by measured
+   * capability (price only as a tiebreak when no candidate carries bench
+   * quality). Absent when no routable candidate could serve as baseline.
+   */
+  baseline?: {
+    registryId: string;
+    source: 'config' | 'auto';
+    cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+  };
+  /**
+   * Actual vs counterfactual spend for this turn, both priced from registry
+   * `$/token` at the SAME observed token counts (`usage`) — never mixed with
+   * provider-reported billing (`cost.total`, absent for subscription
+   * providers), which would compare two different cost bases. `routedCost`
+   * sums every attempt's own price (including failed attempts that still
+   * spent tokens); `baselineCost` reprices that same total at the baseline
+   * model's rate. Absent `baselineCost` means no baseline was resolved.
+   */
+  spend?: { routedCost: number; baselineCost?: number };
 }
 
 export type Role = 'researcher' | 'planner' | 'worker' | 'reviewer' | 'advisor';
@@ -340,6 +362,13 @@ export interface AutoRouterConfig {
   dimensionWeights: Record<Dimension, ScoreWeights>;
   /** Maximum incumbent-retention bonus for mid-session switching. */
   switchMargin: number;
+  /**
+   * Counterfactual baseline for `/router-report`'s spend-vs-baseline
+   * comparison, as `provider/id`. Absent means the router auto-picks the
+   * highest measured-capability routable candidate on each turn's own
+   * dimension instead of a fixed pin.
+   */
+  baselineModel?: string;
   /**
    * Context window to advertise for the synthetic `router/auto` model. Pi tunes
    * compaction to the session model's window, so advertising the largest
