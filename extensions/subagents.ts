@@ -185,13 +185,25 @@ export function computeRoleAssignments(
     });
   }
 
-  // First pass: compute every role's pick.
+  // Reviewer complementarity (below) reads effectiveWorkerModel, which is only
+  // populated once the worker role has been processed. That ordering is load-
+  // bearing: if reviewer were processed before worker, it would silently equal
+  // the worker. Assert it rather than trust the array literal's order.
+  if (ALL_ROLES.indexOf('worker') > ALL_ROLES.indexOf('reviewer')) {
+    throw new Error('ALL_ROLES must process worker before reviewer for complementarity');
+  }
+
+  // First pass: compute every role's pick. A spawn has no incumbent cache to
+  // preserve, so pass isSubagentSpawn:true defensively — even if a caller ever
+  // set incumbentRegistryId, a subagent pick must never receive the
+  // cache-retention bonus.
   const picks: Partial<Record<Role, RoutingDecision>> = {};
   for (const role of ALL_ROLES) {
     const dim = ROLE_DIMENSIONS[role];
     const decision = pickBest(candidates, dim, weights[dim], {
       estimatedContextTokens: opts.estimatedContextTokens ?? 0,
       incumbentRegistryId: opts.incumbentRegistryId,
+      isSubagentSpawn: true,
     });
     picks[role] = decision;
   }
@@ -233,6 +245,7 @@ export function computeRoleAssignments(
           pickBest(filtered, dim, weights[dim], {
             estimatedContextTokens: opts.estimatedContextTokens ?? 0,
             incumbentRegistryId: opts.incumbentRegistryId,
+            isSubagentSpawn: true,
           }) ?? decision;
       } else {
         decision = { ...decision, reason: `${decision.reason}; review fallback: no independent model` };
