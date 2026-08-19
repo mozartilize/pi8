@@ -318,10 +318,14 @@ export async function runDelegationLoop(
           decision.dimension,
         );
       }
-      // The first meaningful output deadline is absolute from stream start.
-      // Lifecycle heartbeats may arrive, but cannot renew the provider's
-      // opportunity to produce text, thinking, or a tool call.
-      const meaningfulOutputDeadline = Date.now() + firstEventTimeoutMs;
+      // The answer deadline is absolute from stream start. Lifecycle heartbeats
+      // (start/done) cannot renew it. Thinking output is the one exception: a
+      // reasoning model legitimately streams thinking for a while before its
+      // first text/tool-call, so each thinking delta pushes the deadline
+      // forward by one stall window — liveness is still enforced (a reasoning
+      // stall longer than the window fails the candidate) without a single
+      // thinking token disabling the deadline outright.
+      let answerDeadline = Date.now() + firstEventTimeoutMs;
       const effectiveSource = `${provider}/${modelId}:${effectiveReasoning ?? 'off'}`;
       const attemptCanRouteUp =
         opts.enableRouteUpGuidance === true &&
@@ -347,6 +351,11 @@ export async function runDelegationLoop(
       let servedTracked = false;
       let sawFirstEvent = false;
       let meaningfulOutputReceived = false;
+      // Set when a candidate's pre-answer reasoning overflows the buffer and we
+      // stream it live rather than fail an otherwise-productive turn. Once its
+      // reasoning has streamed we can no longer replay it on a fallback, so
+      // this locks replay exactly like visible text or a tool call does.
+      let committedToStream = false;
       let networkTimeout = false;
       let errorMessageObj: { stopReason?: string; errorMessage?: string } | undefined;
       const streamTimer = startTimer();
@@ -361,13 +370,21 @@ export async function runDelegationLoop(
       // discarded with the attempt. Once meaningful output has streamed,
       // forwarding is live: partial output is never replayed on another
       // model, so nothing after that point is discarded.
-      // The buffer only ever holds non-output lifecycle events (an output
-      // event flips passthrough immediately), so a cap that never trips on a
-      // well-behaved provider still bounds memory if one spams events until
-      // the meaningful-output deadline.
+      // The buffer holds lifecycle events plus any pre-answer thinking (an
+      // answer event flips passthrough immediately and flushes it). The cap
+      // bounds memory against a provider that spams events without ever
+      // answering; a reasoning trace that overflows it commits to live
+      // streaming instead of failing (see forward()).
       const MAX_BUFFERED_EVENTS = 10_000;
       const attemptBuffer: unknown[] = [];
       let passthrough = false;
+      // Tracks whether the BUFFER (not the current event) already holds a
+      // thinking delta. `thinkingReceived` flips true for the current event
+      // before `forward()` runs, so using it here would treat the very event
+      // that just overflowed a 10,000-event buffer of pure lifecycle spam as
+      // proof the buffer contains thinking, flushing the spam and disabling
+      // fallback for a candidate that never produced a reasoning trace.
+      let bufferHasThinking = false;
       const forward = (ev: unknown): void => {
         if (passthrough) {
           stream.push(ev as never);
@@ -384,10 +401,25 @@ export async function runDelegationLoop(
           return;
         }
         if (attemptBuffer.length >= MAX_BUFFERED_EVENTS) {
+          // Distinguish real output from lifecycle spam. A buffer this large
+          // that already holds thinking is a reasoning model streaming a long
+          // trace before its answer: commit to it (stream live, lock replay)
+          // rather than discard a productive turn. A buffer full of pure
+          // lifecycle events with no thinking is pathological spam and still
+          // fails the candidate, falling over to the next model.
+          if (bufferHasThinking) {
+            passthrough = true;
+            committedToStream = true;
+            for (const buffered of attemptBuffer) stream.push(buffered as never);
+            attemptBuffer.length = 0;
+            stream.push(ev as never);
+            return;
+          }
           throw new Error(
             `candidate emitted more than ${MAX_BUFFERED_EVENTS} events before meaningful output: ${candidateId}`,
           );
         }
+        if ((ev as { type: string }).type === 'thinking_delta') bufferHasThinking = true;
         attemptBuffer.push(ev);
       };
       try {
@@ -397,7 +429,7 @@ export async function runDelegationLoop(
             step = await iterator.next();
           } else {
             try {
-              const remainingMs = meaningfulOutputDeadline - Date.now();
+              const remainingMs = answerDeadline - Date.now();
               if (remainingMs <= 0) throw new Error('meaningful output deadline elapsed');
               step = await withTimeout(iterator.next(), remainingMs);
             } catch {
@@ -419,10 +451,19 @@ export async function runDelegationLoop(
           sawFirstEvent = true;
           if (step.done) break;
           const event = step.value;
+          // Only an answer — text or a tool call — proves the candidate served
+          // this turn. Thinking is the model's own pre-answer reasoning: it
+          // keeps liveness alive (below) but must NOT disarm the answer
+          // requirement, so a candidate that emits only thinking then errors is
+          // still an answerless failure whose buffered reasoning is discarded
+          // with the attempt, never stitched onto the fallback's answer.
           if (isServedOutputEvent(event.type)) meaningfulOutputReceived = true;
 
           if (event.type === 'text_delta') visibleTextReceived = true;
-          if (event.type === 'thinking_delta') thinkingReceived = true;
+          if (event.type === 'thinking_delta') {
+            thinkingReceived = true;
+            answerDeadline = Date.now() + firstEventTimeoutMs;
+          }
           if (isToolCallEvent(event.type)) toolCallReceived = true;
 
           if (event.type === 'done') {
@@ -564,9 +605,11 @@ export async function runDelegationLoop(
           stream.end();
           return { success: false, streamFinalized: true, lastError: message, lastServed };
         }
-        if (visibleTextReceived || toolCallReceived) {
-          // A usable answer or tool action already streamed; replaying it on a
-          // fallback model could duplicate user-visible output or side effects.
+        if (visibleTextReceived || toolCallReceived || committedToStream) {
+          // A usable answer or tool action already streamed — or a long
+          // reasoning trace was committed live past the buffer cap; replaying
+          // on a fallback model could duplicate user-visible output, leak the
+          // reasoning into another model's answer, or repeat side effects.
           stream.push(makeTerminalErrorEvent('error', message));
           stream.end();
           return { success: false, streamFinalized: true, lastError: message, lastServed };
@@ -633,12 +676,16 @@ export async function runDelegationLoop(
 }
 
 /**
- * Events that prove the candidate is actually generating this turn's response,
- * as opposed to lifecycle-only `start`/`done`. Tool calls count: an "implement"
- * turn can be pure tool-call output with no text/thinking deltas at all.
+ * Events that prove the candidate actually produced this turn's answer, as
+ * opposed to lifecycle-only `start`/`done` or pre-answer `thinking_delta`.
+ * Reaching one flips passthrough (flushing the pre-output buffer) and locks
+ * out replay. Tool calls count: an "implement" turn can be pure tool-call
+ * output with no text deltas at all. Thinking is deliberately excluded: it is
+ * the model's own reasoning, and streaming a failed candidate's reasoning
+ * before its answer arrives would leak it into the fallback model's response.
  */
 function isServedOutputEvent(type: string): boolean {
-  return type === 'text_delta' || type === 'thinking_delta' || isToolCallEvent(type);
+  return type === 'text_delta' || isToolCallEvent(type);
 }
 
 function isToolCallEvent(type: string): boolean {

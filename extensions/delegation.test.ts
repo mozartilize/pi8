@@ -122,6 +122,36 @@ describe('runDelegationLoop contracts', () => {
     expect(h.blacklist).toContain('alpha/spammy');
   });
 
+  it('does not commit overflow when the first thinking event is the one that overflows the buffer', async () => {
+    // The overflow-commit branch requires the BUFFER to already hold
+    // thinking, not the current (10,001st) event that triggered the
+    // overflow check. 10,000 pure lifecycle events followed by a single
+    // thinking delta must still fail this candidate as pathological spam and
+    // fall over to the next one, never commit to live streaming.
+    const h = createDelegationHarness({
+      chain: ['alpha/spammy', 'beta/fallback'],
+      scripts: {
+        'alpha/spammy': [[
+          ...Array.from({ length: 10_000 }, () => ({ type: 'start' })),
+          { type: 'thinking_delta', delta: 'late thought' },
+        ]],
+        'beta/fallback': [[
+          { type: 'text_delta', delta: 'served' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.success).toBe(true);
+    expect(h.output).toEqual([
+      { type: 'text_delta', delta: 'served' },
+      { type: 'done', message: { stopReason: 'stop' } },
+    ]);
+    expect(h.blacklist).toContain('alpha/spammy');
+  });
+
   it('serves when the first meaningful output arrives exactly at the cap boundary', async () => {
     // The cap must only fail pre-output spam. A candidate whose (cap+1)th
     // event is its first text has proven itself: it flushes its buffer and
@@ -627,6 +657,68 @@ describe('runDelegationLoop fallback policy', () => {
     expect(result.success).toBe(true);
     expect(h.attempts).toEqual(['alpha/reason', 'beta/answer']);
     expect(h.blacklist).not.toContain('alpha/reason');
+  });
+
+  it('never leaks a failed candidate\'s pre-text thinking into the fallback answer', async () => {
+    // R5: a candidate that streams reasoning then errors before any answer is
+    // answerless. Its buffered thinking must be discarded with the attempt,
+    // never stitched onto the fallback model's answer, and the consumer must
+    // not see two models' `start` events.
+    const h = createDelegationHarness({
+      chain: ['alpha/thinker', 'beta/fallback'],
+      scripts: {
+        'alpha/thinker': [[
+          { type: 'start' },
+          { type: 'thinking_delta', delta: 'A-SECRET-REASONING-1' },
+          { type: 'thinking_delta', delta: 'A-SECRET-REASONING-2' },
+          { type: 'error', error: { message: 'boom' } },
+        ]],
+        'beta/fallback': [[
+          { type: 'text_delta', delta: 'B-ANSWER' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/thinker', 'beta/fallback']);
+    const types = h.output.map((e) => (e as { type: string }).type);
+    expect(types.filter((t) => t === 'start').length).toBeLessThanOrEqual(1);
+    expect(types).not.toContain('thinking_delta');
+    expect(
+      h.output.some((e) => String((e as { delta?: string }).delta ?? '').includes('SECRET')),
+    ).toBe(false);
+  });
+
+  it('a single thinking token does not disable the answer deadline', async () => {
+    // R5 liveness: thinking keeps a reasoning-stall deadline alive but must not
+    // disarm it outright — a provider that emits one thinking token then hangs
+    // still times out and falls over instead of blocking the turn forever.
+    setDelegationTimeouts({ firstEventMs: 40, authMs: 500 });
+    const thinkThenHang: AsyncIterable<unknown> = {
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'thinking_delta', delta: 'reasoning...' };
+        await new Promise(() => {});
+      },
+    };
+    const h = createDelegationHarness({
+      chain: ['alpha/staller', 'beta/answer'],
+      scripts: {
+        'alpha/staller': [thinkThenHang],
+        'beta/answer': [
+          [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }],
+        ],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/staller', 'beta/answer']);
+    expect(result.lastServed?.registryId).toBe('beta/answer');
+    expect(h.output.some((e) => (e as { type: string }).type === 'thinking_delta')).toBe(false);
   });
 
   it('never replays after visible text followed by length', async () => {
