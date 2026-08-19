@@ -36,8 +36,23 @@ export interface RoutingPolicyInput {
   userEscalation?: PendingUserEscalation;
   escalation?: AppliedEscalation;
   estimatedContextTokens: number;
+  /**
+   * Estimated tokens in the static prompt prefix (system prompt) an incumbent
+   * effort change preserves in the provider cache. Feeds the graded switch
+   * bonus so an effort bump on the incumbent is priced below a full model
+   * change. Absent leaves an effort change scored like any other switch.
+   */
+  staticPrefixTokens?: number;
   needsVision: boolean;
   incumbentRegistryId?: string;
+  /**
+   * The dimension the previous decision resolved at. When the incumbent model
+   * stays sticky within a task, this carries forward as an up-only effort
+   * floor so a cheap-phrased same-task follow-up cannot serve the strong
+   * incumbent at a shallow thinking level. Stands down on an off-topic reset
+   * and the same sanctioned downward moves as the incumbent model floor (R3).
+   */
+  incumbentResolvedDimension?: Dimension;
   /**
    * True when this invocation shares the previous decision's intent key — i.e.
    * it is a continuation of the same user entry (a post-tool re-invocation),
@@ -230,8 +245,10 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     userEscalation,
     escalation,
     estimatedContextTokens,
+    staticPrefixTokens,
     needsVision,
     incumbentRegistryId,
+    incumbentResolvedDimension,
     sameIntentAsLast,
     config,
     multiWorkPolicy,
@@ -284,6 +301,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     needsVision,
     isSubagentSpawn: false,
     switchMargin: config.switchMargin,
+    ...(staticPrefixTokens != null ? { staticPrefixTokens } : {}),
   };
   const pickOpts: ScoreOpts = multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
   // A model route-up is strict about the status-reported source attempt. Remove
@@ -427,6 +445,28 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
         decision.reason += ' [incumbent-floor]';
       }
     }
+  }
+
+  // Step 6c: incumbent effort floor. Holding the strong incumbent model on a
+  // cheap-classified same-task follow-up (whether re-picked naturally or
+  // restored by the model floor above) would otherwise serve it at the cheap
+  // dimension's shallow thinking floor — right model, wrong effort. Carry the
+  // incumbent's resolved dimension forward as an up-only effort floor. This
+  // never lowers effort (max only), never changes the routed dimension or
+  // model (so no DecisionCause per R6 — it is a secondary mechanism recorded in
+  // the reason), and stands down for exactly the sanctioned downward moves and
+  // the off-topic reset, matching the model floor.
+  if (
+    incumbentResolvedDimension != null &&
+    !precedence.userApplied &&
+    !precedence.escalationApplied &&
+    !inspectPhasePromotion &&
+    !consultLoweredDimension &&
+    !offTopicReset &&
+    DIMENSION_STRENGTH[incumbentResolvedDimension] > DIMENSION_STRENGTH[dimension]
+  ) {
+    decision.effortFloorDimension = incumbentResolvedDimension;
+    decision.reason += ' [incumbent-effort-floor]';
   }
 
   // Step 7: apply context-pressure metadata as advisory only.

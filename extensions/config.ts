@@ -29,6 +29,13 @@ export interface PersistedConfig {
   sources?: string[];
   dimensionWeights?: Partial<Record<Dimension, { quality: number; cost: number; speed: number }>>;
   switchMargin?: number;
+  /**
+   * Advertise this context window for `router/auto` instead of the largest
+   * routable model's. A smaller value makes Pi compact earlier, keeping
+   * smaller-window (often cheaper) models eligible for longer. Absent =
+   * largest routable window.
+   */
+  routerContextWindow?: number;
   lowConfidenceThreshold?: number;
   consultRouter?: boolean;
   consultRouterAgent?: boolean;
@@ -179,6 +186,12 @@ export function loadConfig(): AutoRouterConfig {
     sources: stringList(persisted.sources) ?? ['artificial-analysis', 'benchlm'],
     dimensionWeights: normalizeDimensionWeights(persisted.dimensionWeights),
     switchMargin: finiteInRange(persisted.switchMargin, DEFAULT_SWITCH_MARGIN, 0, 1),
+    routerContextWindow:
+      typeof persisted.routerContextWindow === 'number' &&
+      Number.isFinite(persisted.routerContextWindow) &&
+      persisted.routerContextWindow > 0
+        ? Math.floor(persisted.routerContextWindow)
+        : undefined,
     lowConfidenceThreshold: finiteInRange(
       persisted.lowConfidenceThreshold,
       DEFAULT_LOW_CONFIDENCE_THRESHOLD,

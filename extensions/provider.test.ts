@@ -799,6 +799,198 @@ describe('provider orchestration', () => {
   });
 });
 
+describe('incumbent effort floor carries across invocations', () => {
+  // The effort floor is a secondary field on a decision (it does not change
+  // `dimension`), so a naive carry that reads only `getLastDecision()?.dimension`
+  // silently drops it one turn after it was set. This must survive an
+  // arbitrary number of subsequent turns, not just one hop.
+  let harness: ProviderTestHarness;
+
+  beforeEach(async () => {
+    harness = await setupProviderTest({
+      dir: temp.path,
+      // A high threshold keeps every cheap-phrased follow-up below it, so the
+      // incumbent capability floor holds across turns regardless of the real
+      // classifier's confidence output for short prompts.
+      config: { consultRouter: false, lowConfidenceThreshold: 0.99 },
+      benchmarks: [
+        {
+          registryId: 'alpha/strong',
+          benchSlug: 'strong',
+          active: true,
+          quality: { intelligence: 95, coding: 95, agenticCoding: 95 },
+          source: 'test',
+        },
+        {
+          registryId: 'beta/cheap',
+          benchSlug: 'cheap',
+          active: true,
+          quality: { intelligence: 60, coding: 60, agenticCoding: 60 },
+          source: 'test',
+        },
+      ],
+      models: [
+        registryModel('alpha/strong', { contextWindow: 200000, maxTokens: 8192 }),
+        registryModel('beta/cheap', { contextWindow: 200000, maxTokens: 8192 }),
+      ],
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+  });
+
+  it('keeps a stronger dimension as the effort floor two turns after it was resolved', async () => {
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'implement the retry logic across the module' }] } as unknown as Context,
+    );
+    expect(harness.getProviderState().lastDecision?.dimension).toBe('implement');
+    expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
+
+    // Turn 2: a fresh, cheap-phrased entry. The incumbent capability floor
+    // keeps alpha/strong served, and its own resolved dimension ('gather') is
+    // weaker than the carried incumbent dimension ('implement'), so this
+    // turn's decision gets an `effortFloorDimension` distinct from its own
+    // `dimension` — exactly the case the naive carry loses.
+    harness.outStream.events = [];
+    harness.outStream.ended = false;
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'what about that' }] } as unknown as Context,
+    );
+    const turn2 = harness.getProviderState().lastDecision;
+    expect(turn2?.dimension).toBe('gather');
+    expect(turn2?.effortFloorDimension).toBe('implement');
+
+    // Turn 3: another fresh, cheap-phrased entry. With the fix, the floor
+    // carried into this turn's `incumbentResolvedDimension` is turn 2's
+    // *effective* dimension ('implement'), not its raw `dimension` ('gather').
+    harness.outStream.events = [];
+    harness.outStream.ended = false;
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'and one more thing' }] } as unknown as Context,
+    );
+    const turn3 = harness.getProviderState().lastDecision;
+    expect(turn3?.dimension).toBe('gather');
+    expect(turn3?.effortFloorDimension).toBe('implement');
+  });
+});
+
+describe('router/auto advertised contextWindow', () => {
+  it('defaults to the largest window among routable (allowlisted) models, not every registry model', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      // The huge window belongs to a provider the allowlist excludes; it must
+      // not leak into the advertised default.
+      config: { models: ['alpha/*'] },
+      models: [
+        registryModel('alpha/small', { contextWindow: 250000, maxTokens: 4096 }),
+        registryModel('zeta/huge', { contextWindow: 1_000_000, maxTokens: 200000 }),
+      ],
+      includeRouterModel: false,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+
+    const routerModel = harness.providerOptions.models?.find(
+      (m) => (m as { id: string }).id === 'auto',
+    ) as { contextWindow?: number } | undefined;
+    expect(routerModel?.contextWindow).toBe(250000);
+  });
+
+  it('advertises the real routable max even when it sits below the synthetic 200k fallback', async () => {
+    // No floor at DEFAULT_CONTEXT_WINDOW: a genuinely small routable maximum
+    // must be advertised as-is, not inflated to 200k.
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { models: ['alpha/*'] },
+      models: [
+        registryModel('alpha/small', { contextWindow: 50000, maxTokens: 2048 }),
+        registryModel('zeta/huge', { contextWindow: 1_000_000, maxTokens: 200000 }),
+      ],
+      includeRouterModel: false,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+
+    const routerModel = harness.providerOptions.models?.find(
+      (m) => (m as { id: string }).id === 'auto',
+    ) as { contextWindow?: number } | undefined;
+    expect(routerModel?.contextWindow).toBe(50000);
+  });
+
+  it('falls back to the synthetic default, never a disallowed model, when nothing is routable', async () => {
+    // An allowlist matching zero registry models must not leak an excluded
+    // provider's window into the advertised capacity; the synthetic
+    // DEFAULT_CONTEXT_WINDOW placeholder is used instead.
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { models: ['nonexistent/*'] },
+      models: [
+        registryModel('alpha/small', { contextWindow: 50000, maxTokens: 2048 }),
+        registryModel('zeta/huge', { contextWindow: 1_000_000, maxTokens: 200000 }),
+      ],
+      includeRouterModel: false,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+
+    const routerModel = harness.providerOptions.models?.find(
+      (m) => (m as { id: string }).id === 'auto',
+    ) as { contextWindow?: number } | undefined;
+    expect(routerModel?.contextWindow).toBe(200000);
+  });
+
+  it('clamps an oversized override to the actual routable max, even when that max is below 200k', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { models: ['alpha/*'], routerContextWindow: 9_000_000 },
+      models: [
+        registryModel('alpha/small', { contextWindow: 50000, maxTokens: 2048 }),
+        registryModel('zeta/huge', { contextWindow: 1_000_000, maxTokens: 200000 }),
+      ],
+      includeRouterModel: false,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+
+    const routerModel = harness.providerOptions.models?.find(
+      (m) => (m as { id: string }).id === 'auto',
+    ) as { contextWindow?: number } | undefined;
+    expect(routerModel?.contextWindow).toBe(50000);
+  });
+
+  it('clamps a routerContextWindow override to the largest routable window, never above it', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { models: ['alpha/*'], routerContextWindow: 5_000_000 },
+      models: [
+        registryModel('alpha/small', { contextWindow: 250000, maxTokens: 4096 }),
+        registryModel('zeta/huge', { contextWindow: 1_000_000, maxTokens: 200000 }),
+      ],
+      includeRouterModel: false,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+
+    const routerModel = harness.providerOptions.models?.find(
+      (m) => (m as { id: string }).id === 'auto',
+    ) as { contextWindow?: number } | undefined;
+    expect(routerModel?.contextWindow).toBe(250000);
+  });
+
+  it('honours a routerContextWindow override within the routable range', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { models: ['alpha/*'], routerContextWindow: 30000 },
+      models: [
+        registryModel('alpha/small', { contextWindow: 50000, maxTokens: 4096 }),
+      ],
+      includeRouterModel: false,
+      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+    });
+
+    const routerModel = harness.providerOptions.models?.find(
+      (m) => (m as { id: string }).id === 'auto',
+    ) as { contextWindow?: number } | undefined;
+    expect(routerModel?.contextWindow).toBe(30000);
+  });
+});
+
 describe('provider auth filtering', () => {
   let harness: ProviderTestHarness;
 

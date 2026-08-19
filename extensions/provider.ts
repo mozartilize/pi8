@@ -28,7 +28,7 @@ import { DIMENSION_STRENGTH } from './classifier.js';
 import { DEFAULT_EMBEDDING_MIN_CONFIDENCE } from './constants.js';
 import { embedAndClassify } from './embedding.js';
 import { getTurnClassificationInput, buildRoleLabelledContext } from './continuation.js';
-import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
+import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter, loadConfigBlacklistFilter } from './allowlist.js';
 import { loadConfig } from './config.js';
 import { runAssessment, type AssessmentAttempt, type AssessmentConfig } from './consult.js';
 import { adoptAssessment, shouldVetoLatch } from './assessment-adoption.js';
@@ -202,18 +202,29 @@ function textFromBlock(block: unknown): string {
   return '';
 }
 
-function hasImageAttachment(messages: readonly Message[] | undefined): boolean {
+// Pi's compaction estimator charges a flat 4800 chars (~1200 tokens) per
+// image block; the router's char-based estimate must account on the same
+// scale so context-pressure detection, the long-context guard, and the
+// cache-retention bonus don't treat an image-heavy session as near-empty.
+const ESTIMATED_IMAGE_CHARS = 4800;
+
+function countImageBlocks(messages: readonly Message[] | undefined): number {
+  let count = 0;
   for (const msg of messages ?? []) {
     if (Array.isArray(msg.content)) {
       for (const block of msg.content) {
         if (block && typeof block === 'object') {
           const b = block as unknown as Record<string, unknown>;
-          if (b.type === 'image' || b.type === 'image_url') return true;
+          if (b.type === 'image' || b.type === 'image_url') count++;
         }
       }
     }
   }
-  return false;
+  return count;
+}
+
+function hasImageAttachment(messages: readonly Message[] | undefined): boolean {
+  return countImageBlocks(messages) > 0;
 }
 
 function allMessagesText(messages: readonly Message[] | undefined): string {
@@ -429,16 +440,56 @@ export function registerAutoRouterProvider(
   const regModels = ctx?.modelRegistry?.getAvailable() ?? [];
   const registryModels = regModels as unknown as RegistryModelInfo[];
 
-  let maxCw = DEFAULT_CONTEXT_WINDOW;
-  let maxMT = DEFAULT_MAX_TOKENS;
-  for (const m of registryModels) {
+  // "Largest routable window" means largest among models the user's
+  // `models`/`blacklist` config actually lets the router pick, not every
+  // model in Pi's registry — an unrelated provider's huge context window
+  // must not delay compaction for a session scoped away from it.
+  let isModelAllowed: (registryId: string) => boolean = () => true;
+  let isModelBlacklisted: (registryId: string) => boolean = () => false;
+  try {
+    isModelAllowed = loadModelFilter();
+    isModelBlacklisted = loadConfigBlacklistFilter();
+  } catch {
+    // Fall through to allow-all/exclude-none; registration must not fail.
+  }
+  const routableRegistryModels = registryModels.filter((m) => {
+    const id = `${m.provider}/${m.id}`;
+    return isModelAllowed(id) && !isModelBlacklisted(id);
+  });
+
+  // Only routable models feed the aggregate: an allowlist that (transiently,
+  // e.g. mid-config-edit) matches nothing must NOT leak a disallowed
+  // provider's window into the advertised capacity. `DEFAULT_CONTEXT_WINDOW`/
+  // `DEFAULT_MAX_TOKENS` are a synthetic placeholder used only when zero
+  // routable models exist, never a floor that inflates a genuinely small
+  // routable maximum.
+  let maxCw = 0;
+  let maxMT = 0;
+  for (const m of routableRegistryModels) {
     if (m.contextWindow && m.contextWindow > maxCw) maxCw = m.contextWindow;
     if (m.maxTokens && m.maxTokens > maxMT) maxMT = m.maxTokens;
   }
+  if (maxCw <= 0) maxCw = DEFAULT_CONTEXT_WINDOW;
+  if (maxMT <= 0) maxMT = DEFAULT_MAX_TOKENS;
+  // Pi tunes compaction to the session model's window. Advertising the largest
+  // routable window (the default) delays compaction and biases long sessions
+  // toward large-window models; a configured `routerContextWindow` lets the
+  // user advertise a smaller effective window so Pi compacts earlier and keeps
+  // cheaper models eligible longer. An override above the largest routable
+  // window (or above the synthetic fallback, when no routable model exists)
+  // would advertise capacity nothing actually has, so it is clamped down to
+  // `maxCw`, never up.
+  let configuredCw: number | undefined;
+  try {
+    configuredCw = loadConfig().routerContextWindow;
+  } catch {
+    configuredCw = undefined;
+  }
+  const advertisedCw = configuredCw && configuredCw > 0 ? Math.min(configuredCw, maxCw) : maxCw;
   const routerThinkingLevelMap = buildRouterThinkingLevelMap(registryModels);
 
   const modelSetKey = registryModels.map((m) => `${m.provider}/${m.id}`).sort().join(',');
-  const modelsKey = `${modelSetKey}|${maxCw}|${maxMT}`;
+  const modelsKey = `${modelSetKey}|${advertisedCw}|${maxMT}`;
   if (modelsKey === getLastRegisteredModels()) return;
 
   try {
@@ -451,7 +502,7 @@ export function registerAutoRouterProvider(
           id: AUTO_MODEL_ID,
           name: 'Auto Router',
           api: 'router-auto-api' as Api,
-          contextWindow: maxCw,
+          contextWindow: advertisedCw,
           maxTokens: maxMT,
           input: ['text', 'image'] as ('text' | 'image')[],
           reasoning: true,
@@ -497,7 +548,14 @@ export function registerAutoRouterProvider(
             // (tool snippets, skills, guidelines) is silently uncounted.
             const fullText =
               (systemPrompt ? systemPrompt + '\n' : '') + allMessagesText(context.messages);
-            const estContextTokens = estimateTokenCount(fullText);
+            const imageChars = countImageBlocks(context.messages) * ESTIMATED_IMAGE_CHARS;
+            const estContextTokens = estimateTokenCount(fullText) + Math.ceil(imageChars / 4);
+            // The static system prefix survives an incumbent effort change in
+            // the provider cache (effort only invalidates message blocks), so
+            // the switch bonus credits it. Tool-schema tokens aren't counted
+            // here, so this under-states the preserved prefix — the safe way to
+            // err (never over-credit a switch).
+            const staticPrefixTokens = systemPrompt ? estimateTokenCount(systemPrompt) : 0;
 
             const cachedIntent = getCachedRoutingIntent();
             const cacheHit = cachedIntent?.key === turnInput.key;
@@ -1002,8 +1060,10 @@ export function registerAutoRouterProvider(
               userEscalation,
               escalation,
               estimatedContextTokens: estContextTokens,
+              staticPrefixTokens,
               needsVision,
               incumbentRegistryId: getLastChosenRegistryId(),
+              incumbentResolvedDimension: getLastDecision()?.effortFloorDimension ?? getLastDecision()?.dimension,
               sameIntentAsLast: getLastDecision()?.intentKey === turnInput.key,
               vetoDepthEscalation,
               ...(multiWorkPolicy ? { multiWorkPolicy } : {}),

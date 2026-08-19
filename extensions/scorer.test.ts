@@ -381,6 +381,293 @@ describe('scorer', () => {
       expect(decision.chosen).toBe('test/cheap');
     });
 
+    it('gives a same-model effort change partial retention credit for the static prefix', () => {
+      // A route-up that only raises effort on the incumbent model reuses the
+      // static system/tool prefix cache (effort invalidates only message
+      // blocks), so it must not be penalized as heavily as switching to a
+      // different model that shares no cache at all.
+      const incumbentLow = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'low', benchSlug: 'model-low',
+          quality: { intelligence: 50, coding: 50 },
+          priceInputPer1M: 8, priceOutputPer1M: 40,
+        }),
+        reasoning: true, effort: 'low',
+        cost: { input: 0.000008, output: 0.00004 },
+      });
+      const sameModelHigh = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'high', benchSlug: 'model-high',
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 3, priceOutputPer1M: 15,
+        }),
+        reasoning: true, effort: 'high',
+        cost: { input: 0.000003, output: 0.000015 },
+      });
+      const rival = candidate('test/rival', {
+        bench: benchRow('test/rival', {
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 2.9, priceOutputPer1M: 14.9,
+        }),
+        cost: { input: 0.0000029, output: 0.0000149 },
+      });
+      const cands = [incumbentLow, sameModelHigh, rival];
+      const opts = {
+        estimatedContextTokens: 80000,
+        incumbentRegistryId: 'test/model:low',
+        switchMargin: 0.15,
+      };
+      // No static credit: the marginally cheaper different model wins the switch.
+      expect(pickBest(cands, 'lightweight', undefined, opts).chosen).toBe('test/rival');
+      // With a large static prefix, the same-model effort change keeps most of
+      // the stickiness and wins instead.
+      expect(
+        pickBest(cands, 'lightweight', undefined, { ...opts, staticPrefixTokens: 60000 }).chosen,
+      ).toBe('test/model:high');
+    });
+
+    it('prices the effort-change credit by the INCUMBENT\'s own cache discount, not the destination candidate\'s', () => {
+      // The credit values cache that is actually preserved by staying on the
+      // incumbent's provider/model — it is the incumbent's own cacheWrite/
+      // cacheRead spread that determines how much is at stake, not the
+      // pricing published on whichever effort variant is being switched to.
+      // Here the incumbent's cacheRead sits nearly at its cacheWrite price
+      // (this provider barely discounts a cache hit at all), so the credit
+      // must shrink to near-nothing even with a large static prefix, and the
+      // marginally cheaper rival wins despite sharing the same model.
+      const incumbentLow = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'low', benchSlug: 'model-low',
+          quality: { intelligence: 50, coding: 50 },
+          priceInputPer1M: 8, priceOutputPer1M: 40,
+        }),
+        reasoning: true, effort: 'low',
+        // cacheRead exactly equal to cacheWrite: this provider offers no
+        // real caching discount at all, so the priced credit must be exactly
+        // zero (not a fallback to the flat unpriced rate).
+        cost: { input: 0.000008, output: 0.00004, cacheRead: 0.000008, cacheWrite: 0.000008 },
+      });
+      const sameModelHigh = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'high', benchSlug: 'model-high',
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 3, priceOutputPer1M: 15,
+        }),
+        reasoning: true, effort: 'high',
+        // A steep cache discount here must NOT matter: this is the target of
+        // the switch, not the cache actually being preserved.
+        cost: { input: 0.000003, output: 0.000015, cacheRead: 0.0000003, cacheWrite: 0.00000375 },
+      });
+      const rival = candidate('test/rival', {
+        bench: benchRow('test/rival', {
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 2.9, priceOutputPer1M: 14.9,
+        }),
+        cost: { input: 0.0000029, output: 0.0000149 },
+      });
+      const cands = [incumbentLow, sameModelHigh, rival];
+      const opts = {
+        estimatedContextTokens: 80000,
+        incumbentRegistryId: 'test/model:low',
+        switchMargin: 0.15,
+        staticPrefixTokens: 60000,
+      };
+      expect(pickBest(cands, 'lightweight', undefined, opts).chosen).toBe('test/rival');
+    });
+
+    it('prices a full model change on the entire context, never just the message tokens', () => {
+      // A different provider/model shares no cache at all: it must get zero
+      // switch credit regardless of staticPrefixTokens, distinct from the
+      // same-model effort change above which gets a partial (static-only)
+      // credit. Both incumbentLow and rival share the same steep cache
+      // discount so any difference in outcome is attributable only to the
+      // switch mechanism, not to underlying price/quality gaps.
+      const incumbentLow = candidate('test/model', {
+        bench: benchRow('test/model', {
+          quality: { intelligence: 60, coding: 60 },
+          priceInputPer1M: 5, priceOutputPer1M: 25,
+        }),
+        cost: { input: 0.000005, output: 0.000025, cacheRead: 0.0000005, cacheWrite: 0.00000625 },
+      });
+      const rivalSamePriceAndQuality = candidate('test/rival', {
+        bench: benchRow('test/rival', {
+          quality: { intelligence: 60, coding: 60 },
+          priceInputPer1M: 5, priceOutputPer1M: 25,
+        }),
+        cost: { input: 0.000005, output: 0.000025, cacheRead: 0.0000005, cacheWrite: 0.00000625 },
+      });
+      const cands = [incumbentLow, rivalSamePriceAndQuality];
+      const opts = {
+        estimatedContextTokens: 80000,
+        incumbentRegistryId: 'test/model',
+        switchMargin: 0.15,
+        staticPrefixTokens: 60000,
+      };
+      const decision = pickBest(cands, 'lightweight', undefined, opts);
+      // Identical price/quality: only the switch credit can break the tie, and
+      // an unrelated model gets none of it.
+      expect(decision.chosen).toBe('test/model');
+    });
+
+    it('exempts a same-model candidate at the model\'s own (unmeasured) default effort from the effort-change discount', () => {
+      // A same-model candidate with no measured effort represents the model's
+      // default call shape — no reasoning-driven message delta invalidates the
+      // cache, so it keeps the FULL incumbent credit rather than the reduced
+      // static-only share an explicit effort change receives.
+      const incumbentHigh = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'high', benchSlug: 'model-high',
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 5, priceOutputPer1M: 25,
+        }),
+        reasoning: true, effort: 'high',
+        cost: { input: 0.000005, output: 0.000025, cacheRead: 0.0000005, cacheWrite: 0.00000625 },
+      });
+      const sameModelDefaultEffort = candidate('test/model', {
+        bench: benchRow('test/model', {
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 5.1, priceOutputPer1M: 25.1,
+        }),
+        cost: { input: 0.0000051, output: 0.0000251 },
+      });
+      const rival = candidate('test/rival', {
+        bench: benchRow('test/rival', {
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 5.05, priceOutputPer1M: 25.05,
+        }),
+        cost: { input: 0.00000505, output: 0.0000251 },
+      });
+      const cands = [incumbentHigh, sameModelDefaultEffort, rival];
+      const opts = {
+        estimatedContextTokens: 80000,
+        incumbentRegistryId: 'test/model:high',
+        switchMargin: 0.15,
+        // Deliberately small: the default-effort exemption must still grant
+        // the FULL credit even though a static prefix this small would only
+        // give an ordinary effort change a negligible fraction of it.
+        staticPrefixTokens: 1000,
+      };
+      const decision = pickBest(cands, 'lightweight', undefined, opts);
+      // sameModelDefaultEffort is priced slightly worse than rival, so on
+      // economics alone (or with only the tiny ordinary effort-change share)
+      // rival would outrank it. The full exemption credit must still lift it
+      // above rival in the fallback chain.
+      const chain = decision.fallbackChain;
+      expect(chain.indexOf('test/model')).toBeLessThan(chain.indexOf('test/rival'));
+    });
+
+    it('grants no retention credit at all when the incumbent publishes no cache pricing, scoring it on ordinary economics', () => {
+      // Guessing at a universal per-token rate when the incumbent's registry
+      // entry does not publish enough pricing to compute a real loss would
+      // reintroduce the exact provider-blind behavior this mechanism
+      // replaces. Absent `cacheRead` (or a `cacheWrite`/`input` write basis),
+      // every candidate — including the incumbent itself and a same-model
+      // effort change — is scored on quality/cost/speed alone, regardless of
+      // `staticPrefixTokens`.
+      const incumbentLow = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'low', benchSlug: 'model-low',
+          quality: { intelligence: 50, coding: 50 },
+          priceInputPer1M: 8, priceOutputPer1M: 40,
+        }),
+        reasoning: true, effort: 'low',
+        cost: { input: 0.000008, output: 0.00004, cacheRead: undefined, cacheWrite: undefined },
+      });
+      const sameModelHigh = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'high', benchSlug: 'model-high',
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 3, priceOutputPer1M: 15,
+        }),
+        reasoning: true, effort: 'high',
+        cost: { input: 0.000003, output: 0.000015, cacheRead: undefined, cacheWrite: undefined },
+      });
+      const rival = candidate('test/rival', {
+        bench: benchRow('test/rival', {
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 2.9, priceOutputPer1M: 14.9,
+        }),
+        cost: { input: 0.0000029, output: 0.0000149, cacheRead: undefined, cacheWrite: undefined },
+      });
+      const cands = [incumbentLow, sameModelHigh, rival];
+      const opts = {
+        estimatedContextTokens: 80000,
+        incumbentRegistryId: 'test/model:low',
+        switchMargin: 0.15,
+      };
+      // No pricing, no credit: the marginally cheaper different model wins.
+      expect(pickBest(cands, 'lightweight', undefined, opts).chosen).toBe('test/rival');
+      // A large static prefix must not resurrect a credit the missing pricing
+      // cannot support — the outcome is unchanged.
+      expect(
+        pickBest(cands, 'lightweight', undefined, { ...opts, staticPrefixTokens: 60000 }).chosen,
+      ).toBe('test/rival');
+    });
+
+    it('produces a deterministic incumbent-retention outcome regardless of candidate array order', () => {
+      const incumbentLow = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'low', benchSlug: 'model-low',
+          quality: { intelligence: 50, coding: 50 },
+          priceInputPer1M: 8, priceOutputPer1M: 40,
+        }),
+        reasoning: true, effort: 'low',
+        cost: { input: 0.000008, output: 0.00004, cacheRead: 0.0000003, cacheWrite: 0.00000375 },
+      });
+      const sameModelHigh = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'high', benchSlug: 'model-high',
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 3, priceOutputPer1M: 15,
+        }),
+        reasoning: true, effort: 'high',
+        cost: { input: 0.000003, output: 0.000015, cacheRead: 0.0000003, cacheWrite: 0.00000375 },
+      });
+      const rival = candidate('test/rival', {
+        bench: benchRow('test/rival', {
+          quality: { intelligence: 70, coding: 70 },
+          priceInputPer1M: 2.9, priceOutputPer1M: 14.9,
+        }),
+        cost: { input: 0.0000029, output: 0.0000149 },
+      });
+      const opts = {
+        estimatedContextTokens: 80000,
+        incumbentRegistryId: 'test/model:low',
+        switchMargin: 0.15,
+        staticPrefixTokens: 60000,
+      };
+      const forward = pickBest([incumbentLow, sameModelHigh, rival], 'lightweight', undefined, opts).chosen;
+      const reversed = pickBest([rival, sameModelHigh, incumbentLow], 'lightweight', undefined, opts).chosen;
+      expect(forward).toBe(reversed);
+    });
+
+    it('does not penalize switch on subagent spawn even when the incumbent publishes cache pricing', () => {
+      const incumbentLow = candidate('test/model', {
+        bench: benchRow('test/model', {
+          effort: 'low', benchSlug: 'model-low',
+          quality: { intelligence: 50, coding: 50 },
+          priceInputPer1M: 8, priceOutputPer1M: 40,
+        }),
+        reasoning: true, effort: 'low',
+        cost: { input: 0.000008, output: 0.00004, cacheRead: 0.0000003, cacheWrite: 0.00000375 },
+      });
+      const rival = candidate('test/rival', {
+        bench: benchRow('test/rival', {
+          quality: { intelligence: 50, coding: 50 },
+          priceInputPer1M: 2.9, priceOutputPer1M: 14.9,
+        }),
+        cost: { input: 0.0000029, output: 0.0000149 },
+      });
+      const decision = pickBest([incumbentLow, rival], 'lightweight', undefined, {
+        estimatedContextTokens: 80000,
+        incumbentRegistryId: 'test/model:low',
+        switchMargin: 0.15,
+        staticPrefixTokens: 60000,
+        isSubagentSpawn: true,
+      });
+      expect(decision.chosen).toBe('test/rival');
+    });
+
     it('routes-up on unknown quality for plan/review', () => {
       const a = candidate('test/ua', { bench: undefined, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
       const b = candidate('test/ub', { bench: undefined, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });

@@ -302,9 +302,13 @@ export async function runDelegationLoop(
       // model's thinkingLevelMap never resolves below the floor (rule 3). An
       // explicit user request uses the nearest-first walk so the user's choice
       // is honoured as closely as the model supports.
+      // A sticky incumbent held on a cheap-classified follow-up carries the
+      // incumbent's resolved dimension as an up-only effort floor, so the
+      // served thinking level cannot drop below what the incumbent ran at.
+      const effortFloorDimension = decision.effortFloorDimension ?? decision.dimension;
       let effectiveReasoning: import('@earendil-works/pi-ai').ModelThinkingLevel | undefined;
       if (entryEffort != null && !opts.userReasoningOverride) {
-        const clamped = clampEffortToFloor(entryEffort, decision.dimension);
+        const clamped = clampEffortToFloor(entryEffort, effortFloorDimension);
         effectiveReasoning = levelFrom(
           clamped,
           chosen as Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
@@ -315,7 +319,7 @@ export async function runDelegationLoop(
           typeof opts.reasoning === 'string'
             ? (opts.reasoning as import('@earendil-works/pi-ai').ThinkingLevel)
             : undefined,
-          decision.dimension,
+          effortFloorDimension,
         );
       }
       // The answer deadline is absolute from stream start. Lifecycle heartbeats

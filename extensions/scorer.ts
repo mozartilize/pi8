@@ -453,6 +453,16 @@ export interface ScoreOpts {
   /** Maximum incumbent-retention bonus for mid-session model switches. */
   switchMargin?: number;
   /**
+   * Estimated tokens in the static prompt prefix (system prompt + tool
+   * schemas) that a same-model effort change preserves in the provider cache.
+   * An effort change invalidates only the message blocks, so switching to a
+   * different effort of the incumbent model is strictly cheaper than switching
+   * models (which shares no cache at all) — it keeps this prefix warm. Absent /
+   * zero disables the partial credit, leaving an effort change scored like any
+   * other switch.
+   */
+  staticPrefixTokens?: number;
+  /**
    * Request-local terminal/inspect floors for an eligible compound-implement
    * intent. Absent selects the current live tier/promotion constants
    * unchanged — this is the only input that changes eligibility parameters.
@@ -593,13 +603,17 @@ export function pickBest(
     }
   }
 
-  // Vision guard
+  // Vision guard. When the turn carries an image, prefer vision-capable models.
+  // If none exists, keep the full set rather than emptying it (fail-open, like
+  // the context guard): a text-only model that cannot see the image is a worse
+  // outcome than no route, but blocking the turn is worse still. No flag is
+  // set here — the scorer is pure; the caller detects the image via
+  // `needsVision` and owns any surfacing of a degraded vision route.
   if (opts.needsVision) {
     const visionFiltered = filtered.filter((c) => c.vision);
     if (visionFiltered.length > 0) {
       filtered = visionFiltered;
     }
-    // If no vision-capable model: keep all, set routedUp flag
   }
 
   // Capability is an eligibility gate, not another weighted component: price
@@ -751,16 +765,64 @@ export function pickBest(
     return s;
   });
 
-  // Switch penalty: incumbent gets a bonus proportional to context size.
+  // Switch penalty: a mid-session switch away from the incumbent must beat
+  // it on the merits, priced by the cache the incumbent's OWN registry
+  // economics say would actually be lost — not a flat unitless per-token
+  // rate, which is provider-blind and cannot tell a steep-cache-discount
+  // provider from one that barely discounts a cache hit at all. When the
+  // incumbent's registry entry does not publish enough pricing to compute a
+  // real loss (`cacheRead` or a `cacheWrite`/`input` write basis absent), no
+  // retention credit is granted at all — guessing at a universal rate would
+  // reintroduce the exact provider-blind behavior this mechanism replaces,
+  // so an unpriced incumbent is scored on ordinary quality/cost/speed merits
+  // like any other candidate.
+  //
+  // `cacheWrite` (or `input` when a provider does not publish a separate
+  // first-write price) is what a fresh, uncached write costs; `cacheRead` is
+  // what the incumbent already pays for warm content. Their difference, per
+  // token, is the dollar value one token of warm cache is worth keeping. A
+  // full model change preserves none of it (credit 0); the exact incumbent
+  // match preserves all of it (credit on every token); a same-model effort
+  // change invalidates only the message blocks and keeps the static
+  // system/tool prefix cache warm, so its credit is priced on
+  // `staticTokens` alone — strictly less than the incumbent's full-total
+  // credit, and strictly more than a full model change's zero. A same-model
+  // candidate with no measured effort represents the model's own default
+  // call shape, which carries no reasoning-driven message delta to
+  // invalidate, so it is exempt from that discount and keeps the full
+  // credit like an exact incumbent match.
   if (opts.incumbentRegistryId && !opts.isSubagentSpawn) {
     // The configured margin caps cache-preservation stickiness so it cannot
     // overwhelm the quality/cost/speed score on long sessions.
     const margin = clamp(opts.switchMargin ?? DEFAULT_SWITCH_MARGIN, 0, 1);
-    const penalty = Math.min(opts.estimatedContextTokens * 0.000005, margin);
-    for (const s of scored) {
-      if (candidateKey(s) === opts.incumbentRegistryId) {
-        s.score += penalty;
-        s.switched = false;
+    const incumbent = parseCandidateKey(opts.incumbentRegistryId);
+    const incumbentScored = scored.find((s) => candidateKey(s) === opts.incumbentRegistryId);
+    const total = Math.max(1, opts.estimatedContextTokens);
+    // Underestimated on purpose: we can measure the system prompt but not the
+    // tool-schema tokens, so the real preserved share is at least this — the
+    // conservative direction never over-credits a switch.
+    const staticTokens = clamp(opts.staticPrefixTokens ?? 0, 0, total);
+
+    const incumbentCost = incumbentScored?.cost;
+    const writeBasis = incumbentCost?.cacheWrite ?? incumbentCost?.input;
+    const cacheRead = incumbentCost?.cacheRead;
+    const perTokenLoss = writeBasis != null && cacheRead != null
+      ? Math.max(0, writeBasis - cacheRead)
+      : undefined;
+
+    if (perTokenLoss != null) {
+      const modelChangeBonus = Math.min(total * perTokenLoss, margin);
+      const effortChangeBonus = Math.min(staticTokens * perTokenLoss, margin);
+      for (const s of scored) {
+        const key = candidateKey(s);
+        if (key === opts.incumbentRegistryId) {
+          s.score += modelChangeBonus;
+          s.switched = false;
+          continue;
+        }
+        const p = parseCandidateKey(key);
+        if (p.provider !== incumbent.provider || p.id !== incumbent.id) continue;
+        s.score += p.effort == null ? modelChangeBonus : effortChangeBonus;
       }
     }
   }

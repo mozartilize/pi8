@@ -152,6 +152,24 @@ describe('depth escalation config', () => {
   });
 });
 
+describe('routerContextWindow', () => {
+  it('is absent by default (advertise the largest routable window)', () => {
+    expect(loadConfig().routerContextWindow).toBeUndefined();
+  });
+
+  it('reads a positive integer override', () => {
+    writeFileSync(getConfigPath(), JSON.stringify({ routerContextWindow: 131072 }), 'utf8');
+    expect(loadConfig().routerContextWindow).toBe(131072);
+  });
+
+  it('rejects non-positive / non-finite values, falling back to the default', () => {
+    for (const bad of [0, -5, 'big', null]) {
+      writeFileSync(getConfigPath(), JSON.stringify({ routerContextWindow: bad }), 'utf8');
+      expect(loadConfig().routerContextWindow).toBeUndefined();
+    }
+  });
+});
+
 describe('malformed config values are normalized to defaults', () => {
   it('rejects a top-level array as config', () => {
     writeFileSync(getConfigPath(), '[]', 'utf8');

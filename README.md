@@ -79,6 +79,7 @@ All `router/auto` intents run through this same pipeline. For an explicit compou
   "consultRouter": true,                 // enable semantic assessment
   "prompt": true,                        // notify when model switches
   "switchMargin": 0.15,                 // cache-preservation bonus for incumbent
+  "routerContextWindow": 200000,         // window advertised for router/auto (default: largest routable)
   "debug": false,                        // enable timing log
   "embeddingClassifier": false,          // enable multilingual E5-small classifier
   "embeddingDeadlineMs": 5000,           // max ms for model load + inference
@@ -89,6 +90,7 @@ All `router/auto` intents run through this same pipeline. For an explicit compou
 - `models` / `blacklist`: `*` wildcards, case-insensitive. Bare provider name = `provider/*`.
 - `assessmentMode`: `"shadow"` runs the assessment in the background without affecting routing. `"active"` lets it adjust the task dimension under strict safety caps.
 - `switchMargin`: how strongly the router prefers keeping the current model to preserve prompt cache. Set to `0` to disable.
+- `routerContextWindow`: the context window advertised for the synthetic `router/auto` model. Pi tunes compaction to the session model's window, so the default (the largest window among models your `models`/`blacklist` config actually lets the router pick) delays compaction on long sessions and biases them toward large-window models as context grows past each smaller model's window. Set this to the effective window you want to route within to make Pi compact earlier and keep cheaper, smaller-window models eligible longer. An override above the largest routable window is clamped down to it — you cannot advertise capacity no routable model actually has.
 - `debug`: `true` or a file path enables per-turn millisecond timing logs.
 - `embeddingClassifier`: when `true`, a local E5-small embedding model classifies prompts where the keyword classifier has no evidence — non-English languages, ambiguous English. Blends up only; never overrides keyword downward. Requires the **optional** `onnxruntime-node` and `@xenova/transformers` packages to be installed (they are not hard dependencies — without them the layer stays disabled). `/router-sync embedding` reports whether the runtime is importable alongside the model download.
 - `embeddingDeadlineMs`: maximum milliseconds the embedding model load + inference may take (default 5000). On expiry the keyword result is used unchanged.

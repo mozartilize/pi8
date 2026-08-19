@@ -753,6 +753,54 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).toContain('incumbent-floor');
   });
 
+  it('carries the incumbent resolved dimension as an up-only effort floor', () => {
+    // A cheap-phrased same-task follow-up classifies gather but keeps the
+    // strong incumbent; its served effort floor must not drop to gather's.
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        confidence: 0.1,
+        incumbentRegistryId: 'bench/strong',
+        incumbentResolvedDimension: 'implement',
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.effortFloorDimension).toBe('implement');
+    expect(result.decision.reason).toContain('incumbent-effort-floor');
+  });
+
+  it('does not lower the effort floor when the carried dimension is weaker', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'plan',
+        baseDimension: 'plan',
+        confidence: 0.1,
+        incumbentRegistryId: 'bench/strong',
+        incumbentResolvedDimension: 'gather',
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.effortFloorDimension).toBeUndefined();
+  });
+
+  it('drops the effort floor carry on an off-topic reset', () => {
+    const result = resolveRoutingDecision(
+      makePolicyInput({
+        candidates: benchmarkCandidates,
+        classifyDimension: 'gather',
+        baseDimension: 'gather',
+        confidence: 0.9,
+        incumbentRegistryId: 'bench/strong',
+        incumbentResolvedDimension: 'implement',
+        estimatedContextTokens: 1_000,
+      }),
+    );
+    expect(result.decision.effortFloorDimension).toBeUndefined();
+  });
+
   it('stands down on a fresh, high-confidence trivial classification (off-topic reset)', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({

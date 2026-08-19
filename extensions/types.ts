@@ -248,6 +248,16 @@ export type DecisionCause =
 
 export interface RoutingDecision {
   dimension: Dimension;
+  /**
+   * Effort floor applied when serving, when it must outrank the routed
+   * dimension's own floor. The incumbent model is sticky within a task, so a
+   * cheap-phrased same-task follow-up keeps the strong model — but its routed
+   * dimension (and thus its effort floor) can classify low. This carries the
+   * incumbent's resolved dimension forward as an up-only effort floor so the
+   * served thinking level cannot drop below what the incumbent ran at.
+   * Absent means the routed dimension's floor applies unchanged.
+   */
+  effortFloorDimension?: Dimension;
   chosen: string;
   reason: string;
   confidence: number;
@@ -330,6 +340,18 @@ export interface AutoRouterConfig {
   dimensionWeights: Record<Dimension, ScoreWeights>;
   /** Maximum incumbent-retention bonus for mid-session switching. */
   switchMargin: number;
+  /**
+   * Context window to advertise for the synthetic `router/auto` model. Pi tunes
+   * compaction to the session model's window, so advertising the largest
+   * routable model's window (the default when this is absent) delays
+   * compaction on long sessions — which pushes context past each smaller
+   * model's real window and drops those (often cheaper) models out of
+   * eligibility one by one, biasing long sessions toward large-window models.
+   * Set this to the effective window you actually want to route within to make
+   * Pi compact earlier and keep cheaper models eligible longer. Absent =
+   * largest routable window.
+   */
+  routerContextWindow?: number;
   /** Threshold for classifier low-confidence route-up. */
   lowConfidenceThreshold: number;
   /** If true (default), use a bounded inline LLM consultation for uncertain input. */

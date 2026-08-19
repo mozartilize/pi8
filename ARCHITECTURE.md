@@ -112,7 +112,7 @@ Per-call cost basis: `costPerTask` when every candidate in the pre-promotion tie
 
 ### Switch penalty
 
-Incumbent models receive a cache-preservation bonus as context grows: `min(estContextTokens × 0.000005, switchMargin)`. This accounts for prompt-cache economics — cached input can be ~10x cheaper than fresh, and switching forfeits the whole conversation's cache. Capped by `switchMargin` (default 0.15). Applies only when the caller supplies an incumbent and does not set `isSubagentSpawn`; role injection supplies neither, so a subagent spawn never receives the bonus (no cache to lose).
+Incumbent models receive a cache-preservation bonus priced from the incumbent's own registry economics, not a flat unitless rate: `perTokenLoss = cacheWrite (or input, if no cacheWrite) − cacheRead`, the dollar value of one warm cache token. An exact incumbent match credits `min(estContextTokens × perTokenLoss, switchMargin)` — the full conversation. A same-model effort change credits only `min(staticPrefixTokens × perTokenLoss, switchMargin)`, since an effort change invalidates message blocks but the system/tool prefix cache stays warm; a same-model candidate with no measured effort (the model's default call shape) gets the full credit like an exact match. A different model gets zero credit — a model change has no cache entries to begin with. When the incumbent's registry entry doesn't publish enough pricing to compute `perTokenLoss` (no `cacheRead`, and no `cacheWrite`/`input`), no retention credit is granted at all. Capped by `switchMargin` (default 0.15). Applies only when the caller supplies an incumbent and does not set `isSubagentSpawn`; role injection supplies neither, so a subagent spawn never receives the bonus (no cache to lose).
 
 ### Effort floor
 
