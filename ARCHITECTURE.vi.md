@@ -160,7 +160,7 @@ Khi text hiển thị hoặc tool call đã được stream, router không bao g
 
 ### Chèn role
 
-Các role của pi-subagents (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) được ánh xạ sang dimension thông qua `ROLE_DIMENSIONS`. Với mỗi lần spawn, router xây candidate từ registry + store, chấm điểm theo dimension đó, rồi chèn `provider/model` cụ thể vào subagent tool call qua hook `tool_call`.
+Các role của pi-subagents (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) cung cấp dimension tối thiểu qua `ROLE_DIMENSIONS`. Router xây và lọc auth snapshot candidate khi refresh session, sau đó chấm điểm lại từng structured child nhìn thấy lúc spawn theo role và task. `assessTerminal(task)` chỉ được nâng floor của role, không được hạ; dimension weights đã cấu hình và context guard đang hoạt động được áp dụng trước khi chèn `provider/model` qua hook `tool_call`. Child bên trong workflow script là opaque với structured walker, nên call đó vẫn dùng default cấp tool theo thứ tự worker-first thay vì định tuyến task-aware từng child.
 
 Không ghi gì vào `settings.json` — việc chèn chỉ áp dụng cho từng spawn. Lựa chọn model tường minh và các pin của người dùng/project (`source` ≠ `pi8`) luôn được ưu tiên. Một child cụ thể không thể đổi model giữa chừng.
 

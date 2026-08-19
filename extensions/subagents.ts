@@ -33,6 +33,9 @@ import { ROLE_DIMENSIONS } from './types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from './constants.js';
 import { activeModels, loadStore } from './store.js';
 import { pickBest, candidateKey, type RegistryModelInfo } from './scorer.js';
+import { assessTerminal } from './terminal-classifier.js';
+import { estimateTokenCount } from './classifier.js';
+import { DIMENSION_STRENGTH } from './classifier-keywords.js';
 import { expandModelCandidates } from './provider.js';
 import { effortDropsPerStep } from './effort-estimate.js';
 import { loadModelFilter } from './allowlist.js';
@@ -159,6 +162,27 @@ export interface AssignOptions {
   existingOverrides?: Partial<Record<Role, ExistingOverride>>;
 }
 
+export interface RoleRoutingSelection {
+  model: string;
+  fallbackChain: string[];
+  dimension: Dimension;
+}
+
+export interface SubagentTaskRequest {
+  path: string;
+  role: Role;
+  task?: string;
+  /** Concrete model requested by the caller, before router ownership is applied. */
+  requestedModel?: string;
+  /** False for explicit concrete models and roles omitted from router ownership. */
+  routerOwned?: boolean;
+}
+
+export interface RoleRoutingSnapshot {
+  candidates: readonly Candidate[];
+  weights: Partial<Record<Dimension, ScoreWeights>>;
+}
+
 export function computeRoleAssignments(
   candidates: Candidate[],
   opts: AssignOptions = {},
@@ -267,6 +291,143 @@ export function computeRoleAssignments(
   return assignments;
 }
 
+function excludedCandidate(
+  id: string,
+  isBlacklisted: (registryId: string) => boolean,
+): boolean {
+  return isBlacklisted(stripThinkingSuffix(id));
+}
+
+function targetDimensionForTask(role: Role, task?: string): Dimension {
+  const baseline = ROLE_DIMENSIONS[role];
+  if (typeof task !== 'string' || task.trim() === '') return baseline;
+  const assessed = assessTerminal(task).kind;
+  return DIMENSION_STRENGTH[assessed] > DIMENSION_STRENGTH[baseline] ? assessed : baseline;
+}
+
+/**
+ * Pure spawn-time selection. Role is the minimum capability; task assessment
+ * can only raise that floor. Candidates remain limited to the role's baseline
+ * fallback chain so auth, allowlists, and pinned-role ownership stay intact.
+ */
+export function selectTaskAwareRoleChildren(
+  requests: readonly SubagentTaskRequest[],
+  roleModels: ReadonlyMap<Role, string>,
+  roleFallbacks: ReadonlyMap<Role, string[]>,
+  snapshot: RoleRoutingSnapshot,
+  isBlacklisted: (registryId: string) => boolean,
+  estimatedContextTokens: number,
+): Map<string, RoleRoutingSelection> {
+  const result = new Map<string, RoleRoutingSelection>();
+  // Explicit concrete worker models are part of reviewer complementarity even
+  // though they are not router-owned and must not be task-rerouted.
+  const workerModels = new Set<string>(
+    requests
+      .filter((request) =>
+        request.role === 'worker'
+        && request.routerOwned === false
+        && typeof request.requestedModel === 'string'
+        && request.requestedModel.trim() !== ''
+        && request.requestedModel !== ROUTER_AUTO_SENTINEL,
+      )
+      .map((request) => request.requestedModel!),
+  );
+
+  const pick = (
+    request: SubagentTaskRequest,
+    avoidWorkerFamilies: boolean,
+  ): RoleRoutingSelection | undefined => {
+    // Explicit concrete models and user/project-pinned roles remain entirely
+    // outside task-aware selection. The optional field preserves direct callers
+    // that predate ownership metadata as router-owned requests.
+    if (request.routerOwned === false || !roleModels.has(request.role)) return undefined;
+    const baselineChain = roleFallbacks.get(request.role) ?? [];
+    const baselineKeys = new Set(baselineChain);
+    const pool = snapshot.candidates.filter((candidate) => {
+      const key = candidateKey(candidate);
+      if (baselineKeys.size > 0 && !baselineKeys.has(key)) return false;
+      if (excludedCandidate(key, isBlacklisted)) return false;
+      if (avoidWorkerFamilies && [...workerModels].some((worker) => sameFamily(key, worker))) return false;
+      return true;
+    });
+
+    // A reviewer should remain usable even when there is no independent model.
+    // Retry the unrestricted role pool rather than blocking the spawn.
+    const unrestricted = avoidWorkerFamilies && pool.length === 0
+      ? snapshot.candidates.filter((candidate) => {
+          const key = candidateKey(candidate);
+          return (baselineKeys.size === 0 || baselineKeys.has(key))
+            && !excludedCandidate(key, isBlacklisted);
+        })
+      : pool;
+    const hasTask = typeof request.task === 'string' && request.task.trim() !== '';
+    if (!hasTask) {
+      // No task is evidence of no new intent: preserve the refresh-time role
+      // pick rather than letting an incomplete child spec trigger a rerank.
+      const baseline = pool.length > 0
+        ? baselineChain.find((id) => pool.some((candidate) => candidateKey(candidate) === id))
+        : undefined;
+      const model = baseline ?? (avoidWorkerFamilies ? undefined : roleModels.get(request.role));
+      if (model) {
+        return {
+          model,
+          fallbackChain: (pool.length > 0 ? baselineChain.filter((id) => pool.some((candidate) => candidateKey(candidate) === id)) : baselineChain).slice(),
+          dimension: ROLE_DIMENSIONS[request.role],
+        };
+      }
+      const fallback = baselineChain.find((id) => !excludedCandidate(id, isBlacklisted));
+      if (fallback) {
+        return { model: fallback, fallbackChain: baselineChain.slice(), dimension: ROLE_DIMENSIONS[request.role] };
+      }
+    }
+    if (unrestricted.length === 0) {
+      const fallback = baselineChain.find((id) => !excludedCandidate(id, isBlacklisted));
+      const model = fallback ?? roleModels.get(request.role);
+      return model
+        ? { model, fallbackChain: baselineChain.slice(), dimension: ROLE_DIMENSIONS[request.role] }
+        : undefined;
+    }
+
+    const dimension = targetDimensionForTask(request.role, request.task);
+    const decision = pickBest(
+      unrestricted,
+      dimension,
+      snapshot.weights[dimension] ?? DEFAULT_DIMENSION_WEIGHTS[dimension],
+      {
+        estimatedContextTokens: Math.max(
+          estimatedContextTokens,
+          typeof request.task === 'string' ? estimateTokenCount(request.task) : 0,
+        ),
+        isSubagentSpawn: true,
+      },
+    );
+    return {
+      model: decision.chosen,
+      fallbackChain: decision.fallbackChain,
+      dimension,
+    };
+  };
+
+  // Process workers first so reviewer complementarity does not depend on the
+  // order in which structured task specs happened to be authored.
+  for (const request of requests.filter((entry) => entry.role === 'worker')) {
+    const selection = pick(request, false);
+    if (selection) {
+      result.set(request.path, selection);
+      workerModels.add(selection.model);
+    }
+  }
+  for (const request of requests.filter((entry) => entry.role !== 'worker' && entry.role !== 'reviewer')) {
+    const selection = pick(request, false);
+    if (selection) result.set(request.path, selection);
+  }
+  for (const request of requests.filter((entry) => entry.role === 'reviewer')) {
+    const selection = pick(request, true);
+    if (selection) result.set(request.path, selection);
+  }
+  return result;
+}
+
 // ─── Settings file I/O (READ ONLY) ──────────────────────────────────────
 //
 // This module never writes settings. Roles are injected per spawn via the
@@ -328,6 +489,8 @@ export interface RoleSyncContext {
   /** Override the settings path (tests). */
   settingsPath?: string;
   estimatedContextTokens?: number;
+  /** Configured economics for each target dimension. */
+  weights?: Partial<Record<Dimension, ScoreWeights>>;
   /** Pre-existing overrides (already read from settings). */
   existingOverrides?: Partial<Record<Role, ExistingOverride>>;
   /**
@@ -351,7 +514,12 @@ export interface RoleSyncContext {
 export function computeRoleModels(
   registryModels: readonly RegistryModelInfo[],
   opts: RoleSyncContext = {},
-): { assignments: RoleAssignment[]; roleModels: Map<Role, string>; roleFallbacks: Map<Role, string[]> } {
+): {
+  assignments: RoleAssignment[];
+  roleModels: Map<Role, string>;
+  roleFallbacks: Map<Role, string[]>;
+  routingSnapshot: RoleRoutingSnapshot;
+} {
   const store = loadStore();
   const benchModels = store ? activeModels(store) : [];
   const { candidates } = buildSubagentCandidates(
@@ -364,8 +532,10 @@ export function computeRoleModels(
   // If the caller didn't pass existing overrides, read them from user and
   // project settings (project wins, matching pi-subagents' own precedence).
   const existing = opts.existingOverrides ?? readExistingOverrides(opts.settingsPath, opts.ctx?.cwd);
+  const weights = opts.weights ?? DEFAULT_DIMENSION_WEIGHTS;
   const assignments = computeRoleAssignments(candidates, {
     estimatedContextTokens: opts.estimatedContextTokens ?? 0,
+    weights,
     existingOverrides: existing,
   });
 
@@ -378,7 +548,18 @@ export function computeRoleModels(
       roleFallbacks.set(a.role, a.fallbackChain);
     }
   }
-  return { assignments, roleModels, roleFallbacks };
+  return {
+    assignments,
+    roleModels,
+    roleFallbacks,
+    routingSnapshot: {
+      candidates: candidates.map((candidate) => ({
+        ...candidate,
+        ...(candidate.bench ? { bench: { ...candidate.bench, quality: { ...candidate.bench.quality } } } : {}),
+      })),
+      weights: { ...weights },
+    },
+  };
 }
 
 /**
@@ -396,7 +577,7 @@ export function resolveLiveRoleModels(
 ): Map<Role, string> {
   const live = new Map<Role, string>();
   for (const [role, chain] of roleFallbacks) {
-    const pick = chain.find((id) => !isBlacklisted(id));
+    const pick = chain.find((id) => !isBlacklisted(stripThinkingSuffix(id)));
     if (pick) live.set(role, pick);
   }
   return live;
@@ -459,6 +640,9 @@ export interface SubagentChildSpec {
 export interface InjectedSubagentSpec extends SubagentChildSpec {
   role: Role;
   model: string;
+  /** The exact task-aware chain used for this child, when available. */
+  fallbackChain?: string[];
+  dimension?: Dimension;
   routerOwned: true;
 }
 
@@ -471,7 +655,15 @@ export interface SubagentRoutingTraversal {
 export const ROUTER_AUTO_SENTINEL = 'router/auto';
 
 export interface SubagentRoutingOptions {
-  consumeOverride?: (role: Role, originalTask?: string) => string | undefined;
+  consumeOverride?: (
+    role: Role,
+    originalTask?: string,
+    fallbackChain?: readonly string[],
+  ) => string | undefined;
+  /** Select structured children before mutation; workflowScript is excluded. */
+  selectChildren?: (
+    requests: readonly SubagentTaskRequest[],
+  ) => ReadonlyMap<string, RoleRoutingSelection>;
   appendEscalationContract?: boolean;
   /**
    * Tool-level model for workflow-scripted spawns. pi-subagents defines
@@ -487,6 +679,42 @@ export interface SubagentRoutingOptions {
 
 export function isRole(value: unknown): value is Role {
   return typeof value === 'string' && (ALL_ROLES as string[]).includes(value);
+}
+
+/** Collect visible structured role/task pairs without parsing workflowScript. */
+function collectSubagentTaskRequests(
+  input: unknown,
+  roleModels: ReadonlyMap<Role, string>,
+): SubagentTaskRequest[] {
+  const requests: SubagentTaskRequest[] = [];
+  const visit = (node: unknown, path: string): void => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    const spec = node as SpecLike;
+    if (typeof spec.agent === 'string' && isRole(spec.agent)) {
+      const requestedModel = typeof spec.model === 'string' ? spec.model : undefined;
+      const callerOptedIntoRouting =
+        requestedModel === undefined || requestedModel === ROUTER_AUTO_SENTINEL;
+      requests.push({
+        path,
+        role: spec.agent,
+        ...(typeof spec.task === 'string' ? { task: spec.task } : {}),
+        ...(requestedModel !== undefined ? { requestedModel } : {}),
+        routerOwned: !!roleModels.get(spec.agent) && callerOptedIntoRouting,
+      });
+    }
+    const visitContainer = (value: unknown, key: string): void => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => visit(item, `${path}.${key}[${index}]`));
+      } else if (key === 'parallel' && value && typeof value === 'object') {
+        visit(value, `${path}.${key}`);
+      }
+    };
+    visitContainer(spec.tasks, 'tasks');
+    visitContainer(spec.chain, 'chain');
+    visitContainer(spec.parallel, 'parallel');
+  };
+  visit(input, '$');
+  return requests;
 }
 
 /**
@@ -513,6 +741,7 @@ export function injectSubagentRoutingWithMetadata(
   const children: SubagentChildSpec[] = [];
   const injected: InjectedSubagentSpec[] = [];
   if (!input || typeof input !== 'object') return { children, injected };
+  const selectionByPath = opts.selectChildren?.(collectSubagentTaskRequests(input, roleModels)) ?? new Map();
   let nextChildIndex: number | undefined = 0;
 
   const visit = (node: unknown, path: string, childIndexSpan: number | null = 1): void => {
@@ -538,11 +767,13 @@ export function injectSubagentRoutingWithMetadata(
         // Ownership: omitted model or explicit `router/auto` sentinel → owned;
         // any other concrete model → caller's choice wins.
         const baseModel = roleModels.get(role);
+        const selection = selectionByPath.get(path);
         const callerOptedIntoRouting =
           requestedModel === undefined || requestedModel === ROUTER_AUTO_SENTINEL;
         if (baseModel && callerOptedIntoRouting) {
-          const override = opts.consumeOverride?.(role, originalTask);
-          const model = override ?? baseModel;
+          const fallbackChain = selection?.fallbackChain ?? [];
+          const override = opts.consumeOverride?.(role, originalTask, fallbackChain);
+          const model = override ?? selection?.model ?? baseModel;
           (spec as Record<string, unknown>).model = model;
           if (
             stableIndexKnown &&
@@ -559,6 +790,8 @@ export function injectSubagentRoutingWithMetadata(
             agent: spec.agent,
             role,
             model,
+            ...(fallbackChain.length > 0 ? { fallbackChain: fallbackChain.slice() } : {}),
+            ...(selection?.dimension ? { dimension: selection.dimension } : {}),
             routerOwned: true,
             originalTask,
             ...(requestedModel !== undefined ? { requestedModel } : {}),

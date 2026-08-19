@@ -519,7 +519,11 @@ export function registerCommands(pi: ExtensionAPI): void {
           ctx.modelRegistry,
           registryModels as never,
         );
-        assignments = computeRoleModels(registryModels as never, { isProviderUsable, ctx }).assignments;
+        assignments = computeRoleModels(registryModels as never, {
+          isProviderUsable,
+          ctx,
+          weights: loadConfig().dimensionWeights,
+        }).assignments;
       } else {
         // No registry or no benchmark data yet: display whatever is pinned.
         const existing = readExistingOverrides(undefined, ctx.cwd);
@@ -550,7 +554,7 @@ export function registerCommands(pi: ExtensionAPI): void {
       lines.push(
         '',
         '[auto] roles receive a concrete provider/model selected at spawn time.',
-        'The model shown is the current role assignment; it is not persisted.',
+        'The model shown is the baseline; structured child tasks may raise and re-score it.',
         'Nothing is written to settings.',
         'An explicit model on the call (e.g. reviewer[model=...]) always wins.',
       );

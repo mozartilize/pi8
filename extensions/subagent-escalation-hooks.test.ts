@@ -54,6 +54,143 @@ describe('SubagentEscalationHooks tool boundaries', () => {
     expect((plan.content?.at(-1) as { text: string }).text).toContain('provider/strong');
   });
 
+  it('uses the injected child chain for task-specific retries', () => {
+    const hooks = new SubagentEscalationHooks();
+    const input = { agent: 'worker', task: 'plan this task' };
+    const call = hooks.toolCall(
+      'call-task-chain',
+      input,
+      roleModels,
+      roleFallbacks,
+      () => false,
+      undefined,
+      (requests) => new Map([
+        [requests[0]!.path, {
+          model: 'provider/fast',
+          fallbackChain: ['provider/fast', 'provider/task-strong'],
+          dimension: 'plan',
+        }],
+      ]),
+    );
+    expect(call.children[0]).toMatchObject({
+      model: 'provider/fast',
+      fallbackChain: ['provider/fast', 'provider/task-strong'],
+      dimension: 'plan',
+    });
+
+    const plan = hooks.toolResult(
+      'call-task-chain',
+      toolResult([subagentResultRow({ exitCode: 1, error: 'failed', finalOutput: 'failed' })]),
+      roleFallbacks,
+      () => undefined,
+    );
+    expect(plan.retryDirectives.join('\\n')).toContain('provider/task-strong');
+  });
+
+  it('skips sibling effort variants after a hard failure and retries another model', () => {
+    const effortRoleModels = new Map<Role, string>([['worker', 'provider/model:low']]);
+    const effortRoleFallbacks = new Map<Role, string[]>([
+      ['worker', ['provider/model:low', 'provider/model:high', 'provider/other:medium']],
+    ]);
+    const blacklistChecks: string[] = [];
+    const blacklisted = new Set<string>();
+    const isBlacklisted = (model: string): boolean => {
+      blacklistChecks.push(model);
+      return blacklisted.has(model);
+    };
+    const hooks = new SubagentEscalationHooks();
+    const input = { agent: 'worker', task: 'implement the task' };
+    hooks.toolCall(
+      'call-hard-effort-chain',
+      input,
+      effortRoleModels,
+      effortRoleFallbacks,
+      isBlacklisted,
+    );
+
+    const plan = hooks.toolResult(
+      'call-hard-effort-chain',
+      toolResult([
+        subagentResultRow({
+          model: 'provider/model:low',
+          exitCode: 1,
+          error: 'low effort failed',
+          finalOutput: 'failed',
+        }),
+      ]),
+      effortRoleFallbacks,
+      (model) => blacklisted.add(model),
+    );
+    expect([...blacklisted]).toEqual(['provider/model']);
+    expect(plan.retryDirectives).toHaveLength(1);
+    expect(plan.retryDirectives[0]).toContain('provider/other:medium');
+    expect(plan.retryDirectives[0]).not.toContain('provider/model:high');
+
+    const retry: { agent: string; task: string; model?: string } = {
+      agent: 'worker',
+      task: 'implement the task',
+    };
+    hooks.toolCall(
+      'call-hard-effort-retry',
+      retry,
+      effortRoleModels,
+      effortRoleFallbacks,
+      isBlacklisted,
+    );
+    expect(retry.model).toBe('provider/other:medium');
+    expect(blacklistChecks).toEqual(['provider/other']);
+  });
+
+  it('keeps effort escalation for self-reports without blacklisting the bare model', () => {
+    const effortRoleModels = new Map<Role, string>([['worker', 'provider/model:low']]);
+    const effortRoleFallbacks = new Map<Role, string[]>([
+      ['worker', ['provider/model:low', 'provider/model:high', 'provider/other:medium']],
+    ]);
+    const blacklistChecks: string[] = [];
+    const blacklisted = new Set<string>();
+    const isBlacklisted = (model: string): boolean => {
+      blacklistChecks.push(model);
+      return blacklisted.has(model);
+    };
+    const hooks = new SubagentEscalationHooks();
+    hooks.toolCall(
+      'call-self-report-effort',
+      { agent: 'worker', task: 'implement the task' },
+      effortRoleModels,
+      effortRoleFallbacks,
+      isBlacklisted,
+    );
+
+    const plan = hooks.toolResult(
+      'call-self-report-effort',
+      toolResult([
+        subagentResultRow({
+          model: 'provider/model:low',
+          finalOutput: `${SUBAGENT_ESCALATION_MARKER}{"reason":"needs more reasoning"}`,
+        }),
+      ]),
+      effortRoleFallbacks,
+      (model) => blacklisted.add(model),
+    );
+    expect([...blacklisted]).toEqual([]);
+    expect(plan.retryDirectives).toHaveLength(1);
+    expect(plan.retryDirectives[0]).toContain('provider/model:high');
+
+    const retry: { agent: string; task: string; model?: string } = {
+      agent: 'worker',
+      task: 'implement the task',
+    };
+    hooks.toolCall(
+      'call-self-report-effort-retry',
+      retry,
+      effortRoleModels,
+      effortRoleFallbacks,
+      isBlacklisted,
+    );
+    expect(retry.model).toBe('provider/model:high');
+    expect(blacklistChecks).toEqual(['provider/model']);
+  });
+
   it('never owns an explicit child that shares a model with a routed sibling', () => {
     const hooks = new SubagentEscalationHooks();
     const input = {

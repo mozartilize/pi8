@@ -168,7 +168,7 @@ Once visible text or a tool call has streamed, the router never replays on anoth
 
 ### Role injection
 
-pi-subagents roles (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) each map to a dimension via `ROLE_DIMENSIONS`. On each spawn, the router builds candidates from the registry + store, scores for that dimension, and injects the concrete `provider/model` into the subagent tool call via a `tool_call` hook.
+pi-subagents roles (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) each provide a minimum dimension via `ROLE_DIMENSIONS`. The router builds and auth-filters the candidate snapshot during session refresh, then re-scores each visible structured child at spawn time from its role and task. `assessTerminal(task)` may raise the role floor, never lower it; configured dimension weights and the live context guard apply to that pick before the concrete `provider/model` is injected through the `tool_call` hook. Workflow-script children are opaque to the structured walker, so those calls retain the worker-first tool-level default rather than task-aware per-child routing.
 
 Nothing is written to `settings.json` — injection is per-spawn only. Explicit model choices and user/project pins (`source` ≠ `pi8`) always win. A concrete child cannot switch models mid-process.
 

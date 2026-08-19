@@ -140,10 +140,23 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     // Pass ctx through so project-scoped pins (.pi/settings.json under
     // ctx.cwd) are discovered, not just user-scope ones — without this, a
     // project pin silently loses to router injection at spawn time.
-    const computed = computeRoleModels(allowedModels, { isProviderUsable, ctx });
+    const config = loadConfig();
+    const usage = (ctx as ExtensionContext & {
+      getContextUsage?: () => { tokens?: number } | undefined;
+    }).getContextUsage?.();
+    const estimatedContextTokens = typeof usage?.tokens === 'number' && usage.tokens > 0
+      ? usage.tokens
+      : 0;
+    const computed = computeRoleModels(allowedModels, {
+      isProviderUsable,
+      ctx,
+      weights: config.dimensionWeights,
+      estimatedContextTokens,
+    });
     routingState.commitRefresh(generation, {
       roleModels: computed.roleModels,
       roleFallbacks: computed.roleFallbacks,
+      routingSnapshot: computed.routingSnapshot,
     });
   };
 
@@ -336,6 +349,12 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
           );
         };
         const live = routingState.resolveLive(isExcluded);
+        const usage = (ctx as ExtensionContext & {
+          getContextUsage?: () => { tokens?: number } | undefined;
+        }).getContextUsage?.();
+        const currentTokens = typeof usage?.tokens === 'number' && usage.tokens > 0
+          ? usage.tokens
+          : 0;
         const defaultModel = pickSubagentDefaultModel(live.roleModels);
         subagentEscalationHooks.toolCall(
           event.toolCallId,
@@ -344,6 +363,7 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
           live.roleFallbacks,
           isExcluded,
           defaultModel,
+          (requests) => routingState.selectChildren(requests, isExcluded, currentTokens),
         );
       } catch {
         // Never block or break a subagent spawn because of routing.

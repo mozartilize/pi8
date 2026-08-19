@@ -23,13 +23,14 @@ import {
   stripThinkingSuffix,
   sameFamily,
   buildSubagentCandidates,
+  selectTaskAwareRoleChildren,
   resolveUserSettingsPath,
   AUTO_ROUTER_SOURCE,
   ALL_ROLES,
   type RoleAssignment,
   type ExistingOverride,
 } from './subagents.js';
-import type { RegistryModelInfo } from './scorer.js';
+import { candidateKey, type RegistryModelInfo } from './scorer.js';
 import { buildModelFilter } from './allowlist.js';
 import type { BenchModel, Candidate, Role } from './types.js';
 import { SUBAGENT_ESCALATION_MARKER } from './subagent-escalation.js';
@@ -97,6 +98,130 @@ describe('computeRoleAssignments — role→dimension', () => {
 });
 
 // ─── reviewer complementarity ──────────────────────────────────────────
+
+describe('spawn-time task-aware role selection', () => {
+  function baselineRouting() {
+    const assignments = computeRoleAssignments(candidatesFor());
+    const roleModels = new Map<Role, string>();
+    const roleFallbacks = new Map<Role, string[]>();
+    for (const assignment of assignments) {
+      if (assignment.applied && assignment.model) {
+        roleModels.set(assignment.role, assignment.model);
+        roleFallbacks.set(assignment.role, assignment.fallbackChain);
+      }
+    }
+    return { roleModels, roleFallbacks };
+  }
+
+  it('raises a worker floor from its task but never lowers it', () => {
+    const { roleModels, roleFallbacks } = baselineRouting();
+    const selected = selectTaskAwareRoleChildren(
+      [
+        { path: '$.tasks[0]', role: 'worker', task: 'plan the distributed architecture' },
+        { path: '$.tasks[1]', role: 'worker', task: 'rename this variable' },
+      ],
+      roleModels,
+      roleFallbacks,
+      { candidates: candidatesFor(), weights: {} },
+      () => false,
+      100,
+    );
+    expect(selected.get('$.tasks[0]')?.dimension).toBe('plan');
+    expect(selected.get('$.tasks[1]')?.dimension).toBe('implement');
+  });
+
+  it('preserves the baseline pick when a child has no task', () => {
+    const { roleModels, roleFallbacks } = baselineRouting();
+    const selected = selectTaskAwareRoleChildren(
+      [{ path: '$.tasks[0]', role: 'worker' }],
+      roleModels,
+      roleFallbacks,
+      { candidates: candidatesFor(), weights: {} },
+      () => false,
+      100,
+    );
+    expect(selected.get('$.tasks[0]')?.model).toBe(roleModels.get('worker'));
+  });
+
+  it('honors target weights and the long-context guard', () => {
+    const candidates = candidatesFor();
+    const chain = candidates.map(candidateKey);
+    const roleModels = new Map<Role, string>([['worker', chain[0]!]]);
+    const roleFallbacks = new Map<Role, string[]>([['worker', chain]]);
+    const weighted = selectTaskAwareRoleChildren(
+      [{ path: '$.tasks[0]', role: 'worker', task: 'implement the change' }],
+      roleModels,
+      roleFallbacks,
+      { candidates, weights: { implement: { quality: 0, cost: 1, speed: 0 } } },
+      () => false,
+      100,
+    );
+    expect(weighted.get('$.tasks[0]')?.model).toContain('deepseek');
+
+    const contextGuarded = selectTaskAwareRoleChildren(
+      [{ path: '$.tasks[1]', role: 'worker', task: 'implement the change' }],
+      roleModels,
+      roleFallbacks,
+      { candidates, weights: {} },
+      () => false,
+      110_000,
+    );
+    expect(contextGuarded.get('$.tasks[1]')?.model).toMatch(/^anthropic\/claude-(?:opus|sonnet)/);
+  });
+
+  it('keeps reviewer selection independent from worker regardless of input order', () => {
+    const { roleModels, roleFallbacks } = baselineRouting();
+    const selected = selectTaskAwareRoleChildren(
+      [
+        { path: '$.tasks[0]', role: 'reviewer', task: 'review the implementation' },
+        { path: '$.tasks[1]', role: 'worker', task: 'implement the change' },
+      ],
+      roleModels,
+      roleFallbacks,
+      { candidates: candidatesFor(), weights: {} },
+      () => false,
+      100,
+    );
+    expect(selected.get('$.tasks[0]')?.model).toBeTruthy();
+    expect(selected.get('$.tasks[1]')?.model).toBeTruthy();
+    expect(sameFamily(selected.get('$.tasks[0]')!.model, selected.get('$.tasks[1]')!.model)).toBe(false);
+  });
+
+  it('avoids an explicit worker family when the reviewer spec appears first', () => {
+    const candidates = candidatesFor();
+    const roleModels = new Map<Role, string>([
+      ['worker', 'deepseek/deepseek-v3'],
+      ['reviewer', 'openai/gpt-5'],
+    ]);
+    const roleFallbacks = new Map<Role, string[]>([
+      ['worker', ['deepseek/deepseek-v3', 'openai/gpt-5']],
+      ['reviewer', ['deepseek/deepseek-v3', 'openai/gpt-5']],
+    ]);
+    const input = {
+      tasks: [
+        { agent: 'reviewer', task: 'review the implementation' },
+        { agent: 'worker', model: 'deepseek/deepseek-v3:low', task: 'explicit worker choice' },
+      ],
+    };
+    const traversal = injectSubagentRoutingWithMetadata(input, roleModels, {
+      selectChildren: (requests) => selectTaskAwareRoleChildren(
+        requests,
+        roleModels,
+        roleFallbacks,
+        { candidates, weights: {} },
+        () => false,
+        100,
+      ),
+    });
+
+    expect(input.tasks[1].model).toBe('deepseek/deepseek-v3:low');
+    expect(input.tasks[0].model).toBe('openai/gpt-5');
+    expect(sameFamily(input.tasks[0].model!, input.tasks[1].model!)).toBe(false);
+    expect(traversal.injected).toMatchObject([
+      { path: '$.tasks[0]', role: 'reviewer', routerOwned: true },
+    ]);
+  });
+});
 
 describe('computeRoleAssignments — reviewer complementarity', () => {
   it('reviewer is never the same model as the worker', () => {

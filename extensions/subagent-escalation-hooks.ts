@@ -2,6 +2,7 @@ import {
   injectSubagentRoutingWithMetadata,
   stripThinkingSuffix,
   type InjectedSubagentSpec,
+  type SubagentRoutingOptions,
   type SubagentRoutingTraversal,
 } from './subagents.js';
 import {
@@ -64,11 +65,36 @@ export class SubagentEscalationHooks {
     roleFallbacks: ReadonlyMap<Role, string[]>,
     isBlacklisted: (registryId: string) => boolean,
     defaultModel?: string,
+    selectChildren?: SubagentRoutingOptions['selectChildren'],
   ): PendingSubagentCall {
     const async = !!input && typeof input === 'object' &&
       (input as { async?: unknown }).async === true;
     const traversal = injectSubagentRoutingWithMetadata(input, roleModels, {
-      consumeOverride: (role, originalTask) => this.state.consume(role, originalTask, roleFallbacks, isBlacklisted),
+      selectChildren: selectChildren ?? ((requests) => {
+        // The selector is attached by the caller through the role maps when
+        // available; this default keeps direct unit callers on baseline picks.
+        return new Map(requests.map((request) => [
+          request.path,
+          {
+            model: roleModels.get(request.role) ?? '',
+            fallbackChain: roleFallbacks.get(request.role) ?? [],
+            dimension: request.role === 'researcher'
+              ? 'gather'
+              : request.role === 'worker'
+                ? 'implement'
+                : request.role === 'reviewer'
+                  ? 'review'
+                  : 'plan',
+          },
+        ] as const).filter(([, selection]) => selection.model));
+      }),
+      consumeOverride: (role, originalTask, selectedFallbackChain) => this.state.consume(
+        role,
+        originalTask,
+        roleFallbacks,
+        isBlacklisted,
+        selectedFallbackChain,
+      ),
       appendEscalationContract: !async,
       defaultModel,
     });
@@ -187,12 +213,22 @@ export class SubagentEscalationHooks {
         boundedGroupKeys.add(groupKey);
         occurrenceKey = `${child.path}:${baseIndex}-${baseIndex + span - 1}`;
       }
+      const sourceChain = child.fallbackChain ?? roleFallbacks.get(child.role);
+      const retryChain = sourceChain && kind === 'hard-failure'
+        ? [
+            child.model,
+            ...sourceChain.filter((model) =>
+              model !== child.model
+              && stripThinkingSuffix(model) !== stripThinkingSuffix(child.model),
+            ),
+          ]
+        : sourceChain;
       const outcome = planSubagentOutcome(
         this.state,
         kind,
         child.role,
-        stripThinkingSuffix(child.model),
-        roleFallbacks,
+        child.model,
+        retryChain ? new Map([[child.role, retryChain]]) : roleFallbacks,
         reason,
         taskKey,
         occurrenceKey,

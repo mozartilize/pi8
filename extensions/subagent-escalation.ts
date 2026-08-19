@@ -1,3 +1,4 @@
+import { stripThinkingSuffix } from './subagents.js';
 import type { Role } from './types.js';
 
 /** Exact, line-leading signal a router-owned child may use to request one retry. */
@@ -127,6 +128,7 @@ export class SubagentEscalationState {
     task: string | undefined,
     roleFallbacks: ReadonlyMap<Role, string[]>,
     isBlacklisted: (registryId: string) => boolean,
+    selectedFallbackChain?: readonly string[],
   ): string | undefined {
     const queue = this.pending.get(role);
     if (!queue) return undefined;
@@ -137,7 +139,7 @@ export class SubagentEscalationState {
     if (queue.length === 0) this.pending.delete(role);
     this.issuedPairs.delete(override.pairKey);
 
-    const chain = roleFallbacks.get(role);
+    const chain = selectedFallbackChain ?? roleFallbacks.get(role);
     if (!chain) return undefined;
     const targetIndex = chain.indexOf(override.nextModel);
     const currentIndex = chain.indexOf(override.currentModel);
@@ -147,7 +149,7 @@ export class SubagentEscalationState {
         ? chain.slice(currentIndex + 1)
         : chain;
     return candidates.find((model) =>
-      model !== override.currentModel && !isBlacklisted(model));
+      model !== override.currentModel && !isBlacklisted(stripThinkingSuffix(model)));
   }
 
   reset(): void {
@@ -163,6 +165,30 @@ export interface PlannedSubagentOutcome {
   retry?: SubagentRetryDirective;
 }
 
+/**
+ * A hard failure blacklists the bare provider/model, so sibling effort entries
+ * cannot be valid retry targets. Keep the exact failed entry in the chain so
+ * `nextRoleFallback` can advance past it to a different model. Self-reports do
+ * not blacklist and therefore retain the full effort-aware chain.
+ */
+function hardFailureFallbacks(
+  role: Role,
+  currentModel: string,
+  roleFallbacks: ReadonlyMap<Role, string[]>,
+): ReadonlyMap<Role, string[]> {
+  const chain = roleFallbacks.get(role);
+  if (!chain) return roleFallbacks;
+  const failedBare = stripThinkingSuffix(currentModel);
+  return new Map([
+    [
+      role,
+      chain.filter((model) =>
+        model === currentModel || stripThinkingSuffix(model) !== failedBare,
+      ),
+    ],
+  ]);
+}
+
 /** Plan blacklist/retry behavior without touching global router state. */
 export function planSubagentOutcome(
   state: SubagentEscalationState,
@@ -175,7 +201,10 @@ export function planSubagentOutcome(
   occurrenceKey?: string,
 ): PlannedSubagentOutcome {
   const blacklistCurrent = kind === 'hard-failure';
-  const nextModel = nextRoleFallback(role, currentModel, roleFallbacks);
+  const eligibleFallbacks = blacklistCurrent
+    ? hardFailureFallbacks(role, currentModel, roleFallbacks)
+    : roleFallbacks;
+  const nextModel = nextRoleFallback(role, currentModel, eligibleFallbacks);
   if (!nextModel) return { blacklistCurrent };
   const retry = state.schedule(role, currentModel, nextModel, reason, taskKey, occurrenceKey);
   return retry ? { blacklistCurrent, retry } : { blacklistCurrent };
