@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -52,6 +52,12 @@ function makeManifest(size: number): ManifestEntry[] {
     bytes: size,
   }));
 }
+
+// The onnx integrity gate requires ~118 MB minimum, so these cases stream and
+// sha256 real 120 MB bodies through disk. That work legitimately exceeds
+// vitest's 5 s default on a slow/loaded disk (the failures are timeouts, not
+// logic), so raise the per-test budget for this file.
+vi.setConfig({ testTimeout: 60_000 });
 
 describe('embedding-provision', () => {
   // ─── Platform detection ───────────────────────────────────────
