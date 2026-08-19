@@ -68,6 +68,20 @@ describe('terminal classifier', () => {
     });
   });
 
+  it.each([
+    'modifies the retry logic in the scheduler',
+    'this patch modifies the parser',
+    'modified the schema last week, align the caller',
+  ])('matches y->ies/ied inflections of a mutation cue: %s', (prompt) => {
+    expect(assessTerminal(prompt).kind).toBe('implement');
+  });
+
+  it('reads a backticked file path as a bounded-scope signal', () => {
+    expect(assessTerminal('fix the bug in `src/auth.ts`').scope).toBe('bounded');
+    expect(assessTerminal('fix the bug in "src/auth.ts"').scope).toBe('bounded');
+    expect(assessTerminal('fix the bug in src/auth.ts').scope).toBe('bounded');
+  });
+
   it('classifies non-mutating work by its own cues', () => {
     expect(assessTerminal('review and improve this')).toMatchObject({ kind: 'review', compound: false });
     expect(assessTerminal('plan the migration strategy')).toMatchObject({ kind: 'plan' });

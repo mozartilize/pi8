@@ -45,6 +45,15 @@ const MAX_ANALYZED_CHARS = 4000;
 // Word-boundary anchors use letter lookarounds rather than \b: \b is
 // ASCII-only, so it never fires before Vietnamese cues such as "điều tra".
 const compile = (cues: readonly string[]): RegExp[] => cues.map((cue) => {
+  // A cue ending in consonant+y inflects the y into i before -es/-ed
+  // (modify -> modifies/modified, strategy -> strategies) but keeps it before
+  // -ing (modifying). Without this branch the generic stemmer below never
+  // matches those forms, and a missed MUTATION cue silently routes DOWN
+  // (kind falls through to gather), the one direction R3 forbids.
+  if (/[^aeiou]y$/iu.test(cue)) {
+    const root = cue.slice(0, -1);
+    return new RegExp(`(?<!\\p{L})${root}(?:y|ies|ied|ying)(?!\\p{L})`, 'iu');
+  }
   const stem = cue.replace(/e$/u, '');
   return new RegExp(`(?<!\\p{L})${stem}(?:e|es|ed|ing|s)?(?!\\p{L})`, 'iu');
 });
@@ -92,7 +101,8 @@ const lastIndex = (text: string, cues: readonly RegExp[]): number => {
 const matches = (text: string, cues: readonly RegExp[]): boolean => firstIndex(text, cues) !== -1;
 
 export function assessTerminal(prompt: string): TerminalAssessment {
-  const text = prompt.slice(0, MAX_ANALYZED_CHARS).replace(QUOTED, ' ');
+  const raw = prompt.slice(0, MAX_ANALYZED_CHARS);
+  const text = raw.replace(QUOTED, ' ');
   const negated = NEGATION.test(text);
 
   const prerequisiteAt = firstIndex(text, PREREQUISITE_RE);
@@ -117,7 +127,12 @@ export function assessTerminal(prompt: string): TerminalAssessment {
   let scopeDefaulted = false;
   let scope: TaskScope;
   if (matches(text, OPEN_RE)) scope = 'open-ended';
-  else if (matches(text, BOUNDED_RE) || PATH_LIKE.test(text)) scope = 'bounded';
+  // Detect file paths on the pre-strip text: developers most often name a file
+  // in backticks (`src/auth.ts`), and QUOTED strips those spans before cue
+  // scanning — so a backtick'd path would otherwise lose its only bounded-scope
+  // signal. Cue matching still runs on the stripped `text` so quoted prose
+  // can't be read as instructions.
+  else if (matches(text, BOUNDED_RE) || PATH_LIKE.test(raw)) scope = 'bounded';
   else if (compound) scope = 'open-ended';
   else {
     // Unknown scope raises the requirement rather than lowering it.
