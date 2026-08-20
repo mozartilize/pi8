@@ -385,4 +385,41 @@ describe('scorer property — strictly-worse candidate', () => {
     expect(pickBest([A, B], 'implement').chosen).toBe('t/b');
     expect(pickBest([A, B, C], 'implement').chosen).toBe('t/a');
   });
+
+  it('keeps a still-eligible incumbent on top across candidate-set churn', () => {
+    // Same flip fixture, but now B is the running incumbent. The set-relative
+    // cost rescale from adding C still happens, yet the incumbent cache-
+    // retention credit must outweigh the compressed cost gap: churn (quota
+    // blacklist, /router-sync, allowlist edit) must not evict a model that is
+    // still tier 0. This is the invariant that makes "leave the flip alone and
+    // rely on the incumbent floor" a safe policy — if it ever breaks, the flip
+    // has started evicting healthy incumbents and the policy must be revisited.
+    const A = candidate('t/a', {
+      bench: benchRow('t/a', {
+        quality: { intelligence: 100, coding: 100, agenticCoding: 100 },
+        priceInputPer1M: 1.1,
+        priceOutputPer1M: 1.1,
+      }),
+      cost: { input: 1.1e-6, output: 1.1e-6, cacheRead: 1e-7, cacheWrite: 1.1e-6 },
+    });
+    const B = candidate('t/b', {
+      bench: benchRow('t/b', {
+        quality: { intelligence: 94, coding: 94, agenticCoding: 94 },
+        priceInputPer1M: 1,
+        priceOutputPer1M: 1,
+      }),
+      cost: { input: 1e-6, output: 1e-6, cacheRead: 1e-7, cacheWrite: 1e-6 },
+    });
+    const C = candidate('t/c', {
+      bench: benchRow('t/c', {
+        quality: { intelligence: 88, coding: 88, agenticCoding: 88 },
+        priceInputPer1M: 1e6,
+        priceOutputPer1M: 1e6,
+      }),
+      cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+    });
+    const opts = { estimatedContextTokens: 100_000, incumbentRegistryId: 't/b' };
+    expect(pickBest([A, B], 'implement', undefined, opts).chosen).toBe('t/b');
+    expect(pickBest([A, B, C], 'implement', undefined, opts).chosen).toBe('t/b');
+  });
 });
