@@ -4,8 +4,9 @@
  * Pi's built-in `bash` tool is a shell string, so the router cannot know what
  * a command actually does without executing it. This classifier statically
  * recognizes high-confidence write shapes — file redirection, in-place
- * editors, file-writer commands, filesystem mutators, `dd of=`, and inline
- * Python write APIs — so the bounded mutation gate can treat them like
+ * editors, file-writer commands, filesystem mutators, `dd of=`, destructive
+ * git worktree resets/discards, and inline Python write APIs — so the bounded
+ * mutation gate can treat them like
  * `edit`/`write`. Everything else is `none` (no recognized mutation shape)
  * or `possible` (opaque Python: scripts, `-m` modules, eval/subprocess/import
  * indirection), which only feeds observability and never blocks.
@@ -31,6 +32,7 @@ export type MutationSignal =
   | 'shell-inplace'
   | 'shell-writer'
   | 'shell-filesystem'
+  | 'shell-git-destructive'
   | 'shell-dd'
   | 'python-write-api'
   | 'python-opaque';
@@ -57,16 +59,28 @@ export function classifyMutationCall(toolName: string, input: Record<string, unk
 
 // ─── Bash classification ──────────────────────────────────────────────────
 
+/**
+ * Command-position introducer: start of string, after a shell separator
+ * (`\n ; & | ( {`), or after a compound-block keyword (`then`/`do`/`else`).
+ * The keyword forms matter because a mutation inside `if …; then sed -i …; fi`
+ * or `while …; do rm …; done` is not preceded by a plain separator and would
+ * otherwise be invisible to every shell-shape and interpreter pattern below.
+ */
+const CMD_DELIM = '(?:^|[\\n;&|({]\\s*|\\b(?:then|do|else)\\s+)';
+const CMD_POS = CMD_DELIM + '(?:sudo\\s+)?';
+
 /** Interpreter names in command position; `pytest` is opaque by definition. */
-const PYTHON_INVOCATION =
-  /(?:^|[\n;&|(]\s*)(?:sudo\s+)?(?:(?:uv|poetry|pipenv)\s+run\s+)?(?:python[23]?(?:\.\d+)?|pytest)(?=[\s"'<])/g;
+const PYTHON_INVOCATION = new RegExp(
+  CMD_POS + '(?:(?:uv|poetry|pipenv)\\s+run\\s+)?(?:python[23]?(?:\\.\\d+)?|pytest)(?=[\\s"\'<])',
+  'g',
+);
 
 /** A heredoc opener: `<<DELIM`, `<<-DELIM`, with optional quotes. */
 const HEREDOC_OPENER = /(?<!<)<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/;
 
 /** A heredoc whose body is Python code (the interpreter owns the opener line). */
 const PYTHON_HEREDOC_OPENER = new RegExp(
-  '(?:^|[\\n;&|(]\\s*)(?:sudo\\s+)?(?:(?:uv|poetry|pipenv)\\s+run\\s+)?python[23]?(?:\\.\\d+)?' +
+  CMD_POS + '(?:(?:uv|poetry|pipenv)\\s+run\\s+)?python[23]?(?:\\.\\d+)?' +
     '(?:\\s+[^;&|\\n]*)?\\s*<<-?\\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)["\']?\\s*$',
 );
 
@@ -213,8 +227,6 @@ function extractHeredocBody(rest: string, delimiter: string, stripTabs: boolean)
 
 // ─── Shell shape detection ────────────────────────────────────────────────
 
-const CMD_POS = '(?:^|[\\n;&|(]\\s*)(?:sudo\\s+)?';
-
 const SHELL_PATTERNS: ReadonlyArray<{ signal: MutationSignal; pattern: RegExp }> = [
   {
     signal: 'shell-inplace',
@@ -230,6 +242,25 @@ const SHELL_PATTERNS: ReadonlyArray<{ signal: MutationSignal; pattern: RegExp }>
   {
     signal: 'shell-filesystem',
     pattern: new RegExp(CMD_POS + '(?:cp|mv|rm|install|mkdir|ln)\\b', 'i'),
+  },
+  {
+    // Destructive git worktree ops that overwrite/delete uncommitted work.
+    // `git reset --hard`, `git checkout -- <paths>` / `git checkout .`,
+    // `git restore` (worktree discard is its default), and forced `git clean`.
+    // These match no redirect/writer/filesystem shape yet are the likeliest to
+    // lose real work, so they get their own high-confidence signal.
+    signal: 'shell-git-destructive',
+    pattern: new RegExp(
+      CMD_POS +
+        'git\\s+(?:' +
+        'reset\\b[^\\n;&|()]*--hard\\b' +
+        '|checkout\\b[^\\n;&|()]*\\s--(?:\\s|$)' +
+        '|checkout\\s+\\.(?:\\s|$)' +
+        '|restore\\b' +
+        '|clean\\b[^\\n;&|()]*\\s-\\w*f' +
+        ')',
+      'i',
+    ),
   },
 ];
 

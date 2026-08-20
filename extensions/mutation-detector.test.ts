@@ -139,6 +139,32 @@ describe('bash shell writers', () => {
     expect(bash('dd if=x of=/dev/stdout')).toEqual({ confidence: 'none' });
   });
 
+  it('recognizes destructive git worktree ops', () => {
+    expect(bash('git reset --hard')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+    expect(bash('git reset --hard HEAD~1')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+    expect(bash('git reset --soft --hard')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+    expect(bash('git checkout -- .')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+    expect(bash('git checkout HEAD -- file.txt')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+    expect(bash('git checkout .')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+    expect(bash('git restore src/app.ts')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+    expect(bash('git clean -fd')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+  });
+
+  it('leaves non-destructive git alone', () => {
+    expect(bash('git checkout -b feature')).toEqual({ confidence: 'none' });
+    expect(bash('git checkout main')).toEqual({ confidence: 'none' });
+    expect(bash('git reset HEAD~1')).toEqual({ confidence: 'none' });
+    expect(bash('git clean -n')).toEqual({ confidence: 'none' });
+  });
+
+  it('sees mutations inside then/do/else compound blocks', () => {
+    expect(bash('if true; then sed -i s/a/b/ f; fi')).toMatchObject({ confidence: 'high', signal: 'shell-inplace' });
+    expect(bash('while read x; do rm -rf $x; done')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+    expect(bash('if [ -f x ]; then echo hi > out.txt; fi')).toMatchObject({ confidence: 'high', signal: 'shell-redirect' });
+    expect(bash('if ok; then :; else git reset --hard; fi')).toMatchObject({ confidence: 'high', signal: 'shell-git-destructive' });
+    expect(bash('if x; then python -c \'open("f","w")\'; fi')).toMatchObject({ confidence: 'high', signal: 'python-write-api' });
+  });
+
   it('leaves unrecognized commands and lookalikes alone', () => {
     expect(bash('ls -la')).toEqual({ confidence: 'none' });
     expect(bash('grep -i pattern f')).toEqual({ confidence: 'none' });
