@@ -804,9 +804,15 @@ export function pickBest(
     const staticTokens = clamp(opts.staticPrefixTokens ?? 0, 0, total);
 
     const incumbentCost = incumbentScored?.cost;
-    const writeBasis = incumbentCost?.cacheWrite ?? incumbentCost?.input;
+    // A non-finite or negative cost field is garbage the registry never emits,
+    // but if one slips through it must not poison the score (rule 2): NaN
+    // propagates through Math.max/Math.min and would surface as a `scored NaN`
+    // decision. Fall back to `input` only when `cacheWrite` is unusable, and
+    // drop retention credit entirely unless both endpoints are real prices.
+    const cacheWrite = incumbentCost?.cacheWrite;
+    const writeBasis = isNonNegativeFinite(cacheWrite) ? cacheWrite : incumbentCost?.input;
     const cacheRead = incumbentCost?.cacheRead;
-    const perTokenLoss = writeBasis != null && cacheRead != null
+    const perTokenLoss = isNonNegativeFinite(writeBasis) && isNonNegativeFinite(cacheRead)
       ? Math.max(0, writeBasis - cacheRead)
       : undefined;
 
