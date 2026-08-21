@@ -3,7 +3,6 @@
  *
  * Pure functions for validation/defaults; I/O lives in the exported helpers.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -11,7 +10,7 @@ import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 
 import type { BenchModel, BenchmarkStore, ExtensionContext } from './types.js';
 import { CONFIG_FILE, STORE_FILE, STALE_MS, STORAGE_DIR } from './constants.js';
-import { writeJsonAtomic } from './json-file.js';
+import { readJsonCached, writeJsonAtomic } from './json-file.js';
 
 /**
  * Resolve the storage directory.
@@ -154,21 +153,22 @@ function sanitizeAliases(value: unknown): Record<string, string> {
 
 export const loadStore = (base?: string): BenchmarkStore | undefined => {
   const path = getStorePath(base);
-  if (!existsSync(path)) return undefined;
+  const cached = readJsonCached(path);
+  if (!cached) return undefined;
+  const parsed = cached.parsed;
+  if (isV1Store(parsed)) {
+    // v1 rows lost the effort level they were measured at, so the store
+    // cannot be upgraded — only discarded. The store is derived data, so
+    // dropping it is safe; the empty result forces a resync.
+    console.warn(
+      '[pi8] benchmark store v1 predates effort identity and cannot be upgraded; discarding it. Run /router-sync to rebuild.',
+    );
+    return emptyStore();
+  }
+  if (!isValidStore(parsed)) return undefined;
   try {
-    const raw = readFileSync(path, 'utf8');
-    const parsed = JSON.parse(raw) as unknown;
-    if (isV1Store(parsed)) {
-      // v1 rows lost the effort level they were measured at, so the store
-      // cannot be upgraded — only discarded. The store is derived data, so
-      // dropping it is safe; the empty result forces a resync.
-      console.warn(
-        '[pi8] benchmark store v1 predates effort identity and cannot be upgraded; discarding it. Run /router-sync to rebuild.',
-      );
-      return emptyStore();
-    }
-    if (!isValidStore(parsed)) return undefined;
-    // Normalize arrays/objects defensively.
+    // Re-shape on every call so the shared cached parse is never handed out for
+    // mutation, and normalize arrays/objects defensively.
     return {
       ...parsed,
       models: Array.isArray(parsed.models)

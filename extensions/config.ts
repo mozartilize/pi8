@@ -2,7 +2,6 @@
  * Extension runtime config loading. In v1 we keep this minimal: read config from
  * ~/.pi/agent/pi8/config.json when present, otherwise use defaults.
  */
-import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AutoRouterConfig, Dimension, ScoreWeights } from './types.js';
 import {
@@ -18,7 +17,7 @@ import {
   DEFAULT_SWITCH_MARGIN,
 } from './constants.js';
 import { resolveStoragePath } from './store.js';
-import { writeJsonAtomic } from './json-file.js';
+import { readJsonCached, writeJsonAtomic } from './json-file.js';
 
 export function getConfigPath(): string {
   return join(resolveStoragePath(), CONFIG_FILE);
@@ -161,14 +160,9 @@ const normalizeDimensionWeights = (value: unknown): Record<Dimension, ScoreWeigh
 /** Read and parse the raw config file, ignoring corruption. Rejects arrays
  *  and primitives so callers don't need to guard against [] or "string". */
 function readPersisted(path: string): PersistedConfig {
-  if (!existsSync(path)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as PersistedConfig;
-    }
-  } catch {
-    // ignore corrupt config
+  const parsed = readJsonCached(path)?.parsed;
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return parsed as PersistedConfig;
   }
   return {};
 }
