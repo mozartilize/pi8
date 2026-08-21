@@ -69,6 +69,8 @@ import {
   getCurrentModelRegistry,
   getWorkPhaseState,
   commitWorkPhaseState,
+  getCandidateExpansion,
+  setCandidateExpansion,
   peekPendingUserEscalation,
   consumePendingUserEscalation,
   addAssessmentCost,
@@ -638,42 +640,67 @@ export function registerAutoRouterProvider(
 
             const store = loadStore();
             const benchModels = store ? activeModels(store) : [];
-            // Rows are pre-merged per (registryId, effort) by the store, so a
-            // model with effort rows maps to several rows.
-            const rowsByModel = new Map<string, BenchModel[]>();
-            for (const b of benchModels) {
-              const list = rowsByModel.get(b.registryId) ?? [];
-              list.push(b);
-              rowsByModel.set(b.registryId, list);
-            }
-            // Derived from the whole store, so it re-tunes on every sync
-            // instead of pinning a constant that a new model generation
-            // invalidates.
-            const effortDrops = effortDropsPerStep(benchModels);
 
             const isModelAllowed = loadModelFilter();
             const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
             const blacklistedProviders = getBlacklistedProviders();
             // Pi's native session scoping (--models / enabledModels) is the
             // authoritative user-intent signal for which models are usable.
-            const isScoped = buildScopedModelFilter(
-              extensionContext?.scopedModels as
-                | readonly { model: { provider: string; id: string } }[]
-                | undefined,
-            );
-            const allCandidates = (regModels as unknown as RegistryModelInfo[])
-              .filter(
-                (rm) =>
-                  rm.provider &&
-                  rm.provider !== ROUTER_PROVIDER_ID &&
-                  !blacklistedProviders.has(rm.provider) &&
-                  isModelAllowed(`${rm.provider}/${rm.id}`) &&
-                  !isBlacklisted(`${rm.provider}/${rm.id}`) &&
-                  isScoped(`${rm.provider}/${rm.id}`),
-              )
-              .flatMap((rm) =>
-                expandModelCandidates(rm, rowsByModel.get(`${rm.provider}/${rm.id}`) ?? [], effortDrops),
-              );
+            const scopedModels = extensionContext?.scopedModels as
+              | readonly { model: { provider: string; id: string } }[]
+              | undefined;
+            const isScoped = buildScopedModelFilter(scopedModels);
+            const regModelList = regModels as unknown as RegistryModelInfo[];
+
+            // The flatMap expansion below is pure in its inputs, so it is
+            // rebuilt only when their signature changes. Live per-model/provider
+            // runtime exclusions are NOT part of the key — they are applied by
+            // `applyRuntimeExclusions` on every invocation. Blacklisted
+            // providers ARE in the key because the build-time filter drops them,
+            // matching the pre-cache candidate count.
+            const expansionKey = [
+              regModelList.map((rm) => `${rm.provider}/${rm.id}`).join(','),
+              `${store?.syncedAt ?? 0}:${benchModels.length}`,
+              JSON.stringify(config.models ?? null),
+              [...getSessionBlacklistPatterns()].slice().sort().join(','),
+              [...blacklistedProviders].sort().join(','),
+              scopedModels
+                ? scopedModels.map((s) => `${s.model.provider}/${s.model.id}`).sort().join(',')
+                : '',
+            ].join('|');
+
+            const cachedExpansion = getCandidateExpansion();
+            let allCandidates: Candidate[];
+            if (cachedExpansion && cachedExpansion.key === expansionKey) {
+              allCandidates = cachedExpansion.candidates;
+            } else {
+              // Rows are pre-merged per (registryId, effort) by the store, so a
+              // model with effort rows maps to several rows.
+              const rowsByModel = new Map<string, BenchModel[]>();
+              for (const b of benchModels) {
+                const list = rowsByModel.get(b.registryId) ?? [];
+                list.push(b);
+                rowsByModel.set(b.registryId, list);
+              }
+              // Derived from the whole store, so it re-tunes on every sync
+              // instead of pinning a constant that a new model generation
+              // invalidates.
+              const effortDrops = effortDropsPerStep(benchModels);
+              allCandidates = regModelList
+                .filter(
+                  (rm) =>
+                    rm.provider &&
+                    rm.provider !== ROUTER_PROVIDER_ID &&
+                    !blacklistedProviders.has(rm.provider) &&
+                    isModelAllowed(`${rm.provider}/${rm.id}`) &&
+                    !isBlacklisted(`${rm.provider}/${rm.id}`) &&
+                    isScoped(`${rm.provider}/${rm.id}`),
+                )
+                .flatMap((rm) =>
+                  expandModelCandidates(rm, rowsByModel.get(`${rm.provider}/${rm.id}`) ?? [], effortDrops),
+                );
+              setCandidateExpansion({ key: expansionKey, candidates: allCandidates });
+            }
             const candidates = allCandidates.filter(
               (candidate) => !getBlacklistedModels().has(candidateKey(candidate)),
             );

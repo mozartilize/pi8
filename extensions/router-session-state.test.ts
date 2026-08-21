@@ -11,6 +11,8 @@ import {
   getAssessmentCost,
   getAssessorTokenEstimate,
   getCachedRoutingIntent,
+  getCandidateExpansion,
+  setCandidateExpansion,
   getLastChosenRegistryId,
   getLastResolvedThinkingLevel,
   getLatchGeneration,
@@ -62,6 +64,25 @@ describe('router session state', () => {
     expect(getAccumulatedCost()).toBe(0);
     expect(getLastResolvedThinkingLevel()).toBeUndefined();
     expect(getCachedRoutingIntent()).toBeUndefined();
+  });
+});
+
+describe('candidate expansion memo', () => {
+  beforeEach(() => resetRouterSession());
+
+  it('round-trips the cached expansion by reference', () => {
+    const candidates = [{ registryId: 'p/m' }] as never;
+    setCandidateExpansion({ key: 'sig-1', candidates });
+    const hit = getCandidateExpansion();
+    expect(hit?.key).toBe('sig-1');
+    // Same array reference: the memo hands back the built list without copying.
+    expect(hit?.candidates).toBe(candidates);
+  });
+
+  it('does not survive a session reset', () => {
+    setCandidateExpansion({ key: 'sig-1', candidates: [] });
+    resetRouterSession();
+    expect(getCandidateExpansion()).toBeUndefined();
   });
 });
 

@@ -9,6 +9,7 @@ import type { ClassifyResult } from './classifier.js';
 import type {
   AssessmentFallbackReason,
   AssessorTokenEstimate,
+  Candidate,
   DecisionCause,
   Dimension,
   RoutingAssessment,
@@ -80,6 +81,16 @@ interface RouterSessionState {
   embeddingStats: EmbeddingStats;
   /** Per-intent multi-work phase lifecycle. Undefined outside an active intent. */
   workPhaseState: WorkPhaseState | undefined;
+  /**
+   * Memoized registry expansion. The flatMap over every registry model into
+   * its effort-expanded candidates is the per-invocation cost that grows with
+   * the model count; it is pure in its inputs, so it is rebuilt only when the
+   * signature of those inputs (registry set, store version, allowlist,
+   * blacklist patterns, blacklisted providers, session scoping) changes. Live
+   * per-model/provider runtime exclusions are applied downstream, never baked
+   * into this cache.
+   */
+  candidateExpansion: { key: string; candidates: Candidate[] } | undefined;
 }
 
 /** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */
@@ -120,6 +131,7 @@ const state: RouterSessionState = {
   assessorStrikes: new Map(),
   embeddingStats: { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 },
   workPhaseState: undefined,
+  candidateExpansion: undefined,
 };
 
 export const getSessionGeneration = (): number => state.sessionGeneration;
@@ -278,6 +290,16 @@ export const setLastRegisteredModels = (key: string): void => {
   state.lastRegisteredModels = key;
 };
 
+export const getCandidateExpansion = ():
+  | { key: string; candidates: Candidate[] }
+  | undefined => state.candidateExpansion;
+
+export const setCandidateExpansion = (
+  entry: { key: string; candidates: Candidate[] } | undefined,
+): void => {
+  state.candidateExpansion = entry;
+};
+
 export const getWorkPhaseState = (): WorkPhaseState | undefined => state.workPhaseState;
 
 /** Replaces the whole state object in one assignment — no partial patches. */
@@ -302,6 +324,7 @@ export const resetRouterSession = (): void => {
   state.assessorStrikes.clear();
   state.embeddingStats = { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 };
   state.workPhaseState = undefined;
+  state.candidateExpansion = undefined;
   latchVetoIntentKey = undefined;
   // lastExtensionContext and currentModelRegistry are intentionally preserved
   // — they are tied to the Pi runtime / session manager, not per-turn state.
