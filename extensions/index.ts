@@ -32,6 +32,7 @@ import { collectSubagentResultText, parseSubagentResultRows } from './subagent-r
 import { computeSubagentSpend } from './subagent-spend.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
 import { loadConfig } from './config.js';
+import { ensureEmbeddingEngine } from './embedding.js';
 import { setSessionFile } from './sessionpaths.js';
 import { debugLog, setConfigDebug } from './debuglog.js';
 import type { RegistryModelInfo } from './scorer.js';
@@ -236,6 +237,20 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
       // Gated: a concrete-model session must not poke provider auth (it can
       // trigger a token refresh under Pi's credential-store lock, pi#7508).
       if (shouldRunAuthSweep(ctx?.model)) await refreshRoleModels(ctx.modelRegistry, ctx);
+    } catch {
+      // Advisory only.
+    }
+    try {
+      // Pre-warm the ONNX embedding engine off the turn path so the first
+      // ambiguous prompt does not pay the cold-start load inline. Only when the
+      // classifier is enabled and the session actually routes (R9). Detached
+      // and advisory: the engine is a process-global singleton whose load
+      // failures degrade to the keyword classifier (R2), so this never blocks
+      // or fails the session.
+      const cfg = loadConfig();
+      if (cfg.embeddingClassifier && isRouterAutoActive(ctx?.model)) {
+        void ensureEmbeddingEngine({ deadlineMs: cfg.embeddingDeadlineMs }).catch(() => {});
+      }
     } catch {
       // Advisory only.
     }
