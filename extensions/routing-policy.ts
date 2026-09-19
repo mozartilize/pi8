@@ -229,6 +229,282 @@ export function applyEscalationPrecedence(
   return { dimension, cause, userApplied, userRaised, escalationApplied, escalationRaised };
 }
 
+// ─── Decision steps ──────────────────────────────────────────────────
+
+/**
+ * Choose the scoring set and dispatch pickBest / pickEscalation.
+ *
+ * A model route-up is strict about the status-reported source attempt.
+ * Forbidden same-model equal/lower-effort candidates are removed before
+ * ordinary scoring so a stale source cannot leak an invalid provider handoff.
+ * A model-requested route-up is a quality-first repick, including when the
+ * target dimension is unchanged or the source is not in this live set.
+ */
+function selectScoredDecision(
+  candidates: Candidate[],
+  dimension: Dimension,
+  precedence: EscalationPrecedenceResult,
+  escalation: AppliedEscalation | undefined,
+  baseOpts: ScoreOpts,
+  pickOpts: ScoreOpts,
+  weights: RoutingPolicyInput['config']['dimensionWeights'],
+): RoutingDecision {
+  const strictModelEscalation =
+    precedence.escalationApplied && !precedence.userApplied && escalation?.fromModel;
+  const scoringCandidates = strictModelEscalation
+    ? candidates.filter((candidate) =>
+        isValidEscalationCandidate(candidateKey(candidate), escalation.fromModel!),
+      )
+    : candidates;
+  if (scoringCandidates.length === 0) {
+    return {
+      dimension,
+      chosen: '',
+      reason: `no valid escalation target from ${escalation?.fromModel ?? 'unknown source'}`,
+      confidence: 0.8,
+      routedUp: true,
+      routedDown: false,
+      cause: 'model-escalation',
+      fallbackChain: [],
+    };
+  }
+  if (strictModelEscalation) {
+    return (
+      pickEscalation(
+        scoringCandidates,
+        dimension,
+        escalation.fromModel!,
+        baseOpts,
+        true,
+      ) ?? {
+        dimension,
+        chosen: '',
+        reason: `no valid escalation target from ${escalation.fromModel}`,
+        confidence: 0.8,
+        routedUp: true,
+        routedDown: false,
+        cause: 'model-escalation',
+        fallbackChain: [],
+      }
+    );
+  }
+  return pickBest(scoringCandidates, dimension, weights[dimension], pickOpts);
+}
+
+/**
+ * Repick away from the source model when scoring would keep it, or when the
+ * request is a same-dimension capability repick. The pure escalation picker
+ * excludes the source model and ranks alternatives quality-first.
+ *
+ * A same-dimension capability repick only overwrites causes that carry no
+ * active routing intent. When an earlier step already owns the dimension,
+ * the repick is a secondary model selection — the dimension-owning cause
+ * must be preserved. Does not write cause onto the decision; the parent
+ * local stays authoritative until annotation.
+ */
+function applyEscalationRepick(
+  decision: RoutingDecision,
+  cause: DecisionCause,
+  candidates: Candidate[],
+  dimension: Dimension,
+  precedence: EscalationPrecedenceResult,
+  userEscalation: PendingUserEscalation | undefined,
+  escalation: AppliedEscalation | undefined,
+  baseOpts: ScoreOpts,
+  weights: RoutingPolicyInput['config']['dimensionWeights'],
+): { decision: RoutingDecision; cause: DecisionCause } {
+  const repick = precedence.userApplied
+    ? { fromModel: userEscalation?.fromModel, raisedDimension: precedence.userRaised }
+    : precedence.escalationApplied
+      ? { fromModel: escalation?.fromModel, raisedDimension: precedence.escalationRaised }
+      : undefined;
+  const invalidModelEscalation =
+    precedence.escalationApplied &&
+    !precedence.userApplied &&
+    repick?.fromModel != null &&
+    !isValidEscalationCandidate(decision.chosen, repick.fromModel);
+  if (
+    repick?.fromModel &&
+    (invalidModelEscalation || decision.chosen === repick.fromModel || !repick.raisedDimension)
+  ) {
+    const escalationDecision = pickEscalation(
+      candidates,
+      dimension,
+      repick.fromModel,
+      baseOpts,
+      !precedence.userApplied,
+    );
+    if (escalationDecision) {
+      decision = escalationDecision;
+      if (!repick.raisedDimension && POLICY_PASSIVE_CAUSES.has(cause)) {
+        cause = 'capability-escalation';
+      }
+    } else if (invalidModelEscalation) {
+      // Do not silently serve an equal/lower-effort provider handoff when no
+      // valid destination exists. Retain the exact serving attempt instead.
+      const sourceCandidate = candidates.find((c) => candidateKey(c) === repick.fromModel);
+      if (sourceCandidate) {
+        decision = pickBest([sourceCandidate], dimension, weights[dimension], baseOpts);
+      }
+    }
+  }
+  return { decision, cause };
+}
+
+/**
+ * Incumbent capability floor. The served model is sticky within one task: a
+ * per-invocation rescore must not fall below the incumbent's measured
+ * capability at the routed dimension. Only measured evidence promotes the
+ * incumbent, and only by reordering the already-scored fallback chain — an
+ * incumbent that the scorer filtered out (context/vision) or that never
+ * entered the chain is never reintroduced, so the floor cannot bypass a
+ * safety filter or capability tier.
+ */
+function applyIncumbentModelFloor(
+  decision: RoutingDecision,
+  candidates: Candidate[],
+  dimension: Dimension,
+  incumbentRegistryId: string | undefined,
+  standsDown: boolean,
+): void {
+  if (incumbentRegistryId == null || incumbentRegistryId === decision.chosen || standsDown) {
+    return;
+  }
+  const incumbentCandidate = candidates.find((c) => candidateKey(c) === incumbentRegistryId);
+  const chosenCandidate = candidates.find((c) => candidateKey(c) === decision.chosen);
+  const incumbentInChain = decision.fallbackChain.indexOf(incumbentRegistryId);
+  if (incumbentCandidate && chosenCandidate && incumbentInChain >= 0) {
+    const incumbentQuality = capabilityForDimension(incumbentCandidate, dimension);
+    const chosenQuality = capabilityForDimension(chosenCandidate, dimension);
+    if (incumbentQuality != null && chosenQuality != null && incumbentQuality > chosenQuality) {
+      if (incumbentInChain > 0) {
+        const chain = decision.fallbackChain.slice();
+        chain.splice(incumbentInChain, 1);
+        chain.unshift(incumbentRegistryId);
+        decision.fallbackChain = chain;
+      }
+      decision.chosen = incumbentRegistryId;
+      decision.reason += ' [incumbent-floor]';
+    }
+  }
+}
+
+/**
+ * Incumbent effort floor. Holding the strong incumbent model on a
+ * cheap-classified same-task follow-up (whether re-picked naturally or
+ * restored by the model floor) would otherwise serve it at the cheap
+ * dimension's shallow thinking floor — right model, wrong effort. Carry the
+ * incumbent's resolved dimension forward as an up-only effort floor. This
+ * never lowers effort (max only), never changes the routed dimension or
+ * model (so no DecisionCause — it is a secondary mechanism recorded in the
+ * reason).
+ */
+function applyIncumbentEffortFloor(
+  decision: RoutingDecision,
+  dimension: Dimension,
+  incumbentResolvedDimension: Dimension | undefined,
+  standsDown: boolean,
+): void {
+  if (
+    incumbentResolvedDimension == null ||
+    standsDown ||
+    DIMENSION_STRENGTH[incumbentResolvedDimension] <= DIMENSION_STRENGTH[dimension]
+  ) {
+    return;
+  }
+  decision.effortFloorDimension = incumbentResolvedDimension;
+  decision.reason += ' [incumbent-effort-floor]';
+}
+
+/**
+ * Apply context-pressure metadata as advisory only, then reason suffixes.
+ * Pressure is structural advice for the user/caller, not a cause that owns
+ * the routing decision or changes the selected dimension. Reason suffixes
+ * are applied after context-pressure so ordering is stable.
+ */
+function annotateDecision(
+  decision: RoutingDecision,
+  dimension: Dimension,
+  cause: DecisionCause,
+  classifyResult: ClassifyResult,
+  candidates: Candidate[],
+  estimatedContextTokens: number,
+  incumbentRegistryId: string | undefined,
+  escalation: AppliedEscalation | undefined,
+  escalationReason: string | undefined,
+  config: RoutingPolicyInput['config'],
+  baseOpts: ScoreOpts,
+): void {
+  decision.dimension = dimension;
+  decision.confidence = classifyResult.confidence;
+  decision.cause = cause;
+  if (escalation) {
+    decision.escalation = {
+      requestedDimension: escalation.dimension,
+      heuristicDimension: classifyResult.dimension,
+      reason: escalation.reason,
+    };
+  }
+  // "Changed" is not "stronger". Direction has to come from the strength
+  // ordering, because the downstream consumers — context-pressure advice, the
+  // status widget, `/router-why` — mean different things for each direction.
+  decision.routedUp =
+    DIMENSION_STRENGTH[dimension] > DIMENSION_STRENGTH[classifyResult.dimension];
+  decision.routedDown =
+    DIMENSION_STRENGTH[dimension] < DIMENSION_STRENGTH[classifyResult.dimension];
+
+  // The status widgets promise "routed-up/down = a different-strength model was
+  // actually served", not merely "the dimension label moved". A raise that
+  // re-selects the model the heuristic dimension would have picked served
+  // nothing stronger, so record whether the pick truly moved and let the UI
+  // suppress a misleading label. Bounded to turns where a direction fired.
+  if (decision.routedUp || decision.routedDown) {
+    const heuristicPick = pickBest(
+      candidates,
+      classifyResult.dimension,
+      config.dimensionWeights[classifyResult.dimension],
+      baseOpts,
+    );
+    decision.routedPickChanged = heuristicPick.chosen !== decision.chosen;
+  }
+
+  const chosenCandidateForContext = candidates.find(
+    (c) => candidateKey(c) === decision.chosen,
+  );
+  const chosenContextWindow = chosenCandidateForContext?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  const contextUsageRatio = estimatedContextTokens / Math.max(1, chosenContextWindow);
+  const undercertainty =
+    classifyResult.confidence < config.lowConfidenceThreshold || decision.routedUp;
+  if (undercertainty && contextUsageRatio >= CONTEXT_PRESSURE_THRESHOLD) {
+    decision.contextPressure = {
+      usageRatio: contextUsageRatio,
+      threshold: CONTEXT_PRESSURE_THRESHOLD,
+      suggestion:
+        'Parent context is dense: offload planning to a fresh-context planner subagent, then run execution in the parent with a cheaper model.',
+    };
+    // Advisory only: do NOT change decision.cause here
+    decision.reason += ' [context-pressure: prefer fresh planner handoff]';
+  }
+
+  if (cause === 'context-depth') {
+    decision.reason += ` [context-depth: ${estimatedContextTokens} tokens ≥ ${config.depthEscalationTokens}]`;
+  }
+  if (cause === 'no-data') {
+    decision.reason += ' [no benchmark quality data]';
+  }
+  if (cause === 'model-escalation' && escalationReason) {
+    decision.reason += ` [escalated: ${escalationReason}]`;
+  } else if (cause === 'user-escalation') {
+    decision.reason += ` [user escalation → ${dimension}]`;
+  } else if (cause === 'router-consult' && decision.assessment) {
+    decision.reason +=
+      ` [assessment ${decision.assessment.kind} ` +
+      `${decision.assessment.scope}/${decision.assessment.confidence}]`;
+  }
+
+  decision.switched = incumbentRegistryId != null && incumbentRegistryId !== decision.chosen;
+}
+
 // ─── Core function ───────────────────────────────────────────────────
 
 /**
@@ -304,102 +580,32 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     ...(staticPrefixTokens != null ? { staticPrefixTokens } : {}),
   };
   const pickOpts: ScoreOpts = multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
-  // A model route-up is strict about the status-reported source attempt. Remove
-  // forbidden same-model equal/lower-effort candidates before ordinary scoring,
-  // so a stale or unavailable source cannot leak an invalid provider handoff.
-  const strictModelEscalation = precedence.escalationApplied && !precedence.userApplied && escalation?.fromModel;
-  const scoringCandidates = strictModelEscalation
-    ? candidates.filter((candidate) => isValidEscalationCandidate(candidateKey(candidate), escalation.fromModel!))
-    : candidates;
-  let decision: RoutingDecision;
-  if (scoringCandidates.length === 0) {
-    decision = {
-      dimension,
-      chosen: '',
-      reason: `no valid escalation target from ${escalation?.fromModel ?? 'unknown source'}`,
-      confidence: 0.8,
-      routedUp: true,
-      routedDown: false,
-      cause: 'model-escalation',
-      fallbackChain: [],
-    };
-  } else if (strictModelEscalation) {
-    // A model-requested route-up is a quality-first repick, including when
-    // the target dimension is unchanged or the source is not in this live
-    // candidate set. This prevents ordinary economics from retaining a
-    // weaker alternative after the strict effort filter.
-    decision = pickEscalation(
-      scoringCandidates,
-      dimension,
-      escalation.fromModel!,
-      baseOpts,
-      true,
-    ) ?? {
-      dimension,
-      chosen: '',
-      reason: `no valid escalation target from ${escalation.fromModel}`,
-      confidence: 0.8,
-      routedUp: true,
-      routedDown: false,
-      cause: 'model-escalation',
-      fallbackChain: [],
-    };
-  } else {
-    decision = pickBest(scoringCandidates, dimension, config.dimensionWeights[dimension], pickOpts);
-  }
+  let decision = selectScoredDecision(
+    candidates,
+    dimension,
+    precedence,
+    escalation,
+    baseOpts,
+    pickOpts,
+    config.dimensionWeights,
+  );
 
   // Step 6: repick away from the source model when scoring would keep it, or
-  // when the request is a same-dimension capability repick. The pure escalation
-  // picker excludes the source model and ranks alternatives quality-first.
-  const repick = precedence.userApplied
-    ? { fromModel: userEscalation?.fromModel, raisedDimension: precedence.userRaised }
-    : precedence.escalationApplied
-      ? { fromModel: escalation?.fromModel, raisedDimension: precedence.escalationRaised }
-      : undefined;
-  const invalidModelEscalation =
-    precedence.escalationApplied &&
-    !precedence.userApplied &&
-    repick?.fromModel != null &&
-    !isValidEscalationCandidate(decision.chosen, repick.fromModel);
-  if (
-    repick?.fromModel &&
-    (invalidModelEscalation || decision.chosen === repick.fromModel || !repick.raisedDimension)
-  ) {
-    const escalationDecision = pickEscalation(
-      candidates,
-      dimension,
-      repick.fromModel,
-      baseOpts,
-      !precedence.userApplied,
-    );
-    if (escalationDecision) {
-      decision = escalationDecision;
-      // A same-dimension capability repick only overwrites causes that
-      // carry no active routing intent. When an earlier step (user request,
-      // consult, depth escalation) already owns the dimension, the repick is
-      // a secondary model selection — the dimension-owning cause must be
-      // preserved.
-      if (!repick.raisedDimension && POLICY_PASSIVE_CAUSES.has(cause)) {
-        cause = 'capability-escalation';
-      }
-    } else if (invalidModelEscalation) {
-      // Do not silently serve an equal/lower-effort provider handoff when no
-      // valid destination exists. Retain the exact serving attempt instead.
-      const sourceCandidate = candidates.find((c) => candidateKey(c) === repick.fromModel);
-      if (sourceCandidate) {
-        decision = pickBest([sourceCandidate], dimension, config.dimensionWeights[dimension], baseOpts);
-      }
-    }
-  }
+  // when the request is a same-dimension capability repick.
+  const repicked = applyEscalationRepick(
+    decision,
+    cause,
+    candidates,
+    dimension,
+    precedence,
+    userEscalation,
+    escalation,
+    baseOpts,
+    config.dimensionWeights,
+  );
+  decision = repicked.decision;
+  cause = repicked.cause;
 
-  // Step 6b: incumbent capability floor. The served model is sticky within one
-  // task: a per-invocation rescore must not fall below the incumbent's measured
-  // capability at the routed dimension. Only measured evidence promotes the
-  // incumbent, and only by reordering the already-scored fallback chain — an
-  // incumbent that the scorer filtered out (context/vision) or that never
-  // entered the chain is never reintroduced, so the floor cannot bypass a
-  // safety filter or capability tier.
-  //
   // The floor stands down for the sanctioned downward moves, never widening
   // them (R3): an explicit user pick and any active escalation own the model
   // (an escalation repick deliberately excludes the source model, so the floor
@@ -419,128 +625,44 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     !sameIntentAsLast &&
     classifyResult.confidence >= config.lowConfidenceThreshold &&
     DIMENSION_STRENGTH[dimension] <= DIMENSION_STRENGTH['gather'];
-  if (
-    incumbentRegistryId != null &&
-    incumbentRegistryId !== decision.chosen &&
-    !precedence.userApplied &&
-    !precedence.escalationApplied &&
-    !inspectPhasePromotion &&
-    !consultLoweredDimension &&
-    !offTopicReset
-  ) {
-    const incumbentCandidate = candidates.find((c) => candidateKey(c) === incumbentRegistryId);
-    const chosenCandidate = candidates.find((c) => candidateKey(c) === decision.chosen);
-    const incumbentInChain = decision.fallbackChain.indexOf(incumbentRegistryId);
-    if (incumbentCandidate && chosenCandidate && incumbentInChain >= 0) {
-      const incumbentQuality = capabilityForDimension(incumbentCandidate, dimension);
-      const chosenQuality = capabilityForDimension(chosenCandidate, dimension);
-      if (incumbentQuality != null && chosenQuality != null && incumbentQuality > chosenQuality) {
-        if (incumbentInChain > 0) {
-          const chain = decision.fallbackChain.slice();
-          chain.splice(incumbentInChain, 1);
-          chain.unshift(incumbentRegistryId);
-          decision.fallbackChain = chain;
-        }
-        decision.chosen = incumbentRegistryId;
-        decision.reason += ' [incumbent-floor]';
-      }
-    }
-  }
+  const incumbentFloorStandsDown =
+    precedence.userApplied ||
+    precedence.escalationApplied ||
+    inspectPhasePromotion ||
+    consultLoweredDimension ||
+    offTopicReset;
 
-  // Step 6c: incumbent effort floor. Holding the strong incumbent model on a
-  // cheap-classified same-task follow-up (whether re-picked naturally or
-  // restored by the model floor above) would otherwise serve it at the cheap
-  // dimension's shallow thinking floor — right model, wrong effort. Carry the
-  // incumbent's resolved dimension forward as an up-only effort floor. This
-  // never lowers effort (max only), never changes the routed dimension or
-  // model (so no DecisionCause per R6 — it is a secondary mechanism recorded in
-  // the reason), and stands down for exactly the sanctioned downward moves and
-  // the off-topic reset, matching the model floor.
-  if (
-    incumbentResolvedDimension != null &&
-    !precedence.userApplied &&
-    !precedence.escalationApplied &&
-    !inspectPhasePromotion &&
-    !consultLoweredDimension &&
-    !offTopicReset &&
-    DIMENSION_STRENGTH[incumbentResolvedDimension] > DIMENSION_STRENGTH[dimension]
-  ) {
-    decision.effortFloorDimension = incumbentResolvedDimension;
-    decision.reason += ' [incumbent-effort-floor]';
-  }
-
-  // Step 7: apply context-pressure metadata as advisory only.
-  // Pressure is structural advice for the user/caller, not a cause that owns
-  // the routing decision or changes the selected dimension.
-  decision.dimension = dimension;
-  decision.confidence = classifyResult.confidence;
-  decision.cause = cause;
-  if (escalation) {
-    decision.escalation = {
-      requestedDimension: escalation.dimension,
-      heuristicDimension: classifyResult.dimension,
-      reason: escalation.reason,
-    };
-  }
-  // "Changed" is not "stronger". Direction has to come from the strength
-  // ordering, because the downstream consumers — context-pressure advice, the
-  // status widget, `/router-why` — mean different things for each direction.
-  decision.routedUp =
-    DIMENSION_STRENGTH[dimension] > DIMENSION_STRENGTH[classifyResult.dimension];
-  decision.routedDown =
-    DIMENSION_STRENGTH[dimension] < DIMENSION_STRENGTH[classifyResult.dimension];
-
-  // The status widgets promise "routed-up/down = a different-strength model was
-  // actually served", not merely "the dimension label moved". A raise that
-  // re-selects the model the heuristic dimension would have picked served
-  // nothing stronger, so record whether the pick truly moved and let the UI
-  // suppress a misleading label. Bounded to turns where a direction fired.
-  if (decision.routedUp || decision.routedDown) {
-    const heuristicPick = pickBest(
-      candidates,
-      classifyResult.dimension,
-      config.dimensionWeights[classifyResult.dimension],
-      baseOpts,
-    );
-    decision.routedPickChanged = heuristicPick.chosen !== decision.chosen;
-  }
-
-  const chosenCandidateForContext = candidates.find(
-    (c) => candidateKey(c) === decision.chosen,
+  // Step 6b: incumbent capability floor.
+  applyIncumbentModelFloor(
+    decision,
+    candidates,
+    dimension,
+    incumbentRegistryId,
+    incumbentFloorStandsDown,
   );
-  const chosenContextWindow = chosenCandidateForContext?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-  const contextUsageRatio = estimatedContextTokens / Math.max(1, chosenContextWindow);
-  const undercertainty =
-    classifyResult.confidence < config.lowConfidenceThreshold || decision.routedUp;
-  if (undercertainty && contextUsageRatio >= CONTEXT_PRESSURE_THRESHOLD) {
-    decision.contextPressure = {
-      usageRatio: contextUsageRatio,
-      threshold: CONTEXT_PRESSURE_THRESHOLD,
-      suggestion:
-        'Parent context is dense: offload planning to a fresh-context planner subagent, then run execution in the parent with a cheaper model.',
-    };
-    // Advisory only: do NOT change decision.cause here
-    decision.reason += ' [context-pressure: prefer fresh planner handoff]';
-  }
 
-  // Step 8: reason suffixes (applied after context-pressure so ordering is stable)
-  if (cause === 'context-depth') {
-    decision.reason += ` [context-depth: ${estimatedContextTokens} tokens ≥ ${config.depthEscalationTokens}]`;
-  }
-  if (cause === 'no-data') {
-    decision.reason += ' [no benchmark quality data]';
-  }
-  if (cause === 'model-escalation' && escalationReason) {
-    decision.reason += ` [escalated: ${escalationReason}]`;
-  } else if (cause === 'user-escalation') {
-    decision.reason += ` [user escalation → ${dimension}]`;
-  } else if (cause === 'router-consult' && decision.assessment) {
-    decision.reason +=
-      ` [assessment ${decision.assessment.kind} ` +
-      `${decision.assessment.scope}/${decision.assessment.confidence}]`;
-  }
+  // Step 6c: incumbent effort floor.
+  applyIncumbentEffortFloor(
+    decision,
+    dimension,
+    incumbentResolvedDimension,
+    incumbentFloorStandsDown,
+  );
 
-  decision.switched = incumbentRegistryId != null && incumbentRegistryId !== decision.chosen;
+  // Steps 7–8: metadata and reason suffixes.
+  annotateDecision(
+    decision,
+    dimension,
+    cause,
+    classifyResult,
+    candidates,
+    estimatedContextTokens,
+    incumbentRegistryId,
+    escalation,
+    escalationReason,
+    config,
+    baseOpts,
+  );
 
   return { decision };
 }
