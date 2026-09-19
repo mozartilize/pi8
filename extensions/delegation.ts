@@ -16,12 +16,14 @@ import {
   type AssistantMessageEventStream,
   type Context,
   type Model,
+  type ModelThinkingLevel,
   type SimpleStreamOptions,
+  type ThinkingLevel,
 } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { ROUTER_PROVIDER_ID } from './types.js';
-import type { Candidate, RoutingDecision } from './types.js';
+import type { Candidate, Dimension, RoutingDecision } from './types.js';
 import { blacklistModel, blacklistProvider } from './blacklist.js';
 import {
   addAccumulatedCost,
@@ -54,6 +56,10 @@ const MAX_FAILURES_PER_PROVIDER = 3;
 const MAX_TRANSIENT_RETRIES = 2;
 /** Same-model retries for a generic provider error (e.g. `finish_reason: error`). */
 const MAX_GENERIC_RETRIES = 1;
+/** Cap on pre-output events buffered for one attempt. Overflow with thinking
+ * already in the buffer commits to live streaming; overflow of pure lifecycle
+ * spam fails the candidate. */
+const MAX_BUFFERED_EVENTS = 10_000;
 
 let authResolveTimeoutMs = AUTH_RESOLVE_TIMEOUT_MS;
 let firstEventTimeoutMs = FIRST_EVENT_TIMEOUT_MS;
@@ -148,6 +154,230 @@ export interface DelegationResult {
 }
 
 /**
+ * The chain entry's own measured effort wins over the turn-level reasoning
+ * (a fallback to a different effort of the same model is a legitimate chain
+ * step); it is still clamped to the dimension floor (rule 3) and to the
+ * entry model's support. Entries without an effort inherit the turn-level
+ * reasoning. An explicit user/session reasoning always wins — the router
+ * fills a gap, it does not override an instruction.
+ *
+ * Router-chosen efforts use an up-only walk (levelFrom) so a gap in the
+ * model's thinkingLevelMap never resolves below the floor (rule 3). An
+ * explicit user request uses the nearest-first walk so the user's choice is
+ * honoured as closely as the model supports.
+ */
+function resolveAttemptEffort(
+  entryEffort: ModelThinkingLevel | undefined,
+  effortFloorDimension: Dimension,
+  userReasoningOverride: boolean | undefined,
+  chosen: Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
+  turnReasoning: string | undefined,
+): ModelThinkingLevel | undefined {
+  if (entryEffort != null && !userReasoningOverride) {
+    const clamped = clampEffortToFloor(entryEffort, effortFloorDimension);
+    return levelFrom(clamped, chosen);
+  }
+  return resolveThinkingLevel(
+    chosen,
+    typeof turnReasoning === 'string' ? (turnReasoning as ThinkingLevel) : undefined,
+    effortFloorDimension,
+  );
+}
+
+/**
+ * Buffer one attempt's events until the candidate proves itself. A failed
+ * candidate's pre-output events must never reach Pi: Pi finalizes the turn
+ * on the first terminal `done` it sees, so an answerless `done` would persist
+ * an empty assistant message and drop the fallback. Once meaningful output
+ * has streamed, forwarding is live — partial output is never replayed.
+ *
+ * `isServedOutputEvent` is checked before the cap: a candidate whose first
+ * answer arrives exactly at the boundary must serve, never fail. Overflow
+ * with thinking already in the buffer commits to live streaming; overflow
+ * of pure lifecycle spam fails the candidate. The overflowing event itself
+ * does not count as buffered thinking — `bufferHasThinking` is set after
+ * the cap check.
+ */
+function createAttemptBuffer(
+  stream: AssistantMessageEventStream,
+  candidateId: string,
+) {
+  const attemptBuffer: unknown[] = [];
+  let passthrough = false;
+  let bufferHasThinking = false;
+  let committedToStream = false;
+
+  const flush = (): void => {
+    for (const buffered of attemptBuffer) stream.push(buffered as never);
+    attemptBuffer.length = 0;
+  };
+  const discard = (): void => {
+    attemptBuffer.length = 0;
+  };
+  const forward = (ev: unknown): void => {
+    if (passthrough) {
+      stream.push(ev as never);
+      return;
+    }
+    if (isServedOutputEvent((ev as { type: string }).type)) {
+      passthrough = true;
+      flush();
+      stream.push(ev as never);
+      return;
+    }
+    if (attemptBuffer.length >= MAX_BUFFERED_EVENTS) {
+      if (bufferHasThinking) {
+        passthrough = true;
+        committedToStream = true;
+        flush();
+        stream.push(ev as never);
+        return;
+      }
+      throw new Error(
+        `candidate emitted more than ${MAX_BUFFERED_EVENTS} events before meaningful output: ${candidateId}`,
+      );
+    }
+    if ((ev as { type: string }).type === 'thinking_delta') bufferHasThinking = true;
+    attemptBuffer.push(ev);
+  };
+
+  return {
+    forward,
+    flush,
+    discard,
+    get committedToStream(): boolean {
+      return committedToStream;
+    },
+  };
+}
+
+/**
+ * In-stream terminal interpretation. Output-limit `done` and pre-content
+ * `error` throw before `forward()` so their events never reach the consumer.
+ * Answerless completion is a later, post-loop gate — a clean iterator can
+ * finish with no `done`, and a live `done` after thinking-overflow commit
+ * must still be forwarded.
+ */
+function classifyTerminalEvent(
+  event: { type: string },
+  visibleTextReceived: boolean,
+  toolCallReceived: boolean,
+  candidateId: string,
+):
+  | { kind: 'none' }
+  | { kind: 'output-limit' }
+  | {
+      kind: 'provider-error';
+      error: { stopReason?: string; errorMessage?: string } | undefined;
+      message: string;
+    } {
+  if (event.type === 'done') {
+    const message = (event as unknown as {
+      message?: { stopReason?: string };
+    }).message;
+    if (
+      message?.stopReason === 'length' &&
+      !visibleTextReceived &&
+      !toolCallReceived
+    ) {
+      return { kind: 'output-limit' };
+    }
+    return { kind: 'none' };
+  }
+  if (event.type === 'error' && !visibleTextReceived && !toolCallReceived) {
+    const error = (event as unknown as {
+      error?: { stopReason?: string; errorMessage?: string };
+    }).error;
+    return {
+      kind: 'provider-error',
+      error,
+      message: errorEventMessage(event) ?? `Model failed before sending content: ${candidateId}`,
+    };
+  }
+  return { kind: 'none' };
+}
+
+/**
+ * Price this attempt's tokens onto the parent-owned turn accumulator at
+ * registry $/token. Provider-reported `cost.total` is a separate cross-check
+ * (a different scale, often zero for subscription providers) and is never
+ * mixed into routed spend.
+ */
+function accumulateAttemptUsage(
+  usage: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    cost?: { total?: number };
+  } | undefined,
+  modelCost: Candidate['cost'] | undefined,
+  acc: {
+    routedCost: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  },
+): void {
+  if (!usage) return;
+  if (usage.cost?.total) {
+    addAccumulatedCost(usage.cost.total);
+  }
+  const attemptCost = priceTokens(
+    modelCost,
+    {
+      inputTokens: usage.input ?? 0,
+      outputTokens: usage.output ?? 0,
+      cacheRead: usage.cacheRead ?? 0,
+      cacheWrite: usage.cacheWrite ?? 0,
+    },
+  );
+  if (attemptCost != null) acc.routedCost += attemptCost;
+  acc.inputTokens += usage.input ?? 0;
+  acc.outputTokens += usage.output ?? 0;
+  acc.cacheReadTokens += usage.cacheRead ?? 0;
+  acc.cacheWriteTokens += usage.cacheWrite ?? 0;
+}
+
+/**
+ * Walk decision after a pre-content catch. Abort is request lifecycle and
+ * stays in the catch above this. `finalize` is the replay lock: visible
+ * text, a tool call, or a thinking-overflow commit already reached the
+ * consumer. Usage-limit is first among remaining cases so a 429 is never
+ * retried as transient.
+ */
+function decideAfterFailure(
+  visibleTextReceived: boolean,
+  toolCallReceived: boolean,
+  committedToStream: boolean,
+  errorMessageObj: { stopReason?: string; errorMessage?: string } | undefined,
+  message: string,
+  tries: number,
+):
+  | { action: 'finalize' }
+  | { action: 'provider-dead' }
+  | { action: 'retry'; transient: boolean }
+  | { action: 'next-candidate'; transient: boolean } {
+  if (visibleTextReceived || toolCallReceived || committedToStream) {
+    return { action: 'finalize' };
+  }
+  const isProviderError = errorMessageObj?.stopReason === 'error';
+  if (isProviderError && isUsageLimitErrorMessage(errorMessageObj?.errorMessage ?? message)) {
+    return { action: 'provider-dead' };
+  }
+  const transient =
+    isProviderError && isRetryableAssistantError(errorMessageObj as unknown as AssistantMessage);
+  const maxRetries = transient
+    ? MAX_TRANSIENT_RETRIES
+    : isProviderError
+      ? MAX_GENERIC_RETRIES
+      : 0;
+  if (tries < maxRetries) return { action: 'retry', transient };
+  return { action: 'next-candidate', transient };
+}
+
+/**
  * Run the fallback delegation walk and pump stream events into `stream`.
  *
  * On success, returns with streamFinalized false and the caller should end
@@ -175,11 +405,13 @@ export async function runDelegationLoop(
   // provider.ts's chosen baseline) compares like with like — never mixed
   // with provider-reported billing (`cost.total`), which is a different
   // scale and absent for subscription providers.
-  let turnRoutedCost = 0;
-  let turnInputTokens = 0;
-  let turnOutputTokens = 0;
-  let turnCacheReadTokens = 0;
-  let turnCacheWriteTokens = 0;
+  const turnSpend = {
+    routedCost: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
 
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
@@ -304,38 +536,17 @@ export async function runDelegationLoop(
         debugLog('attempt.retry', { candidate: candidateId, retry: tries });
       }
 
-      // The chain entry's own measured effort wins over the turn-level
-      // reasoning (a fallback to a different effort of the same model is a
-      // legitimate chain step); it is still clamped to the dimension floor
-      // (rule 3) and to the entry model's support. Entries without an effort
-      // inherit the turn-level reasoning. An explicit user/session reasoning
-      // (userReasoningOverride) always wins — the router fills a gap, it does
-      // not override an instruction.
-      //
-      // Router-chosen efforts use an up-only walk (levelFrom) so a gap in the
-      // model's thinkingLevelMap never resolves below the floor (rule 3). An
-      // explicit user request uses the nearest-first walk so the user's choice
-      // is honoured as closely as the model supports.
       // A sticky incumbent held on a cheap-classified follow-up carries the
       // incumbent's resolved dimension as an up-only effort floor, so the
       // served thinking level cannot drop below what the incumbent ran at.
       const effortFloorDimension = decision.effortFloorDimension ?? decision.dimension;
-      let effectiveReasoning: import('@earendil-works/pi-ai').ModelThinkingLevel | undefined;
-      if (entryEffort != null && !opts.userReasoningOverride) {
-        const clamped = clampEffortToFloor(entryEffort, effortFloorDimension);
-        effectiveReasoning = levelFrom(
-          clamped,
-          chosen as Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
-        );
-      } else {
-        effectiveReasoning = resolveThinkingLevel(
-          chosen as Pick<Candidate, 'reasoning' | 'thinkingLevelMap'> | undefined,
-          typeof opts.reasoning === 'string'
-            ? (opts.reasoning as import('@earendil-works/pi-ai').ThinkingLevel)
-            : undefined,
-          effortFloorDimension,
-        );
-      }
+      const effectiveReasoning = resolveAttemptEffort(
+        entryEffort,
+        effortFloorDimension,
+        opts.userReasoningOverride,
+        chosen as Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
+        opts.reasoning,
+      );
       // The answer deadline is absolute from stream start. Lifecycle heartbeats
       // (start/done) cannot renew it. Thinking output is the one exception: a
       // reasoning model legitimately streams thinking for a while before its
@@ -369,77 +580,10 @@ export async function runDelegationLoop(
       let servedTracked = false;
       let sawFirstEvent = false;
       let meaningfulOutputReceived = false;
-      // Set when a candidate's pre-answer reasoning overflows the buffer and we
-      // stream it live rather than fail an otherwise-productive turn. Once its
-      // reasoning has streamed we can no longer replay it on a fallback, so
-      // this locks replay exactly like visible text or a tool call does.
-      let committedToStream = false;
       let networkTimeout = false;
       let errorMessageObj: { stopReason?: string; errorMessage?: string } | undefined;
       const streamTimer = startTimer();
-      // A failed candidate's events must never reach Pi's consumer stream.
-      // Pi finalizes the turn on the first terminal `done` it sees: if a
-      // candidate completes with an answerless `done` (e.g. a bridge provider
-      // that returns an empty completion), forwarding it would persist an
-      // empty assistant message and end the turn before the fallback model's
-      // response can stream — the user sees the turn stop with no output.
-      // Buffer each attempt's events and release them only once the candidate
-      // has produced meaningful output; a failed attempt's buffer is
-      // discarded with the attempt. Once meaningful output has streamed,
-      // forwarding is live: partial output is never replayed on another
-      // model, so nothing after that point is discarded.
-      // The buffer holds lifecycle events plus any pre-answer thinking (an
-      // answer event flips passthrough immediately and flushes it). The cap
-      // bounds memory against a provider that spams events without ever
-      // answering; a reasoning trace that overflows it commits to live
-      // streaming instead of failing (see forward()).
-      const MAX_BUFFERED_EVENTS = 10_000;
-      const attemptBuffer: unknown[] = [];
-      let passthrough = false;
-      // Tracks whether the BUFFER (not the current event) already holds a
-      // thinking delta. `thinkingReceived` flips true for the current event
-      // before `forward()` runs, so using it here would treat the very event
-      // that just overflowed a 10,000-event buffer of pure lifecycle spam as
-      // proof the buffer contains thinking, flushing the spam and disabling
-      // fallback for a candidate that never produced a reasoning trace.
-      let bufferHasThinking = false;
-      const forward = (ev: unknown): void => {
-        if (passthrough) {
-          stream.push(ev as never);
-          return;
-        }
-        // Output flips to live forwarding before the cap is consulted: a
-        // candidate whose first meaningful output arrives exactly at the
-        // boundary must serve (and flush its buffer), never be failed.
-        if (isServedOutputEvent((ev as { type: string }).type)) {
-          passthrough = true;
-          for (const buffered of attemptBuffer) stream.push(buffered as never);
-          attemptBuffer.length = 0;
-          stream.push(ev as never);
-          return;
-        }
-        if (attemptBuffer.length >= MAX_BUFFERED_EVENTS) {
-          // Distinguish real output from lifecycle spam. A buffer this large
-          // that already holds thinking is a reasoning model streaming a long
-          // trace before its answer: commit to it (stream live, lock replay)
-          // rather than discard a productive turn. A buffer full of pure
-          // lifecycle events with no thinking is pathological spam and still
-          // fails the candidate, falling over to the next model.
-          if (bufferHasThinking) {
-            passthrough = true;
-            committedToStream = true;
-            for (const buffered of attemptBuffer) stream.push(buffered as never);
-            attemptBuffer.length = 0;
-            stream.push(ev as never);
-            return;
-          }
-          throw new Error(
-            `candidate emitted more than ${MAX_BUFFERED_EVENTS} events before meaningful output: ${candidateId}`,
-          );
-        }
-        if ((ev as { type: string }).type === 'thinking_delta') bufferHasThinking = true;
-        attemptBuffer.push(ev);
-      };
+      const attemptBuffer = createAttemptBuffer(stream, candidateId);
       try {
         for (;;) {
           let step: IteratorResult<{ type: string }>;
@@ -487,7 +631,6 @@ export async function runDelegationLoop(
           if (event.type === 'done') {
             const message = (event as unknown as {
               message?: {
-                stopReason?: string;
                 usage?: {
                   input?: number;
                   output?: number;
@@ -497,44 +640,29 @@ export async function runDelegationLoop(
                 };
               };
             }).message;
-            if (message?.usage?.cost?.total) {
-              addAccumulatedCost(message.usage.cost.total);
-            }
-            if (message?.usage) {
-              const u = message.usage;
-              const attemptCost = priceTokens(
-                (chosen as unknown as { cost?: Candidate['cost'] }).cost,
-                {
-                  inputTokens: u.input ?? 0,
-                  outputTokens: u.output ?? 0,
-                  cacheRead: u.cacheRead ?? 0,
-                  cacheWrite: u.cacheWrite ?? 0,
-                },
-              );
-              if (attemptCost != null) turnRoutedCost += attemptCost;
-              turnInputTokens += u.input ?? 0;
-              turnOutputTokens += u.output ?? 0;
-              turnCacheReadTokens += u.cacheRead ?? 0;
-              turnCacheWriteTokens += u.cacheWrite ?? 0;
-            }
-            if (
-              message?.stopReason === 'length' &&
-              !visibleTextReceived &&
-              !toolCallReceived
-            ) {
-              candidateOutputLimitExhausted = true;
-              throw new Error(
-                thinkingReceived
-                  ? `reasoning exhausted the output limit before an answer: ${candidateId}`
-                  : `output limit reached before an answer: ${candidateId}`,
-              );
-            }
-          }
-          if (event.type === 'error' && !visibleTextReceived && !toolCallReceived) {
-            errorMessageObj = (event as unknown as { error?: { stopReason?: string; errorMessage?: string } }).error;
-            throw new Error(
-              errorEventMessage(event) ?? `Model failed before sending content: ${candidateId}`,
+            accumulateAttemptUsage(
+              message?.usage,
+              (chosen as unknown as { cost?: Candidate['cost'] }).cost,
+              turnSpend,
             );
+          }
+          const classified = classifyTerminalEvent(
+            event,
+            visibleTextReceived,
+            toolCallReceived,
+            candidateId,
+          );
+          if (classified.kind === 'output-limit') {
+            candidateOutputLimitExhausted = true;
+            throw new Error(
+              thinkingReceived
+                ? `reasoning exhausted the output limit before an answer: ${candidateId}`
+                : `output limit reached before an answer: ${candidateId}`,
+            );
+          }
+          if (classified.kind === 'provider-error') {
+            errorMessageObj = classified.error;
+            throw new Error(classified.message);
           }
           // Record which model served this turn on the first output-bearing
           // event of ANY kind — including tool calls. A turn whose response is
@@ -606,7 +734,7 @@ export async function runDelegationLoop(
             }
             setLastNotifiedModel(candidateId);
           }
-          forward(event);
+          attemptBuffer.forward(event);
         }
         // A clean stream end with no text, thinking, or tool-call output is
         // treated as an answerless completion, not success: a candidate that
@@ -649,7 +777,15 @@ export async function runDelegationLoop(
           stream.end();
           return { success: false, streamFinalized: true, lastError: message, lastServed };
         }
-        if (visibleTextReceived || toolCallReceived || committedToStream) {
+        const failure = decideAfterFailure(
+          visibleTextReceived,
+          toolCallReceived,
+          attemptBuffer.committedToStream,
+          errorMessageObj,
+          message,
+          tries,
+        );
+        if (failure.action === 'finalize') {
           // A usable answer or tool action already streamed — or a long
           // reasoning trace was committed live past the buffer cap; replaying
           // on a fallback model could duplicate user-visible output, leak the
@@ -658,31 +794,15 @@ export async function runDelegationLoop(
           stream.end();
           return { success: false, streamFinalized: true, lastError: message, lastServed };
         }
-
-        // Pre-content provider failure. `stopReason: 'error'` marks a genuine
-        // provider response (vs. a timeout/thrown transport error), which we
-        // can safely retry in place. pi's own classifier tells transient
-        // (overload/5xx/rate-limit/network) apart from everything else.
-        const isProviderError = errorMessageObj?.stopReason === 'error';
-        // A usage-limit/quota error is account-wide: every model on this
-        // provider will fail the same way, so exclude the whole provider now
-        // (session-scoped) and skip its remaining candidates this turn. Fail
-        // fast — a retry cannot succeed against an exhausted cap.
-        if (isProviderError && isUsageLimitErrorMessage(errorMessageObj?.errorMessage ?? message)) {
+        if (failure.action === 'provider-dead') {
           blacklistProvider(provider);
           deadProviders.add(provider);
           debugLog('attempt.usage-limit', { provider, candidate: candidateId });
           break;
         }
-        candidateTransient =
-          isProviderError && isRetryableAssistantError(errorMessageObj as unknown as AssistantMessage);
-        const maxRetries = candidateTransient
-          ? MAX_TRANSIENT_RETRIES
-          : isProviderError
-            ? MAX_GENERIC_RETRIES
-            : 0;
-        if (tries < maxRetries) continue; // retry the same candidate
-        break; // give up on this candidate; fall over to the next
+        candidateTransient = failure.transient;
+        if (failure.action === 'retry') continue;
+        break;
       }
     }
 
@@ -715,16 +835,16 @@ export async function runDelegationLoop(
   });
   if (lastServed) {
     const turnUsage = {
-      inputTokens: turnInputTokens,
-      outputTokens: turnOutputTokens,
-      cacheRead: turnCacheReadTokens,
-      cacheWrite: turnCacheWriteTokens,
+      inputTokens: turnSpend.inputTokens,
+      outputTokens: turnSpend.outputTokens,
+      cacheRead: turnSpend.cacheReadTokens,
+      cacheWrite: turnSpend.cacheWriteTokens,
     };
     finalDecision = {
       ...finalDecision,
       usage: turnUsage,
       spend: {
-        routedCost: turnRoutedCost,
+        routedCost: turnSpend.routedCost,
         baselineCost: priceTokens(finalDecision.baseline?.cost, turnUsage),
       },
     };
