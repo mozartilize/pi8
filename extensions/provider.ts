@@ -418,6 +418,533 @@ export function expandModelCandidates(
   return [attachKnowledge(buildCandidate(rm, { ...fallback, effort: undefined }))];
 }
 
+// ─── Turn-callback stages ────────────────────────────────────────────
+
+function measureTurnInput(context: Context, config: AutoRouterConfig) {
+  const turnInput = getTurnClassificationInput(
+    context.messages,
+    undefined,
+    { syntheticPrefixes: config.syntheticPrefixes },
+  );
+  const systemPrompt = extractSystemPrompt(context);
+  const needsVision = hasImageAttachment(context.messages);
+  // Pi delivers the system prompt in `context.systemPrompt`, not as a
+  // message, so include it in the token estimate that feeds
+  // context-pressure detection — otherwise a large system prompt
+  // (tool snippets, skills, guidelines) is silently uncounted.
+  const fullText =
+    (systemPrompt ? systemPrompt + '\n' : '') + allMessagesText(context.messages);
+  const imageChars = countImageBlocks(context.messages) * ESTIMATED_IMAGE_CHARS;
+  const estContextTokens = estimateTokenCount(fullText) + Math.ceil(imageChars / 4);
+  // The static system prefix survives an incumbent effort change in
+  // the provider cache (effort only invalidates message blocks), so
+  // the switch bonus credits it. Tool-schema tokens aren't counted
+  // here, so this under-states the preserved prefix — the safe way to
+  // err (never over-credit a switch).
+  const staticPrefixTokens = systemPrompt ? estimateTokenCount(systemPrompt) : 0;
+  return { turnInput, systemPrompt, needsVision, estContextTokens, staticPrefixTokens };
+}
+
+/**
+ * Keyword classify plus embedding blend. Blends up only: never overrides
+ * keyword downward. Timeout/failure degrades to the keyword result.
+ * Escalation is not resolved here — it must not be cached.
+ */
+async function resolveBaseIntent(args: {
+  turnInput: ReturnType<typeof getTurnClassificationInput>;
+  systemPrompt: string | undefined;
+  config: AutoRouterConfig;
+}) {
+  const { turnInput, systemPrompt, config } = args;
+  const cachedIntent = getCachedRoutingIntent();
+  const cacheHit = cachedIntent?.key === turnInput.key;
+  const classifyResult = cacheHit
+    ? cachedIntent.classifyResult
+    : classify(turnInput.classifyText, systemPrompt, {
+        lowConfidenceThreshold: config.lowConfidenceThreshold,
+      });
+  let baseDimension: Dimension = cacheHit
+    ? cachedIntent.dimension
+    : classifyResult.dimension;
+  let baseCause: DecisionCause = cacheHit
+    ? cachedIntent.cause
+    : turnInput.thin
+      ? 'continuation-context'
+      : 'heuristic';
+
+  if (
+    !classifyResult.hasCategoricalEvidence &&
+    config.embeddingClassifier &&
+    !cacheHit
+  ) {
+    try {
+      const embeddingResult = await embedAndClassify(turnInput.classifyText, {
+        deadlineMs: config.embeddingDeadlineMs,
+      });
+      if (embeddingResult) {
+        recordEmbedding('fired');
+        const minConfidence =
+          config.embeddingMinConfidence ?? DEFAULT_EMBEDDING_MIN_CONFIDENCE;
+        if (embeddingResult.confidence >= minConfidence) {
+          const keywordStrength = DIMENSION_STRENGTH[baseDimension];
+          const embeddingStrength = DIMENSION_STRENGTH[embeddingResult.dimension];
+          if (embeddingStrength > keywordStrength) {
+            baseDimension = embeddingResult.dimension;
+            baseCause = 'embedding-classify';
+            recordEmbedding('promoted');
+          }
+        } else {
+          recordEmbedding('abstainedLowConf');
+        }
+      } else {
+        recordEmbedding('degraded');
+      }
+    } catch {
+      recordEmbedding('degraded');
+    }
+  }
+
+  return {
+    cacheHit,
+    cachedIntent,
+    classifyResult,
+    baseDimension,
+    baseCause,
+    confidence: classifyResult.confidence,
+  };
+}
+
+/** Live per-model/provider exclusions. Not part of the expansion-cache key. */
+function applyRuntimeExclusions(pool: readonly Candidate[]): Candidate[] {
+  const liveModels = getBlacklistedModels();
+  const liveProviders = getBlacklistedProviders();
+  return pool.filter((candidate) => {
+    const slash = candidate.registryId.indexOf('/');
+    const provider = slash > 0 ? candidate.registryId.slice(0, slash) : candidate.registryId;
+    return !liveModels.has(candidateKey(candidate)) && !liveProviders.has(provider);
+  });
+}
+
+function buildRoutableCandidates(args: {
+  regModels: unknown[];
+  extensionContext: ExtensionContext | undefined;
+  config: AutoRouterConfig;
+}): Candidate[] {
+  const { extensionContext, config } = args;
+  const store = loadStore();
+  const benchModels = store ? activeModels(store) : [];
+  const isModelAllowed = loadModelFilter();
+  const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
+  const blacklistedProviders = getBlacklistedProviders();
+  const scopedModels = extensionContext?.scopedModels as
+    | readonly { model: { provider: string; id: string } }[]
+    | undefined;
+  const isScoped = buildScopedModelFilter(scopedModels);
+  const regModelList = args.regModels as unknown as RegistryModelInfo[];
+
+  // Live per-model/provider runtime exclusions are NOT part of the key — they
+  // are applied by `applyRuntimeExclusions` on every invocation. Blacklisted
+  // providers ARE in the key because the build-time filter drops them.
+  const expansionKey = [
+    regModelList.map((rm) => `${rm.provider}/${rm.id}`).join(','),
+    `${store?.syncedAt ?? 0}:${benchModels.length}`,
+    JSON.stringify(config.models ?? null),
+    [...getSessionBlacklistPatterns()].slice().sort().join(','),
+    [...blacklistedProviders].sort().join(','),
+    scopedModels
+      ? scopedModels.map((s) => `${s.model.provider}/${s.model.id}`).sort().join(',')
+      : '',
+  ].join('|');
+
+  const cachedExpansion = getCandidateExpansion();
+  let allCandidates: Candidate[];
+  if (cachedExpansion && cachedExpansion.key === expansionKey) {
+    allCandidates = cachedExpansion.candidates;
+  } else {
+    const rowsByModel = new Map<string, BenchModel[]>();
+    for (const b of benchModels) {
+      const list = rowsByModel.get(b.registryId) ?? [];
+      list.push(b);
+      rowsByModel.set(b.registryId, list);
+    }
+    const effortDrops = effortDropsPerStep(benchModels);
+    allCandidates = regModelList
+      .filter(
+        (rm) =>
+          rm.provider &&
+          rm.provider !== ROUTER_PROVIDER_ID &&
+          !blacklistedProviders.has(rm.provider) &&
+          isModelAllowed(`${rm.provider}/${rm.id}`) &&
+          !isBlacklisted(`${rm.provider}/${rm.id}`) &&
+          isScoped(`${rm.provider}/${rm.id}`),
+      )
+      .flatMap((rm) =>
+        expandModelCandidates(rm, rowsByModel.get(`${rm.provider}/${rm.id}`) ?? [], effortDrops),
+      );
+    setCandidateExpansion({ key: expansionKey, candidates: allCandidates });
+  }
+  return allCandidates.filter(
+    (candidate) => !getBlacklistedModels().has(candidateKey(candidate)),
+  );
+}
+
+/** Dispatch + adopt only. Does not write the intent cache or touch the stream. */
+async function runEntryAssessment(args: {
+  cacheHit: boolean;
+  turnInputKey: string;
+  assessmentConfig: AssessmentConfig;
+  assessmentStillCurrent: () => boolean;
+  assessment: import('./types.js').RoutingAssessment | undefined;
+  fallbackReason: import('./types.js').AssessmentFallbackReason | undefined;
+  assessmentDispatched: boolean;
+  context: Context;
+  config: AutoRouterConfig;
+  pi: ExtensionAPI;
+  registry: ReturnType<typeof getCurrentModelRegistry>;
+  routableCandidates: Candidate[];
+  classifyResult: ReturnType<typeof classify>;
+  baseDimension: Dimension;
+  baseCause: DecisionCause;
+}): Promise<{
+  assessment: typeof args.assessment;
+  fallbackReason: typeof args.fallbackReason;
+  assessmentDispatched: boolean;
+  shadowAssessment: Promise<AssessmentAttempt> | undefined;
+  baseDimension: Dimension;
+  baseCause: DecisionCause;
+  aborted: boolean;
+}> {
+  let {
+    assessment,
+    fallbackReason,
+    assessmentDispatched,
+    baseDimension,
+    baseCause,
+  } = args;
+  let shadowAssessment: Promise<AssessmentAttempt> | undefined;
+
+  if (!args.cacheHit && args.assessmentConfig.enabled) {
+    const evidence = evidenceForAssessment(args.context, args.config, args.pi);
+    if (args.assessmentConfig.mode === 'active') {
+      assessmentDispatched = true;
+      const attempt = await runAssessment(
+        args.assessmentConfig,
+        args.registry,
+        args.routableCandidates,
+        evidence,
+        getAssessorStrikes(),
+      );
+      if (!args.assessmentStillCurrent()) {
+        return {
+          assessment,
+          fallbackReason,
+          assessmentDispatched,
+          shadowAssessment,
+          baseDimension,
+          baseCause,
+          aborted: true,
+        };
+      }
+      recordAssessorOutcome(attempt);
+      if (attempt.ok) {
+        addAssessmentCost(attempt.assessment.costUsd);
+        assessment = attempt.assessment;
+      } else {
+        addAssessmentCost(attempt.costUsd);
+        fallbackReason = attempt.fallbackReason;
+      }
+    } else {
+      const heuristicDimension = args.classifyResult.dimension;
+      assessmentDispatched = true;
+      shadowAssessment = runAssessment(
+        args.assessmentConfig,
+        args.registry,
+        args.routableCandidates,
+        evidence,
+        getAssessorStrikes(),
+      );
+      void shadowAssessment
+        .then((attempt) => {
+          if (!args.assessmentStillCurrent()) return;
+          recordAssessorOutcome(attempt, false);
+          if (attempt.ok) {
+            const counterfactual = adoptAssessment({
+              heuristic: heuristicDimension,
+              assessment: attempt.assessment,
+              mode: 'active',
+              latchEngaged: getLatchGeneration() > 0,
+            });
+            addAssessmentCost(attempt.assessment.costUsd);
+            appendShadowAssessment({
+              intentKey: args.turnInputKey,
+              heuristicDimension,
+              counterfactualDimension: counterfactual.dimension,
+              assessment: attempt.assessment,
+            });
+          } else {
+            addAssessmentCost(attempt.costUsd);
+            appendShadowAssessment({
+              intentKey: args.turnInputKey,
+              heuristicDimension,
+              fallbackReason: attempt.fallbackReason,
+            });
+          }
+        })
+        .catch(() => {
+          // A detached assessment must never surface into the turn.
+        });
+    }
+  }
+
+  if (assessment) {
+    const adoption = adoptAssessment({
+      heuristic: baseDimension,
+      assessment,
+      mode: args.assessmentConfig.mode,
+      latchEngaged: getLatchGeneration() > 0,
+    });
+    if (adoption.changed) {
+      baseDimension = adoption.dimension;
+      baseCause = 'router-consult';
+    }
+  }
+
+  return {
+    assessment,
+    fallbackReason,
+    assessmentDispatched,
+    shadowAssessment,
+    baseDimension,
+    baseCause,
+    aborted: false,
+  };
+}
+
+/**
+ * Latch transition. Receives the parent-computed depthWouldEscalate boolean;
+ * ANDs with getLatchGeneration() === 0 itself. Does not call
+ * applyEscalationPrecedence or wouldDepthEscalate. Does not touch the stream.
+ */
+async function evaluateDepthLatch(args: {
+  depthWouldEscalate: boolean;
+  turnInputKey: string;
+  baseDimension: Dimension;
+  assessmentConfig: AssessmentConfig;
+  assessmentStillCurrent: () => boolean;
+  assessment: import('./types.js').RoutingAssessment | undefined;
+  assessmentDispatched: boolean;
+  shadowAssessment: Promise<AssessmentAttempt> | undefined;
+  context: Context;
+  config: AutoRouterConfig;
+  pi: ExtensionAPI;
+  registry: ReturnType<typeof getCurrentModelRegistry>;
+  routableCandidates: Candidate[];
+}): Promise<{
+  vetoDepthEscalation: boolean;
+  assessment: import('./types.js').RoutingAssessment | undefined;
+  assessmentDispatched: boolean;
+  aborted: boolean;
+}> {
+  let { assessment, assessmentDispatched } = args;
+  let vetoDepthEscalation = getLatchVetoIntentKey() === args.turnInputKey;
+  const atLatchTransition = getLatchGeneration() === 0 && args.depthWouldEscalate;
+
+  if (!vetoDepthEscalation && atLatchTransition) {
+    bumpLatchGeneration();
+    if (args.assessmentConfig.enabled) {
+      let latchVerdict = assessment;
+      if (!latchVerdict && !assessmentDispatched && args.assessmentConfig.mode === 'active') {
+        assessmentDispatched = true;
+        const attempt = await runAssessment(
+          args.assessmentConfig,
+          args.registry,
+          args.routableCandidates,
+          evidenceForAssessment(args.context, args.config, args.pi),
+          getAssessorStrikes(),
+        );
+        if (!args.assessmentStillCurrent()) {
+          return { vetoDepthEscalation, assessment, assessmentDispatched, aborted: true };
+        }
+        recordAssessorOutcome(attempt);
+        if (attempt.ok) {
+          addAssessmentCost(attempt.assessment.costUsd);
+          latchVerdict = attempt.assessment;
+        } else {
+          addAssessmentCost(attempt.costUsd);
+        }
+      }
+
+      if (latchVerdict) {
+        vetoDepthEscalation = shouldVetoLatch(latchVerdict);
+        if (vetoDepthEscalation) {
+          setLatchVetoIntentKey(args.turnInputKey);
+        }
+        assessment = { ...latchVerdict, vetoedLatch: vetoDepthEscalation };
+      }
+
+      if (args.assessmentConfig.mode === 'shadow') {
+        if (latchVerdict) {
+          appendShadowAssessment({
+            intentKey: args.turnInputKey,
+            heuristicDimension: args.baseDimension,
+            latchTransition: true,
+            wouldVetoLatch: vetoDepthEscalation,
+            assessment: latchVerdict,
+          });
+        } else if (args.shadowAssessment) {
+          void args.shadowAssessment
+            .then((attempt) => {
+              if (!args.assessmentStillCurrent()) return;
+              appendShadowAssessment({
+                intentKey: args.turnInputKey,
+                heuristicDimension: args.baseDimension,
+                latchTransition: true,
+                wouldVetoLatch: attempt.ok
+                  ? shouldVetoLatch(attempt.assessment)
+                  : false,
+                assessment: attempt.ok ? attempt.assessment : undefined,
+                fallbackReason: attempt.ok ? undefined : attempt.fallbackReason,
+              });
+            })
+            .catch(() => {
+              // A detached assessment must never surface into the turn.
+            });
+        } else if (!assessmentDispatched) {
+          assessmentDispatched = true;
+          const latchEvidence = evidenceForAssessment(args.context, args.config, args.pi);
+          void runAssessment(
+            args.assessmentConfig,
+            args.registry,
+            args.routableCandidates,
+            latchEvidence,
+            getAssessorStrikes(),
+          )
+            .then((attempt) => {
+              if (!args.assessmentStillCurrent()) return;
+              recordAssessorOutcome(attempt, false);
+              if (attempt.ok) {
+                addAssessmentCost(attempt.assessment.costUsd);
+              } else {
+                addAssessmentCost(attempt.costUsd);
+              }
+              appendShadowAssessment({
+                intentKey: args.turnInputKey,
+                heuristicDimension: args.baseDimension,
+                latchTransition: true,
+                wouldVetoLatch: attempt.ok
+                  ? shouldVetoLatch(attempt.assessment)
+                  : false,
+                assessment: attempt.ok ? attempt.assessment : undefined,
+                fallbackReason: attempt.ok ? undefined : attempt.fallbackReason,
+              });
+            })
+            .catch(() => {
+              // A detached assessment must never surface into the turn.
+            });
+        }
+      }
+    }
+  }
+
+  return { vetoDepthEscalation, assessment, assessmentDispatched, aborted: false };
+}
+
+function advanceWorkPhase(args: {
+  cacheHit: boolean;
+  turnInput: ReturnType<typeof getTurnClassificationInput>;
+  classifyResult: ReturnType<typeof classify>;
+  vetoDepthEscalation: boolean;
+  depthWouldEscalate: boolean;
+  preDepth: ReturnType<typeof applyEscalationPrecedence>;
+}) {
+  const resolvedDimensionForPhase: Dimension =
+    !args.vetoDepthEscalation && args.depthWouldEscalate
+      ? (args.preDepth.dimension === 'lightweight' ? 'gather' : 'implement')
+      : args.preDepth.dimension;
+  const capabilityRepickActive =
+    (args.preDepth.userApplied && !args.preDepth.userRaised) ||
+    (args.preDepth.escalationApplied && !args.preDepth.escalationRaised);
+
+  let workPhaseState = getWorkPhaseState();
+  if (!args.cacheHit) {
+    workPhaseState =
+      workPhaseState && args.turnInput.thin
+        ? inheritThinContinuation(args.turnInput.key, workPhaseState)
+        : (() => {
+            const terminal = args.classifyResult.terminal;
+            const requirement = terminalRequirement(terminal);
+            const band = capabilityBandFor(requirement);
+            const initial = deriveInitialPhase(terminal, band, {
+              resolvedDimension: resolvedDimensionForPhase,
+              capabilityRepickActive,
+            });
+            return {
+              intentKey: args.turnInput.key,
+              terminal,
+              terminalRequirement: requirement,
+              terminalBand: band,
+              phase: initial.phase,
+              phaseReason: initial.phaseReason,
+              multiWorkEngaged: initial.multiWorkEngaged,
+              providerInvocation: 1,
+              mutationGateBlocks: 0,
+              mutationGateTriggered: false,
+              mutationCompleted: false,
+              pendingMutationToolCallIds: new Set<string>(),
+              observedReadTools: 0,
+              observedMutationTools: 0,
+            };
+          })();
+  } else if (workPhaseState) {
+    workPhaseState = nextProviderInvocation(workPhaseState);
+  }
+  if (workPhaseState) {
+    workPhaseState = advanceForRoutingOwner(
+      workPhaseState,
+      resolvedDimensionForPhase,
+      capabilityRepickActive,
+    );
+  }
+  const multiWorkPolicy = workPhaseState
+    ? scoringPolicyForState(workPhaseState, resolvedDimensionForPhase, capabilityRepickActive)
+    : undefined;
+  commitWorkPhaseState(workPhaseState);
+  return { multiWorkPolicy };
+}
+
+function resolveTurnEffort(args: {
+  chosenCandidate: Candidate | undefined;
+  options: SimpleStreamOptions | undefined;
+  decision: { dimension: Dimension; chosen: string };
+  pi: ExtensionAPI;
+}) {
+  const requestedReasoning = typeof args.options?.reasoning === 'string' ? args.options.reasoning : undefined;
+  const inheritedReasoning = requestedReasoning === getLastResolvedThinkingLevel();
+  const reasoning = resolveThinkingLevel(
+    args.chosenCandidate,
+    inheritedReasoning ? undefined : requestedReasoning,
+    args.decision.dimension,
+  );
+  setLastResolvedThinkingLevel(reasoning);
+  debugLog('decision.thinking', {
+    dimension: args.decision.dimension,
+    chosen: args.decision.chosen,
+    requested: requestedReasoning ?? null,
+    inherited: inheritedReasoning,
+    resolved: reasoning ?? 'off',
+  });
+  try {
+    args.pi.setThinkingLevel((reasoning ?? 'off') as never);
+  } catch {
+    // Footer sync is cosmetic; never let it break a turn.
+  }
+  const resolvedReasoning = reasoning && reasoning !== 'off' ? reasoning : undefined;
+  const delegatedOptions: SimpleStreamOptions = resolvedReasoning
+    ? { ...(args.options ?? {}), reasoning: resolvedReasoning }
+    : { ...(args.options ?? {}) };
+  return { reasoning, resolvedReasoning, delegatedOptions, inheritedReasoning, requestedReasoning };
+}
+
 // ─── Provider registration ──────────────────────────────────────────
 
 /**
@@ -535,98 +1062,11 @@ export function registerAutoRouterProvider(
             });
 
             const config = loadConfig();
-
-            const turnInput = getTurnClassificationInput(
-              context.messages,
-              undefined,
-              { syntheticPrefixes: config.syntheticPrefixes },
-            );
-            const { classifyText } = turnInput;
-            const systemPrompt = extractSystemPrompt(context);
-            const needsVision = hasImageAttachment(context.messages);
-
-            // Pi delivers the system prompt in `context.systemPrompt`, not as a
-            // message, so include it in the token estimate that feeds
-            // context-pressure detection — otherwise a large system prompt
-            // (tool snippets, skills, guidelines) is silently uncounted.
-            const fullText =
-              (systemPrompt ? systemPrompt + '\n' : '') + allMessagesText(context.messages);
-            const imageChars = countImageBlocks(context.messages) * ESTIMATED_IMAGE_CHARS;
-            const estContextTokens = estimateTokenCount(fullText) + Math.ceil(imageChars / 4);
-            // The static system prefix survives an incumbent effort change in
-            // the provider cache (effort only invalidates message blocks), so
-            // the switch bonus credits it. Tool-schema tokens aren't counted
-            // here, so this under-states the preserved prefix — the safe way to
-            // err (never over-credit a switch).
-            const staticPrefixTokens = systemPrompt ? estimateTokenCount(systemPrompt) : 0;
-
-            const cachedIntent = getCachedRoutingIntent();
-            const cacheHit = cachedIntent?.key === turnInput.key;
-            const classifyResult = cacheHit
-              ? cachedIntent.classifyResult
-              : classify(classifyText, systemPrompt, {
-                  lowConfidenceThreshold: config.lowConfidenceThreshold,
-                });
-            let baseDimension: Dimension = cacheHit
-              ? cachedIntent.dimension
-              : classifyResult.dimension;
-            let baseCause: DecisionCause = cacheHit
-              ? cachedIntent.cause
-              : turnInput.thin
-                ? 'continuation-context'
-                : 'heuristic';
-            const confidence = classifyResult.confidence;
-
-            // ─── Embedding classifier ────────────────────────────────────
-            // When the keyword classifier has no categorical evidence
-            // (non-English prompts, ambiguous English prompts), the local
-            // multilingual embedding classifier supplies the dimension.
-            // Blends up only: never overrides keyword downward. The whole
-            // call — engine load + inference — is bounded by
-            // `embeddingDeadlineMs`; on timeout or failure we degrade to
-            // the keyword result (R2, R5). Runs once per user entry
-            // because it sits on the fresh-classify path (`!cacheHit`).
-            if (
-              !classifyResult.hasCategoricalEvidence &&
-              config.embeddingClassifier &&
-              !cacheHit
-            ) {
-              try {
-                const embeddingResult = await embedAndClassify(classifyText, {
-                  deadlineMs: config.embeddingDeadlineMs,
-                });
-                if (embeddingResult) {
-                  recordEmbedding('fired');
-                  // Abstain below the confidence floor: a low-confidence
-                  // embedding verdict must not move routing at all (R3 —
-                  // abstention never routes cheaper; the keyword result
-                  // stands). Only a confident verdict may apply the blend.
-                  const minConfidence =
-                    config.embeddingMinConfidence ?? DEFAULT_EMBEDDING_MIN_CONFIDENCE;
-                  if (embeddingResult.confidence >= minConfidence) {
-                    const keywordStrength = DIMENSION_STRENGTH[baseDimension];
-                    const embeddingStrength = DIMENSION_STRENGTH[embeddingResult.dimension];
-                    // Blend up only: embedding can raise but never lower the
-                    // keyword dimension (R3: uncertainty routes up).
-                    if (embeddingStrength > keywordStrength) {
-                      baseDimension = embeddingResult.dimension;
-                      baseCause = 'embedding-classify';
-                      recordEmbedding('promoted');
-                    }
-                    // If embedding agrees with keyword or is weaker, keep keyword.
-                    // This covers: keyword=gather, embedding=lightweight → keep gather.
-                  } else {
-                    recordEmbedding('abstainedLowConf');
-                  }
-                } else {
-                  // No verdict (timeout/unavailable) — keyword stands (R2).
-                  recordEmbedding('degraded');
-                }
-              } catch {
-                // Embedding inference failed — degrade to keyword result (R2).
-                recordEmbedding('degraded');
-              }
-            }
+            const measured = measureTurnInput(context, config);
+            const { turnInput, systemPrompt, needsVision, estContextTokens, staticPrefixTokens } = measured;
+            const intent = await resolveBaseIntent({ turnInput, systemPrompt, config });
+            const { cacheHit, cachedIntent, classifyResult, confidence } = intent;
+            let { baseDimension, baseCause } = intent;
 
             // Consume an active route_up request once per low-level Pi turn, as
             // before. Its effect is applied after the cached base intent is
@@ -638,81 +1078,11 @@ export function registerAutoRouterProvider(
             // that point cannot silently swallow the user's request.
             const userEscalation = peekPendingUserEscalation();
 
-            const store = loadStore();
-            const benchModels = store ? activeModels(store) : [];
-
-            const isModelAllowed = loadModelFilter();
-            const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
-            const blacklistedProviders = getBlacklistedProviders();
-            // Pi's native session scoping (--models / enabledModels) is the
-            // authoritative user-intent signal for which models are usable.
-            const scopedModels = extensionContext?.scopedModels as
-              | readonly { model: { provider: string; id: string } }[]
-              | undefined;
-            const isScoped = buildScopedModelFilter(scopedModels);
-            const regModelList = regModels as unknown as RegistryModelInfo[];
-
-            // The flatMap expansion below is pure in its inputs, so it is
-            // rebuilt only when their signature changes. Live per-model/provider
-            // runtime exclusions are NOT part of the key — they are applied by
-            // `applyRuntimeExclusions` on every invocation. Blacklisted
-            // providers ARE in the key because the build-time filter drops them,
-            // matching the pre-cache candidate count.
-            const expansionKey = [
-              regModelList.map((rm) => `${rm.provider}/${rm.id}`).join(','),
-              `${store?.syncedAt ?? 0}:${benchModels.length}`,
-              JSON.stringify(config.models ?? null),
-              [...getSessionBlacklistPatterns()].slice().sort().join(','),
-              [...blacklistedProviders].sort().join(','),
-              scopedModels
-                ? scopedModels.map((s) => `${s.model.provider}/${s.model.id}`).sort().join(',')
-                : '',
-            ].join('|');
-
-            const cachedExpansion = getCandidateExpansion();
-            let allCandidates: Candidate[];
-            if (cachedExpansion && cachedExpansion.key === expansionKey) {
-              allCandidates = cachedExpansion.candidates;
-            } else {
-              // Rows are pre-merged per (registryId, effort) by the store, so a
-              // model with effort rows maps to several rows.
-              const rowsByModel = new Map<string, BenchModel[]>();
-              for (const b of benchModels) {
-                const list = rowsByModel.get(b.registryId) ?? [];
-                list.push(b);
-                rowsByModel.set(b.registryId, list);
-              }
-              // Derived from the whole store, so it re-tunes on every sync
-              // instead of pinning a constant that a new model generation
-              // invalidates.
-              const effortDrops = effortDropsPerStep(benchModels);
-              allCandidates = regModelList
-                .filter(
-                  (rm) =>
-                    rm.provider &&
-                    rm.provider !== ROUTER_PROVIDER_ID &&
-                    !blacklistedProviders.has(rm.provider) &&
-                    isModelAllowed(`${rm.provider}/${rm.id}`) &&
-                    !isBlacklisted(`${rm.provider}/${rm.id}`) &&
-                    isScoped(`${rm.provider}/${rm.id}`),
-                )
-                .flatMap((rm) =>
-                  expandModelCandidates(rm, rowsByModel.get(`${rm.provider}/${rm.id}`) ?? [], effortDrops),
-                );
-              setCandidateExpansion({ key: expansionKey, candidates: allCandidates });
-            }
-            const candidates = allCandidates.filter(
-              (candidate) => !getBlacklistedModels().has(candidateKey(candidate)),
-            );
-            const applyRuntimeExclusions = (pool: readonly Candidate[]): Candidate[] => {
-              const liveModels = getBlacklistedModels();
-              const liveProviders = getBlacklistedProviders();
-              return pool.filter((candidate) => {
-                const slash = candidate.registryId.indexOf('/');
-                const provider = slash > 0 ? candidate.registryId.slice(0, slash) : candidate.registryId;
-                return !liveModels.has(candidateKey(candidate)) && !liveProviders.has(provider);
-              });
-            };
+            const candidates = buildRoutableCandidates({
+              regModels: regModels as unknown[],
+              extensionContext,
+              config,
+            });
             let routableCandidates = applyRuntimeExclusions(candidates);
 
             const endIfNoRoutableCandidates = (): boolean => {
@@ -749,99 +1119,40 @@ export function registerAutoRouterProvider(
             const assessmentSessionGeneration = getSessionGeneration();
             const assessmentStillCurrent = (): boolean =>
               getSessionGeneration() === assessmentSessionGeneration;
-            let assessment = cacheHit ? cachedIntent.assessment : undefined;
-            let fallbackReason = cacheHit ? cachedIntent.fallbackReason : undefined;
+            let assessment = cacheHit ? cachedIntent?.assessment : undefined;
+            let fallbackReason = cacheHit ? cachedIntent?.fallbackReason : undefined;
             // One bounded assessment per real user entry, whatever asks for it
             // (privacy/egress rule). A cache hit means the entry already spent
             // its one dispatch, successful or not.
             let assessmentDispatched = cacheHit;
-            let shadowAssessment: Promise<AssessmentAttempt> | undefined;
-
-            if (!cacheHit && assessmentConfig.enabled) {
-              const evidence = evidenceForAssessment(context, config, pi);
-
-              if (assessmentConfig.mode === 'active') {
-                assessmentDispatched = true;
-                const attempt = await runAssessment(
-                  assessmentConfig,
-                  registry,
-                  routableCandidates,
-                  evidence,
-                  getAssessorStrikes(),
-                );
-                if (!assessmentStillCurrent()) {
-                  stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
-                  stream.end();
-                  return;
-                }
-                recordAssessorOutcome(attempt);
-                if (attempt.ok) {
-                  addAssessmentCost(attempt.assessment.costUsd);
-                  assessment = attempt.assessment;
-                } else {
-                  addAssessmentCost(attempt.costUsd);
-                  fallbackReason = attempt.fallbackReason;
-                }
-              } else {
-                // Shadow adds no wall-clock cost to the turn: dispatch and
-                // forget. The verdict lands in its own log record joined by
-                // intent key, so routing stays byte-identical to the fully
-                // deterministic path.
-                const intentKey = turnInput.key;
-                const heuristicDimension = classifyResult.dimension;
-                assessmentDispatched = true;
-                shadowAssessment = runAssessment(
-                  assessmentConfig,
-                  registry,
-                  routableCandidates,
-                  evidence,
-                  getAssessorStrikes(),
-                );
-                void shadowAssessment
-                  .then((attempt) => {
-                    if (!assessmentStillCurrent()) return;
-                    recordAssessorOutcome(attempt, false);
-                    if (attempt.ok) {
-                      const counterfactual = adoptAssessment({
-                        heuristic: heuristicDimension,
-                        assessment: attempt.assessment,
-                        mode: 'active',
-                        latchEngaged: getLatchGeneration() > 0,
-                      });
-                      addAssessmentCost(attempt.assessment.costUsd);
-                      appendShadowAssessment({
-                        intentKey,
-                        heuristicDimension,
-                        counterfactualDimension: counterfactual.dimension,
-                        assessment: attempt.assessment,
-                      });
-                    } else {
-                      addAssessmentCost(attempt.costUsd);
-                      appendShadowAssessment({
-                        intentKey,
-                        heuristicDimension,
-                        fallbackReason: attempt.fallbackReason,
-                      });
-                    }
-                  })
-                  .catch(() => {
-                    // A detached assessment must never surface into the turn.
-                  });
-              }
+            const entryAssessment = await runEntryAssessment({
+              cacheHit,
+              turnInputKey: turnInput.key,
+              assessmentConfig,
+              assessmentStillCurrent,
+              assessment,
+              fallbackReason,
+              assessmentDispatched,
+              context,
+              config,
+              pi,
+              registry,
+              routableCandidates,
+              classifyResult,
+              baseDimension,
+              baseCause,
+            });
+            if (entryAssessment.aborted) {
+              stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
+              stream.end();
+              return;
             }
-
-            if (assessment) {
-              const adoption = adoptAssessment({
-                heuristic: baseDimension,
-                assessment,
-                mode: assessmentConfig.mode,
-                latchEngaged: getLatchGeneration() > 0,
-              });
-              if (adoption.changed) {
-                baseDimension = adoption.dimension;
-                baseCause = 'router-consult';
-              }
-            }
+            assessment = entryAssessment.assessment;
+            fallbackReason = entryAssessment.fallbackReason;
+            assessmentDispatched = entryAssessment.assessmentDispatched;
+            baseDimension = entryAssessment.baseDimension;
+            baseCause = entryAssessment.baseCause;
+            const shadowAssessment = entryAssessment.shadowAssessment;
 
             if (!cacheHit) {
               setCachedRoutingIntent({
@@ -862,28 +1173,22 @@ export function registerAutoRouterProvider(
               key: turnInput.key,
             });
 
-            // The latch is the one automatic mid-loop transition. It fires on a
-            // token counter, so the first transition in a session gets one
-            // assessment before it is allowed to ratchet the rest of the
-            // session upward. Every failure path still escalates.
-            // Compute post-escalation-precedence state via the same helper
-            // resolveRoutingDecision uses, so a pending user escalation does
-            // not consume the one-shot latch assessment on a turn where user
-            // intent would have superseded depth anyway.
+            // Shared with resolveRoutingDecision so the latch probe and the
+            // policy's depth gate agree. Computed once here; the latch ANDs
+            // with generation === 0 itself, and the phase engine reuses the
+            // boolean rather than probing again.
             const preDepth = applyEscalationPrecedence({
               dimension: baseDimension,
               cause: baseCause,
               userEscalation,
               escalation,
             });
-            const atLatchTransition =
-              getLatchGeneration() === 0 &&
-              wouldDepthEscalate({
-                dimension: preDepth.dimension,
-                cause: preDepth.cause,
-                estimatedContextTokens: estContextTokens,
-                config,
-              });
+            const depthWouldEscalate = wouldDepthEscalate({
+              dimension: preDepth.dimension,
+              cause: preDepth.cause,
+              estimatedContextTokens: estContextTokens,
+              config,
+            });
 
             // A veto holds until the next real user entry, so the first
             // invocation sets the latchVetoIntentKey and subsequent
@@ -892,121 +1197,29 @@ export function registerAutoRouterProvider(
             // question the ordinary assessment already answered, so when an
             // entry-level verdict already exists we reuse it instead of
             // dispatching a dedicated latch assessment.
-            let vetoDepthEscalation = getLatchVetoIntentKey() === turnInput.key;
-
-            if (!vetoDepthEscalation && atLatchTransition) {
-              bumpLatchGeneration();
-              if (assessmentConfig.enabled) {
-                // Reuse the ordinary entry verdict for the latch question;
-                // a dedicated dispatch would ask the same thing.
-                let latchVerdict = assessment;
-                if (!latchVerdict && !assessmentDispatched && assessmentConfig.mode === 'active') {
-                  assessmentDispatched = true;
-                  const attempt = await runAssessment(
-                    assessmentConfig,
-                    registry,
-                    routableCandidates,
-                    evidenceForAssessment(context, config, pi),
-                    getAssessorStrikes(),
-                  );
-                  if (!assessmentStillCurrent()) {
-                    stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
-                    stream.end();
-                    return;
-                  }
-                  recordAssessorOutcome(attempt);
-                  if (attempt.ok) {
-                    addAssessmentCost(attempt.assessment.costUsd);
-                    latchVerdict = attempt.assessment;
-                  } else {
-                    addAssessmentCost(attempt.costUsd);
-                  }
-                }
-
-                if (latchVerdict) {
-                  vetoDepthEscalation = shouldVetoLatch(latchVerdict);
-                  if (vetoDepthEscalation) {
-                    setLatchVetoIntentKey(turnInput.key);
-                  }
-                  // Tag the assessment so consumers can see whether the latch
-                  // was evaluated and which way it went.
-                  assessment = { ...latchVerdict, vetoedLatch: vetoDepthEscalation };
-                }
-
-                // Shadow mode: log the latch transition, preferring the
-                // ordinary assessment's verdict when one is available.
-                if (assessmentConfig.mode === 'shadow') {
-                  if (latchVerdict) {
-                    appendShadowAssessment({
-                      intentKey: turnInput.key,
-                      heuristicDimension: baseDimension,
-                      latchTransition: true,
-                      wouldVetoLatch: vetoDepthEscalation,
-                      assessment: latchVerdict,
-                    });
-                  } else if (shadowAssessment) {
-                    // The entry's own detached assessment answers the latch
-                    // question too, so chain the latch record onto it rather
-                    // than paying a second egress. Cost is accounted by the
-                    // entry-level handler.
-                    void shadowAssessment
-                      .then((attempt) => {
-                        if (!assessmentStillCurrent()) return;
-                        appendShadowAssessment({
-                          intentKey: turnInput.key,
-                          heuristicDimension: baseDimension,
-                          latchTransition: true,
-                          wouldVetoLatch: attempt.ok
-                            ? shouldVetoLatch(attempt.assessment)
-                            : false,
-                          assessment: attempt.ok ? attempt.assessment : undefined,
-                          fallbackReason: attempt.ok ? undefined : attempt.fallbackReason,
-                        });
-                      })
-                      .catch(() => {
-                        // A detached assessment must never surface into the turn.
-                      });
-                  } else if (!assessmentDispatched) {
-                    // No entry-level assessment ran for this intent (the latch
-                    // fired on a later invocation), so this is the entry's one
-                    // dispatch.
-                    assessmentDispatched = true;
-                    const latchEvidence = evidenceForAssessment(context, config, pi);
-                    void runAssessment(
-                      assessmentConfig,
-                      registry,
-                      routableCandidates,
-                      latchEvidence,
-                      getAssessorStrikes(),
-                    )
-                      .then((attempt) => {
-                        if (!assessmentStillCurrent()) return;
-                        recordAssessorOutcome(attempt, false);
-                        if (attempt.ok) {
-                          addAssessmentCost(attempt.assessment.costUsd);
-                        } else {
-                          addAssessmentCost(attempt.costUsd);
-                        }
-                        appendShadowAssessment({
-                          intentKey: turnInput.key,
-                          heuristicDimension: baseDimension,
-                          latchTransition: true,
-                          wouldVetoLatch: attempt.ok
-                            ? shouldVetoLatch(attempt.assessment)
-                            : false,
-                          assessment: attempt.ok ? attempt.assessment : undefined,
-                          fallbackReason: attempt.ok ? undefined : attempt.fallbackReason,
-                        });
-                      })
-                      .catch(() => {
-                        // A detached assessment must never surface into the turn.
-                      });
-                  }
-                }
-              }
-              // Deterministic mode still consumes the generation so the latch
-              // is evaluated once per session either way.
+            const latch = await evaluateDepthLatch({
+              depthWouldEscalate,
+              turnInputKey: turnInput.key,
+              baseDimension,
+              assessmentConfig,
+              assessmentStillCurrent,
+              assessment,
+              assessmentDispatched,
+              shadowAssessment,
+              context,
+              config,
+              pi,
+              registry,
+              routableCandidates,
+            });
+            if (latch.aborted) {
+              stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
+              stream.end();
+              return;
             }
+            const vetoDepthEscalation = latch.vetoDepthEscalation;
+            assessment = latch.assessment;
+            assessmentDispatched = latch.assessmentDispatched;
 
             // An awaited assessment can add a provider-wide usage-limit
             // exclusion after this turn's initial candidate snapshot. Apply
@@ -1016,69 +1229,14 @@ export function registerAutoRouterProvider(
             routableCandidates = applyRuntimeExclusions(candidates);
             if (endIfNoRoutableCandidates()) return;
 
-            // ── Per-intent multi-work phase lifecycle ──────────────────────
-            // Mirrors resolveRoutingDecision's own precedence/depth-escalation
-            // computation so the phase engine and the scorer agree on which
-            // dimension actually owns this invocation, without a second
-            // resolveRoutingDecision call (rule 12: score once per invocation).
-            const resolvedDimensionForPhase: Dimension =
-              !vetoDepthEscalation &&
-              wouldDepthEscalate({
-                dimension: preDepth.dimension,
-                cause: preDepth.cause,
-                estimatedContextTokens: estContextTokens,
-                config,
-              })
-                ? (preDepth.dimension === 'lightweight' ? 'gather' : 'implement')
-                : preDepth.dimension;
-            const capabilityRepickActive =
-              (preDepth.userApplied && !preDepth.userRaised) ||
-              (preDepth.escalationApplied && !preDepth.escalationRaised);
-
-            let workPhaseState = getWorkPhaseState();
-            if (!cacheHit) {
-              workPhaseState =
-                workPhaseState && turnInput.thin
-                  ? inheritThinContinuation(turnInput.key, workPhaseState)
-                  : (() => {
-                      const terminal = classifyResult.terminal;
-                      const requirement = terminalRequirement(terminal);
-                      const band = capabilityBandFor(requirement);
-                      const initial = deriveInitialPhase(terminal, band, {
-                        resolvedDimension: resolvedDimensionForPhase,
-                        capabilityRepickActive,
-                      });
-                      return {
-                        intentKey: turnInput.key,
-                        terminal,
-                        terminalRequirement: requirement,
-                        terminalBand: band,
-                        phase: initial.phase,
-                        phaseReason: initial.phaseReason,
-                        multiWorkEngaged: initial.multiWorkEngaged,
-                        providerInvocation: 1,
-                        mutationGateBlocks: 0,
-                        mutationGateTriggered: false,
-                        mutationCompleted: false,
-                        pendingMutationToolCallIds: new Set<string>(),
-                        observedReadTools: 0,
-                        observedMutationTools: 0,
-                      };
-                    })();
-            } else if (workPhaseState) {
-              workPhaseState = nextProviderInvocation(workPhaseState);
-            }
-            if (workPhaseState) {
-              workPhaseState = advanceForRoutingOwner(
-                workPhaseState,
-                resolvedDimensionForPhase,
-                capabilityRepickActive,
-              );
-            }
-            const multiWorkPolicy = workPhaseState
-              ? scoringPolicyForState(workPhaseState, resolvedDimensionForPhase, capabilityRepickActive)
-              : undefined;
-            commitWorkPhaseState(workPhaseState);
+            const { multiWorkPolicy } = advanceWorkPhase({
+              cacheHit,
+              turnInput,
+              classifyResult,
+              vetoDepthEscalation,
+              depthWouldEscalate,
+              preDepth,
+            });
 
             const policy = resolveRoutingDecision({
               candidates: routableCandidates,
@@ -1131,49 +1289,17 @@ export function registerAutoRouterProvider(
             const chosenCandidate = routableCandidates.find(
               (c) => candidateKey(c) === decision.chosen,
             );
-            const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
-            // Pi's ctx.thinkingLevel mirrors whatever level we last actually
-            // resolved and sent downstream (it's "the current effective level",
-            // not a dedicated user-override flag). So compare the incoming
-            // request against the *resolved* value we returned last turn, not
-            // the raw request we received last turn — otherwise every turn
-            // where adaptivity changes the level looks like a user override on
-            // the very next turn, and dimension-based adaptation only fires
-            // every other turn at best.
-            const inheritedReasoning = requestedReasoning === getLastResolvedThinkingLevel();
-            const reasoning = resolveThinkingLevel(
+            const {
+              resolvedReasoning,
+              delegatedOptions,
+              inheritedReasoning,
+              requestedReasoning,
+            } = resolveTurnEffort({
               chosenCandidate,
-              inheritedReasoning ? undefined : requestedReasoning,
-              decision.dimension,
-            );
-            setLastResolvedThinkingLevel(reasoning);
-            debugLog('decision.thinking', {
-              dimension: decision.dimension,
-              chosen: decision.chosen,
-              requested: requestedReasoning ?? null,
-              inherited: inheritedReasoning,
-              resolved: reasoning ?? 'off',
+              options,
+              decision,
+              pi,
             });
-            // Sync Pi's own footer/session thinking-level state to what the
-            // router actually resolved for this turn. Without this call,
-            // agent.state.thinkingLevel only changes via the user's own
-            // thinking-selector/model-switch actions, so the footer would
-            // keep showing a stale level (e.g. "thinking off") even while the
-            // router silently ran a different candidate at a higher level.
-            try {
-              pi.setThinkingLevel((reasoning ?? 'off') as never);
-            } catch {
-              // Footer sync is cosmetic; never let it break a turn.
-            }
-            // `off` is represented by omitting the reasoning option: pi's
-            // providers treat absent reasoning as thinking disabled, and
-            // SimpleStreamOptions.reasoning has no 'off' value. The resolved
-            // level is still recorded as 'off' for the footer and the next
-            // turn's inheritance check.
-            const resolvedReasoning = reasoning && reasoning !== 'off' ? reasoning : undefined;
-            const delegatedOptions: SimpleStreamOptions = resolvedReasoning
-              ? { ...(options ?? {}), reasoning: resolvedReasoning }
-              : { ...(options ?? {}) };
 
             // Guidance is decided per delegation attempt because effort floors,
             // model maps, and fallback can change the source effort actually
