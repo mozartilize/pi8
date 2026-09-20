@@ -1,0 +1,947 @@
+/**
+ * Subagent role injection (M3).
+ *
+ * Roles are injected per spawn: we patch the `subagent` tool call's `model`
+ * field in a `tool_call` handler (`event.input` is mutable — see Pi's
+ * docs/extensions.md). Nothing is persisted; the routing decision lives and
+ * dies with the call.
+ *
+ * Design rules (from the implementation handoff M3):
+ *  - Role → Dimension: researcher→gather, planner→plan, worker→implement, reviewer→review.
+ *  - Reviewer must not equal the worker, and not be same-family (independent second opinion).
+ *  - Respect user overrides: a role pinned in settings, or an explicit
+ *    `model` on the call itself, always wins — we only fill empty slots.
+ *  - Only assign models whose provider has credentials: pi-subagents consumes
+ *    the model verbatim and hard-fails on an unauthenticated provider.
+ *  - NEVER write to settings.json. It is global, cross-project, outlives the
+ *    process, and is owned by pi core's lock-protected SettingsManager.
+ */
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+
+import type {
+  BenchModel,
+  Candidate,
+  Dimension,
+  Role,
+  RoutingDecision,
+  ScoreWeights,
+  ExtensionContext,
+} from '../types.js';
+import { ROLE_DIMENSIONS } from '../types.js';
+import { DEFAULT_DIMENSION_WEIGHTS } from '../constants.js';
+import { activeModels, loadStore } from '../bench/store.js';
+import { pickBest, candidateKey, type RegistryModelInfo } from '../routing/score/scorer.js';
+import { assessTerminal } from '../routing/classify/terminal-classifier.js';
+import { estimateTokenCount } from '../routing/classify/classifier.js';
+import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
+import { expandModelCandidates } from '../serve/provider.js';
+import { effortDropsPerStep } from '../routing/score/effort-estimate.js';
+import { loadModelFilter } from '../routing/policy/allowlist.js';
+import { identityKey } from '../bench/matcher.js';
+import { appendSubagentEscalationContract } from './subagent-escalation.js';
+
+/** Marker so we can distinguish router-authored overrides from user pins. */
+export const AUTO_ROUTER_SOURCE = 'pi8';
+
+export const ALL_ROLES: Role[] = ['researcher', 'planner', 'worker', 'reviewer', 'advisor'];
+
+export interface RoleAssignment {
+  role: Role;
+  dimension: Dimension;
+  /** The chosen "provider/id", or undefined if no candidate was routable. */
+  model: string | undefined;
+  /**
+   * Ranked routable models for this role (best first), used at spawn time to
+   * skip any model that has since been runtime-blacklisted. Empty for
+   * user-pinned roles and when nothing was routable.
+   */
+  fallbackChain: string[];
+  /** True when this slot was filled by the router (vs. left untouched). */
+  applied: boolean;
+  /** True when a user/project override already owned this slot and was preserved. */
+  userPinned: boolean;
+  /** Human-readable reason (incl. routing notes). */
+  reason: string;
+}
+
+// ─── Candidate building (mirrors provider.ts, sans live auth probe) ─────
+
+export interface BuildCandidatesResult {
+  candidates: Candidate[];
+  skippedUnauthenticated: number;
+  skippedNotAllowed: number;
+}
+
+/**
+ * Join the registry models with their benchmark rows.
+ *
+ * `isProviderUsable` gates candidates by credentials. This is NOT optional in
+ * practice: pi-subagents does *not* validate model availability at spawn time —
+ * it runs whatever model it is handed and hard-fails with "No API key found for
+ * <provider>". Without the credential gate here, roles pin to the
+ * highest-scoring model overall (e.g. `anthropic/claude-opus-*`) even with no
+ * anthropic credentials, breaking every subagent run.
+ *
+ * `isModelAllowed` applies the user's `models` allowlist (see allowlist.ts).
+ *
+ * When a predicate is omitted we stay permissive (callers that genuinely
+ * cannot probe, and unit tests).
+ */
+export function buildSubagentCandidates(
+  registryModels: readonly RegistryModelInfo[],
+  benchModels: ReturnType<typeof activeModels>,
+  isProviderUsable?: (provider: string) => boolean,
+  isModelAllowed?: (registryId: string) => boolean,
+): BuildCandidatesResult {
+  // Rows are pre-merged per (registryId, effort) by the store; keep the whole
+  // list so the effort-aware expansion can emit one candidate per measured,
+  // supported effort instead of binding an arbitrary row per model.
+  const rowsByModel = new Map<string, BenchModel[]>();
+  for (const b of benchModels) {
+    const list = rowsByModel.get(b.registryId) ?? [];
+    list.push(b);
+    rowsByModel.set(b.registryId, list);
+  }
+  // Derived from the whole store, so it re-tunes on every sync instead of
+  // pinning a constant that a new model generation invalidates.
+  const drops = effortDropsPerStep(benchModels);
+
+  const candidates: Candidate[] = [];
+  let skippedUnauthenticated = 0;
+  let skippedNotAllowed = 0;
+  for (const rm of registryModels) {
+    // Never route a subagent to the router itself.
+    if (rm.provider === 'router') continue;
+    const rid = `${rm.provider}/${rm.id}`;
+    // The user allowlist is checked first: an excluded model is a deliberate
+    // choice, not a credentials problem.
+    if (isModelAllowed && !isModelAllowed(rid)) {
+      skippedNotAllowed++;
+      continue;
+    }
+    if (isProviderUsable && !isProviderUsable(rm.provider)) {
+      skippedUnauthenticated++;
+      continue;
+    }
+    candidates.push(...expandModelCandidates(rm, rowsByModel.get(rid) ?? [], drops));
+  }
+  return { candidates, skippedUnauthenticated, skippedNotAllowed };
+}
+
+// ─── Reviewer complementarity ───────────────────────────────────────────
+
+/** Same family if the stripped identity key matches (e.g. all claude-opus-*). */
+export function sameFamily(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  // Candidate keys may carry an effort suffix (`provider/id:high`); the
+  // effort is a run choice, not family identity, so strip it before the
+  // identity comparison — otherwise a worker at max effort would not be
+  // recognized as the same model as a candidate at low effort.
+  return identityKey(stripThinkingSuffix(a)) === identityKey(stripThinkingSuffix(b));
+}
+
+/**
+ * Pick a model for each role. Pure: no I/O, no clock.
+ *
+ * `existingOverrides` lets the caller tell us which slots are already owned by
+ * the user (so we preserve them) — pass a map role → { model, source? }.
+ */
+export interface ExistingOverride {
+  model: string;
+  /** If present and not equal to AUTO_ROUTER_SOURCE, this is a user/project pin. */
+  source?: string;
+}
+
+export interface AssignOptions {
+  estimatedContextTokens?: number;
+  incumbentRegistryId?: string;
+  weights?: Partial<Record<Dimension, ScoreWeights>>;
+  /** Pre-existing overrides keyed by role; user pins are preserved. */
+  existingOverrides?: Partial<Record<Role, ExistingOverride>>;
+}
+
+export interface RoleRoutingSelection {
+  model: string;
+  fallbackChain: string[];
+  dimension: Dimension;
+}
+
+export interface SubagentTaskRequest {
+  path: string;
+  role: Role;
+  task?: string;
+  /** Concrete model requested by the caller, before router ownership is applied. */
+  requestedModel?: string;
+  /** False for explicit concrete models and roles omitted from router ownership. */
+  routerOwned?: boolean;
+}
+
+export interface RoleRoutingSnapshot {
+  candidates: readonly Candidate[];
+  weights: Partial<Record<Dimension, ScoreWeights>>;
+}
+
+export function computeRoleAssignments(
+  candidates: Candidate[],
+  opts: AssignOptions = {},
+): RoleAssignment[] {
+  const weights = opts.weights ?? DEFAULT_DIMENSION_WEIGHTS;
+  const assignments: RoleAssignment[] = [];
+
+  // A registry can contain only router/auto (or be unavailable). Keep role
+  // refresh advisory and return a stable empty assignment table rather than
+  // calling pickBest([]), which cannot produce a decision.
+  if (candidates.length === 0) {
+    return ALL_ROLES.map((role) => {
+      const existing = opts.existingOverrides?.[role];
+      const userPinned = !!existing && existing.source !== AUTO_ROUTER_SOURCE;
+      return {
+        role,
+        dimension: ROLE_DIMENSIONS[role],
+        model: userPinned ? existing?.model : undefined,
+        fallbackChain: [],
+        applied: false,
+        userPinned,
+        reason: 'no routable models',
+      };
+    });
+  }
+
+  // Reviewer complementarity (below) reads effectiveWorkerModel, which is only
+  // populated once the worker role has been processed. That ordering is load-
+  // bearing: if reviewer were processed before worker, it would silently equal
+  // the worker. Assert it rather than trust the array literal's order.
+  if (ALL_ROLES.indexOf('worker') > ALL_ROLES.indexOf('reviewer')) {
+    throw new Error('ALL_ROLES must process worker before reviewer for complementarity');
+  }
+
+  // First pass: compute every role's pick. A spawn has no incumbent cache to
+  // preserve, so pass isSubagentSpawn:true defensively — even if a caller ever
+  // set incumbentRegistryId, a subagent pick must never receive the
+  // cache-retention bonus.
+  const picks: Partial<Record<Role, RoutingDecision>> = {};
+  for (const role of ALL_ROLES) {
+    const dim = ROLE_DIMENSIONS[role];
+    const decision = pickBest(candidates, dim, weights[dim], {
+      estimatedContextTokens: opts.estimatedContextTokens ?? 0,
+      incumbentRegistryId: opts.incumbentRegistryId,
+      isSubagentSpawn: true,
+    });
+    picks[role] = decision;
+  }
+
+  // Set after the worker branch below, so reviewer complementarity uses the
+  // effective worker model even when the worker is user-pinned.
+  let effectiveWorkerModel: string | undefined;
+
+  for (const role of ALL_ROLES) {
+    const dim = ROLE_DIMENSIONS[role];
+    const existing = opts.existingOverrides?.[role];
+
+    // Preserve a user/project override we did not author.
+    if (existing && existing.source !== AUTO_ROUTER_SOURCE) {
+      assignments.push({
+        role,
+        dimension: dim,
+        model: existing.model,
+        fallbackChain: [],
+        applied: false,
+        userPinned: true,
+        reason: 'user override preserved',
+      });
+      if (role === 'worker') effectiveWorkerModel = existing.model;
+      continue;
+    }
+
+    let decision = picks[role]!;
+
+    // Reviewer complementarity: never equal the effective worker, and never
+    // same-family. The worker may have been user-pinned above.
+    if (role === 'reviewer' && effectiveWorkerModel) {
+      const workerFamily = effectiveWorkerModel;
+      const filtered = candidates.filter(
+        (c) => candidateKey(c) !== effectiveWorkerModel && !sameFamily(candidateKey(c), workerFamily),
+      );
+      if (filtered.length > 0) {
+        decision =
+          pickBest(filtered, dim, weights[dim], {
+            estimatedContextTokens: opts.estimatedContextTokens ?? 0,
+            incumbentRegistryId: opts.incumbentRegistryId,
+            isSubagentSpawn: true,
+          }) ?? decision;
+      } else {
+        decision = { ...decision, reason: `${decision.reason}; review fallback: no independent model` };
+      }
+    }
+
+    assignments.push({
+      role,
+      dimension: dim,
+      model: decision.chosen,
+      fallbackChain: decision.fallbackChain,
+      applied: true,
+      userPinned: false,
+      reason: decision.reason,
+    });
+    if (role === 'worker') effectiveWorkerModel = decision.chosen;
+  }
+
+  return assignments;
+}
+
+function excludedCandidate(
+  id: string,
+  isBlacklisted: (registryId: string) => boolean,
+): boolean {
+  return isBlacklisted(stripThinkingSuffix(id));
+}
+
+function targetDimensionForTask(role: Role, task?: string): Dimension {
+  const baseline = ROLE_DIMENSIONS[role];
+  if (typeof task !== 'string' || task.trim() === '') return baseline;
+  const assessed = assessTerminal(task).kind;
+  return DIMENSION_STRENGTH[assessed] > DIMENSION_STRENGTH[baseline] ? assessed : baseline;
+}
+
+/**
+ * Pure spawn-time selection. Role is the minimum capability; task assessment
+ * can only raise that floor. Candidates remain limited to the role's baseline
+ * fallback chain so auth, allowlists, and pinned-role ownership stay intact.
+ */
+export function selectTaskAwareRoleChildren(
+  requests: readonly SubagentTaskRequest[],
+  roleModels: ReadonlyMap<Role, string>,
+  roleFallbacks: ReadonlyMap<Role, string[]>,
+  snapshot: RoleRoutingSnapshot,
+  isBlacklisted: (registryId: string) => boolean,
+  estimatedContextTokens: number,
+): Map<string, RoleRoutingSelection> {
+  const result = new Map<string, RoleRoutingSelection>();
+  // Explicit concrete worker models are part of reviewer complementarity even
+  // though they are not router-owned and must not be task-rerouted.
+  const workerModels = new Set<string>(
+    requests
+      .filter((request) =>
+        request.role === 'worker'
+        && request.routerOwned === false
+        && typeof request.requestedModel === 'string'
+        && request.requestedModel.trim() !== ''
+        && request.requestedModel !== ROUTER_AUTO_SENTINEL,
+      )
+      .map((request) => request.requestedModel!),
+  );
+
+  const pick = (
+    request: SubagentTaskRequest,
+    avoidWorkerFamilies: boolean,
+  ): RoleRoutingSelection | undefined => {
+    // Explicit concrete models and user/project-pinned roles remain entirely
+    // outside task-aware selection. The optional field preserves direct callers
+    // that predate ownership metadata as router-owned requests.
+    if (request.routerOwned === false || !roleModels.has(request.role)) return undefined;
+    const baselineChain = roleFallbacks.get(request.role) ?? [];
+    const baselineKeys = new Set(baselineChain);
+    const pool = snapshot.candidates.filter((candidate) => {
+      const key = candidateKey(candidate);
+      if (baselineKeys.size > 0 && !baselineKeys.has(key)) return false;
+      if (excludedCandidate(key, isBlacklisted)) return false;
+      if (avoidWorkerFamilies && [...workerModels].some((worker) => sameFamily(key, worker))) return false;
+      return true;
+    });
+
+    // A reviewer should remain usable even when there is no independent model.
+    // Retry the unrestricted role pool rather than blocking the spawn.
+    const unrestricted = avoidWorkerFamilies && pool.length === 0
+      ? snapshot.candidates.filter((candidate) => {
+          const key = candidateKey(candidate);
+          return (baselineKeys.size === 0 || baselineKeys.has(key))
+            && !excludedCandidate(key, isBlacklisted);
+        })
+      : pool;
+    const hasTask = typeof request.task === 'string' && request.task.trim() !== '';
+    if (!hasTask) {
+      // No task is evidence of no new intent: preserve the refresh-time role
+      // pick rather than letting an incomplete child spec trigger a rerank.
+      const baseline = pool.length > 0
+        ? baselineChain.find((id) => pool.some((candidate) => candidateKey(candidate) === id))
+        : undefined;
+      const model = baseline ?? (avoidWorkerFamilies ? undefined : roleModels.get(request.role));
+      if (model) {
+        return {
+          model,
+          fallbackChain: (pool.length > 0 ? baselineChain.filter((id) => pool.some((candidate) => candidateKey(candidate) === id)) : baselineChain).slice(),
+          dimension: ROLE_DIMENSIONS[request.role],
+        };
+      }
+      const fallback = baselineChain.find((id) => !excludedCandidate(id, isBlacklisted));
+      if (fallback) {
+        return { model: fallback, fallbackChain: baselineChain.slice(), dimension: ROLE_DIMENSIONS[request.role] };
+      }
+    }
+    if (unrestricted.length === 0) {
+      const fallback = baselineChain.find((id) => !excludedCandidate(id, isBlacklisted));
+      const model = fallback ?? roleModels.get(request.role);
+      return model
+        ? { model, fallbackChain: baselineChain.slice(), dimension: ROLE_DIMENSIONS[request.role] }
+        : undefined;
+    }
+
+    const dimension = targetDimensionForTask(request.role, request.task);
+    const decision = pickBest(
+      unrestricted,
+      dimension,
+      snapshot.weights[dimension] ?? DEFAULT_DIMENSION_WEIGHTS[dimension],
+      {
+        estimatedContextTokens: Math.max(
+          estimatedContextTokens,
+          typeof request.task === 'string' ? estimateTokenCount(request.task) : 0,
+        ),
+        isSubagentSpawn: true,
+      },
+    );
+    return {
+      model: decision.chosen,
+      fallbackChain: decision.fallbackChain,
+      dimension,
+    };
+  };
+
+  // Process workers first so reviewer complementarity does not depend on the
+  // order in which structured task specs happened to be authored.
+  for (const request of requests.filter((entry) => entry.role === 'worker')) {
+    const selection = pick(request, false);
+    if (selection) {
+      result.set(request.path, selection);
+      workerModels.add(selection.model);
+    }
+  }
+  for (const request of requests.filter((entry) => entry.role !== 'worker' && entry.role !== 'reviewer')) {
+    const selection = pick(request, false);
+    if (selection) result.set(request.path, selection);
+  }
+  for (const request of requests.filter((entry) => entry.role === 'reviewer')) {
+    const selection = pick(request, true);
+    if (selection) result.set(request.path, selection);
+  }
+  return result;
+}
+
+// ─── Settings file I/O (READ ONLY) ──────────────────────────────────────
+//
+// This module never writes settings. Roles are injected per spawn via the
+// `subagent` tool's own `model` option, so nothing is persisted beyond the
+// current session. Settings are read only to detect and respect user pins.
+
+/** Resolve the user-scope settings path, matching pi-subagents' own resolution. */
+export function resolveUserSettingsPath(agentDir?: string): string {
+  const configured = agentDir ?? process.env.PI_CODING_AGENT_DIR;
+  const base = configured === '~'
+    ? homedir()
+    : configured?.startsWith('~/')
+      ? join(homedir(), configured.slice(2))
+      : configured ?? join(homedir(), '.pi', 'agent');
+  return join(base, 'settings.json');
+}
+
+/** The config directory name used by pi for project-local config. */
+const PI_CONFIG_DIR = '.pi';
+
+/**
+ * Resolve the project-level settings path, matching pi-subagents'
+ * `getProjectAgentSettingsPath`. Returns null when there is no cwd.
+ */
+export function resolveProjectSettingsPath(cwd?: string): string | null {
+  if (!cwd) return null;
+  return join(cwd, PI_CONFIG_DIR, 'settings.json');
+}
+
+export interface AgentOverrideEntry {
+  model?: string;
+  __source?: string;
+  [k: string]: unknown;
+}
+
+export interface SubagentSettings {
+  subagents?: {
+    agentOverrides?: Partial<Record<string, AgentOverrideEntry>>;
+  };
+  [k: string]: unknown;
+}
+
+/** Read a settings file, returning a defensive default. */
+export function readSettings(path: string): SubagentSettings {
+  if (!existsSync(path)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8'));
+    if (parsed && typeof parsed === 'object') return parsed as SubagentSettings;
+  } catch {
+    // Corrupt settings: treat as empty rather than crashing the sync.
+  }
+  return {};
+}
+
+// ─── Role model computation (pure, no I/O beyond the bench store) ───────
+
+export interface RoleSyncContext {
+  ctx?: ExtensionContext;
+  /** Override the settings path (tests). */
+  settingsPath?: string;
+  estimatedContextTokens?: number;
+  /** Configured economics for each target dimension. */
+  weights?: Partial<Record<Dimension, ScoreWeights>>;
+  /** Pre-existing overrides (already read from settings). */
+  existingOverrides?: Partial<Record<Role, ExistingOverride>>;
+  /**
+   * Credential gate. An injected model is consumed verbatim by pi-subagents,
+   * which does not check availability — so an unauthenticated pick becomes a
+   * hard spawn failure. Callers with a live registry should always pass this.
+   */
+  isProviderUsable?: (provider: string) => boolean;
+  /** User `models` allowlist. Defaults to the persisted config. */
+  isModelAllowed?: (registryId: string) => boolean;
+}
+
+/**
+ * Compute the routed model for each role.
+ *
+ * Returns both the full assignment table (for display) and a role → model map
+ * containing ONLY the roles the router owns. A role the user pinned in their
+ * settings is deliberately absent from the map so spawn-time injection leaves
+ * it alone and the user's pin wins.
+ */
+export function computeRoleModels(
+  registryModels: readonly RegistryModelInfo[],
+  opts: RoleSyncContext = {},
+): {
+  assignments: RoleAssignment[];
+  roleModels: Map<Role, string>;
+  roleFallbacks: Map<Role, string[]>;
+  routingSnapshot: RoleRoutingSnapshot;
+} {
+  const store = loadStore();
+  const benchModels = store ? activeModels(store) : [];
+  const { candidates } = buildSubagentCandidates(
+    registryModels,
+    benchModels,
+    opts.isProviderUsable,
+    opts.isModelAllowed ?? loadModelFilter(),
+  );
+
+  // If the caller didn't pass existing overrides, read them from user and
+  // project settings (project wins, matching pi-subagents' own precedence).
+  const existing = opts.existingOverrides ?? readExistingOverrides(opts.settingsPath, opts.ctx?.cwd);
+  const weights = opts.weights ?? DEFAULT_DIMENSION_WEIGHTS;
+  const assignments = computeRoleAssignments(candidates, {
+    estimatedContextTokens: opts.estimatedContextTokens ?? 0,
+    weights,
+    existingOverrides: existing,
+  });
+
+  const roleModels = new Map<Role, string>();
+  const roleFallbacks = new Map<Role, string[]>();
+  for (const a of assignments) {
+    // `applied` is false for user-pinned roles and when nothing was routable.
+    if (a.applied && a.model) {
+      roleModels.set(a.role, a.model);
+      roleFallbacks.set(a.role, a.fallbackChain);
+    }
+  }
+  return {
+    assignments,
+    roleModels,
+    roleFallbacks,
+    routingSnapshot: {
+      candidates: candidates.map((candidate) => ({
+        ...candidate,
+        ...(candidate.bench ? { bench: { ...candidate.bench, quality: { ...candidate.bench.quality } } } : {}),
+      })),
+      weights: { ...weights },
+    },
+  };
+}
+
+/**
+ * Resolve the concrete model to inject per role at spawn time, skipping any
+ * model that has been runtime-blacklisted this session.
+ *
+ * The role assignment is computed once (at session_start), but a model can be
+ * blacklisted later by a failed main-session turn. Picking from each role's
+ * ranked chain here keeps a stale top pick (e.g. a model that has since gone
+ * dead) from being injected into a subagent spawn.
+ */
+export function resolveLiveRoleModels(
+  roleFallbacks: ReadonlyMap<Role, string[]>,
+  isBlacklisted: (registryId: string) => boolean,
+): Map<Role, string> {
+  const live = new Map<Role, string>();
+  for (const [role, chain] of roleFallbacks) {
+    const pick = chain.find((id) => !isBlacklisted(stripThinkingSuffix(id)));
+    if (pick) live.set(role, pick);
+  }
+  return live;
+}
+
+// ─── Spawn-time injection into the `subagent` tool call ─────────────────
+
+/** Shape of the bits of the subagent tool input we care about. */
+interface SpecLike {
+  agent?: unknown;
+  model?: unknown;
+  task?: unknown;
+  tasks?: unknown;
+  chain?: unknown;
+  parallel?: unknown;
+  expand?: unknown;
+  /** Management/control calls (`action`) never spawn children. */
+  action?: unknown;
+  /** Children inside this string are invisible to the structured walker. */
+  workflowScript?: unknown;
+  /** pi-subagents repeats a task spec `count` times. Must be integer >= 1. */
+  count?: unknown;
+}
+
+/**
+ * Read a valid pi-subagents count from a task spec item.
+ * Returns the span (>= 1) or null when the count is invalid/unknowable,
+ * which fails open rather than establishing ownership.
+ */
+function readCountSpan(item: unknown): number | null {
+  if (!item || typeof item !== 'object') return null;
+  const raw = (item as { count?: unknown }).count;
+  if (raw === undefined) return 1; // no count = single child
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 1) return raw;
+  return null; // invalid count → fail open
+}
+
+export interface SubagentChildSpec {
+  /** Stable launch index matched to pi-subagents SingleResult.index, when knowable. */
+  childIndex?: number;
+  /** Reserved stable-index span; greater than one for bounded dynamic fanout. */
+  childIndexSpan?: number;
+  /** False after a dynamic fanout whose globally resolved bound is unavailable. */
+  stableIndexKnown: boolean;
+  /** Stable traversal path retained for diagnostics and test assertions. */
+  path: string;
+  agent: string;
+  role?: Role;
+  model?: string;
+  routerOwned: boolean;
+  /** Task before the router appended its escalation contract. */
+  originalTask?: string;
+  /**
+   * The explicit model requested by the caller before a router-owned session
+   * overrode it. Kept for observability/debug logging only.
+   */
+  requestedModel?: string;
+}
+
+export interface InjectedSubagentSpec extends SubagentChildSpec {
+  role: Role;
+  model: string;
+  /** The exact task-aware chain used for this child, when available. */
+  fallbackChain?: string[];
+  dimension?: Dimension;
+  routerOwned: true;
+}
+
+export interface SubagentRoutingTraversal {
+  children: SubagentChildSpec[];
+  injected: InjectedSubagentSpec[];
+}
+
+/** Sentinel value a caller passes as `model` to explicitly opt into routing. */
+export const ROUTER_AUTO_SENTINEL = 'router/auto';
+
+export interface SubagentRoutingOptions {
+  consumeOverride?: (
+    role: Role,
+    originalTask?: string,
+    fallbackChain?: readonly string[],
+  ) => string | undefined;
+  /** Select structured children before mutation; workflowScript is excluded. */
+  selectChildren?: (
+    requests: readonly SubagentTaskRequest[],
+  ) => ReadonlyMap<string, RoleRoutingSelection>;
+  appendEscalationContract?: boolean;
+  /**
+   * Tool-level model for workflow-scripted spawns. pi-subagents defines
+   * children inside the `workflowScript` string, which the structured walker
+   * cannot see; the tool schema's top-level `model` field is the one
+   * structured lever that still governs every scripted child. Applied only
+   * when the call carries a non-empty `workflowScript`, has no management
+   * `action`, and its `model` is absent, empty, or the `router/auto`
+   * sentinel.
+   */
+  defaultModel?: string;
+}
+
+export function isRole(value: unknown): value is Role {
+  return typeof value === 'string' && (ALL_ROLES as string[]).includes(value);
+}
+
+/** Collect visible structured role/task pairs without parsing workflowScript. */
+function collectSubagentTaskRequests(
+  input: unknown,
+  roleModels: ReadonlyMap<Role, string>,
+): SubagentTaskRequest[] {
+  const requests: SubagentTaskRequest[] = [];
+  const visit = (node: unknown, path: string): void => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    const spec = node as SpecLike;
+    if (typeof spec.agent === 'string' && isRole(spec.agent)) {
+      const requestedModel = typeof spec.model === 'string' ? spec.model : undefined;
+      const callerOptedIntoRouting =
+        requestedModel === undefined || requestedModel === ROUTER_AUTO_SENTINEL;
+      requests.push({
+        path,
+        role: spec.agent,
+        ...(typeof spec.task === 'string' ? { task: spec.task } : {}),
+        ...(requestedModel !== undefined ? { requestedModel } : {}),
+        routerOwned: !!roleModels.get(spec.agent) && callerOptedIntoRouting,
+      });
+    }
+    const visitContainer = (value: unknown, key: string): void => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => visit(item, `${path}.${key}[${index}]`));
+      } else if (key === 'parallel' && value && typeof value === 'object') {
+        visit(value, `${path}.${key}`);
+      }
+    };
+    visitContainer(spec.tasks, 'tasks');
+    visitContainer(spec.chain, 'chain');
+    visitContainer(spec.parallel, 'parallel');
+  };
+  visit(input, '$');
+  return requests;
+}
+
+/**
+ * Patch a `subagent` tool call in place so each role-targeted spec carries the
+ * routed model.
+ *
+ * Ownership rules (one rule, no override flag):
+ *  - `model` omitted → router-owned (injected with the routed concrete model).
+ *  - `model: "router/auto"` → sentinel, treated identically to omitted.
+ *  - Any other concrete `model` → left unchanged (explicit choices win).
+ *  - User/project pins are already absent from `roleModels` so the router
+ *    never touches them regardless.
+ *
+ * Also: walk single specs, `tasks[]`, `chain[]` steps and nested `parallel[]`.
+ *
+ * Returns every flattened child plus the router-owned injected subset so
+ * details.results[] rows can be correlated by stable child index.
+ */
+export function injectSubagentRoutingWithMetadata(
+  input: unknown,
+  roleModels: ReadonlyMap<Role, string>,
+  opts: SubagentRoutingOptions = {},
+): SubagentRoutingTraversal {
+  const children: SubagentChildSpec[] = [];
+  const injected: InjectedSubagentSpec[] = [];
+  if (!input || typeof input !== 'object') return { children, injected };
+  const selectionByPath = opts.selectChildren?.(collectSubagentTaskRequests(input, roleModels)) ?? new Map();
+  let nextChildIndex: number | undefined = 0;
+
+  const visit = (node: unknown, path: string, childIndexSpan: number | null = 1): void => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    const spec = node as SpecLike;
+
+    if (typeof spec.agent === 'string') {
+      const stableIndexKnown = nextChildIndex !== undefined && childIndexSpan !== null;
+      const childIndex = stableIndexKnown ? nextChildIndex : undefined;
+      if (nextChildIndex !== undefined && childIndexSpan !== null) {
+        nextChildIndex += childIndexSpan;
+      } else {
+        nextChildIndex = undefined;
+      }
+      const role = isRole(spec.agent) ? spec.agent : undefined;
+      const originalTask = typeof spec.task === 'string' ? spec.task : undefined;
+      const requestedModel = typeof spec.model === 'string' ? spec.model : undefined;
+      let routerOwned = false;
+
+      if (role) {
+        // Membership in the base map establishes router ownership. A user pin
+        // is absent, so even a stale override can never replace it.
+        // Ownership: omitted model or explicit `router/auto` sentinel → owned;
+        // any other concrete model → caller's choice wins.
+        const baseModel = roleModels.get(role);
+        const selection = selectionByPath.get(path);
+        const callerOptedIntoRouting =
+          requestedModel === undefined || requestedModel === ROUTER_AUTO_SENTINEL;
+        if (baseModel && callerOptedIntoRouting) {
+          const fallbackChain = selection?.fallbackChain ?? [];
+          const override = opts.consumeOverride?.(role, originalTask, fallbackChain);
+          const model = override ?? selection?.model ?? baseModel;
+          (spec as Record<string, unknown>).model = model;
+          if (
+            stableIndexKnown &&
+            originalTask !== undefined &&
+            opts.appendEscalationContract !== false
+          ) {
+            (spec as Record<string, unknown>).task = appendSubagentEscalationContract(originalTask);
+          }
+          const owned: InjectedSubagentSpec = {
+            ...(childIndex !== undefined ? { childIndex } : {}),
+            ...(childIndexSpan !== null && childIndexSpan !== 1 ? { childIndexSpan } : {}),
+            stableIndexKnown,
+            path,
+            agent: spec.agent,
+            role,
+            model,
+            ...(fallbackChain.length > 0 ? { fallbackChain: fallbackChain.slice() } : {}),
+            ...(selection?.dimension ? { dimension: selection.dimension } : {}),
+            routerOwned: true,
+            originalTask,
+            ...(requestedModel !== undefined ? { requestedModel } : {}),
+          };
+          children.push(owned);
+          injected.push(owned);
+          routerOwned = true;
+        }
+      }
+
+      if (!routerOwned) {
+        children.push({
+          ...(childIndex !== undefined ? { childIndex } : {}),
+          ...(childIndexSpan !== null && childIndexSpan !== 1 ? { childIndexSpan } : {}),
+          stableIndexKnown,
+          path,
+          agent: spec.agent,
+          role,
+          model: requestedModel,
+          routerOwned: false,
+          originalTask,
+        });
+      }
+    }
+
+    const visitContainer = (value: unknown, key: string): void => {
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => {
+          const span = readCountSpan(item);
+          visit(item, `${path}.${key}[${index}]`, span);
+        });
+        return;
+      }
+      // Dynamic fanout stores one child template directly in `parallel` and
+      // reserves expand.maxItems stable indexes for its materialized children.
+      if (key === 'parallel' && value && typeof value === 'object') {
+        const maxItems = (spec.expand as { maxItems?: unknown } | null | undefined)?.maxItems;
+        const span = typeof maxItems === 'number' && Number.isInteger(maxItems) && maxItems >= 0
+          ? maxItems
+          : null;
+        visit(value, `${path}.${key}`, span);
+      }
+    };
+    visitContainer(spec.tasks, 'tasks');
+    visitContainer(spec.chain, 'chain');
+    visitContainer(spec.parallel, 'parallel');
+  };
+
+  visit(input, '$');
+
+  // Tool-level default model for workflow-scripted spawns. Children defined
+  // inside a `workflowScript` string never reach the walker above, but
+  // pi-subagents honors the tool schema's top-level `model` as the default
+  // for every child that does not set its own — and resolves it before
+  // agent-config pins, so the router's fill wins over settings pins here.
+  // A per-child `model` inside the script still outranks both. Role-shaped
+  // single-child calls are not scripted and already got their role-specific
+  // model above, so the default only ever fills genuinely empty slots.
+  if (opts.defaultModel) {
+    const root = input as SpecLike;
+    const hasScript = typeof root.workflowScript === 'string' && root.workflowScript.trim() !== '';
+    const hasAction = root.action !== undefined;
+    if (hasScript && !hasAction) {
+      const existing = root.model;
+      if (existing === undefined || existing === '' || existing === ROUTER_AUTO_SENTINEL) {
+        (root as Record<string, unknown>).model = opts.defaultModel;
+      }
+    }
+  }
+
+  return { children, injected };
+}
+
+// ─── Tool-level default pick ─────────────────────────────────────────────
+
+/**
+ * Fixed role priority for the tool-level default model. The worker's
+ * implement pick is the natural default for general child work; the rest of
+ * the order is a stable fallback for sessions where some roles are
+ * user-pinned (and therefore absent from the map) or unroutable.
+ */
+const DEFAULT_MODEL_ROLE_ORDER: readonly Role[] = [
+  'worker',
+  'planner',
+  'researcher',
+  'advisor',
+  'reviewer',
+];
+
+/**
+ * Pick the concrete model to fill the subagent tool's top-level `model` slot
+ * on workflow-scripted spawns. Returns undefined when no role is routable,
+ * so the call passes through untouched (fail open).
+ */
+export function pickSubagentDefaultModel(
+  roleModels: ReadonlyMap<Role, string>,
+): string | undefined {
+  for (const role of DEFAULT_MODEL_ROLE_ORDER) {
+    const model = roleModels.get(role);
+    if (model) return model;
+  }
+  return undefined;
+}
+
+// ─── Thinking-level suffix stripping ───────────────────────────────────
+
+/** Thinking-level suffixes pi-subagents appends to an injected model id. */
+const THINKING_SUFFIXES = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+/**
+ * Strip a trailing `:<thinking-level>` so `provider/id:high` collapses to the
+ * bare `provider/id` that the registry, allowlist, and blacklist all key on. A
+ * colon whose suffix is not a known thinking level is left intact.
+ */
+export function stripThinkingSuffix(model: string): string {
+  const idx = model.lastIndexOf(':');
+  if (idx === -1) return model;
+  return THINKING_SUFFIXES.has(model.slice(idx + 1)) ? model.slice(0, idx) : model;
+}
+
+/** Read current override source tags from user and project settings. */
+export function readExistingOverrides(
+  settingsPath?: string,
+  cwd?: string,
+): Partial<Record<Role, ExistingOverride>> {
+  const result: Partial<Record<Role, ExistingOverride>> = {};
+
+  // User scope: read first, project overrides take precedence.
+  const userPath = settingsPath ?? resolveUserSettingsPath();
+  const userSettings = readSettings(userPath);
+  const userOverrides = userSettings.subagents?.agentOverrides ?? {};
+  for (const role of ALL_ROLES) {
+    const entry = userOverrides[role];
+    if (entry && entry.model) {
+      result[role] = { model: entry.model, source: entry.__source };
+    }
+  }
+
+  // Project scope: same shape, wins when present (matches pi-subagents).
+  const projectPath = resolveProjectSettingsPath(cwd);
+  if (projectPath) {
+    const projectSettings = readSettings(projectPath);
+    const projectOverrides = projectSettings.subagents?.agentOverrides ?? {};
+    for (const role of ALL_ROLES) {
+      const entry = projectOverrides[role];
+      if (entry && entry.model) {
+        result[role] = { model: entry.model, source: entry.__source };
+      }
+    }
+  }
+
+  return result;
+}

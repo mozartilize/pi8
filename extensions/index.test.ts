@@ -3,16 +3,16 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { RegistryModelInfo } from './scorer.js';
+import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 
 import autoModelRouterExtension from './index.js';
-import { buildSubagentProviderAuthFilter } from './provider.js';
-import { applyEscalation, requestEscalation, resetEscalation } from './escalation.js';
-import { computeRoleModels } from './subagents.js';
+import { buildSubagentProviderAuthFilter } from './serve/provider.js';
+import { applyEscalation, requestEscalation, resetEscalation } from './serve/escalation.js';
+import { computeRoleModels } from './agents/subagents.js';
 import { multiWorkRoutingMeta, routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
-import { formatDecisionDetail } from './ui.js';
-import { DECISION_LOG_FILE, setDecisionLogBase } from './decisionlog.js';
+import { formatDecisionDetail } from './host/ui.js';
+import { DECISION_LOG_FILE, setDecisionLogBase } from './host/decisionlog.js';
 import {
   addAssessmentCost,
   bumpLatchGeneration,
@@ -28,18 +28,18 @@ import {
   setCachedRoutingIntent,
   setLastDecision,
   setLastServed,
-} from './router-session-state.js';
-import type { WorkPhaseState } from './work-phase.js';
-import { evaluateMutationCall } from './mutation-gate.js';
+} from './serve/router-session-state.js';
+import type { WorkPhaseState } from './routing/policy/work-phase.js';
+import { evaluateMutationCall } from './routing/policy/mutation-gate.js';
 
-vi.mock('./commands.js', () => ({ registerCommands: vi.fn() }));
-vi.mock('./mutation-gate.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./mutation-gate.js')>();
+vi.mock('./host/commands.js', () => ({ registerCommands: vi.fn() }));
+vi.mock('./routing/policy/mutation-gate.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./routing/policy/mutation-gate.js')>();
   return { ...actual, evaluateMutationCall: vi.fn(actual.evaluateMutationCall) };
 });
 const mockBlacklist = new Set<string>();
 
-vi.mock('./provider.js', () => ({
+vi.mock('./serve/provider.js', () => ({
   registerAutoRouterProvider: vi.fn(),
   buildSubagentProviderAuthFilter: vi.fn(() => () => true),
   addSessionBlacklistPatterns: vi.fn(() => []),
@@ -50,14 +50,14 @@ vi.mock('./provider.js', () => ({
   getSessionBlacklistPatterns: vi.fn(() => []),
   blacklistModel: vi.fn((model: string) => mockBlacklist.add(model)),
 }));
-vi.mock('./store.js', () => ({
+vi.mock('./bench/store.js', () => ({
   loadStore: vi.fn(() => undefined),
   // The real decisionlog module resolves its log path through this; without it
   // gate-observability writes throw inside their fail-open catch and never land.
   resolveStoragePath: (base?: string) => base ?? '/tmp/pi8-test-store',
 }));
 vi.mock('./config.js', () => ({ loadConfig: vi.fn(() => ({ debug: false })) }));
-vi.mock('./allowlist.js', () => ({
+vi.mock('./routing/policy/allowlist.js', () => ({
   loadModelFilter: vi.fn(() => () => true),
   buildExcludeFilter: vi.fn(() => () => false),
   buildScopedModelFilter: vi.fn(() => () => true),
@@ -71,8 +71,8 @@ const mockRoleFallbacks = new Map<Role, string[]>([
   ['reviewer', ['gamma/moderate', 'delta/strong']],
 ]);
 
-vi.mock('./subagents.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./subagents.js')>();
+vi.mock('./agents/subagents.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./agents/subagents.js')>();
   return {
     ...actual,
     computeRoleModels: vi.fn(() => ({

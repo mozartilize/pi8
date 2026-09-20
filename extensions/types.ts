@@ -199,9 +199,6 @@ export interface ServedCapabilityMeta {
   candidate: CandidateCapabilityMeta;
 }
 
-/** `shadow` logs a counterfactual only; `active` may adopt the verdict. */
-export type AssessmentMode = 'shadow' | 'active';
-
 export type AssessmentFallbackReason =
   | 'expiry'
   | 'auth'
@@ -281,9 +278,8 @@ export interface RoutingDecision {
   assessment?: RoutingAssessment;
   /** Why the assessment was unavailable. Never changes `cause`. */
   fallbackReason?: AssessmentFallbackReason;
-  /** Intent cache key, so a detached shadow verdict can be joined offline. */
+  /** Intent cache key joining assessment metrics to this routing decision. */
   intentKey?: string;
-  assessmentMode?: AssessmentMode;
   /** Message-origin census for this turn's context. */
   provenanceCounts?: Record<MessageProvenance, number>;
   cause: DecisionCause;
@@ -383,18 +379,13 @@ export interface AutoRouterConfig {
   routerContextWindow?: number;
   /** Threshold for classifier low-confidence route-up. */
   lowConfidenceThreshold: number;
-  /** If true (default), use a bounded inline LLM consultation for uncertain input. */
-  consultRouter: boolean;
   /**
-   * `shadow` (default) runs the assessment detached and logs a counterfactual
-   * without touching routing; `active` adopts verdicts under the §7.5 caps.
-   * Flipping this default is a rollout decision, not a code change.
+   * If true (default), await one bounded semantic assessment per real user
+   * entry and adopt its verdict under the assessment safety caps.
    */
-  assessmentMode: AssessmentMode;
-  /** One end-to-end budget for active mode: selection + auth + startup + stream + parse. */
+  consultRouter: boolean;
+  /** One end-to-end budget: selection + auth + startup + stream + parse. */
   assessmentDeadlineMs: number;
-  /** End-to-end budget for shadow mode; generous because shadow is detached. */
-  assessmentShadowDeadlineMs: number;
   /** Hard cap on assembled assessment input, in characters. */
   assessmentMaxInputChars: number;
   /** Assessor must reach this share of the strongest routable intelligence. */

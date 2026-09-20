@@ -7,9 +7,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { setSessionFile, getSessionFile, sessionSidecarPath } from './sessionpaths.js';
-import { appendDecision } from './decisionlog.js';
-import { setDecisionLogBase } from './decisionlog.js';
-import { debugLog, setDebugPath, setConfigDebug } from './debuglog.js';
+import { appendDecision } from './host/decisionlog.js';
+import { setDecisionLogBase } from './host/decisionlog.js';
+import { debugLog, setDebugPath, setConfigDebug } from './host/debuglog.js';
 import type { RoutingDecision } from './types.js';
 
 afterEach(() => {

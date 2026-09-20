@@ -42,15 +42,13 @@ Assessment luôn bật sẽ dispatch một model call có giới hạn — đư�
 
 Mỗi user entry thực chỉ có một assessment, bị giới hạn bởi một end-to-end deadline duy nhất (`assessmentDeadlineMs`, mặc định 1500 ms). Input bị giới hạn bởi `assessmentMaxInputChars` (mặc định 6000), cắt từ phần cũ nhất trước, và được loại bỏ credential trước khi dispatch.
 
-**Chế độ `shadow`** (mặc định): assessment chạy tách rời — không làm tăng wall-clock time của lượt và ghi một record phản thực tế `assessment-shadow` vào decision log (join bằng `intentKey`). Kết quả routing giống từng byte với `consultRouter: false`.
-
-**Chế độ `active`**: verdict có thể được áp dụng dưới các giới hạn nghiêm ngặt:
+Verdict được áp dụng dưới các giới hạn nghiêm ngặt:
 
 - Khi không chắc chắn, luôn route lên: assessment confidence thấp sẽ cho kết quả `max(heuristic, oneTierAbove(verdict))`, không bao giờ thấp hơn heuristic.
 - Chỉ verdict **confidence cao, `scope: bounded`** mới được phép hạ dimension, tối đa **một tier**, không bao giờ hạ từ `implement` hoặc `review`, và không bao giờ khi depth latch đang hoạt động.
 - Capability repick: consult đã nâng dimension sẽ sở hữu quyết định đó (`router-consult` vẫn là cause đang hoạt động cho mục đích capability repick).
 
-Không giống `shadow`, `active` làm phát sinh chi phí assessor và egress trong lượt — đó là cái giá của việc áp dụng verdict; `shadow` (mặc định) không làm tăng wall-clock time và không dispatch thứ gì có ảnh hưởng đến routing.
+Mỗi lần assessment ghi một record `assessment-metric` vào decision log, join bằng `intentKey`, để giữ lại heuristic delta hoặc fallback reason. Một depth-latch transition ghi metric thứ hai từ cùng một assessment dispatch duy nhất. Chi phí assessment được theo dõi riêng với chi phí routing.
 
 Đặt `consultRouter: false` để routing hoàn toàn cục bộ và không dispatch assessment.
 
@@ -242,7 +240,7 @@ Các state transition thuần, fail-open, giới hạn theo invocation, gate cá
 
 ### Assessor v2 contract (`assessment-prompt.ts`)
 
-`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. Assessor trả về cùng shape `{ kind, complexity, scope, compound, confidence, reasoning }` như terminal classifier (`ParsedAssessment`/`RoutingAssessment`), thay thế contract `dimension`/`outcome`/`scope: AssessmentScope` trước đó. Shadow và active mode dispatch cùng một prompt và parser — shadow chỉ ghi một record `assessment-shadow` vào decision log mà không ảnh hưởng routing; active có thể adopt verdict. Các field `complexity`/`compound` của assessor chỉ cung cấp thông tin cho terminal classification — chúng không bao giờ gate routing trực tiếp, và không có down-routing tự động cho verify-phase.
+`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. Assessor trả về cùng shape `{ kind, complexity, scope, compound, confidence, reasoning }` như terminal classifier (`ParsedAssessment`/`RoutingAssessment`), thay thế contract `dimension`/`outcome`/`scope: AssessmentScope` trước đó. Verdict thành công được áp dụng theo các giới hạn trong §1 và ghi thành record `assessment-metric`. Các field `complexity`/`compound` của assessor chỉ cung cấp thông tin cho terminal classification — chúng không bao giờ gate routing trực tiếp, và không có down-routing tự động cho verify-phase.
 
 ### Hiển thị decision
 
@@ -268,7 +266,7 @@ Benchmark slug được fuzzy-match với model ID trong live registry của Pi.
 
 ### Decision log
 
-Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict, shadow counterfactual. Các giá trị cause: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `model-escalation`, `capability-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
+Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict và record `assessment-metric`. Các giá trị cause: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `model-escalation`, `capability-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
 
 ### Timing log
 
@@ -289,7 +287,6 @@ Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 | `escalationTtlTurns` | `4` | Thời lượng override của model `route_up` |
 | `consultRouter` | `true` | Công tắc tổng cho semantic assessment |
 | `consultModel` | — | Model assessor override, tùy chọn |
-| `assessmentMode` | `"shadow"` | `"shadow"` hoặc `"active"` |
 | `assessmentDeadlineMs` | `1500` | Ngân sách end-to-end cho assessor |
 | `assessmentMaxInputChars` | `6000` | Giới hạn input của assessor |
 | `assessorQualityRatio` | `0.5` | Competence floor của assessor |

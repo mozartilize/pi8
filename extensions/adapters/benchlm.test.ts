@@ -10,8 +10,8 @@ import {
   normalize,
   unwrap,
 } from './benchlm.js';
-import { resolveRows } from '../matcher.js';
-import { DEFAULT_BENCHMARK_ALIASES } from '../store.js';
+import { resolveRows } from '../bench/matcher.js';
+import { DEFAULT_BENCHMARK_ALIASES } from '../bench/store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixture = readFileSync(join(__dirname, '../__fixtures__/benchlm-aaomniscience.html'), 'utf8');

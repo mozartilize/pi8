@@ -257,33 +257,25 @@ describe('malformed config values are normalized to defaults', () => {
 });
 
 describe('assessment config', () => {
-  it('defaults assessmentMode to shadow', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({}), 'utf8');
-    expect(loadConfig().assessmentMode).toBe('shadow');
-  });
-
-  it('accepts an explicit active mode', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ assessmentMode: 'active' }), 'utf8');
-    expect(loadConfig().assessmentMode).toBe('active');
-  });
-
-  it('rejects an unknown mode and falls back to shadow', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ assessmentMode: 'aggressive' }), 'utf8');
-    expect(loadConfig().assessmentMode).toBe('shadow');
-  });
-
   it('defaults the assessment deadline, input cap and assessor floor', () => {
     writeFileSync(getConfigPath(), JSON.stringify({}), 'utf8');
     const config = loadConfig();
     expect(config.assessmentDeadlineMs).toBe(1500);
-    expect(config.assessmentShadowDeadlineMs).toBe(12000);
     expect(config.assessmentMaxInputChars).toBe(6000);
     expect(config.assessorQualityRatio).toBe(0.5);
   });
 
-  it('honours a shadow deadline override', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ assessmentShadowDeadlineMs: 8000 }), 'utf8');
-    expect(loadConfig().assessmentShadowDeadlineMs).toBe(8000);
+  it('ignores removed assessment mode fields', () => {
+    writeFileSync(
+      getConfigPath(),
+      JSON.stringify({ assessmentMode: 'shadow', assessmentShadowDeadlineMs: 8000 }),
+      'utf8',
+    );
+    const loaded = loadConfig();
+    const config = loaded as unknown as Record<string, unknown>;
+    expect(loaded.consultRouter).toBe(true);
+    expect(config.assessmentMode).toBeUndefined();
+    expect(config.assessmentShadowDeadlineMs).toBeUndefined();
   });
 
   it('clamps a nonsense assessor ratio back to the default', () => {
@@ -328,7 +320,7 @@ describe('syntheticPrefixes', () => {
   });
 });
 
-describe('legacy escalationToken migration', () => {
+describe('removed config migration', () => {
   it('exposes no escalationToken for a legacy config', () => {
     writeFileSync(
       getConfigPath(),
@@ -339,10 +331,15 @@ describe('legacy escalationToken migration', () => {
     expect('escalationToken' in loadConfig()).toBe(false);
   });
 
-  it('strips the legacy key on the next config write and preserves unrelated keys', () => {
+  it('strips removed keys on the next config write and preserves unrelated keys', () => {
     writeFileSync(
       getConfigPath(),
-      JSON.stringify({ escalationToken: '!up', models: ['alpha/*'] }),
+      JSON.stringify({
+        escalationToken: '!up',
+        assessmentMode: 'shadow',
+        assessmentShadowDeadlineMs: 12000,
+        models: ['alpha/*'],
+      }),
       'utf8',
     );
 
@@ -350,6 +347,8 @@ describe('legacy escalationToken migration', () => {
 
     const raw = JSON.parse(readFileSync(getConfigPath(), 'utf8')) as Record<string, unknown>;
     expect(raw.escalationToken).toBeUndefined();
+    expect(raw.assessmentMode).toBeUndefined();
+    expect(raw.assessmentShadowDeadlineMs).toBeUndefined();
     expect(raw.models).toEqual(['alpha/*']);
     expect(raw.blacklist).toEqual(['*/broken']);
   });

@@ -25,9 +25,9 @@ import type {
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import type { BenchModel, RoutingDecision } from '../types.js';
-import type { ServedInfo } from '../ui.js';
-import type { EmbeddingStats } from '../router-session-state.js';
-import type { WorkPhaseState } from '../work-phase.js';
+import type { ServedInfo } from '../host/ui.js';
+import type { EmbeddingStats } from '../serve/router-session-state.js';
+import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { registryModel } from './router-fixtures.js';
 
 // ─── Event stream ────────────────────────────────────────────────────
@@ -197,9 +197,9 @@ export async function setupProviderTest(options: ProviderHarnessOptions): Promis
     );
   }
 
-  const { setDecisionLogBase } = await import('../decisionlog.js');
+  const { setDecisionLogBase } = await import('../host/decisionlog.js');
   setDecisionLogBase(dir);
-  const { registerAutoRouterProvider } = await import('../provider.js');
+  const { registerAutoRouterProvider } = await import('../serve/provider.js');
 
   const outStream = new MockEventStream();
   vi.mocked(createAssistantMessageEventStream).mockReturnValue(
@@ -234,7 +234,7 @@ export async function setupProviderTest(options: ProviderHarnessOptions): Promis
 
   registerAutoRouterProvider(pi, { modelRegistry: registry, ...options.ctx } as unknown as ExtensionContext);
 
-  const { getProviderState: readProviderState } = await import('../provider.js');
+  const { getProviderState: readProviderState } = await import('../serve/provider.js');
 
   const harness: ProviderTestHarness = {
     providerOptions: undefined as unknown as RouterProviderOptions,
@@ -306,9 +306,9 @@ export function expectDecisionContract(opts: {
 }): void {
   expect(opts.state.lastDecision).toMatchObject(opts.match);
 
-  // Shadow-assessment records may trail the decision line; find the newest
-  // real decision entry.
-  const entry = [...opts.log].reverse().find((e) => e.kind !== 'assessment-shadow');
+  // Assessment metrics may trail the decision line; find the newest real
+  // decision entry.
+  const entry = [...opts.log].reverse().find((e) => e.kind !== 'assessment-metric');
   expect(entry).toBeDefined();
   if (entry) {
     for (const field of ['dimension', 'cause', 'chosen'] as const) {
@@ -332,9 +332,9 @@ export async function fetchDecisionContractHandles(dir: string): Promise<{
   log: Array<{ kind?: string; dimension?: string; cause?: string; chosen?: string }>;
   ui: string[];
 }> {
-  const { getProviderState } = await import('../provider.js');
-  const { readRecentEntries } = await import('../decisionlog.js');
-  const { formatDecisionDetail } = await import('../ui.js');
+  const { getProviderState } = await import('../serve/provider.js');
+  const { readRecentEntries } = await import('../host/decisionlog.js');
+  const { formatDecisionDetail } = await import('../host/ui.js');
   const state = getProviderState();
   return {
     state,

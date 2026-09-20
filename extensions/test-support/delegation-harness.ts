@@ -11,10 +11,10 @@ import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { Context, Model, Api } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
-import { runDelegationLoop, type DelegationResult } from '../delegation.js';
-import { resetRouterSession } from '../router-session-state.js';
-import { clearBlacklistedModels, clearBlacklistedProviders, getBlacklistedModels, getBlacklistedProviders } from '../blacklist.js';
-import { makeTerminalErrorEvent } from '../error-event.js';
+import { runDelegationLoop, type DelegationResult } from '../serve/delegation.js';
+import { resetRouterSession } from '../serve/router-session-state.js';
+import { clearBlacklistedModels, clearBlacklistedProviders, getBlacklistedModels, getBlacklistedProviders } from '../serve/blacklist.js';
+import { makeTerminalErrorEvent } from '../serve/error-event.js';
 import { routingDecision, registryModel } from './router-fixtures.js';
 import type { RoutingDecision } from '../types.js';
 

@@ -11,9 +11,9 @@
  */
 import type { Api } from '@earendil-works/pi-ai';
 
-import type { RegistryModelInfo } from '../scorer.js';
+import type { RegistryModelInfo } from '../routing/score/scorer.js';
 import type { BenchModel, Candidate, MultiWorkRoutingMeta, RoutingDecision, TerminalAssessment } from '../types.js';
-import type { SubagentResultRow } from '../subagent-results.js';
+import type { SubagentResultRow } from '../agents/subagent-results.js';
 
 /** A minimal, hand-filled routing decision across `chain`. */
 export function routingDecision(chain: string[]): RoutingDecision {

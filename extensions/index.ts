@@ -11,7 +11,7 @@
  */
 import type { ExtensionAPI, ExtensionContext, ModelChangeEntry } from '@earendil-works/pi-coding-agent';
 
-import { registerCommands } from './commands.js';
+import { registerCommands } from './host/commands.js';
 import {
   registerAutoRouterProvider,
   buildSubagentProviderAuthFilter,
@@ -22,27 +22,27 @@ import {
   getBlacklistedProviders,
   getSessionBlacklistPatterns,
   blacklistModel,
-} from './provider.js';
-import { registerRouteUpTool, resetEscalationSession } from './escalation.js';
-import { computeRoleModels, pickSubagentDefaultModel } from './subagents.js';
-import { SubagentEscalationHooks } from './subagent-escalation-hooks.js';
-import { SubagentRoutingState } from './subagent-routing-state.js';
-import { extractMissingTools } from './gap-detector.js';
-import { collectSubagentResultText, parseSubagentResultRows } from './subagent-results.js';
-import { computeSubagentSpend } from './subagent-spend.js';
-import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './allowlist.js';
+} from './serve/provider.js';
+import { registerRouteUpTool, resetEscalationSession } from './serve/escalation.js';
+import { computeRoleModels, pickSubagentDefaultModel } from './agents/subagents.js';
+import { SubagentEscalationHooks } from './agents/subagent-escalation-hooks.js';
+import { SubagentRoutingState } from './agents/subagent-routing-state.js';
+import { extractMissingTools } from './host/gap-detector.js';
+import { collectSubagentResultText, parseSubagentResultRows } from './agents/subagent-results.js';
+import { computeSubagentSpend } from './agents/subagent-spend.js';
+import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './routing/policy/allowlist.js';
 import { loadConfig } from './config.js';
-import { ensureEmbeddingEngine } from './embedding.js';
+import { ensureEmbeddingEngine } from './embed/embedding.js';
 import { setSessionFile } from './sessionpaths.js';
-import { debugLog, setConfigDebug } from './debuglog.js';
-import type { RegistryModelInfo } from './scorer.js';
+import { debugLog, setConfigDebug } from './host/debuglog.js';
+import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from './types.js';
 import {
   appendMutationGateSignal,
   appendSubagentGapSignal,
   appendSubagentSpend,
-} from './decisionlog.js';
-import { clearRouterStatus } from './ui.js';
+} from './host/decisionlog.js';
+import { clearRouterStatus } from './host/ui.js';
 import {
   getLastDecision,
   setLastDecision,
@@ -51,9 +51,9 @@ import {
   commitWorkPhaseState,
   resetRouterSession,
   setActiveSkillNames,
-} from './router-session-state.js';
-import { evaluateMutationCall, recordMutationResult } from './mutation-gate.js';
-import { classifyMutationCall } from './mutation-detector.js';
+} from './serve/router-session-state.js';
+import { evaluateMutationCall, recordMutationResult } from './routing/policy/mutation-gate.js';
+import { classifyMutationCall } from './routing/policy/mutation-detector.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
 const SUBAGENT_TOOL = 'subagent';

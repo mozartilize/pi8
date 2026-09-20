@@ -42,15 +42,13 @@ The always-on assessment dispatches a bounded model call — selected from the r
 
 One assessment per real user entry, bounded by one end-to-end deadline (`assessmentDeadlineMs`, default 1500ms). Input is capped by `assessmentMaxInputChars` (default 6000), truncated oldest-first, and credential-scrubbed before dispatch.
 
-**`shadow` mode** (default): the assessment runs detached — adds no wall-clock time to the turn and writes a counterfactual `assessment-shadow` record in the decision log (joined by `intentKey`). Routing is byte-identical to `consultRouter: false`.
-
-**`active` mode**: verdicts may be adopted under strict caps:
+Verdicts are adopted under strict caps:
 
 - Uncertainty always routes up: low-confidence assessments yield `max(heuristic, oneTierAbove(verdict))`, never anything below the heuristic.
 - Only a **high-confidence, `scope: bounded`** verdict may lower the dimension, by **at most one tier**, never from `implement` or `review`, and never while the depth latch is engaged.
 - Capability repick: a consult that raised the dimension owns that decision (`router-consult` cause remains active for capability repick purposes).
 
-Unlike `shadow`, `active` adds assessor spend and egress to the turn — that is the price of adopting verdicts; `shadow` (default) adds no wall-clock time and dispatches nothing that affects routing.
+Each attempt writes an `assessment-metric` decision-log record joined by `intentKey`, preserving the heuristic delta or fallback reason. A depth-latch transition writes a second metric from the same single assessment dispatch. Assessment spend is tracked separately from routed spend.
 
 Set `consultRouter: false` to keep routing fully local with no assessment dispatched.
 
@@ -247,7 +245,7 @@ Pure, fail-open, invocation-bounded state transitions gating `edit`/`write` tool
 
 ### Assessor v2 contract (`assessment-prompt.ts`)
 
-`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. The assessor returns the same `{ kind, complexity, scope, compound, confidence, reasoning }` shape as the terminal classifier (`ParsedAssessment`/`RoutingAssessment`), replacing the prior `dimension`/`outcome`/`scope: AssessmentScope` contract. Shadow and active modes dispatch the identical prompt and parser — shadow logs an `assessment-shadow` decision-log record without influencing routing; active may adopt the verdict. The assessor's `complexity`/`compound` fields inform terminal classification only — they never gate routing directly, and there is no automatic verify-phase down-routing.
+`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. The assessor returns the same `{ kind, complexity, scope, compound, confidence, reasoning }` shape as the terminal classifier (`ParsedAssessment`/`RoutingAssessment`), replacing the prior `dimension`/`outcome`/`scope: AssessmentScope` contract. Successful verdicts are adopted under the caps in §1 and recorded as `assessment-metric` entries. The assessor's `complexity`/`compound` fields inform terminal classification only — they never gate routing directly, and there is no automatic verify-phase down-routing.
 
 ### Decision surfacing
 
@@ -273,7 +271,7 @@ Benchmark slugs are fuzzy-matched against Pi's live registry model IDs. Manual o
 
 ### Decision log
 
-Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, shadow counterfactuals. Caused values: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `model-escalation`, `capability-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
+Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, and `assessment-metric` records. Caused values: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `model-escalation`, `capability-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
 
 ### Timing log
 
@@ -294,7 +292,6 @@ Options in `~/.pi/agent/pi8/config.json`:
 | `escalationTtlTurns` | `4` | Model `route_up` override duration |
 | `consultRouter` | `true` | Master switch for semantic assessment |
 | `consultModel` | — | Optional assessor model override |
-| `assessmentMode` | `"shadow"` | `"shadow"` or `"active"` |
 | `assessmentDeadlineMs` | `1500` | End-to-end assessor budget |
 | `assessmentMaxInputChars` | `6000` | Assessor input cap |
 | `assessorQualityRatio` | `0.5` | Assessor competence floor |
