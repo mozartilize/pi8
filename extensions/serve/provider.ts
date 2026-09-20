@@ -53,41 +53,12 @@ import {
   type EffortDrops,
 } from '../routing/score/effort-estimate.js';
 import {
-  getAccumulatedCost,
-  getActiveSkillNames,
-  getSessionGeneration,
+  RouterSession,
+  RuntimeBindings,
+  defaultRouterSession,
+  defaultRuntimeBindings,
   getCachedRoutingIntent,
-  getLatchGeneration,
-  getLatchVetoIntentKey,
-  setLatchVetoIntentKey,
-  getLastResolvedThinkingLevel,
-  getLastDecision,
-  getLastChosenRegistryId,
-  getLastRegisteredModels,
-  getLastServed,
-  getLastExtensionContext,
   getCurrentModelRegistry,
-  getWorkPhaseState,
-  commitWorkPhaseState,
-  getCandidateExpansion,
-  setCandidateExpansion,
-  peekPendingUserEscalation,
-  consumePendingUserEscalation,
-  addAssessmentCost,
-  recordEmbedding,
-  getEmbeddingStats,
-  getAssessorStrikes,
-  strikeAssessor,
-  clearAssessorStrikes,
-  recordSuccessfulAssessorUsage,
-  bumpLatchGeneration,
-  setCachedRoutingIntent,
-  setCurrentModelRegistry,
-  setLastExtensionContext,
-  setLastRegisteredModels,
-  setLastServed,
-  setLastDecision,
-  setLastResolvedThinkingLevel,
 } from './router-session-state.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop } from './delegation.js';
@@ -102,12 +73,6 @@ import {
   scoringPolicyForState,
   terminalRequirement,
 } from '../routing/policy/work-phase.js';
-import {
-  getBlacklistedModels,
-  getBlacklistedProviders,
-  blacklistProvider,
-  getSessionBlacklistPatterns,
-} from './blacklist.js';
 
 export {
   addSessionBlacklistPatterns,
@@ -184,15 +149,15 @@ async function waitForRegistry(
 const DEFAULT_CONTEXT_WINDOW = 200000;
 const DEFAULT_MAX_TOKENS = 4096;
 
-export const getProviderState = () => ({
-  lastDecision: getLastDecision(),
-  lastChosenRegistryId: getLastChosenRegistryId(),
-  lastServed: getLastServed(),
-  accumulatedCost: getAccumulatedCost(),
-  embeddingStats: getEmbeddingStats(),
-  blacklistedModels: [...getBlacklistedModels()].sort(),
-  blacklistedProviders: [...getBlacklistedProviders()].sort(),
-  workPhaseState: getWorkPhaseState(),
+export const getProviderState = (session: RouterSession = defaultRouterSession) => ({
+  lastDecision: session.getLastDecision(),
+  lastChosenRegistryId: session.getLastChosenRegistryId(),
+  lastServed: session.getLastServed(),
+  accumulatedCost: session.getAccumulatedCost(),
+  embeddingStats: session.getEmbeddingStats(),
+  blacklistedModels: [...session.getBlacklistedModels()].sort(),
+  blacklistedProviders: [...session.getBlacklistedProviders()].sort(),
+  workPhaseState: session.getWorkPhaseState(),
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -261,6 +226,7 @@ function evidenceForAssessment(
   context: Context,
   config: AutoRouterConfig,
   pi: ExtensionAPI,
+  session: RouterSession = defaultRouterSession,
 ): Parameters<typeof runAssessment>[3] {
   let toolNames: string[] = [];
   try {
@@ -277,7 +243,7 @@ function evidenceForAssessment(
     ),
     summary: latestSummaryText(context.messages),
     toolNames,
-    skillNames: getActiveSkillNames(),
+    skillNames: session.getActiveSkillNames(),
     toolActivity: countToolActivity(context.messages),
   };
 }
@@ -291,23 +257,24 @@ function evidenceForAssessment(
  */
 function recordAssessorOutcome(
   attempt: Awaited<ReturnType<typeof runAssessment>>,
+  session: RouterSession = defaultRouterSession,
 ): void {
   if (attempt.ok) {
-    recordSuccessfulAssessorUsage(attempt.assessment.usage);
-    clearAssessorStrikes(attempt.assessment.model);
+    session.recordSuccessfulAssessorUsage(attempt.assessment.usage);
+    session.clearAssessorStrikes(attempt.assessment.model);
     return;
   }
   // The assessor hit the same shared usage cap the serving path would:
   // exclude the whole provider so later turns fail fast there too.
   if (attempt.usageLimitProvider) {
-    blacklistProvider(attempt.usageLimitProvider);
+    session.blacklistProvider(attempt.usageLimitProvider);
   }
   if (
     attempt.model &&
     attempt.producedOutput === false &&
     (attempt.fallbackReason === 'expiry' || attempt.fallbackReason === 'error')
   ) {
-    strikeAssessor(attempt.model);
+    session.strikeAssessor(attempt.model);
   }
 }
 
@@ -449,13 +416,16 @@ function measureTurnInput(context: Context, config: AutoRouterConfig) {
  * keyword downward. Timeout/failure degrades to the keyword result.
  * Escalation is not resolved here — it must not be cached.
  */
-async function resolveBaseIntent(args: {
-  turnInput: ReturnType<typeof getTurnClassificationInput>;
-  systemPrompt: string | undefined;
-  config: AutoRouterConfig;
-}) {
+async function resolveBaseIntent(
+  args: {
+    turnInput: ReturnType<typeof getTurnClassificationInput>;
+    systemPrompt: string | undefined;
+    config: AutoRouterConfig;
+  },
+  session?: RouterSession,
+) {
   const { turnInput, systemPrompt, config } = args;
-  const cachedIntent = getCachedRoutingIntent();
+  const cachedIntent = session ? session.getCachedIntent() : getCachedRoutingIntent();
   const cacheHit = cachedIntent?.key === turnInput.key;
   const classifyResult = cacheHit
     ? cachedIntent.classifyResult
@@ -481,7 +451,8 @@ async function resolveBaseIntent(args: {
         deadlineMs: config.embeddingDeadlineMs,
       });
       if (embeddingResult) {
-        recordEmbedding('fired');
+        const targetSession = session ?? defaultRouterSession;
+        targetSession.recordEmbedding('fired');
         const minConfidence =
           config.embeddingMinConfidence ?? DEFAULT_EMBEDDING_MIN_CONFIDENCE;
         if (embeddingResult.confidence >= minConfidence) {
@@ -490,16 +461,16 @@ async function resolveBaseIntent(args: {
           if (embeddingStrength > keywordStrength) {
             baseDimension = embeddingResult.dimension;
             baseCause = 'embedding-classify';
-            recordEmbedding('promoted');
+            targetSession.recordEmbedding('promoted');
           }
         } else {
-          recordEmbedding('abstainedLowConf');
+          targetSession.recordEmbedding('abstainedLowConf');
         }
       } else {
-        recordEmbedding('degraded');
+        (session ?? defaultRouterSession).recordEmbedding('degraded');
       }
     } catch {
-      recordEmbedding('degraded');
+      (session ?? defaultRouterSession).recordEmbedding('degraded');
     }
   }
 
@@ -514,9 +485,12 @@ async function resolveBaseIntent(args: {
 }
 
 /** Live per-model/provider exclusions. Not part of the expansion-cache key. */
-function applyRuntimeExclusions(pool: readonly Candidate[]): Candidate[] {
-  const liveModels = getBlacklistedModels();
-  const liveProviders = getBlacklistedProviders();
+function applyRuntimeExclusions(
+  pool: readonly Candidate[],
+  session: RouterSession,
+): Candidate[] {
+  const liveModels = session.getBlacklistedModels();
+  const liveProviders = session.getBlacklistedProviders();
   return pool.filter((candidate) => {
     const slash = candidate.registryId.indexOf('/');
     const provider = slash > 0 ? candidate.registryId.slice(0, slash) : candidate.registryId;
@@ -528,13 +502,14 @@ function buildRoutableCandidates(args: {
   regModels: unknown[];
   extensionContext: ExtensionContext | undefined;
   config: AutoRouterConfig;
+  session: RouterSession;
 }): Candidate[] {
-  const { extensionContext, config } = args;
+  const { extensionContext, config, session } = args;
   const store = loadStore();
   const benchModels = store ? activeModels(store) : [];
   const isModelAllowed = loadModelFilter();
-  const isBlacklisted = buildExcludeFilter(getSessionBlacklistPatterns());
-  const blacklistedProviders = getBlacklistedProviders();
+  const isBlacklisted = buildExcludeFilter(session.getSessionBlacklistPatterns());
+  const blacklistedProviders = session.getBlacklistedProviders();
   const scopedModels = extensionContext?.scopedModels as
     | readonly { model: { provider: string; id: string } }[]
     | undefined;
@@ -548,14 +523,14 @@ function buildRoutableCandidates(args: {
     regModelList.map((rm) => `${rm.provider}/${rm.id}`).join(','),
     `${store?.syncedAt ?? 0}:${benchModels.length}`,
     JSON.stringify(config.models ?? null),
-    [...getSessionBlacklistPatterns()].slice().sort().join(','),
+    [...session.getSessionBlacklistPatterns()].slice().sort().join(','),
     [...blacklistedProviders].sort().join(','),
     scopedModels
       ? scopedModels.map((s) => `${s.model.provider}/${s.model.id}`).sort().join(',')
       : '',
   ].join('|');
 
-  const cachedExpansion = getCandidateExpansion();
+  const cachedExpansion = session.getCandidateExpansion();
   let allCandidates: Candidate[];
   if (cachedExpansion && cachedExpansion.key === expansionKey) {
     allCandidates = cachedExpansion.candidates;
@@ -580,10 +555,10 @@ function buildRoutableCandidates(args: {
       .flatMap((rm) =>
         expandModelCandidates(rm, rowsByModel.get(`${rm.provider}/${rm.id}`) ?? [], effortDrops),
       );
-    setCandidateExpansion({ key: expansionKey, candidates: allCandidates });
+    session.setCandidateExpansion({ key: expansionKey, candidates: allCandidates });
   }
   return allCandidates.filter(
-    (candidate) => !getBlacklistedModels().has(candidateKey(candidate)),
+    (candidate) => !session.getBlacklistedModels().has(candidateKey(candidate)),
   );
 }
 
@@ -604,6 +579,7 @@ async function runEntryAssessment(args: {
   classifyResult: ReturnType<typeof classify>;
   baseDimension: Dimension;
   baseCause: DecisionCause;
+  session: RouterSession;
 }): Promise<{
   assessment: typeof args.assessment;
   fallbackReason: typeof args.fallbackReason;
@@ -621,7 +597,7 @@ async function runEntryAssessment(args: {
   } = args;
 
   if (!args.cacheHit && args.assessmentConfig.enabled) {
-    const evidence = evidenceForAssessment(args.context, args.config, args.pi);
+    const evidence = evidenceForAssessment(args.context, args.config, args.pi, args.session);
     const heuristicDimension = args.classifyResult.dimension;
     assessmentDispatched = true;
     const attempt = await runAssessment(
@@ -629,7 +605,8 @@ async function runEntryAssessment(args: {
       args.registry,
       args.routableCandidates,
       evidence,
-      getAssessorStrikes(),
+      args.session.getAssessorStrikes(),
+      (fb) => args.session.getAssessorTokenEstimate(fb),
     );
     if (!args.assessmentStillCurrent()) {
       return {
@@ -641,14 +618,16 @@ async function runEntryAssessment(args: {
         aborted: true,
       };
     }
-    recordAssessorOutcome(attempt);
+    recordAssessorOutcome(attempt, args.session);
     if (attempt.ok) {
-      addAssessmentCost(attempt.assessment.costUsd);
+      args.session.addAssessmentCost(attempt.assessment.costUsd);
       assessment = attempt.assessment;
       const assessed = adoptAssessment({
         heuristic: heuristicDimension,
+        rawHeuristic: args.classifyResult.rawDimension,
+        ambiguityBumped: args.classifyResult.ambiguityBumped,
         assessment,
-        latchEngaged: getLatchGeneration() > 0,
+        latchEngaged: args.session.getLatchGeneration() > 0,
       });
       appendAssessmentMetric({
         intentKey: args.turnInputKey,
@@ -657,7 +636,7 @@ async function runEntryAssessment(args: {
         assessment,
       });
     } else {
-      addAssessmentCost(attempt.costUsd);
+      args.session.addAssessmentCost(attempt.costUsd);
       fallbackReason = attempt.fallbackReason;
       appendAssessmentMetric({
         intentKey: args.turnInputKey,
@@ -667,11 +646,16 @@ async function runEntryAssessment(args: {
     }
   }
 
-  if (assessment) {
+  // On cache hit, baseDimension and baseCause were already adopted on the first invocation.
+  // Re-running adoptAssessment on later tool-loop turns would allow downward adoption
+  // to cascade across multiple turns, violating Rule 12.
+  if (!args.cacheHit && assessment) {
     const adoption = adoptAssessment({
       heuristic: baseDimension,
+      rawHeuristic: args.classifyResult.rawDimension,
+      ambiguityBumped: args.classifyResult.ambiguityBumped,
       assessment,
-      latchEngaged: getLatchGeneration() > 0,
+      latchEngaged: args.session.getLatchGeneration() > 0,
     });
     if (adoption.changed) {
       baseDimension = adoption.dimension;
@@ -691,7 +675,7 @@ async function runEntryAssessment(args: {
 
 /**
  * Latch transition. Receives the parent-computed depthWouldEscalate boolean;
- * ANDs with getLatchGeneration() === 0 itself. Does not call
+ * ANDs with the session's latch generation being 0 itself. Does not call
  * applyEscalationPrecedence or wouldDepthEscalate. Does not touch the stream.
  */
 async function evaluateDepthLatch(args: {
@@ -708,6 +692,7 @@ async function evaluateDepthLatch(args: {
   pi: ExtensionAPI;
   registry: ReturnType<typeof getCurrentModelRegistry>;
   routableCandidates: Candidate[];
+  session: RouterSession;
 }): Promise<{
   vetoDepthEscalation: boolean;
   assessment: import('../types.js').RoutingAssessment | undefined;
@@ -716,11 +701,12 @@ async function evaluateDepthLatch(args: {
   aborted: boolean;
 }> {
   let { assessment, fallbackReason, assessmentDispatched } = args;
-  let vetoDepthEscalation = getLatchVetoIntentKey() === args.turnInputKey;
-  const atLatchTransition = getLatchGeneration() === 0 && args.depthWouldEscalate;
+  let vetoDepthEscalation = args.session.getLatchVetoIntentKey() === args.turnInputKey;
+  const latchGen = args.session.getLatchGeneration();
+  const atLatchTransition = latchGen === 0 && args.depthWouldEscalate;
 
   if (!vetoDepthEscalation && atLatchTransition) {
-    bumpLatchGeneration();
+    args.session.bumpLatchGeneration();
     if (args.assessmentConfig.enabled) {
       let latchVerdict = assessment;
       if (!latchVerdict && !assessmentDispatched) {
@@ -729,8 +715,9 @@ async function evaluateDepthLatch(args: {
           args.assessmentConfig,
           args.registry,
           args.routableCandidates,
-          evidenceForAssessment(args.context, args.config, args.pi),
-          getAssessorStrikes(),
+          evidenceForAssessment(args.context, args.config, args.pi, args.session),
+          args.session.getAssessorStrikes(),
+          (fb) => args.session.getAssessorTokenEstimate(fb),
         );
         if (!args.assessmentStillCurrent()) {
           return {
@@ -741,12 +728,12 @@ async function evaluateDepthLatch(args: {
             aborted: true,
           };
         }
-        recordAssessorOutcome(attempt);
+        recordAssessorOutcome(attempt, args.session);
         if (attempt.ok) {
-          addAssessmentCost(attempt.assessment.costUsd);
+          args.session.addAssessmentCost(attempt.assessment.costUsd);
           latchVerdict = attempt.assessment;
         } else {
-          addAssessmentCost(attempt.costUsd);
+          args.session.addAssessmentCost(attempt.costUsd);
           fallbackReason = attempt.fallbackReason;
         }
       }
@@ -754,7 +741,7 @@ async function evaluateDepthLatch(args: {
       if (latchVerdict) {
         vetoDepthEscalation = shouldVetoLatch(latchVerdict);
         if (vetoDepthEscalation) {
-          setLatchVetoIntentKey(args.turnInputKey);
+          args.session.setLatchVetoIntentKey(args.turnInputKey);
         }
         assessment = { ...latchVerdict, vetoedLatch: vetoDepthEscalation };
         appendAssessmentMetric({
@@ -792,6 +779,7 @@ function advanceWorkPhase(args: {
   vetoDepthEscalation: boolean;
   depthWouldEscalate: boolean;
   preDepth: ReturnType<typeof applyEscalationPrecedence>;
+  session: RouterSession;
 }) {
   const resolvedDimensionForPhase: Dimension =
     !args.vetoDepthEscalation && args.depthWouldEscalate
@@ -801,7 +789,7 @@ function advanceWorkPhase(args: {
     (args.preDepth.userApplied && !args.preDepth.userRaised) ||
     (args.preDepth.escalationApplied && !args.preDepth.escalationRaised);
 
-  let workPhaseState = getWorkPhaseState();
+  let workPhaseState = args.session.getWorkPhaseState();
   if (!args.cacheHit) {
     workPhaseState =
       workPhaseState && args.turnInput.thin
@@ -844,7 +832,7 @@ function advanceWorkPhase(args: {
   const multiWorkPolicy = workPhaseState
     ? scoringPolicyForState(workPhaseState, resolvedDimensionForPhase, capabilityRepickActive)
     : undefined;
-  commitWorkPhaseState(workPhaseState);
+  args.session.commitWorkPhaseState(workPhaseState);
   return { multiWorkPolicy };
 }
 
@@ -853,15 +841,16 @@ function resolveTurnEffort(args: {
   options: SimpleStreamOptions | undefined;
   decision: { dimension: Dimension; chosen: string };
   pi: ExtensionAPI;
+  session: RouterSession;
 }) {
   const requestedReasoning = typeof args.options?.reasoning === 'string' ? args.options.reasoning : undefined;
-  const inheritedReasoning = requestedReasoning === getLastResolvedThinkingLevel();
+  const inheritedReasoning = requestedReasoning === args.session.getLastResolvedThinkingLevel();
   const reasoning = resolveThinkingLevel(
     args.chosenCandidate,
     inheritedReasoning ? undefined : requestedReasoning,
     args.decision.dimension,
   );
-  setLastResolvedThinkingLevel(reasoning);
+  args.session.setLastResolvedThinkingLevel(reasoning);
   debugLog('decision.thinking', {
     dimension: args.decision.dimension,
     chosen: args.decision.chosen,
@@ -897,10 +886,12 @@ function resolveTurnEffort(args: {
 export function registerAutoRouterProvider(
   pi: ExtensionAPI,
   ctx?: ExtensionContext,
+  session: RouterSession = defaultRouterSession,
+  runtime: RuntimeBindings = defaultRuntimeBindings,
 ): void {
   if (ctx) {
-    setCurrentModelRegistry(ctx.modelRegistry);
-    setLastExtensionContext(ctx);
+    runtime.setCurrentModelRegistry(ctx.modelRegistry);
+    runtime.setLastExtensionContext(ctx);
   }
 
   const regModels = ctx?.modelRegistry?.getAvailable() ?? [];
@@ -956,7 +947,7 @@ export function registerAutoRouterProvider(
 
   const modelSetKey = registryModels.map((m) => `${m.provider}/${m.id}`).sort().join(',');
   const modelsKey = `${modelSetKey}|${advertisedCw}|${maxMT}`;
-  if (modelsKey === getLastRegisteredModels()) return;
+  if (modelsKey === runtime.getLastRegisteredModels()) return;
 
   try {
     pi.registerProvider('router', {
@@ -985,12 +976,12 @@ export function registerAutoRouterProvider(
         const stream = createAssistantMessageEventStream();
 
         (async () => {
-          setLastServed(undefined);
+          session.setLastServed(undefined);
           const turnTimer = startTimer();
           try {
             const waitTimer = startTimer();
-            const registry = await waitForRegistry(getCurrentModelRegistry);
-            const extensionContext = getLastExtensionContext();
+            const registry = await waitForRegistry(() => runtime.getCurrentModelRegistry());
+            const extensionContext = runtime.getLastExtensionContext();
             const regModels = registry?.getAvailable() ?? [];
             debugLog('turn.start', {
               waitForRegistryMs: waitTimer(),
@@ -1000,7 +991,7 @@ export function registerAutoRouterProvider(
             const config = loadConfig();
             const measured = measureTurnInput(context, config);
             const { turnInput, systemPrompt, needsVision, estContextTokens, staticPrefixTokens } = measured;
-            const intent = await resolveBaseIntent({ turnInput, systemPrompt, config });
+            const intent = await resolveBaseIntent({ turnInput, systemPrompt, config }, session);
             const { cacheHit, cachedIntent, classifyResult, confidence } = intent;
             let { baseDimension, baseCause } = intent;
 
@@ -1012,18 +1003,19 @@ export function registerAutoRouterProvider(
             // Peek only: a pending /router-escalate request is consumed after
             // the decision is recorded, so a router-internal failure before
             // that point cannot silently swallow the user's request.
-            const userEscalation = peekPendingUserEscalation();
+            const userEscalation = session.peekPendingUserEscalation();
 
             const candidates = buildRoutableCandidates({
               regModels: regModels as unknown[],
               extensionContext,
               config,
+              session,
             });
-            let routableCandidates = applyRuntimeExclusions(candidates);
+            let routableCandidates = applyRuntimeExclusions(candidates, session);
 
             const endIfNoRoutableCandidates = (): boolean => {
               if (routableCandidates.length > 0) return false;
-              const excludedProviders = getBlacklistedProviders();
+              const excludedProviders = session.getBlacklistedProviders();
               stream.push(
                 makeTerminalErrorEvent(
                   'error',
@@ -1045,9 +1037,9 @@ export function registerAutoRouterProvider(
               assessorQualityRatio: config.assessorQualityRatio,
             };
 
-            const assessmentSessionGeneration = getSessionGeneration();
+            const assessmentSessionGeneration = session.getSessionGeneration();
             const assessmentStillCurrent = (): boolean =>
-              getSessionGeneration() === assessmentSessionGeneration;
+              session.getSessionGeneration() === assessmentSessionGeneration;
             let assessment = cacheHit ? cachedIntent?.assessment : undefined;
             let fallbackReason = cacheHit ? cachedIntent?.fallbackReason : undefined;
             // One bounded assessment per real user entry, whatever asks for it
@@ -1070,6 +1062,7 @@ export function registerAutoRouterProvider(
               classifyResult,
               baseDimension,
               baseCause,
+              session,
             });
             if (entryAssessment.aborted) {
               stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
@@ -1083,7 +1076,7 @@ export function registerAutoRouterProvider(
             baseCause = entryAssessment.baseCause;
 
             if (!cacheHit) {
-              setCachedRoutingIntent({
+              session.setCachedIntent({
                 key: turnInput.key,
                 classifyResult,
                 dimension: baseDimension,
@@ -1139,6 +1132,7 @@ export function registerAutoRouterProvider(
               pi,
               registry,
               routableCandidates,
+              session,
             });
             if (latch.aborted) {
               stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
@@ -1155,7 +1149,7 @@ export function registerAutoRouterProvider(
             // live runtime exclusions again before scoring/delegation so the
             // assessor failure cannot immediately re-hit the same provider as
             // the serving model in this turn.
-            routableCandidates = applyRuntimeExclusions(candidates);
+            routableCandidates = applyRuntimeExclusions(candidates, session);
             if (endIfNoRoutableCandidates()) return;
 
             const { multiWorkPolicy } = advanceWorkPhase({
@@ -1165,6 +1159,7 @@ export function registerAutoRouterProvider(
               vetoDepthEscalation,
               depthWouldEscalate,
               preDepth,
+              session,
             });
 
             const policy = resolveRoutingDecision({
@@ -1177,9 +1172,9 @@ export function registerAutoRouterProvider(
               estimatedContextTokens: estContextTokens,
               staticPrefixTokens,
               needsVision,
-              incumbentRegistryId: getLastChosenRegistryId(),
-              incumbentResolvedDimension: getLastDecision()?.effortFloorDimension ?? getLastDecision()?.dimension,
-              sameIntentAsLast: getLastDecision()?.intentKey === turnInput.key,
+              incumbentRegistryId: session.getLastChosenRegistryId(),
+              incumbentResolvedDimension: session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
+              sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
               vetoDepthEscalation,
               ...(multiWorkPolicy ? { multiWorkPolicy } : {}),
               config,
@@ -1201,8 +1196,8 @@ export function registerAutoRouterProvider(
             } catch {
               // Best-effort telemetry only.
             }
-            setLastDecision(decision);
-            if (userEscalation) consumePendingUserEscalation();
+            session.setLastDecision(decision);
+            if (userEscalation) session.consumePendingUserEscalation();
 
             debugLog('decision', {
               dimension: decision.dimension,
@@ -1227,6 +1222,7 @@ export function registerAutoRouterProvider(
               options,
               decision,
               pi,
+              session,
             });
 
             // Guidance is decided per delegation attempt because effort floors,
@@ -1246,7 +1242,7 @@ export function registerAutoRouterProvider(
               appendDecision(decision, {
                 registryId: '',
                 viaFallback: false,
-                accumulatedCost: getAccumulatedCost(),
+                accumulatedCost: session.getAccumulatedCost(),
               });
               stream.push(makeTerminalErrorEvent('error', decision.reason));
               stream.end();
@@ -1266,6 +1262,7 @@ export function registerAutoRouterProvider(
                 extensionContext,
                 notifyOnRoute: config.prompt,
                 turnTimer,
+                session,
               },
               stream,
             );
@@ -1301,7 +1298,7 @@ export function registerAutoRouterProvider(
       },
     });
 
-    setLastRegisteredModels(modelsKey);
+    runtime.setLastRegisteredModels(modelsKey);
   } catch {
     // Registration failed — don't poison the dedup guard.
   }

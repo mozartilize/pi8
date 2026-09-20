@@ -12,8 +12,8 @@ import type { Context, Model, Api } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { runDelegationLoop, type DelegationResult } from '../serve/delegation.js';
-import { resetRouterSession } from '../serve/router-session-state.js';
-import { clearBlacklistedModels, clearBlacklistedProviders, getBlacklistedModels, getBlacklistedProviders } from '../serve/blacklist.js';
+import { RouterSession, resetRouterSession } from '../serve/router-session-state.js';
+import { clearBlacklistedModels, clearBlacklistedProviders } from '../serve/blacklist.js';
 import { makeTerminalErrorEvent } from '../serve/error-event.js';
 import { routingDecision, registryModel } from './router-fixtures.js';
 import type { RoutingDecision } from '../types.js';
@@ -117,6 +117,7 @@ export interface DelegationHarnessOptions {
 }
 
 export interface DelegationHarness {
+  session: RouterSession;
   run(): Promise<DelegationResult>;
   attempts: string[];
   output: unknown[];
@@ -197,8 +198,10 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
   }) as never);
 
   const registry = buildRegistry(registryOverrides, credentials, getProviderAuth);
+  const session = new RouterSession();
 
   return {
+    session,
     attempts,
     output,
     reasoningOptions,
@@ -206,10 +209,10 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     streamedModels,
     registry,
     get blacklist(): string[] {
-      return [...getBlacklistedModels()].sort();
+      return [...session.getBlacklistedModels()].sort();
     },
     get blacklistedProviders(): string[] {
-      return [...getBlacklistedProviders()].sort();
+      return [...session.getBlacklistedProviders()].sort();
     },
     waitForAttempts(n: number): Promise<void> {
       return new Promise((resolve) => {
@@ -221,6 +224,8 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
       });
     },
     async run(): Promise<DelegationResult> {
+      session.reset();
+      session.clearSessionBlacklist();
       resetRouterSession();
       clearBlacklistedModels();
       clearBlacklistedProviders();
@@ -244,6 +249,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
           turnTimer: () => 0,
           extensionContext: undefined,
           notifyOnRoute: false,
+          session,
         },
         recordingStream as unknown as Parameters<typeof runDelegationLoop>[1],
       );

@@ -1603,8 +1603,7 @@ describe('assessment orchestration', () => {
   it('updates assessor economics from successful reported usage', async () => {
     const session = await newSession({ consultRouter: true });
     await session.routeTurn('investigate the flaky test');
-    const { getAssessorTokenEstimate } = await import('./router-session-state.js');
-    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+    expect(harness.session.getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
       input: 120,
       output: 30,
     });

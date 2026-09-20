@@ -17,9 +17,8 @@ describe('syncBenchmarks', () => {
 
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), 'pi8-'));
-    // Regression: this suite used to create tmpDir and then never use it, so
-    // every `vitest run` overwrote the developer's real benchmark store with
-    // mocked fixtures.
+    // Ensure tmpDir is passed through to the sync environment so
+    // test fixtures do not overwrite user storage.
     vi.stubEnv('PI8_DIR', tmpDir);
     fakeCtx = {
       modelRegistry: {

@@ -16,7 +16,7 @@ import { multiWorkRoutingMeta, routingDecision, registryModel } from '../test-su
 import { createDelegationHarness, rejectingReturnStream, hangingReturnStream } from '../test-support/delegation-harness.js';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { setDecisionLogBase } from '../host/decisionlog.js';
-import { getLastDecision, resetRouterSession } from './router-session-state.js';
+import { resetRouterSession } from './router-session-state.js';
 import { clearBlacklistedModels } from './blacklist.js';
 import { setDelegationTimeouts } from './delegation.js';
 
@@ -1062,8 +1062,8 @@ describe('runDelegationLoop usage-limit provider blacklist', () => {
     const result = await harness.run();
     expect(result.lastServed?.registryId).toBe('test/inspect');
     expect(result.lastServed?.capability?.candidate.clearsTerminalFloor).toBe(false);
-    expect(getLastDecision()?.cause).toBe('error-fallback');
-    expect(getLastDecision()?.multiWork?.servedCandidateKey).toBe('test/inspect');
+    expect(harness.session.getLastDecision()?.cause).toBe('error-fallback');
+    expect(harness.session.getLastDecision()?.multiWork?.servedCandidateKey).toBe('test/inspect');
   });
 });
 

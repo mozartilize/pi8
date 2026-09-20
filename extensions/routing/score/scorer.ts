@@ -96,7 +96,7 @@ function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension)
       // Only `intelligence` is used: quality axes from different benchmark
       // sources are on different raw scales and must never be blended inside
       // one request-local ratio — doing so silently demotes a frontier model
-      // measured by only one source. See spec §17.6 and §redundancy-report G3.
+      // measured by only one source.
       return b.quality.intelligence;
     case 'implement':
       return b.quality.agenticCoding ?? b.quality.coding;

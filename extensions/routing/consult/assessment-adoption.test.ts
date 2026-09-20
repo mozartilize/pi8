@@ -124,6 +124,55 @@ describe('adoptAssessment — high confidence', () => {
       changed: true,
     });
   });
+
+  it('releases an ambiguity bump down to rawHeuristic on a high-confidence bounded verdict', () => {
+    // Scenario: heuristic was bumped gather -> plan due to low confidence,
+    // but the assessment confirms it is bounded gather work with high confidence.
+    expect(
+      adoptAssessment({
+        heuristic: 'plan',
+        rawHeuristic: 'gather',
+        ambiguityBumped: true,
+        assessment: verdict('gather', 'high', 'bounded'),
+        latchEngaged: false,
+      }),
+    ).toEqual({
+      dimension: 'gather',
+      changed: true,
+    });
+  });
+
+  it('does not release to rawHeuristic when ambiguityBumped is false (e.g. embedding promotion)', () => {
+    // An unbumped gather was promoted to plan by embedding. A high-confidence bounded
+    // gather verdict can drop at most one tier (plan -> review), NOT down to rawHeuristic gather.
+    expect(
+      adoptAssessment({
+        heuristic: 'plan',
+        rawHeuristic: 'gather',
+        ambiguityBumped: false,
+        assessment: verdict('gather', 'high', 'bounded'),
+        latchEngaged: false,
+      }),
+    ).toEqual({
+      dimension: 'review',
+      changed: true,
+    });
+  });
+
+  it('refuses to release an ambiguity bump down to rawHeuristic when latch is engaged', () => {
+    expect(
+      adoptAssessment({
+        heuristic: 'plan',
+        rawHeuristic: 'gather',
+        ambiguityBumped: true,
+        assessment: verdict('gather', 'high', 'bounded'),
+        latchEngaged: true,
+      }),
+    ).toEqual({
+      dimension: 'plan',
+      changed: false,
+    });
+  });
 });
 
 describe('adoptAssessment — medium confidence', () => {

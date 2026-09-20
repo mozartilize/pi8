@@ -9,8 +9,7 @@
  * error is unusable as a whole, because the quota/limit behind it is shared by
  * every model it serves.
  *
- * Stored in its own tiny module so both the provider orchestrator and the
- * delegation fallback loop can reference it without a circular import.
+ * Encapsulated inside `BlacklistState` class to avoid global state and circular imports.
  */
 
 import { debugLog } from '../host/debuglog.js';
@@ -21,108 +20,147 @@ const debugModuleCounter = (debugGlobal[debugCounterKey] ?? 0) + 1;
 debugGlobal[debugCounterKey] = debugModuleCounter;
 const debugModuleInstance = `${process.pid}:${debugModuleCounter}`;
 
-function providerDebugState(): Record<string, unknown> {
-  return {
-    instance: debugModuleInstance,
-    pid: process.pid,
-    providers: [...sessionBlacklistedProviders].sort(),
-    models: sessionBlacklistedModels.size,
-    patterns: sessionBlacklistPatterns.length,
-  };
-}
-
-export const getBlacklistDebugState = (): Record<string, unknown> => providerDebugState();
-
-function debugProviderBlacklist(event: string, data: Record<string, unknown> = {}): void {
-  debugLog(event, { ...providerDebugState(), ...data });
-}
-
-/** Models that failed before producing content during this Pi session. */
-const sessionBlacklistedModels = new Set<string>();
-
-/** Providers excluded after a usage-limit error during this Pi session. */
-const sessionBlacklistedProviders = new Set<string>();
-
-/** User-supplied exclusion globs scoped to this session; insertion-ordered. */
-const sessionBlacklistPatterns: string[] = [];
-
 const normalizePattern = (pattern: string): string => pattern.trim();
-
 const samePattern = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
-export const blacklistModel = (registryId: string): void => {
-  if (registryId) sessionBlacklistedModels.add(registryId);
-};
+export class BlacklistState {
+  private readonly sessionBlacklistedModels = new Set<string>();
+  private readonly sessionBlacklistedProviders = new Set<string>();
+  private readonly sessionBlacklistPatterns: string[] = [];
+
+  private providerDebugState(): Record<string, unknown> {
+    return {
+      instance: debugModuleInstance,
+      pid: process.pid,
+      providers: [...this.sessionBlacklistedProviders].sort(),
+      models: this.sessionBlacklistedModels.size,
+      patterns: this.sessionBlacklistPatterns.length,
+    };
+  }
+
+  getDebugState(): Record<string, unknown> {
+    return this.providerDebugState();
+  }
+
+  private debug(event: string, data: Record<string, unknown> = {}): void {
+    debugLog(event, { ...this.providerDebugState(), ...data });
+  }
+
+  blacklistModel(registryId: string): void {
+    if (registryId) this.sessionBlacklistedModels.add(registryId);
+  }
+
+  removeBlacklistedModel(registryId: string): boolean {
+    return this.sessionBlacklistedModels.delete(registryId);
+  }
+
+  clearBlacklistedModels(): void {
+    this.sessionBlacklistedModels.clear();
+  }
+
+  getBlacklistedModels(): ReadonlySet<string> {
+    return this.sessionBlacklistedModels;
+  }
+
+  blacklistProvider(provider: string): void {
+    const hadProvider = this.sessionBlacklistedProviders.has(provider);
+    if (provider) this.sessionBlacklistedProviders.add(provider);
+    this.debug('blacklist.provider.add', { provider, hadProvider });
+  }
+
+  removeBlacklistedProvider(provider: string): boolean {
+    const removed = this.sessionBlacklistedProviders.delete(provider);
+    this.debug('blacklist.provider.remove', { provider, removed });
+    return removed;
+  }
+
+  clearBlacklistedProviders(): void {
+    const before = [...this.sessionBlacklistedProviders].sort();
+    this.sessionBlacklistedProviders.clear();
+    this.debug('blacklist.providers.clear', { before });
+  }
+
+  getBlacklistedProviders(): ReadonlySet<string> {
+    this.debug('blacklist.providers.read');
+    return this.sessionBlacklistedProviders;
+  }
+
+  addSessionBlacklistPatterns(patterns: readonly string[]): string[] {
+    const added: string[] = [];
+    for (const raw of patterns) {
+      const pattern = normalizePattern(raw);
+      if (!pattern) continue;
+      if (this.sessionBlacklistPatterns.some((p) => samePattern(p, pattern))) continue;
+      this.sessionBlacklistPatterns.push(pattern);
+      added.push(pattern);
+    }
+    return added;
+  }
+
+  removeSessionBlacklistPatterns(patterns: readonly string[]): string[] {
+    const removed: string[] = [];
+    for (const raw of patterns) {
+      const pattern = normalizePattern(raw);
+      const index = this.sessionBlacklistPatterns.findIndex((p) => samePattern(p, pattern));
+      if (index === -1) continue;
+      removed.push(this.sessionBlacklistPatterns[index]);
+      this.sessionBlacklistPatterns.splice(index, 1);
+    }
+    return removed;
+  }
+
+  getSessionBlacklistPatterns(): readonly string[] {
+    return [...this.sessionBlacklistPatterns];
+  }
+
+  clearSessionBlacklist(): void {
+    const before = [...this.sessionBlacklistedProviders].sort();
+    const stack = new Error().stack?.split('\n').slice(2, 6).map((line) => line.trim());
+    this.sessionBlacklistPatterns.length = 0;
+    this.sessionBlacklistedModels.clear();
+    this.sessionBlacklistedProviders.clear();
+    this.debug('blacklist.session.clear', { before, stack });
+  }
+}
+
+/** Shared default instance used by top-level CLI commands and procedural adapters. */
+export const defaultBlacklistState = new BlacklistState();
+
+export const getBlacklistDebugState = (): Record<string, unknown> =>
+  defaultBlacklistState.getDebugState();
+
+export const blacklistModel = (registryId: string): void =>
+  defaultBlacklistState.blacklistModel(registryId);
 
 export const removeBlacklistedModel = (registryId: string): boolean =>
-  sessionBlacklistedModels.delete(registryId);
+  defaultBlacklistState.removeBlacklistedModel(registryId);
 
-export const clearBlacklistedModels = (): void => {
-  sessionBlacklistedModels.clear();
-};
+export const clearBlacklistedModels = (): void =>
+  defaultBlacklistState.clearBlacklistedModels();
 
-export const getBlacklistedModels = (): ReadonlySet<string> => sessionBlacklistedModels;
+export const getBlacklistedModels = (): ReadonlySet<string> =>
+  defaultBlacklistState.getBlacklistedModels();
 
-/** Exclude every model of a provider for the rest of the session. */
-export const blacklistProvider = (provider: string): void => {
-  const hadProvider = sessionBlacklistedProviders.has(provider);
-  if (provider) sessionBlacklistedProviders.add(provider);
-  debugProviderBlacklist('blacklist.provider.add', { provider, hadProvider });
-};
+export const blacklistProvider = (provider: string): void =>
+  defaultBlacklistState.blacklistProvider(provider);
 
-/** Lift a session provider exclusion (e.g. after the account was topped up). */
-export const removeBlacklistedProvider = (provider: string): boolean => {
-  const removed = sessionBlacklistedProviders.delete(provider);
-  debugProviderBlacklist('blacklist.provider.remove', { provider, removed });
-  return removed;
-};
+export const removeBlacklistedProvider = (provider: string): boolean =>
+  defaultBlacklistState.removeBlacklistedProvider(provider);
 
-/** Wipe the runtime provider exclusions (test seam / session reset). */
-export const clearBlacklistedProviders = (): void => {
-  const before = [...sessionBlacklistedProviders].sort();
-  sessionBlacklistedProviders.clear();
-  debugProviderBlacklist('blacklist.providers.clear', { before });
-};
+export const clearBlacklistedProviders = (): void =>
+  defaultBlacklistState.clearBlacklistedProviders();
 
-export const getBlacklistedProviders = (): ReadonlySet<string> => {
-  debugProviderBlacklist('blacklist.providers.read');
-  return sessionBlacklistedProviders;
-};
+export const getBlacklistedProviders = (): ReadonlySet<string> =>
+  defaultBlacklistState.getBlacklistedProviders();
 
-/** Add exclusion globs for this session. Returns the ones that were new. */
-export const addSessionBlacklistPatterns = (patterns: readonly string[]): string[] => {
-  const added: string[] = [];
-  for (const raw of patterns) {
-    const pattern = normalizePattern(raw);
-    if (!pattern) continue;
-    if (sessionBlacklistPatterns.some((p) => samePattern(p, pattern))) continue;
-    sessionBlacklistPatterns.push(pattern);
-    added.push(pattern);
-  }
-  return added;
-};
+export const addSessionBlacklistPatterns = (patterns: readonly string[]): string[] =>
+  defaultBlacklistState.addSessionBlacklistPatterns(patterns);
 
-/** Drop exclusion globs from this session. Returns the ones that were present. */
-export const removeSessionBlacklistPatterns = (patterns: readonly string[]): string[] => {
-  const removed: string[] = [];
-  for (const raw of patterns) {
-    const pattern = normalizePattern(raw);
-    const index = sessionBlacklistPatterns.findIndex((p) => samePattern(p, pattern));
-    if (index === -1) continue;
-    removed.push(sessionBlacklistPatterns[index]);
-    sessionBlacklistPatterns.splice(index, 1);
-  }
-  return removed;
-};
+export const removeSessionBlacklistPatterns = (patterns: readonly string[]): string[] =>
+  defaultBlacklistState.removeSessionBlacklistPatterns(patterns);
 
-export const getSessionBlacklistPatterns = (): readonly string[] => [...sessionBlacklistPatterns];
+export const getSessionBlacklistPatterns = (): readonly string[] =>
+  defaultBlacklistState.getSessionBlacklistPatterns();
 
-/** Wipe every session-scoped exclusion: user globs and runtime failures alike. */
-export const clearSessionBlacklist = (): void => {
-  const before = [...sessionBlacklistedProviders].sort();
-  const stack = new Error().stack?.split('\n').slice(2, 6).map((line) => line.trim());
-  sessionBlacklistPatterns.length = 0;
-  sessionBlacklistedModels.clear();
-  sessionBlacklistedProviders.clear();
-  debugProviderBlacklist('blacklist.session.clear', { before, stack });
-};
+export const clearSessionBlacklist = (): void =>
+  defaultBlacklistState.clearSessionBlacklist();

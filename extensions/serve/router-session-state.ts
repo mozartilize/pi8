@@ -1,8 +1,11 @@
 /**
- * Mutable per-session routing state for provider.ts.
+ * Mutable per-session routing state for provider.ts and its sub-domains.
  *
- * Groups the provider's mutable routing lifecycle, including the base intent
- * cached for the latest user entry, into a single container with typed accessors.
+ * Encapsulated domain aggregates:
+ * - `AssessmentState`: Assessment spend, EMA usage calculation, and strikes.
+ * - `IntentState`: Cached routing intent, latch generation, and veto intent key.
+ * - `RuntimeBindings`: Pi extension runtime context & model registry (survives session reset).
+ * - `RouterSession`: Unified session aggregate owning the lifecycle and domain objects.
  */
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ClassifyResult } from '../routing/classify/classifier.js';
@@ -17,6 +20,7 @@ import type {
 } from '../types.js';
 import type { ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import { BlacklistState, defaultBlacklistState } from './blacklist.js';
 
 export interface CachedRoutingIntent {
   key: string;
@@ -31,66 +35,11 @@ export interface CachedRoutingIntent {
   fallbackReason?: AssessmentFallbackReason;
 }
 
-/**
- * A `/router-escalate` request waiting to be applied to the next provider
- * invocation. One-shot: peeked while routing, consumed only once a decision
- * was actually recorded, so a router-internal failure cannot silently discard
- * the user's request.
- */
 export interface PendingUserEscalation {
   /** Explicit target dimension; absent means "one tier up". */
   target?: Dimension;
   /** Candidate key the user is escaping from, so the exact attempt can be excluded. */
   fromModel?: string;
-}
-
-interface RouterSessionState {
-  /** Monotonic guard for detached work that must not cross session resets. */
-  sessionGeneration: number;
-  lastDecision: RoutingDecision | undefined;
-  /** Last chosen candidate key (`provider/id` or `provider/id:effort`). */
-  lastChosenRegistryId: string | undefined;
-  lastServed: ServedInfo | undefined;
-  lastNotifiedModel: string | undefined;
-  accumulatedCost: number;
-  lastResolvedThinkingLevel: string | undefined;
-  cachedRoutingIntent: CachedRoutingIntent | undefined;
-  lastExtensionContext: ExtensionContext | undefined;
-  currentModelRegistry: ExtensionContext['modelRegistry'] | undefined;
-  lastRegisteredModels: string;
-  pendingUserEscalation: PendingUserEscalation | undefined;
-  /** Incremented once when the depth latch is first evaluated per session. */
-  latchGeneration: number;
-  /** USD spent on assessments, kept apart from routed spend. */
-  assessmentCost: number;
-  /** Successful assessor input/output usage EMA for selection economics. */
-  assessorTokenEma: AssessorTokenEstimate | undefined;
-  /** Skill names captured at before_agent_start; names only. */
-  activeSkillNames: readonly string[];
-  /**
-   * Per-session assessor strike counts, keyed by candidate registryId. A
-   * strike is recorded when an assessor produced NO output before the
-   * deadline (a structural "this model cannot deliver a verdict here"
-   * signal, distinct from auth/parse/refusal). `selectAssessor` prefers
-   * lower-strike candidates so the selector stops repicking a dud every
-   * turn; a successful verdict clears that model's strikes so a transient
-   * blip self-heals. Reorder-only — never excludes, so the pool never empties.
-   */
-  assessorStrikes: Map<string, number>;
-  /** Per-session embedding-classifier outcome tallies for `/router-status`. */
-  embeddingStats: EmbeddingStats;
-  /** Per-intent multi-work phase lifecycle. Undefined outside an active intent. */
-  workPhaseState: WorkPhaseState | undefined;
-  /**
-   * Memoized registry expansion. The flatMap over every registry model into
-   * its effort-expanded candidates is the per-invocation cost that grows with
-   * the model count; it is pure in its inputs, so it is rebuilt only when the
-   * signature of those inputs (registry set, store version, allowlist,
-   * blacklist patterns, blacklisted providers, session scoping) changes. Live
-   * per-model/provider runtime exclusions are applied downstream, never baked
-   * into this cache.
-   */
-  candidateExpansion: { key: string; candidates: Candidate[] } | undefined;
 }
 
 /** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */
@@ -107,225 +56,570 @@ export interface EmbeddingStats {
 
 type EmbeddingOutcome = keyof EmbeddingStats;
 
-/** Intent key whose latch transition was vetoed, so subsequent invocations of
- *  the same entry reuse the veto rather than re-evaluating. */
-let latchVetoIntentKey: string | undefined;
+export const ASSESSOR_USAGE_EMA_ALPHA = 0.2;
 
-const state: RouterSessionState = {
-  sessionGeneration: 0,
-  lastDecision: undefined,
-  lastChosenRegistryId: undefined,
-  lastServed: undefined,
-  lastNotifiedModel: undefined,
-  accumulatedCost: 0,
-  lastResolvedThinkingLevel: undefined,
-  cachedRoutingIntent: undefined,
-  lastExtensionContext: undefined,
-  currentModelRegistry: undefined,
-  lastRegisteredModels: '',
-  pendingUserEscalation: undefined,
-  latchGeneration: 0,
-  assessmentCost: 0,
-  assessorTokenEma: undefined,
-  activeSkillNames: [],
-  assessorStrikes: new Map(),
-  embeddingStats: { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 },
-  workPhaseState: undefined,
-  candidateExpansion: undefined,
-};
+/**
+ * Domain object for assessment spend, EMA usage, and assessor strikes.
+ */
+export class AssessmentState {
+  private cost = 0;
+  private tokenEma: AssessorTokenEstimate | undefined;
+  private readonly strikes = new Map<string, number>();
 
-export const getSessionGeneration = (): number => state.sessionGeneration;
-export const getLastDecision = (): RoutingDecision | undefined => state.lastDecision;
-export const getLastChosenRegistryId = (): string | undefined => state.lastChosenRegistryId;
-export const getLastServed = (): ServedInfo | undefined => state.lastServed;
-export const getLastNotifiedModel = (): string | undefined => state.lastNotifiedModel;
-export const getAccumulatedCost = (): number => state.accumulatedCost;
-export const getLastResolvedThinkingLevel = (): string | undefined => state.lastResolvedThinkingLevel;
-export const getCachedRoutingIntent = (): CachedRoutingIntent | undefined => state.cachedRoutingIntent;
-export const getLastExtensionContext = (): ExtensionContext | undefined => state.lastExtensionContext;
+  getCost(): number {
+    return this.cost;
+  }
+
+  addCost(delta: number): void {
+    if (!Number.isFinite(delta) || delta <= 0) return;
+    this.cost += delta;
+  }
+
+  getTokenEstimate(fallback: AssessorTokenEstimate): AssessorTokenEstimate {
+    return this.tokenEma ? { ...this.tokenEma } : { ...fallback };
+  }
+
+  recordSuccessfulUsage(observed: AssessorTokenEstimate): void {
+    if (
+      !Number.isFinite(observed.input)
+      || observed.input <= 0
+      || !Number.isFinite(observed.output)
+      || observed.output < 0
+    ) {
+      return;
+    }
+    const previous = this.tokenEma;
+    this.tokenEma = previous
+      ? {
+          input:
+            ASSESSOR_USAGE_EMA_ALPHA * observed.input
+            + (1 - ASSESSOR_USAGE_EMA_ALPHA) * previous.input,
+          output:
+            ASSESSOR_USAGE_EMA_ALPHA * observed.output
+            + (1 - ASSESSOR_USAGE_EMA_ALPHA) * previous.output,
+        }
+      : { input: observed.input, output: observed.output };
+  }
+
+  getStrikes(): ReadonlyMap<string, number> {
+    return this.strikes;
+  }
+
+  strike(registryId: string): void {
+    this.strikes.set(registryId, (this.strikes.get(registryId) ?? 0) + 1);
+  }
+
+  clearStrikes(registryId: string): void {
+    this.strikes.delete(registryId);
+  }
+
+  reset(): void {
+    this.cost = 0;
+    this.tokenEma = undefined;
+    this.strikes.clear();
+  }
+}
+
+/**
+ * Domain object for per-turn intent caching, latch evaluation/veto, and multi-work phases.
+ */
+export class IntentState {
+  private cachedIntent: CachedRoutingIntent | undefined;
+  private latchGen = 0;
+  private vetoIntentKey: string | undefined;
+  private phaseState: WorkPhaseState | undefined;
+
+  getCachedIntent(): CachedRoutingIntent | undefined {
+    return this.cachedIntent;
+  }
+
+  setCachedIntent(intent: CachedRoutingIntent | undefined): void {
+    this.cachedIntent = intent;
+  }
+
+  getLatchGeneration(): number {
+    return this.latchGen;
+  }
+
+  bumpLatchGeneration(): number {
+    this.latchGen += 1;
+    return this.latchGen;
+  }
+
+  getLatchVetoIntentKey(): string | undefined {
+    return this.vetoIntentKey;
+  }
+
+  setLatchVetoIntentKey(key: string | undefined): void {
+    this.vetoIntentKey = key;
+  }
+
+  getWorkPhaseState(): WorkPhaseState | undefined {
+    return this.phaseState;
+  }
+
+  commitWorkPhaseState(next: WorkPhaseState | undefined): void {
+    this.phaseState = next;
+  }
+
+  reset(): void {
+    this.cachedIntent = undefined;
+    this.latchGen = 0;
+    this.vetoIntentKey = undefined;
+    this.phaseState = undefined;
+  }
+}
+
+/**
+ * Runtime extension context & model registry bindings that survive session resets.
+ */
+export class RuntimeBindings {
+  private lastContext: ExtensionContext | undefined;
+  private currentRegistry: ExtensionContext['modelRegistry'] | undefined;
+  private lastRegModels = '';
+
+  getLastExtensionContext(): ExtensionContext | undefined {
+    return this.lastContext;
+  }
+
+  setLastExtensionContext(ctx: ExtensionContext | undefined): void {
+    this.lastContext = ctx;
+  }
+
+  getCurrentModelRegistry(): ExtensionContext['modelRegistry'] | undefined {
+    return this.currentRegistry;
+  }
+
+  setCurrentModelRegistry(registry: ExtensionContext['modelRegistry'] | undefined): void {
+    this.currentRegistry = registry;
+  }
+
+  getLastRegisteredModels(): string {
+    return this.lastRegModels;
+  }
+
+  setLastRegisteredModels(key: string): void {
+    this.lastRegModels = key;
+  }
+
+  clear(): void {
+    this.lastContext = undefined;
+    this.currentRegistry = undefined;
+    this.lastRegModels = '';
+  }
+}
+
+/**
+ * Root session state container for the auto-model-router.
+ */
+export class RouterSession {
+  public readonly blacklist: BlacklistState;
+  public readonly assessment: AssessmentState;
+  public readonly intent: IntentState;
+
+  private sessionGen = 0;
+  private decision: RoutingDecision | undefined;
+  private chosenRegistryId: string | undefined;
+  private served: ServedInfo | undefined;
+  private notifiedModel: string | undefined;
+  private accumCost = 0;
+  private resolvedThinkingLevel: string | undefined;
+  private pendingEscalation: PendingUserEscalation | undefined;
+  private activeSkills: readonly string[] = [];
+  private readonly embedStats: EmbeddingStats = {
+    fired: 0,
+    promoted: 0,
+    abstainedLowConf: 0,
+    degraded: 0,
+  };
+  private memoizedCandidateExpansion: { key: string; candidates: Candidate[] } | undefined;
+
+  constructor(
+    blacklist: BlacklistState = new BlacklistState(),
+    assessment: AssessmentState = new AssessmentState(),
+    intent: IntentState = new IntentState(),
+  ) {
+    this.blacklist = blacklist;
+    this.assessment = assessment;
+    this.intent = intent;
+  }
+
+  getSessionGeneration(): number {
+    return this.sessionGen;
+  }
+
+  getLastDecision(): RoutingDecision | undefined {
+    return this.decision;
+  }
+
+  getLastChosenRegistryId(): string | undefined {
+    return this.chosenRegistryId;
+  }
+
+  setLastDecision(d: RoutingDecision): void {
+    this.decision = d;
+    this.chosenRegistryId = d.chosen;
+  }
+
+  getLastServed(): ServedInfo | undefined {
+    return this.served;
+  }
+
+  setLastServed(s: ServedInfo | undefined): void {
+    this.served = s;
+  }
+
+  updateLastServed(patch: Partial<ServedInfo>): void {
+    if (!this.served) return;
+    this.served = { ...this.served, ...patch };
+  }
+
+  getLastNotifiedModel(): string | undefined {
+    return this.notifiedModel;
+  }
+
+  setLastNotifiedModel(id: string | undefined): void {
+    this.notifiedModel = id;
+  }
+
+  getAccumulatedCost(): number {
+    return this.accumCost;
+  }
+
+  addAccumulatedCost(delta: number): void {
+    this.accumCost += delta;
+  }
+
+  getLastResolvedThinkingLevel(): string | undefined {
+    return this.resolvedThinkingLevel;
+  }
+
+  setLastResolvedThinkingLevel(level: string | undefined): void {
+    this.resolvedThinkingLevel = level;
+  }
+
+  peekPendingUserEscalation(): PendingUserEscalation | undefined {
+    return this.pendingEscalation;
+  }
+
+  setPendingUserEscalation(pending: PendingUserEscalation | undefined): void {
+    this.pendingEscalation = pending;
+  }
+
+  consumePendingUserEscalation(): PendingUserEscalation | undefined {
+    const pending = this.pendingEscalation;
+    this.pendingEscalation = undefined;
+    return pending;
+  }
+
+  getActiveSkillNames(): readonly string[] {
+    return this.activeSkills;
+  }
+
+  setActiveSkillNames(names: readonly string[]): void {
+    this.activeSkills = [...names];
+  }
+
+  getEmbeddingStats(): EmbeddingStats {
+    return { ...this.embedStats };
+  }
+
+  recordEmbedding(outcome: EmbeddingOutcome): void {
+    this.embedStats[outcome] += 1;
+  }
+
+  getCandidateExpansion(): { key: string; candidates: Candidate[] } | undefined {
+    return this.memoizedCandidateExpansion;
+  }
+
+  setCandidateExpansion(entry: { key: string; candidates: Candidate[] } | undefined): void {
+    this.memoizedCandidateExpansion = entry;
+  }
+
+  // ─── Direct Blacklist Facade ─────────────────────────────────────────
+
+  blacklistModel(registryId: string): void {
+    this.blacklist.blacklistModel(registryId);
+  }
+
+  removeBlacklistedModel(registryId: string): boolean {
+    return this.blacklist.removeBlacklistedModel(registryId);
+  }
+
+  clearBlacklistedModels(): void {
+    this.blacklist.clearBlacklistedModels();
+  }
+
+  getBlacklistedModels(): ReadonlySet<string> {
+    return this.blacklist.getBlacklistedModels();
+  }
+
+  blacklistProvider(provider: string): void {
+    this.blacklist.blacklistProvider(provider);
+  }
+
+  removeBlacklistedProvider(provider: string): boolean {
+    return this.blacklist.removeBlacklistedProvider(provider);
+  }
+
+  clearBlacklistedProviders(): void {
+    this.blacklist.clearBlacklistedProviders();
+  }
+
+  getBlacklistedProviders(): ReadonlySet<string> {
+    return this.blacklist.getBlacklistedProviders();
+  }
+
+  addSessionBlacklistPatterns(patterns: readonly string[]): string[] {
+    return this.blacklist.addSessionBlacklistPatterns(patterns);
+  }
+
+  removeSessionBlacklistPatterns(patterns: readonly string[]): string[] {
+    return this.blacklist.removeSessionBlacklistPatterns(patterns);
+  }
+
+  getSessionBlacklistPatterns(): readonly string[] {
+    return this.blacklist.getSessionBlacklistPatterns();
+  }
+
+  clearSessionBlacklist(): void {
+    this.blacklist.clearSessionBlacklist();
+  }
+
+  // ─── Direct Assessment Facade ────────────────────────────────────────
+
+  getAssessmentCost(): number {
+    return this.assessment.getCost();
+  }
+
+  addAssessmentCost(delta: number): void {
+    this.assessment.addCost(delta);
+  }
+
+  getAssessorTokenEstimate(fallback: AssessorTokenEstimate): AssessorTokenEstimate {
+    return this.assessment.getTokenEstimate(fallback);
+  }
+
+  recordSuccessfulAssessorUsage(observed: AssessorTokenEstimate): void {
+    this.assessment.recordSuccessfulUsage(observed);
+  }
+
+  getAssessorStrikes(): ReadonlyMap<string, number> {
+    return this.assessment.getStrikes();
+  }
+
+  strikeAssessor(registryId: string): void {
+    this.assessment.strike(registryId);
+  }
+
+  clearAssessorStrikes(registryId: string): void {
+    this.assessment.clearStrikes(registryId);
+  }
+
+  // ─── Direct Intent & Work-Phase Facade ────────────────────────────────
+
+  getCachedIntent(): CachedRoutingIntent | undefined {
+    return this.intent.getCachedIntent();
+  }
+
+  setCachedIntent(intent: CachedRoutingIntent | undefined): void {
+    this.intent.setCachedIntent(intent);
+  }
+
+  getLatchGeneration(): number {
+    return this.intent.getLatchGeneration();
+  }
+
+  bumpLatchGeneration(): number {
+    return this.intent.bumpLatchGeneration();
+  }
+
+  getLatchVetoIntentKey(): string | undefined {
+    return this.intent.getLatchVetoIntentKey();
+  }
+
+  setLatchVetoIntentKey(key: string | undefined): void {
+    this.intent.setLatchVetoIntentKey(key);
+  }
+
+  getWorkPhaseState(): WorkPhaseState | undefined {
+    return this.intent.getWorkPhaseState();
+  }
+
+  commitWorkPhaseState(next: WorkPhaseState | undefined): void {
+    this.intent.commitWorkPhaseState(next);
+  }
+
+  /**
+   * Reset session-scoped state on `session_start` or test teardown.
+   * Increments session generation and clears all session-bound data.
+   */
+  reset(): void {
+    this.sessionGen += 1;
+    this.decision = undefined;
+    this.chosenRegistryId = undefined;
+    this.served = undefined;
+    this.notifiedModel = undefined;
+    this.accumCost = 0;
+    this.resolvedThinkingLevel = undefined;
+    this.pendingEscalation = undefined;
+    this.activeSkills = [];
+    this.embedStats.fired = 0;
+    this.embedStats.promoted = 0;
+    this.embedStats.abstainedLowConf = 0;
+    this.embedStats.degraded = 0;
+    this.memoizedCandidateExpansion = undefined;
+
+    this.assessment.reset();
+    this.intent.reset();
+    // Note: blacklist exclusions are cleared independently via blacklist.clearSessionBlacklist()
+  }
+}
+
+// ─── Default Singleton & Backwards-Compatibility Adapters ──────────────
+
+export const defaultRuntimeBindings = new RuntimeBindings();
+export const defaultRouterSession = new RouterSession(defaultBlacklistState);
+
+export const getSessionGeneration = (): number => defaultRouterSession.getSessionGeneration();
+export const getLastDecision = (): RoutingDecision | undefined =>
+  defaultRouterSession.getLastDecision();
+export const getLastChosenRegistryId = (): string | undefined =>
+  defaultRouterSession.getLastChosenRegistryId();
+export const getLastServed = (): ServedInfo | undefined => defaultRouterSession.getLastServed();
+export const getLastNotifiedModel = (): string | undefined =>
+  defaultRouterSession.getLastNotifiedModel();
+export const getAccumulatedCost = (): number => defaultRouterSession.getAccumulatedCost();
+export const getLastResolvedThinkingLevel = (): string | undefined =>
+  defaultRouterSession.getLastResolvedThinkingLevel();
+export const getCachedRoutingIntent = (): CachedRoutingIntent | undefined =>
+  defaultRouterSession.intent.getCachedIntent();
+export const getLastExtensionContext = (): ExtensionContext | undefined =>
+  defaultRuntimeBindings.getLastExtensionContext();
 export const getCurrentModelRegistry = (): ExtensionContext['modelRegistry'] | undefined =>
-  state.currentModelRegistry;
-export const getLastRegisteredModels = (): string => state.lastRegisteredModels;
+  defaultRuntimeBindings.getCurrentModelRegistry();
+export const getLastRegisteredModels = (): string =>
+  defaultRuntimeBindings.getLastRegisteredModels();
 
 export const peekPendingUserEscalation = (): PendingUserEscalation | undefined =>
-  state.pendingUserEscalation;
+  defaultRouterSession.peekPendingUserEscalation();
 
-export const setPendingUserEscalation = (
-  pending: PendingUserEscalation | undefined,
-): void => {
-  state.pendingUserEscalation = pending;
+export const setPendingUserEscalation = (pending: PendingUserEscalation | undefined): void => {
+  defaultRouterSession.setPendingUserEscalation(pending);
 };
 
-export const consumePendingUserEscalation = (): PendingUserEscalation | undefined => {
-  const pending = state.pendingUserEscalation;
-  state.pendingUserEscalation = undefined;
-  return pending;
-};
+export const consumePendingUserEscalation = (): PendingUserEscalation | undefined =>
+  defaultRouterSession.consumePendingUserEscalation();
 
 export const setLastDecision = (d: RoutingDecision): void => {
-  state.lastDecision = d;
-  state.lastChosenRegistryId = d.chosen;
+  defaultRouterSession.setLastDecision(d);
 };
 
 export const setLastServed = (s: ServedInfo | undefined): void => {
-  state.lastServed = s;
+  defaultRouterSession.setLastServed(s);
 };
 
-/** The model most recently surfaced to the user via a routing notification. */
 export const setLastNotifiedModel = (id: string | undefined): void => {
-  state.lastNotifiedModel = id;
+  defaultRouterSession.setLastNotifiedModel(id);
 };
 
 export const updateLastServed = (patch: Partial<ServedInfo>): void => {
-  if (!state.lastServed) return;
-  state.lastServed = { ...state.lastServed, ...patch };
+  defaultRouterSession.updateLastServed(patch);
 };
 
 export const setLastResolvedThinkingLevel = (level: string | undefined): void => {
-  state.lastResolvedThinkingLevel = level;
+  defaultRouterSession.setLastResolvedThinkingLevel(level);
 };
 
 export const setCachedRoutingIntent = (intent: CachedRoutingIntent | undefined): void => {
-  state.cachedRoutingIntent = intent;
+  defaultRouterSession.intent.setCachedIntent(intent);
 };
 
 export const addAccumulatedCost = (delta: number): void => {
-  state.accumulatedCost += delta;
+  defaultRouterSession.addAccumulatedCost(delta);
 };
 
-export const getLatchGeneration = (): number => state.latchGeneration;
+export const getLatchGeneration = (): number => defaultRouterSession.intent.getLatchGeneration();
 
-/**
- * Bumped once when the depth latch is first evaluated in a session, whichever
- * way it resolves. It is part of the intent key so a latch decision opens a
- * fresh intent instead of reusing a verdict formed before the transition.
- */
-export const bumpLatchGeneration = (): number => {
-  state.latchGeneration += 1;
-  return state.latchGeneration;
-};
+export const bumpLatchGeneration = (): number => defaultRouterSession.intent.bumpLatchGeneration();
 
-export const getEmbeddingStats = (): EmbeddingStats => ({ ...state.embeddingStats });
+export const getEmbeddingStats = (): EmbeddingStats => defaultRouterSession.getEmbeddingStats();
 
-/** Tally one embedding-classifier outcome for `/router-status`. */
 export const recordEmbedding = (outcome: EmbeddingOutcome): void => {
-  state.embeddingStats[outcome] += 1;
+  defaultRouterSession.recordEmbedding(outcome);
 };
 
-export const getAssessmentCost = (): number => state.assessmentCost;
+export const getAssessmentCost = (): number => defaultRouterSession.assessment.getCost();
 
-/** Kept apart from routed spend so `/router-status` can show the routing tax. */
 export const addAssessmentCost = (delta: number): void => {
-  if (!Number.isFinite(delta) || delta <= 0) return;
-  state.assessmentCost += delta;
+  defaultRouterSession.assessment.addCost(delta);
 };
-
-/** EMA weight for the newest successful assessor usage observation. */
-export const ASSESSOR_USAGE_EMA_ALPHA = 0.2;
 
 export const getAssessorTokenEstimate = (
   fallback: AssessorTokenEstimate,
-): AssessorTokenEstimate => state.assessorTokenEma
-  ? { ...state.assessorTokenEma }
-  : { ...fallback };
+): AssessorTokenEstimate => defaultRouterSession.assessment.getTokenEstimate(fallback);
 
-/** Update only from a successful attempt that reported real input usage. */
-export const recordSuccessfulAssessorUsage = (
-  observed: AssessorTokenEstimate,
-): void => {
-  if (
-    !Number.isFinite(observed.input)
-    || observed.input <= 0
-    || !Number.isFinite(observed.output)
-    || observed.output < 0
-  ) return;
-  const previous = state.assessorTokenEma;
-  state.assessorTokenEma = previous
-    ? {
-        input: ASSESSOR_USAGE_EMA_ALPHA * observed.input
-          + (1 - ASSESSOR_USAGE_EMA_ALPHA) * previous.input,
-        output: ASSESSOR_USAGE_EMA_ALPHA * observed.output
-          + (1 - ASSESSOR_USAGE_EMA_ALPHA) * previous.output,
-      }
-    : { input: observed.input, output: observed.output };
+export const recordSuccessfulAssessorUsage = (observed: AssessorTokenEstimate): void => {
+  defaultRouterSession.assessment.recordSuccessfulUsage(observed);
 };
 
-/**
- * Skill names captured at `before_agent_start`. Pi exposes no runtime skills
- * getter — `systemPromptOptions` is the only source, and Pi's own docs mark
- * it sensitive, so only the names are retained and never the descriptions or
- * file contents.
- */
-export const getAssessorStrikes = (): ReadonlyMap<string, number> => state.assessorStrikes;
+export const getAssessorStrikes = (): ReadonlyMap<string, number> =>
+  defaultRouterSession.assessment.getStrikes();
+
 export const strikeAssessor = (registryId: string): void => {
-  state.assessorStrikes.set(registryId, (state.assessorStrikes.get(registryId) ?? 0) + 1);
-};
-export const clearAssessorStrikes = (registryId: string): void => {
-  state.assessorStrikes.delete(registryId);
+  defaultRouterSession.assessment.strike(registryId);
 };
 
-export const getActiveSkillNames = (): readonly string[] => state.activeSkillNames;
+export const clearAssessorStrikes = (registryId: string): void => {
+  defaultRouterSession.assessment.clearStrikes(registryId);
+};
+
+export const getActiveSkillNames = (): readonly string[] =>
+  defaultRouterSession.getActiveSkillNames();
 
 export const setActiveSkillNames = (names: readonly string[]): void => {
-  state.activeSkillNames = [...names];
+  defaultRouterSession.setActiveSkillNames(names);
 };
 
-export const getLatchVetoIntentKey = (): string | undefined => latchVetoIntentKey;
+export const getLatchVetoIntentKey = (): string | undefined =>
+  defaultRouterSession.intent.getLatchVetoIntentKey();
 
-export const setLatchVetoIntentKey = (key: string): void => {
-  latchVetoIntentKey = key;
+export const setLatchVetoIntentKey = (key: string | undefined): void => {
+  defaultRouterSession.intent.setLatchVetoIntentKey(key);
 };
 
 export const setLastExtensionContext = (ctx: ExtensionContext | undefined): void => {
-  state.lastExtensionContext = ctx;
+  defaultRuntimeBindings.setLastExtensionContext(ctx);
 };
 
 export const setCurrentModelRegistry = (
   registry: ExtensionContext['modelRegistry'] | undefined,
 ): void => {
-  state.currentModelRegistry = registry;
+  defaultRuntimeBindings.setCurrentModelRegistry(registry);
 };
 
 export const setLastRegisteredModels = (key: string): void => {
-  state.lastRegisteredModels = key;
+  defaultRuntimeBindings.setLastRegisteredModels(key);
 };
 
 export const getCandidateExpansion = ():
   | { key: string; candidates: Candidate[] }
-  | undefined => state.candidateExpansion;
+  | undefined => defaultRouterSession.getCandidateExpansion();
 
 export const setCandidateExpansion = (
   entry: { key: string; candidates: Candidate[] } | undefined,
 ): void => {
-  state.candidateExpansion = entry;
+  defaultRouterSession.setCandidateExpansion(entry);
 };
 
-export const getWorkPhaseState = (): WorkPhaseState | undefined => state.workPhaseState;
+export const getWorkPhaseState = (): WorkPhaseState | undefined =>
+  defaultRouterSession.intent.getWorkPhaseState();
 
-/** Replaces the whole state object in one assignment — no partial patches. */
 export const commitWorkPhaseState = (next: WorkPhaseState | undefined): void => {
-  state.workPhaseState = next;
+  defaultRouterSession.intent.commitWorkPhaseState(next);
 };
 
 export const resetRouterSession = (): void => {
-  state.sessionGeneration += 1;
-  state.lastDecision = undefined;
-  state.lastChosenRegistryId = undefined;
-  state.lastServed = undefined;
-  state.lastNotifiedModel = undefined;
-  state.accumulatedCost = 0;
-  state.lastResolvedThinkingLevel = undefined;
-  state.cachedRoutingIntent = undefined;
-  state.pendingUserEscalation = undefined;
-  state.latchGeneration = 0;
-  state.assessmentCost = 0;
-  state.assessorTokenEma = undefined;
-  state.activeSkillNames = [];
-  state.assessorStrikes.clear();
-  state.embeddingStats = { fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 0 };
-  state.workPhaseState = undefined;
-  state.candidateExpansion = undefined;
-  latchVetoIntentKey = undefined;
-  // lastExtensionContext and currentModelRegistry are intentionally preserved
-  // — they are tied to the Pi runtime / session manager, not per-turn state.
+  defaultRouterSession.reset();
+  // lastExtensionContext and currentModelRegistry on defaultRuntimeBindings are intentionally preserved
 };

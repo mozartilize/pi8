@@ -17,6 +17,7 @@ import {
   addAssessmentCost,
   bumpLatchGeneration,
   commitWorkPhaseState,
+  defaultRouterSession,
   getActiveSkillNames,
   getAssessmentCost,
   getCachedRoutingIntent,
@@ -37,18 +38,10 @@ vi.mock('./routing/policy/mutation-gate.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./routing/policy/mutation-gate.js')>();
   return { ...actual, evaluateMutationCall: vi.fn(actual.evaluateMutationCall) };
 });
-const mockBlacklist = new Set<string>();
-
 vi.mock('./serve/provider.js', () => ({
   registerAutoRouterProvider: vi.fn(),
   buildSubagentProviderAuthFilter: vi.fn(() => () => true),
-  addSessionBlacklistPatterns: vi.fn(() => []),
-  clearSessionBlacklist: vi.fn(() => mockBlacklist.clear()),
   getBlacklistDebugState: vi.fn(() => ({ instance: 'test' })),
-  getBlacklistedModels: vi.fn(() => new Set(mockBlacklist)),
-  getBlacklistedProviders: vi.fn(() => new Set()),
-  getSessionBlacklistPatterns: vi.fn(() => []),
-  blacklistModel: vi.fn((model: string) => mockBlacklist.add(model)),
 }));
 vi.mock('./bench/store.js', () => ({
   loadStore: vi.fn(() => undefined),
@@ -490,7 +483,7 @@ describe('region-restricted parallel reviewers', () => {
       },
     )) as { content?: Array<{ type: string; text?: string }> };
 
-    expect(mockBlacklist.has('gamma/moderate')).toBe(true);
+    expect(defaultRouterSession.getBlacklistedModels().has('gamma/moderate')).toBe(true);
     expect(plan?.content?.some((part: { type?: string; text?: string }) =>
       part.type === 'text' && part.text?.includes('delta/strong'),
     )).toBe(true);
@@ -548,7 +541,7 @@ describe('region-restricted parallel reviewers', () => {
     toolCall!({ toolName: 'subagent', toolCallId: 'call-dynamic', input: dynamicInput }, ctx);
     expect(dynamicInput.chain[0].parallel.model).toBe('gamma/moderate');
 
-    mockBlacklist.clear();
+    defaultRouterSession.clearSessionBlacklist();
     const asyncPlan = (await toolResult!(
       {
         toolName: 'subagent',
@@ -570,7 +563,7 @@ describe('region-restricted parallel reviewers', () => {
       },
       ctx,
     )) as { content?: Array<{ type: string; text?: string }> };
-    expect(mockBlacklist.size).toBe(0);
+    expect(defaultRouterSession.getBlacklistedModels().size).toBe(0);
     expect(asyncPlan?.content).toBeUndefined();
 
     const dynamicPlan = (await toolResult!(
@@ -594,7 +587,7 @@ describe('region-restricted parallel reviewers', () => {
       },
       ctx,
     )) as { content?: Array<{ type: string; text?: string }> };
-    expect(mockBlacklist.size).toBe(0);
+    expect(defaultRouterSession.getBlacklistedModels().size).toBe(0);
     expect(dynamicPlan?.content).toBeUndefined();
   });
 });

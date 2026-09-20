@@ -1,7 +1,8 @@
 /**
  * Classifier — pure function. Maps a user prompt to a task Dimension.
  *
- * Ported from LiteLLM's complexity_router.py (Apache-2.0, see docs/findings.md §5.1).
+ * Uses the LiteLLM complexity-router scheme (Apache-2.0) with keyword presence,
+ * prompt length, and opening intent scoring.
  * Exports: classify()
  */
 import type { Dimension, TerminalAssessment } from '../../types.js';
@@ -151,6 +152,10 @@ export interface ClassifyOptions {
 
 export interface ClassifyResult {
   dimension: Dimension;
+  /** Unbumped dimension before low-confidence or long-prompt ambiguity bump. */
+  rawDimension?: Dimension;
+  /** True if dimension was bumped upward due to low confidence or prompt length. */
+  ambiguityBumped?: boolean;
   confidence: number;
   /** Deterministic terminal metadata — the only authority for phase routing. */
   terminal: TerminalAssessment;
@@ -178,23 +183,25 @@ export interface ClassifyResult {
  * - Weighted sum mapped through tier boundaries to dimension.
  * - Confidence = margin between top two dimension scores.
  */
-export function classify(
-  prompt: string,
-  // Accepted but not read: classifier.ts is frozen in semantic scope (spec
-  // §5.1), so the system prompt is not scored here. See spec §3.3.
-  _systemPrompt?: string | null,
-  options: ClassifyOptions = {},
-): ClassifyResult {
-  const lowConfidenceThreshold = options.lowConfidenceThreshold ?? DEFAULT_LOW_CONFIDENCE_THRESHOLD;
-  // Keyword & intent scoring runs against the user prompt only — the system
-  // prompt is instructions TO the model, not a description OF the task.
-  // Scored text (disclosable in signals) is the same thing.
-  const scoredText = prompt.toLowerCase();
-  const estimatedTokens = estimateTokenCount(prompt);
+interface ComplexityMetrics {
+  rawScore: number;
+  signals: string[];
+  codeHits: number;
+  technicalScore: DimensionScore;
+  reasoningScore: DimensionScore;
+  multiStepScore: DimensionScore;
+}
 
+/**
+ * Score token counts, code presence, technical terms, and reasoning markers.
+ * Pure: reads only its inputs.
+ */
+function scoreComplexityMetrics(
+  scoredText: string,
+  estimatedTokens: number,
+): ComplexityMetrics {
   const signals: string[] = [];
 
-  // Token count signal
   let tokenScore = 0;
   if (estimatedTokens < 15) {
     tokenScore = -1.0;
@@ -204,41 +211,35 @@ export function classify(
     signals.push('long-prompt');
   }
 
-  // Code presence: (1,2) thresholds → (0, .5, 1.0)
   const codeScore = scoreKeywordDimension(
     scoredText, scoredText, CODE_KEYWORDS, 'codePresence', 'code',
     [1, 2], [0, 0.5, 1.0],
   );
   if (codeScore.detail) signals.push(codeScore.detail);
 
-  // Reasoning markers (LiteLLM design: user_text only)
   const reasoningScore = scoreKeywordDimension(
     scoredText, scoredText, REASONING_KEYWORDS, 'reasoningMarkers', 'reasoning',
     [1, 2], [0, 0.7, 1.0],
   );
   if (reasoningScore.detail) signals.push(reasoningScore.detail);
 
-  // Technical terms
   const technicalScore = scoreKeywordDimension(
     scoredText, scoredText, TECHNICAL_KEYWORDS, 'technicalTerms', 'technical',
     [2, 4], [0, 0.5, 1.0],
   );
   if (technicalScore.detail) signals.push(technicalScore.detail);
 
-  // Simple indicators (negative weight → low complexity)
   const simpleScore = scoreKeywordDimension(
     scoredText, scoredText, SIMPLE_KEYWORDS, 'simpleIndicators', 'simple',
     [1, 3], [0, -0.5, -1.0],
   );
   if (simpleScore.detail) signals.push(simpleScore.detail);
 
-  // Multi-step & question patterns
   const multiStepScore = scoreMultiStep(scoredText);
   if (multiStepScore.detail) signals.push(multiStepScore.detail);
   const questionScore = scoreQuestionComplexity(scoredText);
   if (questionScore.detail) signals.push(questionScore.detail);
 
-  // Weighted sum using LiteLLM's dimension weights
   const weights = DEFAULT_COMPLEXITY_DIMENSION_WEIGHTS;
 
   const rawScore =
@@ -250,11 +251,34 @@ export function classify(
     multiStepScore.score * weights.multiStepPatterns +
     questionScore.score * weights.questionComplexity;
 
-  // ─── Per-dimension evidence ─────────────────────────────────────────
-  //
-  // Map keyword/intent hits directly onto routing dimensions so each task
-  // type competes independently and gets its own strength score.
+  const countMatches = (keywords: string[], text: string): number =>
+    keywords.filter((kw) => keywordMatches(text, kw)).length;
 
+  return {
+    rawScore,
+    signals,
+    codeHits: countMatches(CODE_KEYWORDS, scoredText),
+    technicalScore,
+    reasoningScore,
+    multiStepScore,
+  };
+}
+
+interface EvidenceEvaluation {
+  ordered: Array<{ dim: Dimension; score: number }>;
+  hasCategoricalEvidence: boolean;
+}
+
+/**
+ * Score keyword hits, intent verbs, and task evidence across dimensions.
+ * Pure: reads only its inputs.
+ */
+function evaluateDimensionEvidence(
+  prompt: string,
+  scoredText: string,
+  estimatedTokens: number,
+  complexity: ComplexityMetrics,
+): EvidenceEvaluation {
   const countMatches = (keywords: string[], text: string): number =>
     keywords.filter((kw) => keywordMatches(text, kw)).length;
 
@@ -262,48 +286,30 @@ export function classify(
   const reviewHits = countMatches(REVIEW_KEYWORDS, scoredText);
   const planHits = countMatches(PLAN_KEYWORDS, scoredText);
   const simpleHits = countMatches(SIMPLE_KEYWORDS, scoredText);
-  const codeHits = countMatches(CODE_KEYWORDS, scoredText);
 
-  if (gatherHits > 0) signals.push(`gather (${gatherHits})`);
-  if (reviewHits > 0) signals.push(`review (${reviewHits})`);
-  if (planHits > 0) signals.push(`plan (${planHits})`);
+  if (gatherHits > 0) complexity.signals.push(`gather (${gatherHits})`);
+  if (reviewHits > 0) complexity.signals.push(`review (${reviewHits})`);
+  if (planHits > 0) complexity.signals.push(`plan (${planHits})`);
 
   const intent = detectIntent(prompt);
-  if (intent) signals.push(`intent:${intent}`);
+  if (intent) complexity.signals.push(`intent:${intent}`);
 
-  // Small-talk words only count as evidence when they dominate a short prompt.
-  // In a long deliberative prompt, "ok" / "thanks" / "hey" are conversational
-  // glue, not task evidence, so we require at least two distinct simple hits
-  // before assigning any lightweight evidence. (Long prompts are rarely small
-  // talk by definition.)
   const simpleEvidenceHits =
     estimatedTokens > 40 && simpleHits < 2 ? 0 : simpleHits;
 
-  // "Tiny prompt" = genuinely small-talk sized. Uses BOTH the token estimate
-  // and a raw character floor. The floor is deliberately low (< 7 chars) so it
-  // catches greetings in every script (hi, hola, привет, 你好, こんにちは, 안녕 are
-  // all ≤ 6 chars) WITHOUT swallowing short-but-substantive non-English
-  // requests (重构认证中间件 = 7 chars = "refactor auth middleware"), which must
-  // fall through to the universal `gather` fallback rather than lightweight.
   const isTinyPrompt = estimatedTokens < 15 && prompt.trim().length < 7;
 
   const evidence: Record<Dimension, number> = {
     lightweight: simpleEvidenceHits * 0.6,
     gather: gatherHits * 0.8,
-    implement: codeHits * 0.5 + technicalScore.score * 0.3,
+    implement: complexity.codeHits * 0.5 + complexity.technicalScore.score * 0.3,
     review: reviewHits * 1.0,
-    plan: planHits * 0.9 + reasoningScore.score * 0.8,
+    plan: planHits * 0.9 + complexity.reasoningScore.score * 0.8,
   };
 
-  // The opening verb outweighs any single keyword hit but not a pile of them.
   if (intent) evidence[intent] += 1.2;
 
-  // Very short prompts with no code or reasoning content are small talk
-  // regardless of what else matched. Uses isTinyPrompt so the char-count
-  // floor protects substantive non-English prompts: e.g. a 12-char CJK
-  // coding request is ~12 tokens (<15) but 12 chars (<25) — it will pass
-  // this guard and fall through to the universal safe default (gather).
-  if (isTinyPrompt && codeHits === 0 && !hasReasoningMarkers(reasoningScore)) {
+  if (isTinyPrompt && complexity.codeHits === 0 && !hasReasoningMarkers(complexity.reasoningScore)) {
     evidence.lightweight += 1.0;
   }
   if (prompt.trim() === '') {
@@ -315,23 +321,40 @@ export function classify(
     .sort((a, b) =>
       b.score !== a.score
         ? b.score - a.score
-        : // Tie-break toward the more capable dimension: over-serving a cheap
-          // task costs money, under-serving a hard one costs a bad answer.
-          DIMENSION_STRENGTH[b.dim] - DIMENSION_STRENGTH[a.dim],
+        : DIMENSION_STRENGTH[b.dim] - DIMENSION_STRENGTH[a.dim],
     );
 
+  const hasCategoricalEvidence =
+    gatherHits > 0 ||
+    reviewHits > 0 ||
+    planHits > 0 ||
+    complexity.codeHits > 0 ||
+    simpleEvidenceHits > 0 ||
+    complexity.reasoningScore.score > 0 ||
+    complexity.technicalScore.score > 0 ||
+    intent !== undefined ||
+    complexity.multiStepScore.score > 0;
+
+  return { ordered, hasCategoricalEvidence };
+}
+
+/**
+ * Resolve the base dimension and confidence before uncertainty guards.
+ * Pure: reads only its inputs.
+ */
+function resolveBaseDimension(
+  ordered: Array<{ dim: Dimension; score: number }>,
+  rawScore: number,
+  prompt: string,
+  estimatedTokens: number,
+): { dimension: Dimension; confidence: number } {
   let dimension: Dimension;
+  const isTinyPrompt = estimatedTokens < 15 && prompt.trim().length < 7;
   const t = TIER_BOUNDARIES;
 
   if (ordered[0].score > 0) {
     dimension = ordered[0].dim;
   } else {
-    // No categorical evidence at all — fall back to raw complexity banding.
-    // Uncertainty routes UP: an unrecognized but non-trivial prompt is never
-    // classified as small talk, because under-routing a real task is the
-    // expensive failure mode. This is the universal safe default for ALL
-    // non-English prompts: keywords are English-only, so any Spanish,
-    // Russian, Arabic, CJK… prompt typically lands here → gather.
     if (prompt.trim() === '' || isTinyPrompt) {
       dimension = 'lightweight';
     } else if (rawScore < t.medium_complex) {
@@ -343,13 +366,29 @@ export function classify(
     }
   }
 
-  // Confidence: normalized margin between the top two dimensions.
   const top = ordered[0].score;
   const second = ordered[1]?.score ?? 0;
   const confidence = top > 0 ? clamp(1 - second / top, 0, 1) : 0.5;
   const reportedConfidence = Math.max(CONFIDENCE_FLOOR, confidence);
 
-  // Route up on low confidence: prefer the harder of the top two.
+  return { dimension, confidence: reportedConfidence };
+}
+
+/**
+ * Apply low-confidence and prompt-length ambiguity route-up guards.
+ * Pure: reads only its inputs.
+ */
+function applyAmbiguityGuards(
+  baseDimension: Dimension,
+  ordered: Array<{ dim: Dimension; score: number }>,
+  reportedConfidence: number,
+  lowConfidenceThreshold: number,
+  estimatedTokens: number,
+): { dimension: Dimension; rawDimension: Dimension; ambiguityBumped: boolean } {
+  const rawDimension = baseDimension;
+  let dimension = baseDimension;
+  const top = ordered[0]?.score ?? 0;
+
   if (reportedConfidence < lowConfidenceThreshold && top > 0 && ordered[1]) {
     const harder =
       DIMENSION_STRENGTH[ordered[0].dim] >= DIMENSION_STRENGTH[ordered[1].dim]
@@ -358,10 +397,6 @@ export function classify(
     dimension = harder;
   }
 
-  // Asymmetric route-up for lightweight winners on longer prompts:
-  // over-serving a cheap task costs pennies; under-serving a hard one costs
-  // a bad answer. A long prompt that only barely looks lightweight is an
-  // unrecognized task, not small talk.
   if (
     dimension === 'lightweight' &&
     reportedConfidence < 0.35 &&
@@ -373,22 +408,42 @@ export function classify(
 
   return {
     dimension,
-    confidence: reportedConfidence,
+    rawDimension,
+    ambiguityBumped: dimension !== rawDimension,
+  };
+}
+
+export function classify(
+  prompt: string,
+  // Accepted but not read: the system prompt is instructions TO the model,
+  // not a description OF the task, so scoring it would contaminate non-English
+  // or simple user requests.
+  _systemPrompt?: string | null,
+  options: ClassifyOptions = {},
+): ClassifyResult {
+  const lowConfidenceThreshold = options.lowConfidenceThreshold ?? DEFAULT_LOW_CONFIDENCE_THRESHOLD;
+  const scoredText = prompt.toLowerCase();
+  const estimatedTokens = estimateTokenCount(prompt);
+
+  const complexity = scoreComplexityMetrics(scoredText, estimatedTokens);
+  const evidence = evaluateDimensionEvidence(prompt, scoredText, estimatedTokens, complexity);
+  const base = resolveBaseDimension(evidence.ordered, complexity.rawScore, prompt, estimatedTokens);
+  const guarded = applyAmbiguityGuards(
+    base.dimension,
+    evidence.ordered,
+    base.confidence,
+    lowConfidenceThreshold,
+    estimatedTokens,
+  );
+
+  return {
+    dimension: guarded.dimension,
+    rawDimension: guarded.rawDimension,
+    ambiguityBumped: guarded.ambiguityBumped,
+    confidence: base.confidence,
     terminal: assessTerminal(prompt),
-    signals,
-    // hasCategoricalEvidence means a keyword, intent, or pattern matched —
-    // the length-only tiny-prompt boost does NOT count. An English system
-    // prompt should not make a non-English user prompt look categorized.
-    hasCategoricalEvidence:
-      gatherHits > 0 ||
-      reviewHits > 0 ||
-      planHits > 0 ||
-      codeHits > 0 ||
-      simpleEvidenceHits > 0 ||
-      reasoningScore.score > 0 ||
-      technicalScore.score > 0 ||
-      intent !== undefined ||
-      multiStepScore.score > 0,
+    signals: complexity.signals,
+    hasCategoricalEvidence: evidence.hasCategoricalEvidence,
   };
 }
 

@@ -284,6 +284,7 @@ export async function runAssessment(
   candidates: Candidate[],
   evidence: AssessmentEvidence,
   strikes: ReadonlyMap<string, number> = new Map(),
+  tokenEstimator: (fallback: AssessorTokenEstimate) => AssessorTokenEstimate = getAssessorTokenEstimate,
 ): Promise<AssessmentAttempt> {
   if (!config.enabled) return { ok: false, fallbackReason: 'disabled', costUsd: 0, ms: 0 };
 
@@ -298,7 +299,7 @@ export async function runAssessment(
 
   try {
     const prompt = buildAssessmentPrompt(evidence, config.maxInputChars);
-    const expectedUsage = getAssessorTokenEstimate({
+    const expectedUsage = tokenEstimator({
       input: prompt.length / 4,
       output: DEFAULT_ASSESSOR_OUTPUT_TOKENS,
     });

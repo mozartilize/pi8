@@ -25,8 +25,6 @@ import { multiWorkRoutingMeta, routingDecision } from '../test-support/router-fi
 import { evaluateMutationCall } from '../routing/policy/mutation-gate.js';
 import {
   commitWorkPhaseState,
-  getLastDecision,
-  getLastServed,
 } from './router-session-state.js';
 import type { BenchModel } from '../types.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
@@ -233,8 +231,8 @@ describe('multi-work routing acceptance', () => {
     });
     const result = await harness.run();
     expect(result.lastServed?.registryId).toBe('test/inspect');
-    expect(getLastDecision()?.cause).toBe('error-fallback');
-    expect(getLastServed()?.capability?.candidate.clearsTerminalFloor).toBe(false);
+    expect(harness.session.getLastDecision()?.cause).toBe('error-fallback');
+    expect(harness.session.getLastServed()?.capability?.candidate.clearsTerminalFloor).toBe(false);
 
     // The mutation gate reads whatever multi-work state a real session would
     // have carried alongside the capability delegation.ts just published —
@@ -261,7 +259,7 @@ describe('multi-work routing acceptance', () => {
       toolName: 'edit',
       toolCallId: 'fallback-edit',
       state: inspectState,
-      served: getLastServed(),
+      served: harness.session.getLastServed(),
     });
     expect(decisionResult).toMatchObject({ block: true, reason: expect.any(String) });
   });

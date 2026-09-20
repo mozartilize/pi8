@@ -1,5 +1,5 @@
 /**
- * Unit tests for the always-on assessment layer (formerly the consult gate).
+ * Unit tests for the always-on assessment layer.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {

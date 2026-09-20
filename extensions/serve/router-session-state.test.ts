@@ -26,7 +26,11 @@ import {
   setLastDecision,
   setLastResolvedThinkingLevel,
   setPendingUserEscalation,
+  getLatchVetoIntentKey,
+  setLatchVetoIntentKey,
+  RouterSession,
 } from './router-session-state.js';
+import { getBlacklistedModels, getBlacklistedProviders } from './blacklist.js';
 
 describe('router session state', () => {
   it('clears per-session routing state', () => {
@@ -197,5 +201,78 @@ describe('assessment session state', () => {
     resetRouterSession();
 
     expect(getWorkPhaseState()).toBeUndefined();
+  });
+
+  it('folds latchVetoIntentKey into session state and clears it on reset (regression fix)', () => {
+    setLatchVetoIntentKey('vetoed-intent-123');
+    expect(getLatchVetoIntentKey()).toBe('vetoed-intent-123');
+
+    resetRouterSession();
+
+    expect(getLatchVetoIntentKey()).toBeUndefined();
+  });
+});
+
+describe('RouterSession independent instances', () => {
+  it('maintains independent state between multiple instances', () => {
+    const s1 = new RouterSession();
+    const s2 = new RouterSession();
+
+    s1.bumpLatchGeneration();
+    s1.addAssessmentCost(0.05);
+    s1.blacklistModel('model-1');
+
+    expect(s1.getLatchGeneration()).toBe(1);
+    expect(s1.getAssessmentCost()).toBe(0.05);
+    expect(s1.getBlacklistedModels().has('model-1')).toBe(true);
+
+    expect(s2.getLatchGeneration()).toBe(0);
+    expect(s2.getAssessmentCost()).toBe(0);
+    expect(s2.getBlacklistedModels().has('model-1')).toBe(false);
+  });
+
+  // The serving path resolves blacklists, escalation, and the incumbent from
+  // the session it was handed. An injected session that wrote through to the
+  // default one would let a second session inherit the first's exclusions and
+  // incumbent, and would survive a reset of the instance that owns them.
+  it('keeps an injected session out of the default session', () => {
+    resetRouterSession();
+    const isolated = new RouterSession();
+
+    isolated.blacklistModel('alpha/failed');
+    isolated.blacklistProvider('alpha');
+    isolated.setPendingUserEscalation({ target: 'plan', fromModel: 'alpha/failed' });
+    isolated.setLastDecision({
+      dimension: 'implement',
+      chosen: 'beta/strong',
+      reason: 'test',
+      confidence: 1,
+      routedUp: false,
+      routedDown: false,
+      cause: 'heuristic',
+      fallbackChain: ['beta/strong'],
+    });
+
+    expect(getBlacklistedModels().has('alpha/failed')).toBe(false);
+    expect(getBlacklistedProviders().has('alpha')).toBe(false);
+    expect(peekPendingUserEscalation()).toBeUndefined();
+    expect(getLastChosenRegistryId()).toBeUndefined();
+  });
+
+  // A pending request must be visible to, and consumable by, the same owner:
+  // peeking one session and consuming another silently drops the request.
+  it('peeks and consumes a pending escalation on the same session', () => {
+    const isolated = new RouterSession();
+    isolated.setPendingUserEscalation({ target: 'review', fromModel: 'beta/strong' });
+
+    expect(isolated.peekPendingUserEscalation()).toEqual({
+      target: 'review',
+      fromModel: 'beta/strong',
+    });
+    expect(isolated.consumePendingUserEscalation()).toEqual({
+      target: 'review',
+      fromModel: 'beta/strong',
+    });
+    expect(isolated.peekPendingUserEscalation()).toBeUndefined();
   });
 });

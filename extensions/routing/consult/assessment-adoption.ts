@@ -38,6 +38,14 @@ function stronger(a: Dimension, b: Dimension): Dimension {
 export interface AdoptionInput {
   /** The keyword classifier's dimension, `H` in the spec. */
   heuristic: Dimension;
+  /**
+   * The unbumped keyword dimension before ambiguity/length route-up, if any.
+   * A high-confidence bounded assessment may release the ambiguity bump down
+   * to this raw floor ONLY when ambiguityBumped is true.
+   */
+  rawHeuristic?: Dimension;
+  /** True if the heuristic was bumped upward due to low confidence or prompt length. */
+  ambiguityBumped?: boolean;
   /** The assessor's verdict, `A`. Absent means unavailable. */
   assessment?: RoutingAssessment;
   /** True once depth escalation has engaged for this session. */
@@ -79,7 +87,19 @@ export function adoptAssessment(input: AdoptionInput): AdoptionResult {
     // in reverse.
     !latchEngaged;
 
-  const floor = downwardPermitted ? oneTierBelow(heuristic) : heuristic;
+  // Ordinary downward routing drops at most one tier from the heuristic.
+  // When the keyword classifier bumped the dimension due to low confidence or prompt length,
+  // a high-confidence bounded assessment may also release that artificial bump down to rawHeuristic.
+  // Unrelated promotions (such as embedding classifier promotions) must never be dropped via rawHeuristic.
+  let floor = downwardPermitted ? oneTierBelow(heuristic) : heuristic;
+  if (
+    downwardPermitted &&
+    input.ambiguityBumped &&
+    input.rawHeuristic &&
+    DIMENSION_STRENGTH[input.rawHeuristic] < DIMENSION_STRENGTH[floor]
+  ) {
+    floor = input.rawHeuristic;
+  }
   const adopted = stronger(floor, verdict);
   return { dimension: adopted, changed: adopted !== heuristic };
 }

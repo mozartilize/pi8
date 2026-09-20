@@ -12,11 +12,7 @@ const registry = [
 ];
 
 describe('resolveSlugAll — canonical single targets', () => {
-  // The single-target resolution entry point no longer exists; these pin the
-  // shipped resolveSlugAll behavior for the same inputs. "Prefers the shorter
-  // id" tie-breaking was a property of the deleted wrapper — identity-key
-  // equality already keeps longer siblings out (asserted in the collapse
-  // tests), so the shipped function has no tie to break for these inputs.
+  // Match exact provider/id canonical targets using resolveSlugAll.
   it('matches exact provider/id', () => {
     expect(resolveSlugAll('anthropic/claude-opus-4-6-20260115', registry)).toEqual([
       'anthropic/claude-opus-4-6-20260115',

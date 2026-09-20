@@ -311,40 +311,34 @@ function applyEscalationRepick(
   userEscalation: PendingUserEscalation | undefined,
   escalation: AppliedEscalation | undefined,
   baseOpts: ScoreOpts,
-  weights: RoutingPolicyInput['config']['dimensionWeights'],
 ): { decision: RoutingDecision; cause: DecisionCause } {
+  const strictModelEscalation =
+    precedence.escalationApplied && !precedence.userApplied && escalation?.fromModel;
+  if (strictModelEscalation) {
+    if (decision.chosen !== '' && !precedence.escalationRaised && POLICY_PASSIVE_CAUSES.has(cause)) {
+      cause = 'capability-escalation';
+    }
+    return { decision, cause };
+  }
+
   const repick = precedence.userApplied
     ? { fromModel: userEscalation?.fromModel, raisedDimension: precedence.userRaised }
-    : precedence.escalationApplied
-      ? { fromModel: escalation?.fromModel, raisedDimension: precedence.escalationRaised }
-      : undefined;
-  const invalidModelEscalation =
-    precedence.escalationApplied &&
-    !precedence.userApplied &&
-    repick?.fromModel != null &&
-    !isValidEscalationCandidate(decision.chosen, repick.fromModel);
+    : undefined;
   if (
     repick?.fromModel &&
-    (invalidModelEscalation || decision.chosen === repick.fromModel || !repick.raisedDimension)
+    (decision.chosen === repick.fromModel || !repick.raisedDimension)
   ) {
     const escalationDecision = pickEscalation(
       candidates,
       dimension,
       repick.fromModel,
       baseOpts,
-      !precedence.userApplied,
+      false,
     );
     if (escalationDecision) {
       decision = escalationDecision;
       if (!repick.raisedDimension && POLICY_PASSIVE_CAUSES.has(cause)) {
         cause = 'capability-escalation';
-      }
-    } else if (invalidModelEscalation) {
-      // Do not silently serve an equal/lower-effort provider handoff when no
-      // valid destination exists. Retain the exact serving attempt instead.
-      const sourceCandidate = candidates.find((c) => candidateKey(c) === repick.fromModel);
-      if (sourceCandidate) {
-        decision = pickBest([sourceCandidate], dimension, weights[dimension], baseOpts);
       }
     }
   }
@@ -601,7 +595,6 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     userEscalation,
     escalation,
     baseOpts,
-    config.dimensionWeights,
   );
   decision = repicked.decision;
   cause = repicked.cause;

@@ -24,15 +24,9 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { ROUTER_PROVIDER_ID } from '../types.js';
 import type { Candidate, Dimension, RoutingDecision } from '../types.js';
-import { blacklistModel, blacklistProvider } from './blacklist.js';
 import {
-  addAccumulatedCost,
-  getAccumulatedCost,
-  getLastNotifiedModel,
-  setLastNotifiedModel,
-  setLastServed,
-  updateLastServed,
-  setLastDecision,
+  RouterSession,
+  defaultRouterSession,
 } from './router-session-state.js';
 import { renderRouterStatus, notifyRouting, type ServedInfo } from '../host/ui.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
@@ -138,6 +132,8 @@ export interface DelegationOptions {
   notifyOnRoute?: boolean;
   /** Total-turn timer, used for final debug log timestamps. */
   turnTimer: () => number;
+  /** Owning session state for this delegation loop. */
+  session?: RouterSession;
 }
 
 export interface DelegationResult {
@@ -319,10 +315,11 @@ function accumulateAttemptUsage(
     cacheReadTokens: number;
     cacheWriteTokens: number;
   },
+  session?: RouterSession,
 ): void {
   if (!usage) return;
   if (usage.cost?.total) {
-    addAccumulatedCost(usage.cost.total);
+    (session ?? defaultRouterSession).addAccumulatedCost(usage.cost.total);
   }
   const attemptCost = priceTokens(
     modelCost,
@@ -395,6 +392,7 @@ function recordServedAttempt(args: {
   optionsReasoning: string | undefined;
   notifyOnRoute: boolean | undefined;
   extensionContext: ExtensionContext | undefined;
+  session: RouterSession;
 }): { lastServed: ServedInfo; finalDecision: RoutingDecision } {
   const viaFallback = args.candidateIndex > 0;
   const baseDecision = viaFallback
@@ -430,7 +428,7 @@ function recordServedAttempt(args: {
     thinkingLevel: (args.effectiveReasoning ?? args.optionsReasoning) as string | undefined,
     viaFallback,
     fallbackRank: viaFallback ? args.candidateIndex + 1 : undefined,
-    accumulatedCost: getAccumulatedCost(),
+    accumulatedCost: args.session.getAccumulatedCost(),
     ...(finalMultiWork?.servedCapability
       ? {
           capability: {
@@ -442,13 +440,13 @@ function recordServedAttempt(args: {
         }
       : {}),
   };
-  setLastServed(lastServed);
-  setLastDecision(finalDecision);
+  args.session.setLastServed(lastServed);
+  args.session.setLastDecision(finalDecision);
   renderRouterStatus(args.extensionContext, finalDecision, lastServed);
-  if (args.notifyOnRoute && args.candidateId !== getLastNotifiedModel()) {
+  if (args.notifyOnRoute && args.candidateId !== args.session.getLastNotifiedModel()) {
     notifyRouting(args.extensionContext, finalDecision, lastServed);
   }
-  setLastNotifiedModel(args.candidateId);
+  args.session.setLastNotifiedModel(args.candidateId);
   return { lastServed, finalDecision };
 }
 
@@ -466,6 +464,7 @@ export async function runDelegationLoop(
   stream: AssistantMessageEventStream,
 ): Promise<DelegationResult> {
   const { decision, registry, context, options, extensionContext, turnTimer } = opts;
+  const session = opts.session ?? defaultRouterSession;
 
   let success = false;
   let lastError: string | undefined;
@@ -530,7 +529,7 @@ export async function runDelegationLoop(
     const chosen = registry?.find(provider, modelId);
     if (!chosen) {
       lastError = `not in registry: ${candidateId}`;
-      blacklistModel(candidateId);
+      session.blacklistModel(candidateId);
       recordFailure(provider, 'model');
       continue;
     }
@@ -544,7 +543,7 @@ export async function runDelegationLoop(
       );
     } catch {
       lastError = `credential lookup timed out: ${candidateId}`;
-      blacklistModel(candidateId);
+      session.blacklistModel(candidateId);
       recordFailure(provider, 'provider');
       debugLog('attempt.auth', { candidate: candidateId, ms: authTimer(), outcome: 'timeout' });
       continue;
@@ -552,7 +551,7 @@ export async function runDelegationLoop(
     // Header-only auth (e.g. kimi-coding OAuth Bearer) is valid; apiKey may be absent.
     if (!auth || !auth.ok || (!auth.apiKey && (!auth.headers || Object.keys(auth.headers).length === 0))) {
       lastError = `no usable credentials: ${candidateId}`;
-      blacklistModel(candidateId);
+      session.blacklistModel(candidateId);
       recordFailure(provider, 'provider');
       debugLog('attempt.auth', { candidate: candidateId, ms: authTimer(), outcome: 'no-creds' });
       continue;
@@ -719,6 +718,7 @@ export async function runDelegationLoop(
               message?.usage,
               (chosen as unknown as { cost?: Candidate['cost'] }).cost,
               turnSpend,
+              session,
             );
           }
           const classified = classifyTerminalEvent(
@@ -756,6 +756,7 @@ export async function runDelegationLoop(
               optionsReasoning: opts.options?.reasoning as string | undefined,
               notifyOnRoute: opts.notifyOnRoute,
               extensionContext,
+              session,
             });
             lastServed = recorded.lastServed;
             finalDecision = recorded.finalDecision;
@@ -779,8 +780,8 @@ export async function runDelegationLoop(
           streamMs: streamTimer(),
         });
         if (lastServed) {
-          updateLastServed({ accumulatedCost: getAccumulatedCost() });
-          renderRouterStatus(extensionContext, finalDecision, { ...lastServed, accumulatedCost: getAccumulatedCost() });
+          session.updateLastServed({ accumulatedCost: session.getAccumulatedCost() });
+          renderRouterStatus(extensionContext, finalDecision, { ...lastServed, accumulatedCost: session.getAccumulatedCost() });
         }
         break;
       } catch (_err) {
@@ -821,7 +822,7 @@ export async function runDelegationLoop(
           return { success: false, streamFinalized: true, lastError: message, lastServed };
         }
         if (failure.action === 'provider-dead') {
-          blacklistProvider(provider);
+          session.blacklistProvider(provider);
           deadProviders.add(provider);
           debugLog('attempt.usage-limit', { provider, candidate: candidateId });
           break;
@@ -839,7 +840,7 @@ export async function runDelegationLoop(
     // later turns, so neither failure mode blacklists it for this session.
     // Only provider-health failures count toward circuit strikes; model-level
     // output-limit exhaustion does not.
-    if (!candidateTransient && !candidateOutputLimitExhausted) blacklistModel(candidateId);
+    if (!candidateTransient && !candidateOutputLimitExhausted) session.blacklistModel(candidateId);
     recordFailure(provider, candidateOutputLimitExhausted ? 'model' : 'provider');
     continue;
   }

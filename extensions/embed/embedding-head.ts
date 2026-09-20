@@ -7,7 +7,7 @@
  *
  * Prototypes are versioned via EMBEDDING_HEAD_VERSION. Changing them is a
  * reviewable event; the version must be bumped and the change justified by
- * net movement on `classifier-metrics.ts` (Phase 1).
+ * net movement on `classifier-metrics.ts`.
  */
 import type { Dimension } from '../types.js';
 import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
@@ -28,8 +28,7 @@ export const EMBEDDING_HEAD_VERSION = 1;
  *
  * Design constraint: prototypes must be semantically distinct. If two
  * prototypes are within ~0.85 cosine, noise dominates classification.
- * The current set is conservative; a distilled linear head (Phase 5)
- * would replace these with learned weights.
+ * The current set is conservative.
  */
 const PROTOTYPE_TEXTS: Record<Dimension, string> = {
   lightweight:

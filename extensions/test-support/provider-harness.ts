@@ -2,11 +2,8 @@
  * Typed provider orchestration harness for provider.test.ts.
  *
  * The router registers `router/auto` through the ExtensionAPI and serves each
- * turn by delegating through `streamSimple(model, context, options)`. Every
- * describe in provider.test.ts used to rebuild that wiring by hand — module
- * resets, decision-log base, event stream, mock registry, credential policy —
- * and then read the `streamSimple` positional shape through `as any` at ~40
- * call sites. This harness is the single place that knows the positional
+ * turn by delegating through `streamSimple(model, context, options)`.
+ * This harness is the single place that knows the positional
  * shape (`delegatedCall`) and the single place that assembles the mock
  * ExtensionContext/registry.
  */
@@ -26,7 +23,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 
 import type { BenchModel, RoutingDecision } from '../types.js';
 import type { ServedInfo } from '../host/ui.js';
-import type { EmbeddingStats } from '../serve/router-session-state.js';
+import { RouterSession, RuntimeBindings, type EmbeddingStats } from '../serve/router-session-state.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { registryModel } from './router-fixtures.js';
 
@@ -156,6 +153,8 @@ export interface ProviderHarnessOptions {
 }
 
 export interface ProviderTestHarness {
+  session: RouterSession;
+  runtime: RuntimeBindings;
   providerOptions: RouterProviderOptions;
   /** Mutable: a test that simulates a fresh turn may swap in a new stream. */
   outStream: MockEventStream;
@@ -200,6 +199,9 @@ export async function setupProviderTest(options: ProviderHarnessOptions): Promis
   const { setDecisionLogBase } = await import('../host/decisionlog.js');
   setDecisionLogBase(dir);
   const { registerAutoRouterProvider } = await import('../serve/provider.js');
+  const { defaultRouterSession } = await import('../serve/router-session-state.js');
+  defaultRouterSession.reset();
+  defaultRouterSession.clearSessionBlacklist();
 
   const outStream = new MockEventStream();
   vi.mocked(createAssistantMessageEventStream).mockReturnValue(
@@ -232,15 +234,25 @@ export async function setupProviderTest(options: ProviderHarnessOptions): Promis
     ...options.pi,
   } as unknown as ExtensionAPI;
 
-  registerAutoRouterProvider(pi, { modelRegistry: registry, ...options.ctx } as unknown as ExtensionContext);
+  const runtime = new RuntimeBindings();
+  const currentSession = defaultRouterSession;
+
+  registerAutoRouterProvider(
+    pi,
+    { modelRegistry: registry, ...options.ctx } as unknown as ExtensionContext,
+    currentSession,
+    runtime,
+  );
 
   const { getProviderState: readProviderState } = await import('../serve/provider.js');
 
   const harness: ProviderTestHarness = {
+    session: currentSession,
+    runtime,
     providerOptions: undefined as unknown as RouterProviderOptions,
     outStream,
     getProviderState(): ProviderStateSnapshot {
-      return readProviderState() as unknown as ProviderStateSnapshot;
+      return readProviderState(currentSession) as unknown as ProviderStateSnapshot;
     },
     async serve(
       context: Context,
@@ -327,7 +339,7 @@ export function expectDecisionContract(opts: {
 }
 
 /** Fetch the three handles for {@link expectDecisionContract}. */
-export async function fetchDecisionContractHandles(dir: string): Promise<{
+export async function fetchDecisionContractHandles(dir: string, session?: RouterSession): Promise<{
   state: { lastDecision: RoutingDecision | undefined };
   log: Array<{ kind?: string; dimension?: string; cause?: string; chosen?: string }>;
   ui: string[];
@@ -335,7 +347,7 @@ export async function fetchDecisionContractHandles(dir: string): Promise<{
   const { getProviderState } = await import('../serve/provider.js');
   const { readRecentEntries } = await import('../host/decisionlog.js');
   const { formatDecisionDetail } = await import('../host/ui.js');
-  const state = getProviderState();
+  const state = getProviderState(session);
   return {
     state,
     log: readRecentEntries(10, dir) as Array<{

@@ -29,8 +29,7 @@ describe('artificial-analysis adapter', () => {
   });
 
   describe('unwrap', () => {
-    // Regression: the v2 API returns an envelope, and the adapter used to
-    // throw "Unexpected response shape" on every real sync.
+    // The v2 API returns an envelope; unwrap extracts pagination and data.
     it('unwraps the v2 { pagination, data } envelope', () => {
       const { rows, pagination } = unwrap(payload);
       expect(rows).toHaveLength(7);

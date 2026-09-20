@@ -142,7 +142,7 @@ describe('classifier', () => {
   });
 
   it('classifies report requests as gather (cheap research)', () => {
-    const prompt = 'report the progress from @docs/superpowers/specs/';
+    const prompt = 'report the progress from @src/specs/';
     const result = classify(prompt);
     expect(result.dimension).toBe('gather');
   });
