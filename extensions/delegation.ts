@@ -378,6 +378,81 @@ function decideAfterFailure(
 }
 
 /**
+ * Record the model that actually produced this turn's first answer.
+ * First assignment must use the setter, not `updateLastServed`: the turn
+ * starts with `setLastServed(undefined)`, and `updateLastServed` is a no-op
+ * patch while state is undefined. Notify against `lastNotifiedModel`, not
+ * `lastChosenRegistryId`, because the provider already recorded this turn's
+ * decision before delegation starts.
+ */
+function recordServedAttempt(args: {
+  decision: RoutingDecision;
+  candidateId: string;
+  candidateIndex: number;
+  provider: string;
+  modelId: string;
+  effectiveReasoning: ModelThinkingLevel | undefined;
+  optionsReasoning: string | undefined;
+  notifyOnRoute: boolean | undefined;
+  extensionContext: ExtensionContext | undefined;
+}): { lastServed: ServedInfo; finalDecision: RoutingDecision } {
+  const viaFallback = args.candidateIndex > 0;
+  const baseDecision = viaFallback
+    ? {
+        ...args.decision,
+        chosen: args.candidateId,
+        cause: 'error-fallback' as const,
+        reason: `${args.decision.reason}; fallback served after an earlier candidate failed`,
+        fallbackChain: [
+          ...new Set([
+            ...args.decision.fallbackChain.slice(args.candidateIndex),
+            ...args.decision.fallbackChain.slice(0, args.candidateIndex),
+          ]),
+        ],
+      }
+    : args.decision;
+  // Terminal capability is scored for every candidate up front, but only
+  // the model that actually streams the turn's output has "served"
+  // capability — fallback can substitute a lower-tier sibling.
+  const servedCandidateCapability = baseDecision.multiWork?.candidateCapability[args.candidateId];
+  const finalMultiWork = baseDecision.multiWork && servedCandidateCapability
+    ? {
+        ...baseDecision.multiWork,
+        servedCandidateKey: args.candidateId,
+        servedCapability: servedCandidateCapability,
+      }
+    : baseDecision.multiWork;
+  const finalDecision = finalMultiWork
+    ? { ...baseDecision, multiWork: finalMultiWork }
+    : baseDecision;
+  const lastServed: ServedInfo = {
+    registryId: `${args.provider}/${args.modelId}`,
+    thinkingLevel: (args.effectiveReasoning ?? args.optionsReasoning) as string | undefined,
+    viaFallback,
+    fallbackRank: viaFallback ? args.candidateIndex + 1 : undefined,
+    accumulatedCost: getAccumulatedCost(),
+    ...(finalMultiWork?.servedCapability
+      ? {
+          capability: {
+            providerInvocation: finalMultiWork.providerInvocation,
+            terminalFloor: finalMultiWork.terminalFloor,
+            terminalCapableInScoringSet: finalMultiWork.terminalCapableInScoringSet,
+            candidate: finalMultiWork.servedCapability,
+          },
+        }
+      : {}),
+  };
+  setLastServed(lastServed);
+  setLastDecision(finalDecision);
+  renderRouterStatus(args.extensionContext, finalDecision, lastServed);
+  if (args.notifyOnRoute && args.candidateId !== getLastNotifiedModel()) {
+    notifyRouting(args.extensionContext, finalDecision, lastServed);
+  }
+  setLastNotifiedModel(args.candidateId);
+  return { lastServed, finalDecision };
+}
+
+/**
  * Run the fallback delegation walk and pump stream events into `stream`.
  *
  * On success, returns with streamFinalized false and the caller should end
@@ -671,68 +746,19 @@ export async function runDelegationLoop(
           // the status widget and decision log must not depend on text output.
           if (!servedTracked && isServedOutputEvent(event.type)) {
             servedTracked = true;
-            const viaFallback = candidateIndex > 0;
-            const baseDecision = viaFallback
-              ? {
-                  ...decision,
-                  chosen: candidateId,
-                  cause: 'error-fallback' as const,
-                  reason: `${decision.reason}; fallback served after an earlier candidate failed`,
-                  fallbackChain: [
-                    ...new Set([
-                      ...decision.fallbackChain.slice(candidateIndex),
-                      ...decision.fallbackChain.slice(0, candidateIndex),
-                    ]),
-                  ],
-                }
-              : decision;
-            // Terminal capability is scored for every candidate up front, but only
-            // the model that actually streams the turn's output has "served"
-            // capability — fallback can substitute a lower-tier sibling.
-            const servedCandidateCapability = baseDecision.multiWork?.candidateCapability[candidateId];
-            const finalMultiWork = baseDecision.multiWork && servedCandidateCapability
-              ? {
-                  ...baseDecision.multiWork,
-                  servedCandidateKey: candidateId,
-                  servedCapability: servedCandidateCapability,
-                }
-              : baseDecision.multiWork;
-            finalDecision = finalMultiWork
-              ? { ...baseDecision, multiWork: finalMultiWork }
-              : baseDecision;
-            lastServed = {
-              registryId: `${provider}/${modelId}`,
-              thinkingLevel: (effectiveReasoning ?? opts.options?.reasoning) as string | undefined,
-              viaFallback,
-              fallbackRank: viaFallback ? candidateIndex + 1 : undefined,
-              accumulatedCost: getAccumulatedCost(),
-              ...(finalMultiWork?.servedCapability
-                ? {
-                    capability: {
-                      providerInvocation: finalMultiWork.providerInvocation,
-                      terminalFloor: finalMultiWork.terminalFloor,
-                      terminalCapableInScoringSet: finalMultiWork.terminalCapableInScoringSet,
-                      candidate: finalMultiWork.servedCapability,
-                    },
-                  }
-                : {}),
-            };
-            // First assignment must use the setter, not `updateLastServed`:
-            // the turn starts with `setLastServed(undefined)`, and
-            // `updateLastServed` is a no-op patch while state is undefined.
-            // Subsequent `updateLastServed` patches (cost) work once set here.
-            setLastServed(lastServed);
-            setLastDecision(finalDecision);
-            renderRouterStatus(extensionContext, finalDecision, lastServed);
-            // Notify once per turn, only when the served model differs from the
-            // one last surfaced to the user (undefined covers the first pick).
-            // Compared against a dedicated `lastNotifiedModel`, not
-            // `lastChosenRegistryId`, because provider.ts already records this
-            // turn's decision before delegation starts.
-            if (opts.notifyOnRoute && candidateId !== getLastNotifiedModel()) {
-              notifyRouting(extensionContext, finalDecision, lastServed);
-            }
-            setLastNotifiedModel(candidateId);
+            const recorded = recordServedAttempt({
+              decision,
+              candidateId,
+              candidateIndex,
+              provider,
+              modelId,
+              effectiveReasoning,
+              optionsReasoning: opts.options?.reasoning as string | undefined,
+              notifyOnRoute: opts.notifyOnRoute,
+              extensionContext,
+            });
+            lastServed = recorded.lastServed;
+            finalDecision = recorded.finalDecision;
           }
           attemptBuffer.forward(event);
         }

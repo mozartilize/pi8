@@ -152,6 +152,35 @@ describe('runDelegationLoop contracts', () => {
     expect(h.blacklist).toContain('alpha/spammy');
   });
 
+  it('commits overflow when thinking is already buffered, then finalizes without fallback', async () => {
+    // Overflow with thinking already in the buffer commits to live streaming
+    // and locks replay. A later pre-answer error must finalize this turn,
+    // not fall over to the next model (that would leak the reasoning into
+    // another answer).
+    const h = createDelegationHarness({
+      chain: ['alpha/x', 'beta/fallback'],
+      scripts: {
+        'alpha/x': [[
+          { type: 'thinking_delta', delta: 'trace' },
+          ...Array.from({ length: 10_000 }, () => ({ type: 'start' })),
+          { type: 'error', error: { errorMessage: 'failed after thinking' } },
+        ]],
+        'beta/fallback': [[
+          { type: 'text_delta', delta: 'served' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+
+    const result = await h.run();
+
+    expect(result.streamFinalized).toBe(true);
+    expect(result.success).toBe(false);
+    expect(h.attempts).toEqual(['alpha/x']);
+    expect(h.output.some((e) => (e as { type: string }).type === 'thinking_delta')).toBe(true);
+    expect(h.output.some((e) => (e as { type: string }).type === 'text_delta')).toBe(false);
+  });
+
   it('serves when the first meaningful output arrives exactly at the cap boundary', async () => {
     // The cap must only fail pre-output spam. A candidate whose (cap+1)th
     // event is its first text has proven itself: it flushes its buffer and
