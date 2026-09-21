@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ReasoningLoopDetector, RL_MIN_TOKENS, RL_WINDOW } from './reasoning-loop.js';
+import {
+  ReasoningLoopDetector,
+  RL_MIN_TOKENS,
+  RL_STRIDE,
+  RL_WINDOW,
+} from './reasoning-loop.js';
 
 function pad(token: string, count: number): string {
   return Array.from({ length: count }, () => token).join(' ');
@@ -78,6 +83,37 @@ describe('ReasoningLoopDetector', () => {
     loop.update('wai');
     loop.update('t actually ');
     expect(loop.snapshot().reflectionTransitions).toBeGreaterThan(0);
+  });
+
+  // Same tokens every round, so windows are near-duplicates, but a per-round
+  // punctuation marker keeps every 128-char block unique — the exact-block
+  // rule is a separate lifetime signal and would mask the rolling share.
+  const loopRound = (round: number): string => {
+    const tokens = ['wait', ...Array.from({ length: RL_WINDOW - 1 }, (_, i) => `tok${i}`)];
+    return `${tokens.join(` ${'.'.repeat(round + 1)} `)} `;
+  };
+
+  it('ages repeat evidence out of the rolling share', () => {
+    const loop = new ReasoningLoopDetector();
+    for (let round = 0; round < 12; round += 1) loop.update(loopRound(round));
+    expect(loop.snapshot().repeatedWindowCount).toBeGreaterThan(0);
+
+    let token = 0;
+    for (let i = 0; i < 40; i += 1) {
+      loop.update(`${Array.from({ length: RL_STRIDE }, () => `unique${token++}`).join(' ')} `);
+    }
+    const after = loop.snapshot();
+    expect(after.repeatedWindowCount).toBe(0);
+    expect(after.severity).toBe('none');
+  });
+
+  it('keeps the repeat share within 0..1 on a long repetitive stream', () => {
+    const loop = new ReasoningLoopDetector();
+    for (let round = 0; round < 200; round += 1) loop.update(loopRound(round));
+    const { repeatedWindowCount, windowCount } = loop.snapshot();
+    expect(windowCount).toBeGreaterThan(0);
+    expect(repeatedWindowCount).toBeGreaterThanOrEqual(0);
+    expect(repeatedWindowCount).toBeLessThanOrEqual(windowCount);
   });
 
   it('bounds retained tokens and hashes exact comparison blocks', () => {

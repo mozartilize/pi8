@@ -45,6 +45,50 @@ function pytest(output: string, isError = true): ToolCycleInput {
   };
 }
 
+let shellSeq = 0;
+function shell(command: string, output: string, isError = false): ToolCycleInput {
+  shellSeq += 1;
+  return {
+    toolName: 'bash',
+    toolCallId: `shell-${shellSeq}`,
+    input: { command },
+    content: [{ type: 'text', text: output }],
+    isError,
+  };
+}
+
+const PYTEST_FAIL =
+  'FAILED tests/test_policy.py::test_escalates_same_failure\nAssertionError: expected true';
+
+/**
+ * Verifier runs separated by distinct corrective edits. A correction only
+ * counts when the mutation lands strictly between two verifier invocations,
+ * so each step advances the invocation counter.
+ */
+function driveFailurePersistence(
+  state: TrajectoryState,
+  fail = PYTEST_FAIL,
+  startInvocation = 1,
+) {
+  let decision = state.observeToolResult(pytest(fail), startInvocation);
+  const patches = [['a', 'b'], ['c', 'd'], ['e', 'f']];
+  for (let i = 0; i < patches.length; i += 1) {
+    const [oldText, newText] = patches[i]!;
+    const editAt = startInvocation + i * 2 + 1;
+    state.observeToolResult(
+      edit('policy.ts', `--- a\n+++ b\n-${oldText}\n+${newText}\n`, oldText, newText),
+      editAt,
+    );
+    decision = state.observeToolResult(pytest(fail), editAt + 1);
+  }
+  return decision;
+}
+
+function lastProgressKind(state: TrajectoryState): string | undefined {
+  const cycles = (state as unknown as { cycles: Array<{ progressKind: string }> }).cycles;
+  return cycles[cycles.length - 1]?.progressKind;
+}
+
 describe('TrajectoryState', () => {
   it('treats a changed re-read as progress, not recurrence', () => {
     const state = new TrajectoryState();
@@ -235,5 +279,132 @@ describe('TrajectoryState', () => {
     const first = read('a.ts', 'v1');
     expect(state.observeToolResult(first, 1)).toBeDefined();
     expect(state.observeToolResult(first, 1)).toBeUndefined();
+  });
+});
+
+describe('TrajectoryState evidence ownership', () => {
+  it('does not let one owner\'s struggle condemn the next one', () => {
+    const state = new TrajectoryState();
+    state.bindOwner('alpha/weak');
+    const armed = driveFailurePersistence(state);
+    expect(armed?.escalate).toBe(true);
+    state.maybeArmPending(armed!, 'alpha/weak', 'implement', false);
+    expect(state.peekPending()?.fromModel).toBe('alpha/weak');
+
+    state.bindOwner('beta/strong');
+    expect(state.peekPending()).toBeUndefined();
+    const neutral = state.observeToolResult(read('fresh.ts', 'new evidence'), 20);
+    expect(neutral?.escalate).toBe(false);
+    state.maybeArmPending(neutral!, 'beta/strong', 'implement', false);
+    expect(state.peekPending()).toBeUndefined();
+  });
+
+  it('makes the new owner earn its own escalation', () => {
+    const state = new TrajectoryState();
+    state.bindOwner('alpha/weak');
+    driveFailurePersistence(state);
+    state.bindOwner('beta/strong');
+
+    const halfway = state.observeToolResult(pytest(PYTEST_FAIL), 20);
+    state.maybeArmPending(halfway!, 'beta/strong', 'implement', false);
+    expect(state.peekPending()).toBeUndefined();
+
+    const earned = driveFailurePersistence(state, PYTEST_FAIL, 21);
+    expect(earned?.escalate).toBe(true);
+    state.maybeArmPending(earned!, 'beta/strong', 'implement', false);
+    expect(state.peekPending()?.fromModel).toBe('beta/strong');
+  });
+
+  it('treats a higher effort on the same model as a distinct owner', () => {
+    const state = new TrajectoryState();
+    state.bindOwner('alpha/model:medium');
+    const armed = driveFailurePersistence(state);
+    state.maybeArmPending(armed!, 'alpha/model:medium', 'implement', false);
+    expect(state.peekPending()).toBeDefined();
+
+    state.bindOwner('alpha/model:high');
+    const after = state.observeToolResult(pytest(PYTEST_FAIL), 20);
+    expect(after?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('none');
+    expect(state.peekPending()).toBeUndefined();
+  });
+
+  it('refuses to arm a model that does not own the evidence', () => {
+    const state = new TrajectoryState();
+    state.bindOwner('alpha/weak');
+    const armed = driveFailurePersistence(state);
+    state.maybeArmPending(armed!, 'beta/strong', 'implement', false);
+    expect(state.peekPending()).toBeUndefined();
+  });
+
+  it('keeps task knowledge across an owner change', () => {
+    const state = new TrajectoryState();
+    state.bindOwner('alpha/weak');
+    state.observeToolResult(read('a.ts', 'v1'), 1);
+    state.bindOwner('beta/strong');
+    state.observeToolResult(read('a.ts', 'v1'), 2);
+    // Already-seen evidence is not new evidence just because the owner changed.
+    expect(lastProgressKind(state)).toBe('none');
+  });
+});
+
+describe('TrajectoryState verifier scoping', () => {
+  it('keeps a test failure alive across an unrelated passing verifier', () => {
+    for (const passing of ['npx tsc --noEmit', 'npx eslint src']) {
+      const state = new TrajectoryState();
+      state.observeToolResult(pytest(PYTEST_FAIL), 1);
+      state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-a\n+b\n', 'a', 'b'), 2);
+      state.observeToolResult(shell(passing, 'all good'), 3);
+      const back = state.observeToolResult(pytest(PYTEST_FAIL), 3);
+      expect(back?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('warning');
+    }
+  });
+
+  it('clears a failure when its own verifier passes', () => {
+    const state = new TrajectoryState();
+    state.observeToolResult(pytest(PYTEST_FAIL), 1);
+    state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-a\n+b\n', 'a', 'b'), 2);
+    const passed = state.observeToolResult(pytest('3 passed', false), 3);
+    expect(passed?.signals.find((s) => s.kind === 'stagnation')?.severity).toBe('none');
+
+    state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-c\n+d\n', 'c', 'd'), 4);
+    const again = state.observeToolResult(pytest(PYTEST_FAIL), 5);
+    expect(again?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('none');
+  });
+
+  it('does not treat a changed failure signature as progress', () => {
+    const state = new TrajectoryState();
+    state.observeToolResult(pytest(PYTEST_FAIL), 1);
+    state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-a\n+b\n', 'a', 'b'), 2);
+    state.observeToolResult(
+      pytest('FAILED tests/test_other.py::test_unrelated\nTypeError: bad'),
+      3,
+    );
+    // A different failure is not evidence the run improved, so the recurrence
+    // chain must not be broken by confirmed progress.
+    expect(lastProgressKind(state)).toBe('unknown');
+  });
+});
+
+describe('TrajectoryState snapshot memory', () => {
+  it('bounds tracked file bodies and skips oversized reads', () => {
+    const state = new TrajectoryState();
+    for (let i = 0; i < 200; i += 1) {
+      state.observeToolResult(read(`file-${i}.ts`, `body ${i}\n`.repeat(50)), i + 1);
+    }
+    state.observeToolResult(read('huge.ts', 'x'.repeat(1_000_001)), 201);
+    const files = (state as unknown as { files: Map<string, unknown> }).files;
+    expect(files.size).toBeLessThanOrEqual(16);
+    expect(files.has('huge.ts')).toBe(false);
+  });
+
+  it('keeps other detectors working once snapshots are evicted', () => {
+    const state = new TrajectoryState();
+    state.observeToolResult(read('policy.ts', 'baseline\n'), 1);
+    for (let i = 0; i < 40; i += 1) {
+      state.observeToolResult(read(`other-${i}.ts`, `body ${i}\n`), i + 2);
+    }
+    const decision = driveFailurePersistence(state, PYTEST_FAIL, 50);
+    expect(decision?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('severe');
+    expect(decision?.escalate).toBe(true);
   });
 });

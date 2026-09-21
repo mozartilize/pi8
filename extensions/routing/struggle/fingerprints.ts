@@ -3,6 +3,7 @@
  * input; raw tool payloads never leave this module.
  */
 import { createHash } from 'node:crypto';
+import { diffLines } from 'diff';
 
 export type ToolFamily = 'read' | 'search' | 'shell' | 'mutation' | 'other';
 export type CommandClass = 'test' | 'typecheck' | 'lint' | 'build' | 'inspect' | 'other';
@@ -195,27 +196,54 @@ export function diffLineDistance(diff: string): { added: number; deleted: number
   return { added, deleted };
 }
 
+/** Combined line count above which an exact distance is refused outright. */
+export const MAX_DIFF_LINES = 50_000;
+/** Largest edit script the router will pay for before giving up. */
+export const MAX_DIFF_EDIT_LENGTH = 2_000;
+/** Wall-clock ceiling per comparison; the real bound on adversarial input. */
+export const MAX_DIFF_MS = 100;
+
+export type LineDistanceResult =
+  | { available: true; added: number; deleted: number }
+  | { available: false; reason: 'too-large' | 'budget-exhausted' };
+
 /**
- * Line-level added+deleted distance between two snapshots. LCS length is the
- * retained lines; the rest is displacement from initial to current.
+ * Line-level added+deleted displacement between two snapshots, or an explicit
+ * unavailable result.
+ *
+ * This runs synchronously inside trajectory observation, so the comparison is
+ * bounded twice over: jsdiff returns `undefined` once the edit script passes
+ * `maxEditLength` or the deadline expires. An exhausted budget must surface as
+ * unavailable — never as an approximation, which could manufacture
+ * backtracking evidence out of work the router declined to do.
  */
-export function lineDistance(from: string, to: string): { added: number; deleted: number } {
-  if (from === to) return { added: 0, deleted: 0 };
-  const a = from.split('\n');
-  const b = to.split('\n');
-  const n = a.length;
-  const m = b.length;
-  const prev = new Array<number>(m + 1).fill(0);
-  const curr = new Array<number>(m + 1).fill(0);
-  for (let i = 1; i <= n; i++) {
-    for (let j = 1; j <= m; j++) {
-      curr[j] = a[i - 1] === b[j - 1] ? prev[j - 1]! + 1 : Math.max(prev[j]!, curr[j - 1]!);
-    }
-    for (let j = 0; j <= m; j++) prev[j] = curr[j]!;
-    curr.fill(0);
+export function lineDistance(from: string, to: string): LineDistanceResult {
+  if (from === to) return { available: true, added: 0, deleted: 0 };
+  if (countLines(from) + countLines(to) > MAX_DIFF_LINES) {
+    return { available: false, reason: 'too-large' };
   }
-  const lcs = prev[m]!;
-  return { deleted: n - lcs, added: m - lcs };
+  const changes = diffLines(from, to, {
+    // A file that gained a trailing newline did not rewrite its last line.
+    ignoreNewlineAtEof: true,
+    maxEditLength: MAX_DIFF_EDIT_LENGTH,
+    timeout: MAX_DIFF_MS,
+  });
+  if (!changes) return { available: false, reason: 'budget-exhausted' };
+  let added = 0;
+  let deleted = 0;
+  for (const change of changes) {
+    if (change.added) added += change.count ?? 0;
+    else if (change.removed) deleted += change.count ?? 0;
+  }
+  return { available: true, added, deleted };
+}
+
+function countLines(text: string): number {
+  let lines = 1;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text.charCodeAt(i) === 10) lines += 1;
+  }
+  return lines;
 }
 
 export function applyReplacement(content: string, oldText: string, newText: string): string | undefined {
@@ -224,19 +252,32 @@ export function applyReplacement(content: string, oldText: string, newText: stri
   return content.slice(0, at) + newText + content.slice(at + oldText.length);
 }
 
+/** Match identities hashed into one search observation. */
+const MAX_MATCH_IDENTITIES = 64;
+
+function matchIdentity(match: Record<string, unknown>): string {
+  const path = String(match.path ?? '');
+  if (!path) return '';
+  const line = String(match.line ?? match.startLine ?? '');
+  const column = String(match.column ?? match.startColumn ?? '');
+  const text = String(match.text ?? match.snippet ?? '');
+  return fingerprint([path, line, column, normalizeText(text).slice(0, 200)]);
+}
+
 function observationKey(action: ActionFingerprint, event: ToolCycleInput): string {
   const details = asRecord(event.details);
   if (action.family === 'search' && Array.isArray(details.matches)) {
+    // Paths alone make "same files, moved/changed hits" look like a repeated
+    // observation, which is exactly what an agent chasing a moving target
+    // through a file produces. Location and matched text carry the difference.
     const ids = details.matches
-      .map((match) => {
-        if (match && typeof match === 'object' && 'path' in match) {
-          return String((match as { path?: unknown }).path ?? '');
-        }
-        return '';
-      })
+      .slice(0, MAX_MATCH_IDENTITIES)
+      .map((match) => (match && typeof match === 'object'
+        ? matchIdentity(match as Record<string, unknown>)
+        : ''))
       .filter(Boolean)
       .sort();
-    return fingerprint(['obs', action.key, ids.join('|')]);
+    return fingerprint(['obs', action.key, String(details.matches.length), ids.join('|')]);
   }
   const text = contentText(event.content);
   return fingerprint(['obs', action.key, normalizeText(text).slice(0, 4000)]);

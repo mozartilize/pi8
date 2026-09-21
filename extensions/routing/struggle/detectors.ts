@@ -3,7 +3,17 @@
  *
  * AOR counts equivalent (action, observation) pairs, not max similarity.
  * PS ignores `unknown` cycles so unverified mutations do not look like stalls.
- * Two warnings that share evidence are one warning.
+ *
+ * Independence is checked by evidence-id overlap, which is a deliberately
+ * narrow test: it collapses two detectors that cite literally the same ids,
+ * not two detectors reading the same underlying cycle through different
+ * lenses. Families namespace their ids differently (`fail:<signature>` vs
+ * `<action-key>:<observation-key>`), so FP and PS can both fire on one
+ * failing verifier loop and count as two warnings. That is intended — they
+ * measure different properties — but it is overlap rejection, not general
+ * correlation rejection, and reading it as the latter overstates the
+ * guarantee. Stronger correlation rejection would need shared cycle
+ * provenance on the evidence ids themselves.
  */
 import type { StruggleDecision, StruggleSeverity, StruggleSignal } from './types.js';
 import type { ActionFingerprint } from './fingerprints.js';

@@ -94,10 +94,21 @@ export interface ReasoningLoopSnapshot {
   severity: StruggleSeverity;
 }
 
+interface ReasoningWindow {
+  shingles: Set<string>;
+  repeated: boolean;
+}
+
 export class ReasoningLoopDetector {
   private tokens: string[] = [];
   private tokenCount = 0;
-  private windows: Set<string>[] = [];
+  /**
+   * Numerator and denominator of the repeat share must live on the same
+   * retention scope. A lifetime repeat count over a rolling window count
+   * inflates the share as old windows age out, and can exceed 1 outright —
+   * which would abort a still-pre-output attempt on arithmetic alone.
+   */
+  private windows: ReasoningWindow[] = [];
   private repeatedWindowCount = 0;
   private reflectionTransitions = 0;
   private maxSimilarity = 0;
@@ -145,16 +156,21 @@ export class ReasoningLoopDetector {
     while (this.tokens.length - this.cursor >= RL_WINDOW) {
       const windowTokens = this.tokens.slice(this.cursor, this.cursor + RL_WINDOW);
       const set = shingles(windowTokens);
+      let repeated = false;
       for (let i = 0; i < this.windows.length - 1; i += 1) {
-        const similarity = jaccard(set, this.windows[i]!);
+        const similarity = jaccard(set, this.windows[i]!.shingles);
         if (similarity > this.maxSimilarity) this.maxSimilarity = similarity;
         if (similarity >= RL_NEAR_DUPLICATE) {
-          this.repeatedWindowCount += 1;
+          repeated = true;
           break;
         }
       }
-      this.windows.push(set);
-      if (this.windows.length > MAX_WINDOWS) this.windows.shift();
+      this.windows.push({ shingles: set, repeated });
+      if (repeated) this.repeatedWindowCount += 1;
+      if (this.windows.length > MAX_WINDOWS) {
+        const evicted = this.windows.shift();
+        if (evicted?.repeated) this.repeatedWindowCount -= 1;
+      }
       this.cursor += RL_STRIDE;
     }
     if (this.tokens.length > RL_WINDOW + RL_STRIDE * 2) {

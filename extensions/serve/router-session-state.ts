@@ -459,24 +459,43 @@ export class RouterSession {
   }
 
   observeTrajectory(event: ToolCycleInput, invocation: number): StruggleDecision | undefined {
+    this.syncTrajectoryOwner();
     return this.trajectory.observeToolResult(event, invocation);
   }
 
-  servedTrajectoryKey(): string | undefined {
+  /**
+   * Bind struggle evidence to whichever capability is serving before that
+   * evidence is recorded. Every owner change goes through here — a trajectory
+   * handoff, an objective-failure fallback, or a user escalation — so a
+   * pending claim always names the model whose own cycles produced it.
+   */
+  private syncTrajectoryOwner(): void {
+    // Served identity only. The decision fallback names a pick that has not
+    // run yet and is spelled differently, so owning evidence by it would make
+    // one model's own serve look like a handoff and drop its own evidence.
+    this.trajectory.bindOwner(this.servedCapabilityKey());
+  }
+
+  /** Identity of the capability that last actually served, effort included. */
+  private servedCapabilityKey(): string | undefined {
     const served = this.getLastServed();
-    if (served?.registryId) {
-      return served.thinkingLevel
-        ? `${served.registryId}:${served.thinkingLevel}`
-        : served.registryId;
-    }
-    return this.getLastDecision()?.chosen;
+    if (!served?.registryId) return undefined;
+    return served.thinkingLevel
+      ? `${served.registryId}:${served.thinkingLevel}`
+      : served.registryId;
+  }
+
+  servedTrajectoryKey(): string | undefined {
+    return this.servedCapabilityKey() ?? this.getLastDecision()?.chosen;
   }
 
   noteTrajectoryToolCall(toolName: string, toolCallId: string, input?: unknown): StruggleDecision | undefined {
+    this.syncTrajectoryOwner();
     return this.trajectory.noteToolCall(toolName, toolCallId, input);
   }
 
   abandonUnresolvedTrajectoryCalls(): StruggleDecision | undefined {
+    this.syncTrajectoryOwner();
     return this.trajectory.abandonUnresolvedCalls();
   }
 
@@ -486,7 +505,7 @@ export class RouterSession {
    * escalation from that evidence before the next routing peek.
    */
   flushAndArmUnresolvedTrajectory(): void {
-    const decision = this.trajectory.abandonUnresolvedCalls();
+    const decision = this.abandonUnresolvedTrajectoryCalls();
     if (!decision) return;
     this.armTrajectoryEscalation(
       decision,

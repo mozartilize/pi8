@@ -657,6 +657,11 @@ export function isStrictlyStrongerCandidate(
   if (!isValidEscalationCandidate(destKey, fromModel)) return false;
   const sourceParsed = parseCandidateKey(fromModel);
   const destParsed = parseCandidateKey(destKey);
+  // Same model, and the guard above already proved a strictly higher effort.
+  // More reasoning effort on the same weights is itself the capability
+  // escalation, so this deliberately needs no benchmark comparison — the
+  // effort ladder is the evidence. Unmeasured efforts would otherwise be
+  // unreachable as destinations even when the model plainly supports them.
   if (destParsed.id === sourceParsed.id) return true;
   const measured = destAtServedEffort(dest, dim, opts);
   if (!measured) return false;

@@ -305,3 +305,61 @@ describe('trajectory flush-and-arm', () => {
     expect(session.peekPendingTrajectoryEscalation()?.fromModel).toBe('test/weak:low');
   });
 });
+
+describe('trajectory evidence ownership', () => {
+  const sameRead = (id: string) => ({
+    toolName: 'read',
+    toolCallId: id,
+    input: { path: 'a.ts' },
+    content: [{ type: 'text', text: 'v1' }],
+  });
+
+  const serve = (session: RouterSession, registryId: string, thinkingLevel?: string): void => {
+    session.setLastServed({ registryId, thinkingLevel, viaFallback: false, accumulatedCost: 0 });
+  };
+
+  it('keeps evidence owned by the model that produced it across one serve', () => {
+    const session = new RouterSession();
+    session.setLastDecision(routingDecision(['test/weak:low']));
+    session.bindTrajectoryIntent('intent-a');
+    serve(session, 'test/weak', 'low');
+    session.observeTrajectory(sameRead('r1'), 1);
+    session.observeTrajectory(sameRead('r2'), 2);
+    session.observeTrajectory(sameRead('r3'), 3);
+    const decision = session.observeTrajectory(sameRead('r4'), 4);
+    session.armTrajectoryEscalation(decision!, session.servedTrajectoryKey(), 'implement', false);
+    expect(session.peekPendingTrajectoryEscalation()?.fromModel).toBe('test/weak:low');
+  });
+
+  it('drops the prior model\'s claim once a different capability serves', () => {
+    const session = new RouterSession();
+    session.setLastDecision(routingDecision(['test/weak:low']));
+    session.bindTrajectoryIntent('intent-a');
+    serve(session, 'test/weak', 'low');
+    for (const id of ['r1', 'r2', 'r3', 'r4']) session.observeTrajectory(sameRead(id), 1);
+    session.armTrajectoryEscalation(
+      session.observeTrajectory(sameRead('r5'), 5)!,
+      session.servedTrajectoryKey(),
+      'implement',
+      false,
+    );
+    expect(session.peekPendingTrajectoryEscalation()).toBeDefined();
+
+    // The handoff served: evidence from here on describes the new capability.
+    serve(session, 'test/strong', 'high');
+    const decision = session.observeTrajectory(sameRead('r6'), 6);
+    session.armTrajectoryEscalation(decision!, session.servedTrajectoryKey(), 'implement', false);
+    expect(session.peekPendingTrajectoryEscalation()).toBeUndefined();
+  });
+
+  it('treats the same model at a higher effort as a different owner', () => {
+    const session = new RouterSession();
+    session.setLastDecision(routingDecision(['test/weak:low']));
+    session.bindTrajectoryIntent('intent-a');
+    serve(session, 'test/weak', 'low');
+    for (const id of ['r1', 'r2', 'r3']) session.observeTrajectory(sameRead(id), 1);
+    serve(session, 'test/weak', 'high');
+    const decision = session.observeTrajectory(sameRead('r4'), 4);
+    expect(decision?.signals.find((s) => s.kind === 'aor')?.severity).toBe('none');
+  });
+});
