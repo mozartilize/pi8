@@ -3,12 +3,10 @@
  *
  * Walks the ranked fallback chain produced by the scorer, attempts each model
  * in turn, and pumps stream events back to the caller until one candidate
- * succeeds or the chain is exhausted. Handles auth probing, bounded same-model
- * retries on transient provider errors, per-model blacklisting, provider
- * circuit-breaking, first-event timeouts, and provider-specific base-url
- * resolution (e.g. GitHub Copilot proxy endpoints).
+ * succeeds or the chain is exhausted. Pi's registry owns request auth and
+ * provider dispatch; the router owns bounded setup/output waits, same-model
+ * retries, blacklisting, and provider circuit-breaking.
  */
-import { streamSimple } from '@earendil-works/pi-ai/compat';
 import {
   isRetryableAssistantError,
   type Api,
@@ -70,12 +68,18 @@ export function setDelegationTimeouts(opts?: { authMs?: number; firstEventMs?: n
   retryBackoffMs = opts?.retryBackoffMs ?? 400;
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
-  });
-  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+/** Stop waiting even when a provider ignores cancellation; remove each wait's listener. */
+function nextWithAbort<T>(iterator: AsyncIterator<T>, signal: AbortSignal): Promise<IteratorResult<T>> {
+  signal.throwIfAborted();
+  let onAbort: () => void;
+  return new Promise<IteratorResult<T>>((resolve, reject) => {
+    onAbort = (): void => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return iterator.next();
+    }).then(resolve, reject);
+  }).finally(() => signal.removeEventListener('abort', onAbort));
 }
 
 /** Abortable retry delay: rejects promptly on signal abort (listener removed). */
@@ -408,33 +412,23 @@ function decideAfterFailure(
  * `lastChosenRegistryId`, because the provider already recorded this turn's
  * decision before delegation starts.
  */
-function recordServedAttempt(args: {
-  decision: RoutingDecision;
-  candidateId: string;
-  candidateIndex: number;
-  provider: string;
-  modelId: string;
-  effectiveReasoning: ModelThinkingLevel | undefined;
-  optionsReasoning: string | undefined;
-  notifyOnRoute: boolean | undefined;
-  extensionContext: ExtensionContext | undefined;
-  session: RouterSession;
-  /** Evidence when this attempt is a pre-output capability hop, not a failure. */
-  trajectoryHop: PendingTrajectoryEscalation | undefined;
-  /** False when a newer session/intent owns state; skip session writes. */
-  persist: boolean;
-}): { lastServed: ServedInfo; finalDecision: RoutingDecision } {
-  const viaFallback = args.candidateIndex > 0;
+function recordServedAttempt(
+  ctx: DelegationContext,
+  candidate: PreparedCandidate,
+): { lastServed: ServedInfo; finalDecision: RoutingDecision } {
+  const { decision, session } = ctx;
+  const { candidateId, candidateIndex } = candidate;
+  const viaFallback = candidateIndex > 0;
   // A capability hop and a failure fallback reach the same later candidate by
   // different mechanisms, and `/router-why` distinguishes them by cause.
-  const hop = args.trajectoryHop;
+  const hop = candidate.hopTargetThisCandidate ? candidate.servingHop : undefined;
   const hopCause: DecisionCause = hop
-    ? (POLICY_PASSIVE_CAUSES.has(args.decision.cause) ? 'trajectory-escalation' : args.decision.cause)
+    ? (POLICY_PASSIVE_CAUSES.has(decision.cause) ? 'trajectory-escalation' : decision.cause)
     : 'error-fallback';
   const baseDecision = viaFallback
     ? {
-        ...args.decision,
-        chosen: args.candidateId,
+        ...decision,
+        chosen: candidateId,
         cause: hopCause,
         ...(hop
           ? {
@@ -451,24 +445,24 @@ function recordServedAttempt(args: {
             }
           : {}),
         reason: hop
-          ? `${args.decision.reason}; capability hop after pre-output reasoning loop on ${hop.fromModel}`
-          : `${args.decision.reason}; fallback served after an earlier candidate failed`,
+          ? `${decision.reason}; capability hop after pre-output reasoning loop on ${hop.fromModel}`
+          : `${decision.reason}; fallback served after an earlier candidate failed`,
         fallbackChain: [
           ...new Set([
-            ...args.decision.fallbackChain.slice(args.candidateIndex),
-            ...args.decision.fallbackChain.slice(0, args.candidateIndex),
+            ...decision.fallbackChain.slice(candidateIndex),
+            ...decision.fallbackChain.slice(0, candidateIndex),
           ]),
         ],
       }
-    : args.decision;
+    : decision;
   // Terminal capability is scored for every candidate up front, but only
   // the model that actually streams the turn's output has "served"
   // capability — fallback can substitute a lower-tier sibling.
-  const servedCandidateCapability = baseDecision.multiWork?.candidateCapability[args.candidateId];
+  const servedCandidateCapability = baseDecision.multiWork?.candidateCapability[candidateId];
   const finalMultiWork = baseDecision.multiWork && servedCandidateCapability
     ? {
         ...baseDecision.multiWork,
-        servedCandidateKey: args.candidateId,
+        servedCandidateKey: candidateId,
         servedCapability: servedCandidateCapability,
       }
     : baseDecision.multiWork;
@@ -476,11 +470,12 @@ function recordServedAttempt(args: {
     ? { ...baseDecision, multiWork: finalMultiWork }
     : baseDecision;
   const lastServed: ServedInfo = {
-    registryId: `${args.provider}/${args.modelId}`,
-    thinkingLevel: (args.effectiveReasoning ?? args.optionsReasoning) as string | undefined,
+    registryId: `${candidate.provider}/${candidate.modelId}`,
+    thinkingLevel: (candidate.effectiveReasoning
+      ?? ctx.opts.options?.reasoning) as string | undefined,
     viaFallback,
-    fallbackRank: viaFallback ? args.candidateIndex + 1 : undefined,
-    accumulatedCost: args.session.getAccumulatedCost(),
+    fallbackRank: viaFallback ? candidateIndex + 1 : undefined,
+    accumulatedCost: session.getAccumulatedCost(),
     ...(finalMultiWork?.servedCapability
       ? {
           capability: {
@@ -492,16 +487,357 @@ function recordServedAttempt(args: {
         }
       : {}),
   };
-  if (args.persist) {
-    args.session.setLastServed(lastServed);
-    args.session.setLastDecision(finalDecision);
-    renderRouterStatus(args.extensionContext, finalDecision, lastServed);
-    if (args.notifyOnRoute && args.candidateId !== args.session.getLastNotifiedModel()) {
-      notifyRouting(args.extensionContext, finalDecision, lastServed);
+  // Evaluated here, not at attempt start: a newer session or intent may have
+  // taken ownership while this attempt was streaming.
+  if (ctx.stillCurrent()) {
+    session.setLastServed(lastServed);
+    session.setLastDecision(finalDecision);
+    renderRouterStatus(ctx.opts.extensionContext, finalDecision, lastServed);
+    if (ctx.opts.notifyOnRoute && candidateId !== session.getLastNotifiedModel()) {
+      notifyRouting(ctx.opts.extensionContext, finalDecision, lastServed);
     }
-    args.session.setLastNotifiedModel(args.candidateId);
+    session.setLastNotifiedModel(candidateId);
   }
   return { lastServed, finalDecision };
+}
+
+interface TurnSpend {
+  routedCost: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  incomplete: boolean;
+}
+
+type DelegatedEvent = { type: string };
+
+type AttemptEventDisposition =
+  | { kind: 'continue' }
+  | { kind: 'trajectory' }
+  | { kind: 'output-limit'; message: string }
+  | {
+      kind: 'provider-error';
+      message: string;
+      error: { stopReason?: string; errorMessage?: string } | undefined;
+    };
+
+type CandidateAttemptResult =
+  | {
+      kind: 'served';
+      lastServed: ServedInfo | undefined;
+      finalDecision: RoutingDecision;
+      effectiveSource: string;
+    }
+  | { kind: 'trajectory'; message: string; effectiveSource: string; usageObserved: boolean }
+  | { kind: 'aborted'; message: string }
+  | { kind: 'finalize'; message: string }
+  | { kind: 'provider-dead'; message: string }
+  | { kind: 'retry'; message: string; transient: boolean; outputLimitExhausted: boolean }
+  | { kind: 'next-candidate'; message: string; transient: boolean; outputLimitExhausted: boolean };
+
+/** Turn-level inputs, constant for the whole delegation walk. */
+interface DelegationContext {
+  opts: DelegationOptions;
+  stream: AssistantMessageEventStream;
+  decision: RoutingDecision;
+  turnSpend: TurnSpend;
+  session: RouterSession;
+  stillCurrent: () => boolean;
+}
+
+/**
+ * One candidate resolved against the registry and ready to stream. Every
+ * field is constant across that candidate's retries — including the resolved
+ * effort and the stronger-target probe, which depend on the candidate and the
+ * chain rather than on the attempt number.
+ */
+interface PreparedCandidate {
+  candidateId: string;
+  candidateIndex: number;
+  attemptIndex: number;
+  provider: string;
+  modelId: string;
+  chosen: Model<Api>;
+  effectiveReasoning: ModelThinkingLevel | undefined;
+  effectiveSource: string;
+  remainingHasStronger: boolean;
+  hopTargetThisCandidate: boolean;
+  servingHop: PendingTrajectoryEscalation | undefined;
+}
+
+/**
+ * Single owner for one provider attempt's event-derived state. Pi's stream is
+ * a consumable queue, not a broadcast channel, so buffering, replay safety,
+ * liveness, usage, and reasoning-loop detection must observe each event in
+ * one ordered transition before anything reaches the consumer stream.
+ */
+class AttemptController {
+  visibleTextReceived = false;
+  toolCallReceived = false;
+  thinkingReceived = false;
+  meaningfulOutputReceived = false;
+  sawFirstEvent = false;
+  observedUsage: Parameters<typeof accumulateAttemptUsage>[0];
+  terminalAccounting = false;
+  lastServed: ServedInfo | undefined;
+  finalDecision: RoutingDecision;
+
+  private servedTracked = false;
+  private usageCommitted = false;
+  private readonly reasoningLoop = new ReasoningLoopDetector();
+  private readonly attemptBuffer: ReturnType<typeof createAttemptBuffer>;
+
+  constructor(
+    private readonly ctx: DelegationContext,
+    private readonly candidate: PreparedCandidate,
+  ) {
+    this.finalDecision = ctx.decision;
+    this.attemptBuffer = createAttemptBuffer(ctx.stream, candidate.candidateId);
+  }
+
+  get committedToStream(): boolean {
+    return this.attemptBuffer.committedToStream;
+  }
+
+  accept(event: DelegatedEvent): AttemptEventDisposition {
+    const latestUsage = eventUsage(event);
+    if (latestUsage) {
+      this.observedUsage = latestUsage;
+      if (event.type === 'done' || event.type === 'error') this.terminalAccounting = true;
+    }
+
+    if (isServedOutputEvent(event.type)) this.meaningfulOutputReceived = true;
+    if (event.type === 'text_delta') this.visibleTextReceived = true;
+    if (event.type === 'thinking_delta') {
+      this.thinkingReceived = true;
+      const rec = event as { delta?: unknown; text?: unknown; content?: unknown };
+      const delta = typeof rec.delta === 'string'
+        ? rec.delta
+        : typeof rec.text === 'string'
+          ? rec.text
+          : typeof rec.content === 'string'
+            ? rec.content
+            : '';
+      this.reasoningLoop.update(delta);
+      if (
+        this.candidate.remainingHasStronger
+        && !this.meaningfulOutputReceived
+        && !this.attemptBuffer.committedToStream
+        && this.reasoningLoop.severity() === 'severe'
+      ) {
+        return { kind: 'trajectory' };
+      }
+    }
+    if (isToolCallEvent(event.type)) this.toolCallReceived = true;
+
+    const classified = classifyTerminalEvent(
+      event,
+      this.visibleTextReceived,
+      this.toolCallReceived,
+      this.candidate.candidateId,
+    );
+    if (classified.kind === 'output-limit') {
+      return {
+        kind: 'output-limit',
+        message: this.thinkingReceived
+          ? `reasoning exhausted the output limit before an answer: ${this.candidate.candidateId}`
+          : `output limit reached before an answer: ${this.candidate.candidateId}`,
+      };
+    }
+    if (classified.kind === 'provider-error') {
+      return { kind: 'provider-error', message: classified.message, error: classified.error };
+    }
+
+    if (!this.servedTracked && isServedOutputEvent(event.type)) {
+      this.servedTracked = true;
+      const recorded = recordServedAttempt(this.ctx, this.candidate);
+      this.lastServed = recorded.lastServed;
+      this.finalDecision = recorded.finalDecision;
+    }
+    this.attemptBuffer.forward(event);
+    return { kind: 'continue' };
+  }
+
+  commitUsage(providerAttempted: boolean): void {
+    if (this.usageCommitted) return;
+    this.usageCommitted = true;
+    if (this.observedUsage) {
+      accumulateAttemptUsage(
+        this.observedUsage,
+        (this.candidate.chosen as unknown as { cost?: Candidate['cost'] }).cost,
+        this.ctx.turnSpend,
+        this.ctx.session,
+      );
+    }
+    // Auth/setup failures happen inside ModelRuntime's lazy stream but before
+    // provider dispatch, so they spent no provider tokens and cannot make
+    // routed spend incomplete.
+    if (providerAttempted && !this.terminalAccounting) this.ctx.turnSpend.incomplete = true;
+    debugLog('attempt.usage', {
+      candidate: this.candidate.candidateId,
+      usage: this.observedUsage ? 'observed' : 'missing',
+    });
+  }
+}
+
+async function runCandidateAttempt(
+  ctx: DelegationContext,
+  candidate: PreparedCandidate,
+  tries: number,
+): Promise<CandidateAttemptResult> {
+  const attemptAbort = new AbortController();
+  const callerSignal = ctx.opts.options?.signal;
+  const forwardAbort = (): void => attemptAbort.abort(new Error('aborted'));
+  callerSignal?.addEventListener('abort', forwardAbort, { once: true });
+  if (callerSignal?.aborted) forwardAbort();
+
+  let iterator: AsyncIterator<DelegatedEvent> | undefined;
+  let networkTimeout = false;
+  let failureError: unknown;
+  let failureMessageObj: { stopReason?: string; errorMessage?: string } | undefined;
+  let outputLimitExhausted = false;
+  let trajectoryEscalation = false;
+  const streamTimer = startTimer();
+  const controller = new AttemptController(ctx, candidate);
+  let requestReady = false;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  const armDeadline = (ms: number, message: string): void => {
+    clearTimeout(deadline);
+    deadline = setTimeout(() => {
+      networkTimeout = true;
+      attemptAbort.abort(new Error(message));
+    }, ms);
+  };
+  const armOutputDeadline = (): void => armDeadline(
+    firstEventTimeoutMs,
+    `no response within ${Math.round(firstEventTimeoutMs / 1000)}s: ${candidate.candidateId}`,
+  );
+  // These values belong to router/auto's resolved request, not the destination.
+  // Even the synthetic router API key overrides stored destination credentials.
+  const { apiKey: _apiKey, headers: _headers, env: _env, ...options } = ctx.opts.options ?? {};
+
+  try {
+    try {
+      attemptAbort.signal.throwIfAborted();
+      armDeadline(authResolveTimeoutMs, `credential lookup timed out: ${candidate.candidateId}`);
+      const delegatedStream = ctx.opts.registry.streamSimple(
+        candidate.chosen,
+        ctx.opts.context,
+        {
+          ...options,
+          ...(candidate.effectiveReasoning && candidate.effectiveReasoning !== 'off'
+            ? { reasoning: candidate.effectiveReasoning }
+            : {}),
+          signal: attemptAbort.signal,
+          // Pi awaits this after request auth, before invoking the provider.
+          // A late auth resolution must not dispatch an abandoned attempt.
+          transformHeaders: (headers) => {
+            attemptAbort.signal.throwIfAborted();
+            requestReady = true;
+            debugLog('attempt.auth', { candidate: candidate.candidateId, ms: streamTimer(), outcome: 'ok' });
+            armOutputDeadline();
+            return headers;
+          },
+        },
+      );
+      iterator = (delegatedStream as AsyncIterable<DelegatedEvent>)[Symbol.asyncIterator]();
+
+      for (;;) {
+        const step = await nextWithAbort(iterator, attemptAbort.signal);
+        attemptAbort.signal.throwIfAborted();
+        if (!controller.sawFirstEvent) {
+          debugLog('attempt.stream', {
+            candidate: candidate.candidateId,
+            firstEventMs: streamTimer(),
+            outcome: 'first-event',
+            event: step.done ? 'done' : step.value.type,
+          });
+        }
+        controller.sawFirstEvent = true;
+        if (step.done) break;
+
+        const disposition = controller.accept(step.value);
+        if (controller.meaningfulOutputReceived) clearTimeout(deadline);
+        else if (step.value.type === 'thinking_delta') armOutputDeadline();
+        if (disposition.kind === 'continue') continue;
+        if (disposition.kind === 'trajectory') {
+          trajectoryEscalation = true;
+          failureError = new Error(`trajectory reasoning-loop: ${candidate.candidateId}`);
+        } else if (disposition.kind === 'output-limit') {
+          outputLimitExhausted = true;
+          failureError = new Error(disposition.message);
+        } else {
+          failureMessageObj = disposition.error;
+          failureError = new Error(disposition.message);
+        }
+        break;
+      }
+      if (!failureError && !controller.meaningfulOutputReceived) {
+        failureError = new Error(`stream ended before meaningful output: ${candidate.candidateId}`);
+      }
+    } catch (error) {
+      failureError = error;
+    }
+
+    if (!failureError) {
+      debugLog('attempt.served', {
+        candidate: candidate.candidateId,
+        attemptNumber: candidate.attemptIndex + 1,
+        retries: tries,
+        streamMs: streamTimer(),
+      });
+      return {
+        kind: 'served',
+        lastServed: controller.lastServed,
+        finalDecision: controller.finalDecision,
+        effectiveSource: candidate.effectiveSource,
+      };
+    }
+
+    const message = failureError instanceof Error ? failureError.message : String(failureError);
+    const userAborted = callerSignal?.aborted === true;
+    debugLog(requestReady ? 'attempt.stream' : 'attempt.auth', {
+      candidate: candidate.candidateId,
+      streamMs: streamTimer(),
+      outcome: userAborted ? 'aborted' : networkTimeout ? 'timeout' : 'error',
+      error: message.slice(0, 120),
+    });
+    if (userAborted) return { kind: 'aborted', message: 'aborted' };
+    // Setup failures have not reached the provider. Do not spend stream retries
+    // on missing credentials or an auth resolver that cannot finish.
+    if (!requestReady) return { kind: 'next-candidate', message, transient: false, outputLimitExhausted: false };
+    if (trajectoryEscalation) {
+      return {
+        kind: 'trajectory',
+        message,
+        effectiveSource: candidate.effectiveSource,
+        usageObserved: controller.observedUsage != null,
+      };
+    }
+    const failure = decideAfterFailure(
+      controller.visibleTextReceived,
+      controller.toolCallReceived,
+      controller.committedToStream,
+      failureMessageObj,
+      message,
+      tries,
+    );
+    if (failure.action === 'finalize') return { kind: 'finalize', message };
+    if (failure.action === 'provider-dead') return { kind: 'provider-dead', message };
+    return {
+      kind: failure.action,
+      message,
+      transient: failure.transient,
+      outputLimitExhausted,
+    };
+  } finally {
+    clearTimeout(deadline);
+    controller.commitUsage(requestReady);
+    callerSignal?.removeEventListener('abort', forwardAbort);
+    if (!attemptAbort.signal.aborted) attemptAbort.abort();
+    if (iterator) closeIterator(iterator);
+  }
 }
 
 /**
@@ -517,7 +853,7 @@ export async function runDelegationLoop(
   opts: DelegationOptions,
   stream: AssistantMessageEventStream,
 ): Promise<DelegationResult> {
-  const { decision, registry, context, options, extensionContext, turnTimer } = opts;
+  const { decision, registry, extensionContext, turnTimer } = opts;
   const session = opts.session ?? defaultRouterSession;
   const startGeneration = session.getSessionGeneration();
   const startIntent = decision.intentKey;
@@ -555,6 +891,7 @@ export async function runDelegationLoop(
 
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
+  const ctx: DelegationContext = { opts, stream, decision, turnSpend, session, stillCurrent };
   /**
    * Set only for the single hop that immediately follows a pre-output
    * reasoning loop. It gates the *destination* of that hop and is cleared as
@@ -580,23 +917,6 @@ export async function runDelegationLoop(
     const n = (strikes.get(provider) ?? 0) + 1;
     strikes.set(provider, n);
     if (n >= MAX_FAILURES_PER_PROVIDER) deadProviders.add(provider);
-  };
-
-  const baseUrlByProvider = new Map<string, string | undefined>();
-  const resolveBaseUrl = async (provider: string): Promise<string | undefined> => {
-    if (baseUrlByProvider.has(provider)) return baseUrlByProvider.get(provider);
-    let baseUrl: string | undefined;
-    try {
-      const providerAuth = await withTimeout(
-        Promise.resolve(registry?.getProviderAuth?.(provider)),
-        authResolveTimeoutMs,
-      );
-      baseUrl = providerAuth?.auth?.baseUrl;
-    } catch {
-      // Missing or slow provider metadata must fall back to the model's baseUrl.
-    }
-    baseUrlByProvider.set(provider, baseUrl);
-    return baseUrl;
   };
 
   for (const [candidateIndex, candidateId] of decision.fallbackChain.entries()) {
@@ -632,41 +952,6 @@ export async function runDelegationLoop(
       continue;
     }
 
-    let auth;
-    const authTimer = startTimer();
-    try {
-      auth = await withTimeout(
-        Promise.resolve(registry?.getApiKeyAndHeaders(chosen)),
-        authResolveTimeoutMs,
-      );
-    } catch {
-      lastError = `credential lookup timed out: ${candidateId}`;
-      session.blacklistModel(candidateId);
-      recordFailure(provider, 'provider');
-      debugLog('attempt.auth', { candidate: candidateId, ms: authTimer(), outcome: 'timeout' });
-      continue;
-    }
-    // Header-only auth (e.g. kimi-coding OAuth Bearer) is valid; apiKey may be absent.
-    if (!auth || !auth.ok || (!auth.apiKey && (!auth.headers || Object.keys(auth.headers).length === 0))) {
-      lastError = `no usable credentials: ${candidateId}`;
-      session.blacklistModel(candidateId);
-      recordFailure(provider, 'provider');
-      debugLog('attempt.auth', { candidate: candidateId, ms: authTimer(), outcome: 'no-creds' });
-      continue;
-    }
-    debugLog('attempt.auth', { candidate: candidateId, ms: authTimer(), outcome: 'ok' });
-
-    const resolvedBaseUrl = await resolveBaseUrl(provider);
-    const modelForStream = (resolvedBaseUrl
-      ? { ...(chosen as Model<Api>), baseUrl: resolvedBaseUrl }
-      : chosen) as Model<Api>;
-    // A provider registered with its own `streamSimple` (e.g. an OAuth/SDK-backed
-    // virtual provider with a non-standard `api` value) must be dispatched through
-    // that registered implementation. The generic compat `streamSimple` only
-    // resolves built-in `api` types and throws "No API provider registered for
-    // api: <custom>" for anything else.
-    const providerStreamSimple = registry?.getProvider?.(provider)?.streamSimple ?? streamSimple;
-
     // A candidate may be retried in place on a transient/generic provider
     // error before we fall over to the next model. `served` breaks the outer
     // walk; the failure classification decides whether the model is blacklisted.
@@ -674,6 +959,45 @@ export async function runDelegationLoop(
     let candidateTransient = false;
     let candidateOutputLimitExhausted = false;
     let candidateTrajectoryEscalation = false;
+
+    // A sticky incumbent held on a cheap-classified follow-up carries the
+    // incumbent's resolved dimension as an up-only effort floor, so the
+    // served thinking level cannot drop below what the incumbent ran at.
+    const effortFloorDimension = decision.effortFloorDimension ?? decision.dimension;
+    const effectiveReasoning = resolveAttemptEffort(
+      entryEffort,
+      effortFloorDimension,
+      opts.userReasoningOverride,
+      chosen as Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
+      opts.reasoning,
+    );
+    const effectiveSource = `${provider}/${modelId}:${effectiveReasoning ?? 'off'}`;
+    const sourceCandidate = opts.candidates
+      ? findSourceCandidate(opts.candidates, effectiveSource)
+      : undefined;
+    // Resolved once per candidate, not per retry: a retry changes only the
+    // attempt number. A trajectory hop does rewrite the remaining chain, but
+    // it leaves this candidate immediately, so the next candidate recomputes
+    // this against the rewritten chain.
+    const remainingHasStronger = decision.fallbackChain.slice(candidateIndex + 1).some((key) => {
+      const dest = opts.candidates?.find((entry) => candidateKey(entry) === key);
+      return dest
+        ? isStrictlyStrongerCandidate(dest, effectiveSource, decision.dimension, sourceCandidate, compareOpts)
+        : false;
+    });
+    const prepared: PreparedCandidate = {
+      candidateId,
+      candidateIndex,
+      attemptIndex,
+      provider,
+      modelId,
+      chosen: chosen as Model<Api>,
+      effectiveReasoning,
+      effectiveSource,
+      remainingHasStronger,
+      hopTargetThisCandidate,
+      servingHop,
+    };
 
     // If the request was already aborted before this candidate began, surface
     // the canonical aborted terminal event without blacklisting or retrying.
@@ -709,326 +1033,105 @@ export async function runDelegationLoop(
         debugLog('attempt.retry', { candidate: candidateId, retry: tries });
       }
 
-      // A sticky incumbent held on a cheap-classified follow-up carries the
-      // incumbent's resolved dimension as an up-only effort floor, so the
-      // served thinking level cannot drop below what the incumbent ran at.
-      const effortFloorDimension = decision.effortFloorDimension ?? decision.dimension;
-      const effectiveReasoning = resolveAttemptEffort(
-        entryEffort,
-        effortFloorDimension,
-        opts.userReasoningOverride,
-        chosen as Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
-        opts.reasoning,
-      );
-      // The answer deadline is absolute from stream start. Lifecycle heartbeats
-      // (start/done) cannot renew it. Thinking output is the one exception: a
-      // reasoning model legitimately streams thinking for a while before its
-      // first text/tool-call, so each thinking delta pushes the deadline
-      // forward by one stall window — liveness is still enforced (a reasoning
-      // stall longer than the window fails the candidate) without a single
-      // thinking token disabling the deadline outright.
-      let answerDeadline = Date.now() + firstEventTimeoutMs;
-      const effectiveSource = `${provider}/${modelId}:${effectiveReasoning ?? 'off'}`;
-      const sourceCandidate = opts.candidates
-        ? findSourceCandidate(opts.candidates, effectiveSource)
-        : undefined;
-      const remainingHasStronger = decision.fallbackChain.slice(candidateIndex + 1).some((key) => {
-        const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === key);
-        return dest
-          ? isStrictlyStrongerCandidate(dest, effectiveSource, decision.dimension, sourceCandidate, compareOpts)
-          : false;
-      });
-      const reasoningLoop = new ReasoningLoopDetector();
-      // Closing the iterator does not stop the provider: Pi's EventStream
-      // iterator only detaches this consumer, while the producer keeps
-      // generating (and billing) against `options.signal`. An attempt-local
-      // controller, chained to the caller's signal so a user abort still
-      // propagates, is the only way to actually end an abandoned attempt.
-      const attemptAbort = new AbortController();
-      const callerSignal = options?.signal;
-      const forwardAbort = () => attemptAbort.abort();
-      callerSignal?.addEventListener('abort', forwardAbort, { once: true });
-      const delegatedStream = providerStreamSimple(modelForStream, context, {
-        ...options,
-        ...(effectiveReasoning && effectiveReasoning !== 'off'
-          ? { reasoning: effectiveReasoning }
-          : {}),
-        signal: attemptAbort.signal,
-        apiKey: auth.apiKey,
-        headers: auth.headers,
-      });
-      const iterator = (delegatedStream as AsyncIterable<{ type: string }>)[Symbol.asyncIterator]();
+      const attempt = await runCandidateAttempt(ctx, prepared, tries);
 
-      let visibleTextReceived = false;
-      let toolCallReceived = false;
-      let thinkingReceived = false;
-      let servedTracked = false;
-      let sawFirstEvent = false;
-      let meaningfulOutputReceived = false;
-      let networkTimeout = false;
-      let errorMessageObj: { stopReason?: string; errorMessage?: string } | undefined;
-      let observedUsage: Parameters<typeof accumulateAttemptUsage>[0];
-      let terminalAccounting = false;
-      let usageCommitted = false;
-      const streamTimer = startTimer();
-      const attemptBuffer = createAttemptBuffer(stream, candidateId);
-      const commitAttemptUsage = (status: 'observed' | 'missing'): void => {
-        if (usageCommitted) return;
-        usageCommitted = true;
-        if (observedUsage) {
-          accumulateAttemptUsage(
-            observedUsage,
-            (chosen as unknown as { cost?: Candidate['cost'] }).cost,
-            turnSpend,
-            session,
-          );
-        }
-        if (!terminalAccounting) turnSpend.incomplete = true;
-        debugLog('attempt.usage', { candidate: candidateId, usage: status });
-      };
-      try {
-        for (;;) {
-          let step: IteratorResult<{ type: string }>;
-          if (meaningfulOutputReceived) {
-            step = await iterator.next();
-          } else {
-            try {
-              const remainingMs = answerDeadline - Date.now();
-              if (remainingMs <= 0) throw new Error('meaningful output deadline elapsed');
-              step = await withTimeout(iterator.next(), remainingMs);
-            } catch {
-              networkTimeout = true;
-              debugLog('attempt.stream', { candidate: candidateId, firstEventMs: streamTimer(), outcome: 'timeout' });
-              throw new Error(
-                `no response within ${Math.round(firstEventTimeoutMs / 1000)}s: ${candidateId}`,
-              );
-            }
-          }
-          if (!sawFirstEvent) {
-            debugLog('attempt.stream', {
-              candidate: candidateId,
-              firstEventMs: streamTimer(),
-              outcome: 'first-event',
-              event: step.done ? 'done' : (step.value as { type: string }).type,
-            });
-          }
-          sawFirstEvent = true;
-          if (step.done) break;
-          const event = step.value;
-          const latestUsage = eventUsage(event);
-          if (latestUsage) {
-            observedUsage = latestUsage;
-            if (event.type === 'done' || event.type === 'error') terminalAccounting = true;
-          }
-          // Only an answer — text or a tool call — proves the candidate served
-          // this turn. Thinking is the model's own pre-answer reasoning: it
-          // keeps liveness alive (below) but must NOT disarm the answer
-          // requirement, so a candidate that emits only thinking then errors is
-          // still an answerless failure whose buffered reasoning is discarded
-          // with the attempt, never stitched onto the fallback's answer.
-          if (isServedOutputEvent(event.type)) meaningfulOutputReceived = true;
-
-          if (event.type === 'text_delta') visibleTextReceived = true;
-          if (event.type === 'thinking_delta') {
-            thinkingReceived = true;
-            answerDeadline = Date.now() + firstEventTimeoutMs;
-            const rec = event as { delta?: unknown; text?: unknown; content?: unknown };
-            const delta = typeof rec.delta === 'string'
-              ? rec.delta
-              : typeof rec.text === 'string'
-                ? rec.text
-                : typeof rec.content === 'string'
-                  ? rec.content
-                  : '';
-            reasoningLoop.update(delta);
-            if (
-              remainingHasStronger
-              && !meaningfulOutputReceived
-              && !attemptBuffer.committedToStream
-              && reasoningLoop.severity() === 'severe'
-            ) {
-              const err = new Error(`trajectory reasoning-loop: ${candidateId}`) as Error & {
-                trajectoryEscalation?: boolean;
-              };
-              err.trajectoryEscalation = true;
-              throw err;
-            }
-          }
-          if (isToolCallEvent(event.type)) toolCallReceived = true;
-
-          const classified = classifyTerminalEvent(
-            event,
-            visibleTextReceived,
-            toolCallReceived,
-            candidateId,
-          );
-          if (classified.kind === 'output-limit') {
-            candidateOutputLimitExhausted = true;
-            throw new Error(
-              thinkingReceived
-                ? `reasoning exhausted the output limit before an answer: ${candidateId}`
-                : `output limit reached before an answer: ${candidateId}`,
-            );
-          }
-          if (classified.kind === 'provider-error') {
-            errorMessageObj = classified.error;
-            throw new Error(classified.message);
-          }
-          // Record which model served this turn on the first output-bearing
-          // event of ANY kind — including tool calls. A turn whose response is
-          // pure tool-call output (an "implement" step that opens directly with
-          // an edit/write call, no narration) emits no text/thinking deltas, so
-          // the status widget and decision log must not depend on text output.
-          if (!servedTracked && isServedOutputEvent(event.type)) {
-            servedTracked = true;
-            const recorded = recordServedAttempt({
-              decision,
-              candidateId,
-              candidateIndex,
-              provider,
-              modelId,
-              effectiveReasoning,
-              optionsReasoning: opts.options?.reasoning as string | undefined,
-              notifyOnRoute: opts.notifyOnRoute,
-              extensionContext,
-              session,
-              trajectoryHop: hopTargetThisCandidate ? servingHop : undefined,
-              persist: stillCurrent(),
-            });
-            lastServed = recorded.lastServed;
-            finalDecision = recorded.finalDecision;
-          }
-          attemptBuffer.forward(event);
-        }
-        // A clean stream end with no text, thinking, or tool-call output is
-        // treated as an answerless completion, not success: a candidate that
-        // produced nothing must fall through to the next model. The length-only
-        // case above already threw with `candidateOutputLimitExhausted`, so
-        // reaching here clean means the provider simply returned nothing.
-        if (!meaningfulOutputReceived) {
-          throw new Error(`stream ended before meaningful output: ${candidateId}`);
-        }
+      if (attempt.kind === 'served') {
         success = true;
         served = true;
-        debugLog('attempt.served', {
-          candidate: candidateId,
-          attemptNumber: attemptIndex + 1,
-          retries: tries,
-          streamMs: streamTimer(),
-        });
+        lastServed = attempt.lastServed;
+        finalDecision = attempt.finalDecision;
         if (lastServed && stillCurrent()) {
           session.updateLastServed({ accumulatedCost: session.getAccumulatedCost() });
-          renderRouterStatus(extensionContext, finalDecision, { ...lastServed, accumulatedCost: session.getAccumulatedCost() });
-        }
-        break;
-      } catch (_err) {
-        const message = _err instanceof Error ? _err.message : String(_err);
-        lastError = message;
-        const userAborted = opts.options?.signal?.aborted === true;
-        if (!networkTimeout) {
-          debugLog('attempt.stream', {
-            candidate: candidateId,
-            streamMs: streamTimer(),
-            outcome: userAborted ? 'aborted' : 'error',
-            error: message.slice(0, 120),
+          renderRouterStatus(extensionContext, finalDecision, {
+            ...lastServed,
+            accumulatedCost: session.getAccumulatedCost(),
           });
         }
-        if ((_err as { trajectoryEscalation?: boolean }).trajectoryEscalation === true) {
-          candidateTrajectoryEscalation = true;
-          excludeSource = effectiveSource;
-          capabilityHop = {
-            fromModel: effectiveSource,
-            dimension: decision.dimension,
-            signals: [{
-              kind: 'reasoning-loop',
-              severity: 'severe',
-              evidenceIds: [`rl:${candidateId}`],
-              evidenceCount: 1,
-            }],
-            tfi: 1,
-            preOutput: true,
-          };
-          const remaining = decision.fallbackChain.slice(candidateIndex + 1);
-          const hopSource = opts.candidates
-            ? findSourceCandidate(opts.candidates, effectiveSource)
-            : undefined;
-          const stronger: string[] = [];
-          const recovery: string[] = [];
-          for (const key of remaining) {
-            if (!isValidEscalationCandidate(key, effectiveSource)) continue;
-            const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === key);
-            if (
-              dest
-              && isStrictlyStrongerCandidate(
-                dest,
-                effectiveSource,
-                decision.dimension,
-                hopSource,
-                compareOpts,
-              )
-            ) {
-              stronger.push(key);
-            } else {
-              recovery.push(key);
-            }
-          }
-          // Mutate the live chain in place. The outer walk iterates
-          // `fallbackChain.entries()`; replacing the array would leave that
-          // iterator on the pre-hop order and skip recovery sitting before
-          // the stronger target.
-          decision.fallbackChain.splice(
-            candidateIndex + 1,
-            decision.fallbackChain.length - (candidateIndex + 1),
-            ...stronger,
-            ...recovery,
-          );
-          if (stronger.length === 0) capabilityHop = undefined;
-          debugLog('attempt.trajectory', {
-            candidate: candidateId,
-            reason: 'reasoning-loop',
-            usage: observedUsage ? 'partial' : 'missing',
-          });
-          break;
-        }
-        if (userAborted) {
-          // User cancelled the request. Surface the standard aborted terminal
-          // event, but do not blacklist or penalize the model.
-          stream.push(makeTerminalErrorEvent('aborted', message));
-          stream.end();
-          return { success: false, streamFinalized: true, lastError: message, lastServed };
-        }
-        const failure = decideAfterFailure(
-          visibleTextReceived,
-          toolCallReceived,
-          attemptBuffer.committedToStream,
-          errorMessageObj,
-          message,
-          tries,
-        );
-        if (failure.action === 'finalize') {
-          // A usable answer or tool action already streamed — or a long
-          // reasoning trace was committed live past the buffer cap; replaying
-          // on a fallback model could duplicate user-visible output, leak the
-          // reasoning into another model's answer, or repeat side effects.
-          stream.push(makeTerminalErrorEvent('error', message));
-          stream.end();
-          return { success: false, streamFinalized: true, lastError: message, lastServed };
-        }
-        if (failure.action === 'provider-dead') {
-          session.blacklistProvider(provider);
-          deadProviders.add(provider);
-          debugLog('attempt.usage-limit', { provider, candidate: candidateId });
-          break;
-        }
-        candidateTransient = failure.transient;
-        if (failure.action === 'retry') continue;
         break;
-      } finally {
-        commitAttemptUsage(observedUsage ? 'observed' : 'missing');
-        callerSignal?.removeEventListener('abort', forwardAbort);
-        if (!attemptAbort.signal.aborted) attemptAbort.abort();
-        closeIterator(iterator as AsyncIterator<unknown>);
       }
+
+      lastError = attempt.message;
+      if (attempt.kind === 'trajectory') {
+        candidateTrajectoryEscalation = true;
+        excludeSource = attempt.effectiveSource;
+        capabilityHop = {
+          fromModel: attempt.effectiveSource,
+          dimension: decision.dimension,
+          signals: [{
+            kind: 'reasoning-loop',
+            severity: 'severe',
+            evidenceIds: [`rl:${candidateId}`],
+            evidenceCount: 1,
+          }],
+          tfi: 1,
+          preOutput: true,
+        };
+        const remaining = decision.fallbackChain.slice(candidateIndex + 1);
+        const hopSource = opts.candidates
+          ? findSourceCandidate(opts.candidates, attempt.effectiveSource)
+          : undefined;
+        const stronger: string[] = [];
+        const recovery: string[] = [];
+        for (const key of remaining) {
+          if (!isValidEscalationCandidate(key, attempt.effectiveSource)) continue;
+          const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === key);
+          if (
+            dest
+            && isStrictlyStrongerCandidate(
+              dest,
+              attempt.effectiveSource,
+              decision.dimension,
+              hopSource,
+              compareOpts,
+            )
+          ) {
+            stronger.push(key);
+          } else {
+            recovery.push(key);
+          }
+        }
+        // Mutate the live chain in place. The outer walk iterates
+        // `fallbackChain.entries()`; replacing the array would leave that
+        // iterator on the pre-hop order and skip recovery sitting before
+        // the stronger target.
+        decision.fallbackChain.splice(
+          candidateIndex + 1,
+          decision.fallbackChain.length - (candidateIndex + 1),
+          ...stronger,
+          ...recovery,
+        );
+        if (stronger.length === 0) capabilityHop = undefined;
+        debugLog('attempt.trajectory', {
+          candidate: candidateId,
+          reason: 'reasoning-loop',
+          usage: attempt.usageObserved ? 'partial' : 'missing',
+        });
+        break;
+      }
+      if (attempt.kind === 'aborted' || attempt.kind === 'finalize') {
+        stream.push(makeTerminalErrorEvent(
+          attempt.kind === 'aborted' ? 'aborted' : 'error',
+          attempt.message,
+        ));
+        stream.end();
+        return {
+          success: false,
+          streamFinalized: true,
+          lastError: attempt.message,
+          lastServed,
+        };
+      }
+      if (attempt.kind === 'provider-dead') {
+        session.blacklistProvider(provider);
+        deadProviders.add(provider);
+        debugLog('attempt.usage-limit', { provider, candidate: candidateId });
+        break;
+      }
+
+      candidateTransient = attempt.transient;
+      candidateOutputLimitExhausted ||= attempt.outputLimitExhausted;
+      if (attempt.kind === 'retry') continue;
+      break;
     }
 
     if (served) break; // a candidate served the turn — done

@@ -396,13 +396,13 @@ describe('runDelegationLoop contracts', () => {
     expect(h.blacklist).not.toContain('alpha/limited');
   });
 
-  it('falls back to the model baseUrl when provider auth metadata hangs', async () => {
+  it('skips a candidate when its request auth metadata cannot resolve', async () => {
     setDelegationTimeouts({ authMs: 10 });
     const h = createDelegationHarness({
-      chain: ['alpha/model'],
-      getProviderAuth: () => new Promise(() => {}),
+      chain: ['alpha/model', 'beta/answer'],
+      getProviderAuth: (provider) => provider === 'alpha' ? new Promise(() => {}) : Promise.resolve(undefined),
       scripts: {
-        'alpha/model': [
+        'beta/answer': [
           [
             { type: 'text_delta', delta: 'ok' },
             { type: 'done', message: { stopReason: 'stop' } },
@@ -414,7 +414,8 @@ describe('runDelegationLoop contracts', () => {
     const result = await h.run();
 
     expect(result.success).toBe(true);
-    expect(h.streamedModels[0]?.baseUrl).toBe('https://alpha.example.test');
+    expect(h.attempts).toEqual(['beta/answer']);
+    expect(h.blacklist).toContain('alpha/model');
   });
 
   it('does not blacklist or attempt a fallback when aborted during retry entry', async () => {
@@ -1079,7 +1080,7 @@ describe('runDelegationLoop custom provider streamSimple dispatch', () => {
     expect(streamSimple).not.toHaveBeenCalled();
   });
 
-  it('falls back to the generic compat streamSimple when the provider has none registered', async () => {
+  it('uses registry streaming for a standard provider', async () => {
     const h = createDelegationHarness({
       chain: ['alpha/model'],
       scripts: {

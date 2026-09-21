@@ -562,115 +562,131 @@ function buildRoutableCandidates(args: {
   );
 }
 
-/** Dispatch + adopt only. Does not write the intent cache or touch the stream. */
-async function runEntryAssessment(args: {
-  cacheHit: boolean;
-  turnInputKey: string;
+/**
+ * Everything an assessment dispatch needs that is constant for the whole
+ * turn. Both the entry assessment and the depth latch resolve against this
+ * same environment, so they cannot disagree about the assessor, the routable
+ * pool, or which session generation is current.
+ */
+interface AssessmentEnv {
   assessmentConfig: AssessmentConfig;
-  assessmentStillCurrent: () => boolean;
-  assessment: import('../types.js').RoutingAssessment | undefined;
-  fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
-  assessmentDispatched: boolean;
+  stillCurrent: () => boolean;
+  turnInputKey: string;
   context: Context;
   config: AutoRouterConfig;
   pi: ExtensionAPI;
   registry: ReturnType<typeof getCurrentModelRegistry>;
   routableCandidates: Candidate[];
-  classifyResult: ReturnType<typeof classify>;
-  baseDimension: Dimension;
-  baseCause: DecisionCause;
   session: RouterSession;
-}): Promise<{
-  assessment: typeof args.assessment;
-  fallbackReason: typeof args.fallbackReason;
-  assessmentDispatched: boolean;
-  baseDimension: Dimension;
-  baseCause: DecisionCause;
-  aborted: boolean;
-}> {
-  let {
-    assessment,
-    fallbackReason,
-    assessmentDispatched,
-    baseDimension,
-    baseCause,
-  } = args;
+}
 
-  if (!args.cacheHit && args.assessmentConfig.enabled) {
-    const evidence = evidenceForAssessment(args.context, args.config, args.pi, args.session);
-    const heuristicDimension = args.classifyResult.dimension;
-    assessmentDispatched = true;
-    const attempt = await runAssessment(
-      args.assessmentConfig,
-      args.registry,
-      args.routableCandidates,
-      evidence,
-      args.session.getAssessorStrikes(),
-      (fb) => args.session.getAssessorTokenEstimate(fb),
-    );
-    if (!args.assessmentStillCurrent()) {
-      return {
-        assessment,
-        fallbackReason,
-        assessmentDispatched,
-        baseDimension,
-        baseCause,
-        aborted: true,
-      };
-    }
-    recordAssessorOutcome(attempt, args.session);
-    if (attempt.ok) {
-      args.session.addAssessmentCost(attempt.assessment.costUsd);
-      assessment = attempt.assessment;
+/**
+ * The entry's single assessment budget and its verdict so far. Mutated in
+ * place by the two phases below: the privacy rule is one dispatch per real
+ * user entry whatever asks for it, so `dispatched` has to be one flag both
+ * phases read and write, not a value threaded out and back.
+ */
+interface AssessmentState {
+  assessment: import('../types.js').RoutingAssessment | undefined;
+  fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
+  dispatched: boolean;
+}
+
+type AssessmentDispatch =
+  | { kind: 'aborted' }
+  | { kind: 'verdict'; assessment: import('../types.js').RoutingAssessment }
+  | { kind: 'fallback' };
+
+/**
+ * Spend the entry's one assessment dispatch and fold the outcome into
+ * `state`. `dispatched` is set before the await so a failure still counts as
+ * the entry's spend; a session change during the await yields `aborted` with
+ * `state` untouched beyond that flag.
+ */
+async function dispatchAssessment(
+  env: AssessmentEnv,
+  state: AssessmentState,
+): Promise<AssessmentDispatch> {
+  state.dispatched = true;
+  const attempt = await runAssessment(
+    env.assessmentConfig,
+    env.registry,
+    env.routableCandidates,
+    evidenceForAssessment(env.context, env.config, env.pi, env.session),
+    env.session.getAssessorStrikes(),
+    (fb) => env.session.getAssessorTokenEstimate(fb),
+  );
+  if (!env.stillCurrent()) return { kind: 'aborted' };
+  recordAssessorOutcome(attempt, env.session);
+  if (attempt.ok) {
+    env.session.addAssessmentCost(attempt.assessment.costUsd);
+    return { kind: 'verdict', assessment: attempt.assessment };
+  }
+  env.session.addAssessmentCost(attempt.costUsd);
+  state.fallbackReason = attempt.fallbackReason;
+  return { kind: 'fallback' };
+}
+
+/** Dispatch + adopt only. Does not write the intent cache or touch the stream. */
+async function runEntryAssessment(
+  env: AssessmentEnv,
+  state: AssessmentState,
+  entry: {
+    cacheHit: boolean;
+    classifyResult: ReturnType<typeof classify>;
+    dimension: Dimension;
+    cause: DecisionCause;
+  },
+): Promise<{ dimension: Dimension; cause: DecisionCause; aborted: boolean }> {
+  let { dimension, cause } = entry;
+  const { classifyResult } = entry;
+
+  if (!entry.cacheHit && env.assessmentConfig.enabled) {
+    const heuristicDimension = classifyResult.dimension;
+    const dispatched = await dispatchAssessment(env, state);
+    if (dispatched.kind === 'aborted') return { dimension, cause, aborted: true };
+    if (dispatched.kind === 'verdict') {
+      state.assessment = dispatched.assessment;
       const assessed = adoptAssessment({
         heuristic: heuristicDimension,
-        rawHeuristic: args.classifyResult.rawDimension,
-        ambiguityBumped: args.classifyResult.ambiguityBumped,
-        assessment,
-        latchEngaged: args.session.getLatchGeneration() > 0,
+        rawHeuristic: classifyResult.rawDimension,
+        ambiguityBumped: classifyResult.ambiguityBumped,
+        assessment: dispatched.assessment,
+        latchEngaged: env.session.getLatchGeneration() > 0,
       });
       appendAssessmentMetric({
-        intentKey: args.turnInputKey,
+        intentKey: env.turnInputKey,
         heuristicDimension,
         counterfactualDimension: assessed.dimension,
-        assessment,
+        assessment: dispatched.assessment,
       });
     } else {
-      args.session.addAssessmentCost(attempt.costUsd);
-      fallbackReason = attempt.fallbackReason;
       appendAssessmentMetric({
-        intentKey: args.turnInputKey,
+        intentKey: env.turnInputKey,
         heuristicDimension,
-        fallbackReason,
+        fallbackReason: state.fallbackReason,
       });
     }
   }
 
-  // On cache hit, baseDimension and baseCause were already adopted on the first invocation.
+  // On cache hit, dimension and cause were already adopted on the first invocation.
   // Re-running adoptAssessment on later tool-loop turns would allow downward adoption
   // to cascade across multiple turns, violating Rule 12.
-  if (!args.cacheHit && assessment) {
+  if (!entry.cacheHit && state.assessment) {
     const adoption = adoptAssessment({
-      heuristic: baseDimension,
-      rawHeuristic: args.classifyResult.rawDimension,
-      ambiguityBumped: args.classifyResult.ambiguityBumped,
-      assessment,
-      latchEngaged: args.session.getLatchGeneration() > 0,
+      heuristic: dimension,
+      rawHeuristic: classifyResult.rawDimension,
+      ambiguityBumped: classifyResult.ambiguityBumped,
+      assessment: state.assessment,
+      latchEngaged: env.session.getLatchGeneration() > 0,
     });
     if (adoption.changed) {
-      baseDimension = adoption.dimension;
-      baseCause = 'router-consult';
+      dimension = adoption.dimension;
+      cause = 'router-consult';
     }
   }
 
-  return {
-    assessment,
-    fallbackReason,
-    assessmentDispatched,
-    baseDimension,
-    baseCause,
-    aborted: false,
-  };
+  return { dimension, cause, aborted: false };
 }
 
 /**
@@ -678,98 +694,47 @@ async function runEntryAssessment(args: {
  * ANDs with the session's latch generation being 0 itself. Does not call
  * applyEscalationPrecedence or wouldDepthEscalate. Does not touch the stream.
  */
-async function evaluateDepthLatch(args: {
-  depthWouldEscalate: boolean;
-  turnInputKey: string;
-  baseDimension: Dimension;
-  assessmentConfig: AssessmentConfig;
-  assessmentStillCurrent: () => boolean;
-  assessment: import('../types.js').RoutingAssessment | undefined;
-  fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
-  assessmentDispatched: boolean;
-  context: Context;
-  config: AutoRouterConfig;
-  pi: ExtensionAPI;
-  registry: ReturnType<typeof getCurrentModelRegistry>;
-  routableCandidates: Candidate[];
-  session: RouterSession;
-}): Promise<{
-  vetoDepthEscalation: boolean;
-  assessment: import('../types.js').RoutingAssessment | undefined;
-  fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
-  assessmentDispatched: boolean;
-  aborted: boolean;
-}> {
-  let { assessment, fallbackReason, assessmentDispatched } = args;
-  let vetoDepthEscalation = args.session.getLatchVetoIntentKey() === args.turnInputKey;
-  const latchGen = args.session.getLatchGeneration();
-  const atLatchTransition = latchGen === 0 && args.depthWouldEscalate;
+async function evaluateDepthLatch(
+  env: AssessmentEnv,
+  state: AssessmentState,
+  latch: { depthWouldEscalate: boolean; baseDimension: Dimension },
+): Promise<{ vetoDepthEscalation: boolean; aborted: boolean }> {
+  let vetoDepthEscalation = env.session.getLatchVetoIntentKey() === env.turnInputKey;
+  const atLatchTransition = env.session.getLatchGeneration() === 0 && latch.depthWouldEscalate;
+  if (vetoDepthEscalation || !atLatchTransition) return { vetoDepthEscalation, aborted: false };
 
-  if (!vetoDepthEscalation && atLatchTransition) {
-    args.session.bumpLatchGeneration();
-    if (args.assessmentConfig.enabled) {
-      let latchVerdict = assessment;
-      if (!latchVerdict && !assessmentDispatched) {
-        assessmentDispatched = true;
-        const attempt = await runAssessment(
-          args.assessmentConfig,
-          args.registry,
-          args.routableCandidates,
-          evidenceForAssessment(args.context, args.config, args.pi, args.session),
-          args.session.getAssessorStrikes(),
-          (fb) => args.session.getAssessorTokenEstimate(fb),
-        );
-        if (!args.assessmentStillCurrent()) {
-          return {
-            vetoDepthEscalation,
-            assessment,
-            fallbackReason,
-            assessmentDispatched,
-            aborted: true,
-          };
-        }
-        recordAssessorOutcome(attempt, args.session);
-        if (attempt.ok) {
-          args.session.addAssessmentCost(attempt.assessment.costUsd);
-          latchVerdict = attempt.assessment;
-        } else {
-          args.session.addAssessmentCost(attempt.costUsd);
-          fallbackReason = attempt.fallbackReason;
-        }
-      }
+  env.session.bumpLatchGeneration();
+  if (!env.assessmentConfig.enabled) return { vetoDepthEscalation, aborted: false };
 
-      if (latchVerdict) {
-        vetoDepthEscalation = shouldVetoLatch(latchVerdict);
-        if (vetoDepthEscalation) {
-          args.session.setLatchVetoIntentKey(args.turnInputKey);
-        }
-        assessment = { ...latchVerdict, vetoedLatch: vetoDepthEscalation };
-        appendAssessmentMetric({
-          intentKey: args.turnInputKey,
-          heuristicDimension: args.baseDimension,
-          latchTransition: true,
-          wouldVetoLatch: vetoDepthEscalation,
-          assessment: latchVerdict,
-        });
-      } else if (fallbackReason) {
-        appendAssessmentMetric({
-          intentKey: args.turnInputKey,
-          heuristicDimension: args.baseDimension,
-          latchTransition: true,
-          wouldVetoLatch: false,
-          fallbackReason,
-        });
-      }
-    }
+  let latchVerdict = state.assessment;
+  if (!latchVerdict && !state.dispatched) {
+    const dispatched = await dispatchAssessment(env, state);
+    if (dispatched.kind === 'aborted') return { vetoDepthEscalation, aborted: true };
+    if (dispatched.kind === 'verdict') latchVerdict = dispatched.assessment;
   }
 
-  return {
-    vetoDepthEscalation,
-    assessment,
-    fallbackReason,
-    assessmentDispatched,
-    aborted: false,
-  };
+  if (latchVerdict) {
+    vetoDepthEscalation = shouldVetoLatch(latchVerdict);
+    if (vetoDepthEscalation) env.session.setLatchVetoIntentKey(env.turnInputKey);
+    state.assessment = { ...latchVerdict, vetoedLatch: vetoDepthEscalation };
+    appendAssessmentMetric({
+      intentKey: env.turnInputKey,
+      heuristicDimension: latch.baseDimension,
+      latchTransition: true,
+      wouldVetoLatch: vetoDepthEscalation,
+      assessment: latchVerdict,
+    });
+  } else if (state.fallbackReason) {
+    appendAssessmentMetric({
+      intentKey: env.turnInputKey,
+      heuristicDimension: latch.baseDimension,
+      latchTransition: true,
+      wouldVetoLatch: false,
+      fallbackReason: state.fallbackReason,
+    });
+  }
+
+  return { vetoDepthEscalation, aborted: false };
 }
 
 function advanceWorkPhase(args: {
@@ -881,6 +846,449 @@ function resolveTurnEffort(args: {
  * provider. When `ctx` is present (session_start / turn_start), capacities are
  * refreshed from the live registry; the dedup guard makes that idempotent.
  */
+// ─── Turn pipeline ──────────────────────────────────────────────────
+
+/**
+ * The user-visible terminal outcome of one routed turn.
+ *
+ * Phases return this instead of writing to the consumer stream. Pi ends a turn
+ * on the first terminal event it receives, so routing all terminal writes
+ * through the single gate in `streamSimple` is what stops one phase from
+ * finalizing a turn a later phase still treats as live. `runDelegationLoop` is
+ * the one exception: it owns its attempt buffer and reports back through
+ * `streamFinalized`.
+ */
+type RouterTurnOutcome =
+  | { kind: 'terminal'; reason: 'error' | 'aborted'; message: string }
+  | { kind: 'done' };
+
+const ASSESSMENT_ABORTED: RouterTurnOutcome = {
+  kind: 'terminal',
+  reason: 'aborted',
+  message: 'Router session changed during assessment.',
+};
+
+function noRoutableCandidates(session: RouterSession): RouterTurnOutcome {
+  const excludedProviders = session.getBlacklistedProviders();
+  return {
+    kind: 'terminal',
+    reason: 'error',
+    message:
+      excludedProviders.size > 0
+        ? `No routable models: providers excluded for usage limits this session (${[...excludedProviders].sort().join(', ')}).`
+        : 'No routable models: the `models` allowlist in `~/.pi/agent/pi8/config.json` matched none of the available models.',
+  };
+}
+
+interface PreparedTurn {
+  registry: ReturnType<typeof getCurrentModelRegistry>;
+  extensionContext: ExtensionContext | undefined;
+  config: AutoRouterConfig;
+  measured: ReturnType<typeof measureTurnInput>;
+  intent: Awaited<ReturnType<typeof resolveBaseIntent>>;
+  userEscalation: ReturnType<RouterSession['peekPendingUserEscalation']>;
+  trajectoryEscalation: ReturnType<RouterSession['peekPendingTrajectoryEscalation']>;
+  /**
+   * Pre-exclusion pool. Kept because an awaited assessment can blacklist a
+   * provider mid-turn, so scoring re-filters this rather than the snapshot.
+   */
+  candidates: Candidate[];
+  routableCandidates: Candidate[];
+}
+
+interface AssessedTurn {
+  assessment: import('../types.js').RoutingAssessment | undefined;
+  fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
+  baseDimension: Dimension;
+  baseCause: DecisionCause;
+  preDepth: ReturnType<typeof applyEscalationPrecedence>;
+  depthWouldEscalate: boolean;
+  vetoDepthEscalation: boolean;
+  assessmentStillCurrent: () => boolean;
+}
+
+interface ScoredTurn {
+  decision: ReturnType<typeof resolveRoutingDecision>['decision'];
+  routableCandidates: Candidate[];
+  requestedReasoning: string | undefined;
+}
+
+/** Resolve the registry, this turn's input identity, and the candidate pool. */
+async function prepareRouterTurn(args: {
+  context: Context;
+  session: RouterSession;
+  runtime: RuntimeBindings;
+}): Promise<{ kind: 'ready'; prepared: PreparedTurn } | RouterTurnOutcome> {
+  const { context, session, runtime } = args;
+  const waitTimer = startTimer();
+  const registry = await waitForRegistry(() => runtime.getCurrentModelRegistry());
+  const extensionContext = runtime.getLastExtensionContext();
+  const regModels = registry?.getAvailable() ?? [];
+  debugLog('turn.start', {
+    waitForRegistryMs: waitTimer(),
+    registryModels: (regModels as unknown[]).length,
+  });
+
+  const config = loadConfig();
+  const measured = measureTurnInput(context, config);
+  const intent = await resolveBaseIntent(
+    { turnInput: measured.turnInput, systemPrompt: measured.systemPrompt, config },
+    session,
+  );
+
+  session.bindTrajectoryIntent(measured.turnInput.key);
+  // Blocked preflights never emit tool_result. Finalize that batch
+  // here, before peeking, so a sibling's evidence can arm this
+  // invocation rather than stalling behind an impossible result.
+  session.flushAndArmUnresolvedTrajectory();
+
+  // Peek only: a pending /router-escalate request is consumed after
+  // the decision is recorded, so a router-internal failure before
+  // that point cannot silently swallow the user's request.
+  const userEscalation = session.peekPendingUserEscalation();
+  const trajectoryEscalation = session.peekPendingTrajectoryEscalation();
+
+  const candidates = buildRoutableCandidates({
+    regModels: regModels as unknown[],
+    extensionContext,
+    config,
+    session,
+  });
+  const routableCandidates = applyRuntimeExclusions(candidates, session);
+  if (routableCandidates.length === 0) return noRoutableCandidates(session);
+
+  return {
+    kind: 'ready',
+    prepared: {
+      registry,
+      extensionContext,
+      config,
+      measured,
+      intent,
+      userEscalation,
+      trajectoryEscalation,
+      candidates,
+      routableCandidates,
+    },
+  };
+}
+
+/** Spend this entry's one bounded assessment and settle the depth latch. */
+async function assessRouterTurn(args: {
+  prepared: PreparedTurn;
+  context: Context;
+  pi: ExtensionAPI;
+  session: RouterSession;
+}): Promise<{ kind: 'ready'; assessed: AssessedTurn } | RouterTurnOutcome> {
+  const { prepared, context, pi, session } = args;
+  const { config, measured, intent, registry, routableCandidates, userEscalation } = prepared;
+  const { turnInput, estContextTokens } = measured;
+  const { cacheHit, cachedIntent, classifyResult } = intent;
+
+  const assessmentSessionGeneration = session.getSessionGeneration();
+  const assessmentStillCurrent = (): boolean =>
+    session.getSessionGeneration() === assessmentSessionGeneration;
+  const env: AssessmentEnv = {
+    assessmentConfig: {
+      enabled: config.consultRouter,
+      modelRef: config.consultModel,
+      deadlineMs: config.assessmentDeadlineMs,
+      maxInputChars: config.assessmentMaxInputChars,
+      assessorQualityRatio: config.assessorQualityRatio,
+    },
+    stillCurrent: assessmentStillCurrent,
+    turnInputKey: turnInput.key,
+    context,
+    config,
+    pi,
+    registry,
+    routableCandidates,
+    session,
+  };
+  // A cache hit means the entry already spent its one dispatch, successful or
+  // not, so the budget starts closed and the cached verdict carries forward.
+  const state: AssessmentState = {
+    assessment: cacheHit ? cachedIntent?.assessment : undefined,
+    fallbackReason: cacheHit ? cachedIntent?.fallbackReason : undefined,
+    dispatched: cacheHit,
+  };
+
+  const entry = await runEntryAssessment(env, state, {
+    cacheHit,
+    classifyResult,
+    dimension: intent.baseDimension,
+    cause: intent.baseCause,
+  });
+  if (entry.aborted) return ASSESSMENT_ABORTED;
+  const baseDimension = entry.dimension;
+  const baseCause = entry.cause;
+
+  if (!cacheHit) {
+    session.setCachedIntent({
+      key: turnInput.key,
+      classifyResult,
+      dimension: baseDimension,
+      cause: baseCause,
+      thin: turnInput.thin,
+      contextChars: turnInput.contextChars,
+      assessment: state.assessment,
+      fallbackReason: state.fallbackReason,
+    });
+  }
+  debugLog('classify.context', {
+    thin: turnInput.thin,
+    cacheHit,
+    contextChars: turnInput.contextChars,
+    key: turnInput.key,
+  });
+
+  // Shared with resolveRoutingDecision so the latch probe and the
+  // policy's depth gate agree. Computed once here; the latch ANDs
+  // with generation === 0 itself, and the phase engine reuses the
+  // boolean rather than probing again.
+  const preDepth = applyEscalationPrecedence({
+    dimension: baseDimension,
+    cause: baseCause,
+    userEscalation,
+  });
+  const depthWouldEscalate = wouldDepthEscalate({
+    dimension: preDepth.dimension,
+    cause: preDepth.cause,
+    estimatedContextTokens: estContextTokens,
+    config,
+  });
+
+  // A veto holds until the next real user entry, so the first
+  // invocation sets the latchVetoIntentKey and subsequent
+  // invocations of the same entry reuse it.  The latch question —
+  // "is the stated deliverable still bounded?" — is the same
+  // question the ordinary assessment already answered, so when an
+  // entry-level verdict already exists we reuse it instead of
+  // dispatching a dedicated latch assessment.
+  const latch = await evaluateDepthLatch(env, state, { depthWouldEscalate, baseDimension });
+  if (latch.aborted) return ASSESSMENT_ABORTED;
+
+  return {
+    kind: 'ready',
+    assessed: {
+      assessment: state.assessment,
+      fallbackReason: state.fallbackReason,
+      baseDimension,
+      baseCause,
+      preDepth,
+      depthWouldEscalate,
+      vetoDepthEscalation: latch.vetoDepthEscalation,
+      assessmentStillCurrent,
+    },
+  };
+}
+
+/** Advance the work phase, score the live pool, and record the decision. */
+function scoreRouterTurn(args: {
+  prepared: PreparedTurn;
+  assessed: AssessedTurn;
+  options: SimpleStreamOptions | undefined;
+  session: RouterSession;
+}): { kind: 'ready'; scored: ScoredTurn } | RouterTurnOutcome {
+  const { prepared, assessed, options, session } = args;
+  const { config, measured, intent, candidates, userEscalation, trajectoryEscalation } = prepared;
+  const { turnInput, needsVision, estContextTokens, staticPrefixTokens } = measured;
+  const { classifyResult, cacheHit, confidence } = intent;
+  const { baseDimension, baseCause, preDepth, depthWouldEscalate, vetoDepthEscalation } = assessed;
+
+  // An awaited assessment can add a provider-wide usage-limit
+  // exclusion after this turn's initial candidate snapshot. Apply
+  // live runtime exclusions again before scoring/delegation so the
+  // assessor failure cannot immediately re-hit the same provider as
+  // the serving model in this turn.
+  const routableCandidates = applyRuntimeExclusions(candidates, session);
+  if (routableCandidates.length === 0) return noRoutableCandidates(session);
+
+  const { multiWorkPolicy } = advanceWorkPhase({
+    cacheHit,
+    turnInput,
+    classifyResult,
+    vetoDepthEscalation,
+    depthWouldEscalate,
+    preDepth,
+    session,
+  });
+
+  const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
+  const userReasoningOverride =
+    requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
+  const policy = resolveRoutingDecision({
+    candidates: routableCandidates,
+    classifyResult,
+    baseDimension,
+    baseCause,
+    userEscalation,
+    trajectoryEscalation,
+    userReasoning: requestedReasoning as ThinkingLevel | undefined,
+    userReasoningOverride,
+    estimatedContextTokens: estContextTokens,
+    staticPrefixTokens,
+    needsVision,
+    incumbentRegistryId: session.getLastChosenRegistryId(),
+    incumbentResolvedDimension:
+      session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
+    sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
+    vetoDepthEscalation,
+    ...(multiWorkPolicy ? { multiWorkPolicy } : {}),
+    config,
+  });
+  const decision = policy.decision;
+  if (assessed.assessment) decision.assessment = assessed.assessment;
+  if (assessed.fallbackReason) decision.fallbackReason = assessed.fallbackReason;
+  decision.intentKey = turnInput.key;
+  decision.provenanceCounts = turnInput.provenanceCounts;
+  try {
+    // Counterfactual baseline for /router-report. Never blocks
+    // routing (rule 2): a failure here only omits baseline
+    // telemetry for the turn.
+    decision.baseline = pickBaseline(routableCandidates, decision.dimension, config.baselineModel);
+  } catch {
+    // Best-effort telemetry only.
+  }
+  session.setLastDecision(decision);
+  if (userEscalation) session.consumePendingUserEscalation();
+  // Trajectory pending is consumed only after a successful serve of
+  // an applied handoff. Peeking it here must not drop evidence when
+  // no stronger target exists, user escalation won, or delegation
+  // fails.
+
+  debugLog('decision', {
+    dimension: decision.dimension,
+    confidence: Number(confidence.toFixed(3)),
+    candidates: candidates.length,
+    routable: routableCandidates.length,
+    chosen: decision.chosen,
+    chainLen: decision.fallbackChain.length,
+    estContextTokens,
+  });
+
+  return { kind: 'ready', scored: { decision, routableCandidates, requestedReasoning } };
+}
+
+/** Resolve the served effort, run the fallback walk, and settle the handoff. */
+async function delegateRouterTurn(args: {
+  prepared: PreparedTurn;
+  assessed: AssessedTurn;
+  scored: ScoredTurn;
+  context: Context;
+  options: SimpleStreamOptions | undefined;
+  pi: ExtensionAPI;
+  session: RouterSession;
+  turnTimer: () => number;
+  stream: AssistantMessageEventStream;
+}): Promise<RouterTurnOutcome> {
+  const { prepared, assessed, scored, context, options, pi, session, turnTimer, stream } = args;
+  const { config, extensionContext, registry } = prepared;
+  const { decision, routableCandidates, requestedReasoning } = scored;
+
+  const chosenCandidate = routableCandidates.find((c) => candidateKey(c) === decision.chosen);
+  const { resolvedReasoning, delegatedOptions, inheritedReasoning } = resolveTurnEffort({
+    chosenCandidate,
+    options,
+    decision,
+    pi,
+    session,
+  });
+
+  if (decision.fallbackChain.length === 0) {
+    // A strict escalation can legitimately have no eligible target.
+    // Surface and persist that specific outcome instead of entering
+    // delegation and replacing it with a generic exhaustion error.
+    renderRouterStatus(extensionContext, decision, undefined);
+    appendDecision(decision, {
+      registryId: '',
+      viaFallback: false,
+      accumulatedCost: session.getAccumulatedCost(),
+    });
+    return { kind: 'terminal', reason: 'error', message: decision.reason };
+  }
+
+  const pendingTrajectory = session.peekPendingTrajectoryEscalation();
+  const delegationSessionGeneration = session.getSessionGeneration();
+  const result = await runDelegationLoop(
+    {
+      decision,
+      registry: registry!,
+      context,
+      options: delegatedOptions,
+      candidates: routableCandidates,
+      reasoning: resolvedReasoning as string | undefined,
+      userReasoningOverride: !inheritedReasoning && requestedReasoning != null,
+      extensionContext,
+      notifyOnRoute: config.prompt,
+      turnTimer,
+      session,
+    },
+    stream,
+  );
+
+  if (
+    result.capabilityHandoff
+    && pendingTrajectory
+    && result.capabilityHandoff.fromModel === pendingTrajectory.fromModel
+    && session.peekPendingTrajectoryEscalation() === pendingTrajectory
+    && session.getSessionGeneration() === delegationSessionGeneration
+    && assessed.assessmentStillCurrent()
+  ) {
+    session.consumePendingTrajectoryEscalation();
+  }
+
+  if (!result.streamFinalized && !result.success) {
+    return {
+      kind: 'terminal',
+      reason: 'error',
+      message: `All routing fallbacks exhausted${result.lastError ? ` (last error: ${result.lastError})` : ''}.`,
+    };
+  }
+  return { kind: 'done' };
+}
+
+/**
+ * Ordered phases for one router turn. The order is a real dependency chain:
+ * an awaited assessment can exclude a provider, so scoring must re-filter
+ * after it, and the trajectory handoff is acknowledged only once a stronger
+ * model has actually served.
+ */
+async function runRouterTurn(args: {
+  context: Context;
+  options: SimpleStreamOptions | undefined;
+  pi: ExtensionAPI;
+  session: RouterSession;
+  runtime: RuntimeBindings;
+  turnTimer: () => number;
+  stream: AssistantMessageEventStream;
+}): Promise<RouterTurnOutcome> {
+  const { context, options, pi, session, runtime, turnTimer, stream } = args;
+
+  const preparation = await prepareRouterTurn({ context, session, runtime });
+  if (preparation.kind !== 'ready') return preparation;
+  const { prepared } = preparation;
+
+  const assessment = await assessRouterTurn({ prepared, context, pi, session });
+  if (assessment.kind !== 'ready') return assessment;
+  const { assessed } = assessment;
+
+  const scoring = scoreRouterTurn({ prepared, assessed, options, session });
+  if (scoring.kind !== 'ready') return scoring;
+
+  return delegateRouterTurn({
+    prepared,
+    assessed,
+    scored: scoring.scored,
+    context,
+    options,
+    pi,
+    session,
+    turnTimer,
+    stream,
+  });
+}
+
 export function registerAutoRouterProvider(
   pi: ExtensionAPI,
   ctx?: ExtensionContext,
@@ -977,315 +1385,17 @@ export function registerAutoRouterProvider(
           session.setLastServed(undefined);
           const turnTimer = startTimer();
           try {
-            const waitTimer = startTimer();
-            const registry = await waitForRegistry(() => runtime.getCurrentModelRegistry());
-            const extensionContext = runtime.getLastExtensionContext();
-            const regModels = registry?.getAvailable() ?? [];
-            debugLog('turn.start', {
-              waitForRegistryMs: waitTimer(),
-              registryModels: (regModels as unknown[]).length,
-            });
-
-            const config = loadConfig();
-            const measured = measureTurnInput(context, config);
-            const { turnInput, systemPrompt, needsVision, estContextTokens, staticPrefixTokens } = measured;
-            const intent = await resolveBaseIntent({ turnInput, systemPrompt, config }, session);
-            const { cacheHit, cachedIntent, classifyResult, confidence } = intent;
-            let { baseDimension, baseCause } = intent;
-
-            session.bindTrajectoryIntent(turnInput.key);
-            // Blocked preflights never emit tool_result. Finalize that batch
-            // here, before peeking, so a sibling's evidence can arm this
-            // invocation rather than stalling behind an impossible result.
-            session.flushAndArmUnresolvedTrajectory();
-
-            // Peek only: a pending /router-escalate request is consumed after
-            // the decision is recorded, so a router-internal failure before
-            // that point cannot silently swallow the user's request.
-            const userEscalation = session.peekPendingUserEscalation();
-            const trajectoryEscalation = session.peekPendingTrajectoryEscalation();
-
-            const candidates = buildRoutableCandidates({
-              regModels: regModels as unknown[],
-              extensionContext,
-              config,
-              session,
-            });
-            let routableCandidates = applyRuntimeExclusions(candidates, session);
-
-            const endIfNoRoutableCandidates = (): boolean => {
-              if (routableCandidates.length > 0) return false;
-              const excludedProviders = session.getBlacklistedProviders();
-              stream.push(
-                makeTerminalErrorEvent(
-                  'error',
-                  excludedProviders.size > 0
-                    ? `No routable models: providers excluded for usage limits this session (${[...excludedProviders].sort().join(', ')}).`
-                    : 'No routable models: the `models` allowlist in `~/.pi/agent/pi8/config.json` matched none of the available models.',
-                ),
-              );
-              stream.end();
-              return true;
-            };
-            if (endIfNoRoutableCandidates()) return;
-
-            const assessmentConfig: AssessmentConfig = {
-              enabled: config.consultRouter,
-              modelRef: config.consultModel,
-              deadlineMs: config.assessmentDeadlineMs,
-              maxInputChars: config.assessmentMaxInputChars,
-              assessorQualityRatio: config.assessorQualityRatio,
-            };
-
-            const assessmentSessionGeneration = session.getSessionGeneration();
-            const assessmentStillCurrent = (): boolean =>
-              session.getSessionGeneration() === assessmentSessionGeneration;
-            let assessment = cacheHit ? cachedIntent?.assessment : undefined;
-            let fallbackReason = cacheHit ? cachedIntent?.fallbackReason : undefined;
-            // One bounded assessment per real user entry, whatever asks for it
-            // (privacy/egress rule). A cache hit means the entry already spent
-            // its one dispatch, successful or not.
-            let assessmentDispatched = cacheHit;
-            const entryAssessment = await runEntryAssessment({
-              cacheHit,
-              turnInputKey: turnInput.key,
-              assessmentConfig,
-              assessmentStillCurrent,
-              assessment,
-              fallbackReason,
-              assessmentDispatched,
+            const outcome = await runRouterTurn({
               context,
-              config,
-              pi,
-              registry,
-              routableCandidates,
-              classifyResult,
-              baseDimension,
-              baseCause,
-              session,
-            });
-            if (entryAssessment.aborted) {
-              stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
-              stream.end();
-              return;
-            }
-            assessment = entryAssessment.assessment;
-            fallbackReason = entryAssessment.fallbackReason;
-            assessmentDispatched = entryAssessment.assessmentDispatched;
-            baseDimension = entryAssessment.baseDimension;
-            baseCause = entryAssessment.baseCause;
-
-            if (!cacheHit) {
-              session.setCachedIntent({
-                key: turnInput.key,
-                classifyResult,
-                dimension: baseDimension,
-                cause: baseCause,
-                thin: turnInput.thin,
-                contextChars: turnInput.contextChars,
-                assessment,
-                fallbackReason,
-              });
-            }
-            debugLog('classify.context', {
-              thin: turnInput.thin,
-              cacheHit,
-              contextChars: turnInput.contextChars,
-              key: turnInput.key,
-            });
-
-            // Shared with resolveRoutingDecision so the latch probe and the
-            // policy's depth gate agree. Computed once here; the latch ANDs
-            // with generation === 0 itself, and the phase engine reuses the
-            // boolean rather than probing again.
-            const preDepth = applyEscalationPrecedence({
-              dimension: baseDimension,
-              cause: baseCause,
-              userEscalation,
-            });
-            const depthWouldEscalate = wouldDepthEscalate({
-              dimension: preDepth.dimension,
-              cause: preDepth.cause,
-              estimatedContextTokens: estContextTokens,
-              config,
-            });
-
-            // A veto holds until the next real user entry, so the first
-            // invocation sets the latchVetoIntentKey and subsequent
-            // invocations of the same entry reuse it.  The latch question —
-            // "is the stated deliverable still bounded?" — is the same
-            // question the ordinary assessment already answered, so when an
-            // entry-level verdict already exists we reuse it instead of
-            // dispatching a dedicated latch assessment.
-            const latch = await evaluateDepthLatch({
-              depthWouldEscalate,
-              turnInputKey: turnInput.key,
-              baseDimension,
-              assessmentConfig,
-              assessmentStillCurrent,
-              assessment,
-              fallbackReason,
-              assessmentDispatched,
-              context,
-              config,
-              pi,
-              registry,
-              routableCandidates,
-              session,
-            });
-            if (latch.aborted) {
-              stream.push(makeTerminalErrorEvent('aborted', 'Router session changed during assessment.'));
-              stream.end();
-              return;
-            }
-            const vetoDepthEscalation = latch.vetoDepthEscalation;
-            assessment = latch.assessment;
-            fallbackReason = latch.fallbackReason;
-            assessmentDispatched = latch.assessmentDispatched;
-
-            // An awaited assessment can add a provider-wide usage-limit
-            // exclusion after this turn's initial candidate snapshot. Apply
-            // live runtime exclusions again before scoring/delegation so the
-            // assessor failure cannot immediately re-hit the same provider as
-            // the serving model in this turn.
-            routableCandidates = applyRuntimeExclusions(candidates, session);
-            if (endIfNoRoutableCandidates()) return;
-
-            const { multiWorkPolicy } = advanceWorkPhase({
-              cacheHit,
-              turnInput,
-              classifyResult,
-              vetoDepthEscalation,
-              depthWouldEscalate,
-              preDepth,
-              session,
-            });
-
-            const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
-            const userReasoningOverride =
-              requestedReasoning != null
-              && requestedReasoning !== session.getLastResolvedThinkingLevel();
-            const policy = resolveRoutingDecision({
-              candidates: routableCandidates,
-              classifyResult,
-              baseDimension,
-              baseCause,
-              userEscalation,
-              trajectoryEscalation,
-              userReasoning: requestedReasoning as ThinkingLevel | undefined,
-              userReasoningOverride,
-              estimatedContextTokens: estContextTokens,
-              staticPrefixTokens,
-              needsVision,
-              incumbentRegistryId: session.getLastChosenRegistryId(),
-              incumbentResolvedDimension: session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
-              sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
-              vetoDepthEscalation,
-              ...(multiWorkPolicy ? { multiWorkPolicy } : {}),
-              config,
-            });
-            const decision = policy.decision;
-            if (assessment) decision.assessment = assessment;
-            if (fallbackReason) decision.fallbackReason = fallbackReason;
-            decision.intentKey = turnInput.key;
-            decision.provenanceCounts = turnInput.provenanceCounts;
-            try {
-              // Counterfactual baseline for /router-report. Never blocks
-              // routing (rule 2): a failure here only omits baseline
-              // telemetry for the turn.
-              decision.baseline = pickBaseline(
-                routableCandidates,
-                decision.dimension,
-                config.baselineModel,
-              );
-            } catch {
-              // Best-effort telemetry only.
-            }
-            session.setLastDecision(decision);
-            if (userEscalation) session.consumePendingUserEscalation();
-            // Trajectory pending is consumed only after a successful serve of
-            // an applied handoff. Peeking it here must not drop evidence when
-            // no stronger target exists, user escalation won, or delegation
-            // fails.
-
-            debugLog('decision', {
-              dimension: decision.dimension,
-              confidence: Number(confidence.toFixed(3)),
-              candidates: candidates.length,
-              routable: routableCandidates.length,
-              chosen: decision.chosen,
-              chainLen: decision.fallbackChain.length,
-              estContextTokens,
-            });
-
-            const chosenCandidate = routableCandidates.find(
-              (c) => candidateKey(c) === decision.chosen,
-            );
-            const {
-              resolvedReasoning,
-              delegatedOptions,
-              inheritedReasoning,
-            } = resolveTurnEffort({
-              chosenCandidate,
               options,
-              decision,
               pi,
               session,
-            });
-
-            if (decision.fallbackChain.length === 0) {
-              // A strict escalation can legitimately have no eligible target.
-              // Surface and persist that specific outcome instead of entering
-              // delegation and replacing it with a generic exhaustion error.
-              renderRouterStatus(extensionContext, decision, undefined);
-              appendDecision(decision, {
-                registryId: '',
-                viaFallback: false,
-                accumulatedCost: session.getAccumulatedCost(),
-              });
-              stream.push(makeTerminalErrorEvent('error', decision.reason));
-              stream.end();
-              return;
-            }
-
-            const pendingTrajectory = session.peekPendingTrajectoryEscalation();
-            const delegationSessionGeneration = session.getSessionGeneration();
-            const result = await runDelegationLoop(
-              {
-                decision,
-                registry: registry!,
-                context,
-                options: delegatedOptions,
-                candidates: routableCandidates,
-                reasoning: resolvedReasoning as string | undefined,
-                userReasoningOverride:
-                  !inheritedReasoning && requestedReasoning != null,
-                extensionContext,
-                notifyOnRoute: config.prompt,
-                turnTimer,
-                session,
-              },
+              runtime,
+              turnTimer,
               stream,
-            );
-
-            if (
-              result.capabilityHandoff
-              && pendingTrajectory
-              && result.capabilityHandoff.fromModel === pendingTrajectory.fromModel
-              && session.peekPendingTrajectoryEscalation() === pendingTrajectory
-              && session.getSessionGeneration() === delegationSessionGeneration
-              && assessmentStillCurrent()
-            ) {
-              session.consumePendingTrajectoryEscalation();
-            }
-
-            if (!result.streamFinalized && !result.success) {
-              stream.push(
-                makeTerminalErrorEvent(
-                  'error',
-                  `All routing fallbacks exhausted${result.lastError ? ` (last error: ${result.lastError})` : ''}.`,
-                ),
-              );
+            });
+            if (outcome.kind === 'terminal') {
+              stream.push(makeTerminalErrorEvent(outcome.reason, outcome.message));
             }
             stream.end();
           } catch (err) {

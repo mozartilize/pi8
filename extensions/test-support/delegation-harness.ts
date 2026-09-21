@@ -16,6 +16,7 @@ import { RouterSession, resetRouterSession } from '../serve/router-session-state
 import { clearBlacklistedModels, clearBlacklistedProviders } from '../serve/blacklist.js';
 import { makeTerminalErrorEvent } from '../serve/error-event.js';
 import { routingDecision, registryModel } from './router-fixtures.js';
+import { scriptedRegistryStream } from './registry-stream.js';
 import type { Candidate, RoutingDecision } from '../types.js';
 
 /** One registryId maps to an ordered list of attempt scripts (one per retry). */
@@ -144,7 +145,7 @@ function buildRegistry(
   getProviderAuth: DelegationHarnessOptions['getProviderAuth'],
 ): ExtensionContext['modelRegistry'] {
   const defaultCreds = { ok: true, apiKey: 'test-key', headers: {} };
-  return {
+  const registry = {
     find: (provider: string, id: string) =>
       registryModel(`${provider}/${id}`) as unknown as Model<Api>,
     getApiKeyAndHeaders: async (model: Model<Api>) => {
@@ -156,6 +157,8 @@ function buildRegistry(
     ...(getProviderAuth ? { getProviderAuth } : {}),
     ...overrides,
   } as unknown as ExtensionContext['modelRegistry'];
+  registry.streamSimple ??= scriptedRegistryStream(registry);
+  return registry;
 }
 
 export function createDelegationHarness(options: DelegationHarnessOptions): DelegationHarness {

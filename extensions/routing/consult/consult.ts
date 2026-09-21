@@ -12,7 +12,7 @@
  * scorer still owns which models satisfy that need.
  */
 import { streamSimple } from '@earendil-works/pi-ai/compat';
-import type { Model, Api, Context, SimpleStreamOptions } from '@earendil-works/pi-ai';
+import { normalizeContext, type Model, type Api, type Context, type SimpleStreamOptions } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import type {
@@ -325,12 +325,15 @@ export async function runAssessment(
     // that registered implementation. The generic compat `streamSimple` only
     // resolves built-in `api` types and throws "No API provider registered for
     // api: <custom>" for anything else.
-    const providerStreamSimple = registry?.getProvider?.(selected.model.provider)?.streamSimple ?? streamSimple;
-    const stream = providerStreamSimple(selected.model, assessmentContext, {
+    const providerStreamSimple = registry?.getProvider?.(selected.model.provider)?.streamSimple;
+    const streamOptions: SimpleStreamOptions = {
       apiKey: auth.apiKey,
       headers: auth.headers,
       signal: controller.signal,
-    } as SimpleStreamOptions);
+    };
+    const stream = providerStreamSimple
+      ? providerStreamSimple(selected.model, normalizeContext(assessmentContext), streamOptions)
+      : streamSimple(selected.model, assessmentContext, streamOptions);
 
     let fullText = '';
     let expired = false;

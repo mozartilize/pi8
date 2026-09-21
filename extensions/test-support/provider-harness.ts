@@ -26,13 +26,14 @@ import type { ServedInfo } from '../host/ui.js';
 import { RouterSession, RuntimeBindings, type EmbeddingStats } from '../serve/router-session-state.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { registryModel } from './router-fixtures.js';
+import { scriptedRegistryStream } from './registry-stream.js';
 
 // ─── Event stream ────────────────────────────────────────────────────
 
 /**
  * Mirror of pi's `ResolvedRequestAuth` registry contract: the mock
- * `getApiKeyAndHeaders` returns this shape, and the delegation loop treats
- * `{ ok: false }` as a credential failure before any stream call.
+ * `getApiKeyAndHeaders` returns this shape for assessment. The scripted
+ * registry stream also uses it to simulate request-time credential failures.
  */
 export type ResolvedRequestAuth =
   | { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
@@ -225,6 +226,7 @@ export async function setupProviderTest(options: ProviderHarnessOptions): Promis
       return entry ?? { ok: true, apiKey: 'k', headers: {} };
     },
   } as unknown as ExtensionContext['modelRegistry'];
+  registry.streamSimple = scriptedRegistryStream(registry);
 
   let providerOptions: RouterProviderOptions | undefined;
   const pi = {
