@@ -45,7 +45,7 @@ One assessment per real user entry, bounded by one end-to-end deadline (`assessm
 Verdicts are adopted under strict caps:
 
 - Uncertainty always routes up: low-confidence assessments yield `max(heuristic, oneTierAbove(verdict))`, never anything below the heuristic.
-- Only a **high-confidence, `scope: bounded`** verdict may lower the dimension, by **at most one tier**, never from `implement` or `review`, and never while the depth latch is engaged.
+- Only a **high-confidence, `scope: bounded`** verdict may lower the dimension, by **at most one tier** (or release an unassisted keyword ambiguity bump to `rawHeuristic`), never from `implement` or `review`, and never while the depth latch is engaged.
 - Capability repick: a consult that raised the dimension owns that decision (`router-consult` cause remains active for capability repick purposes).
 
 Each attempt writes an `assessment-metric` decision-log record joined by `intentKey`, preserving the heuristic delta or fallback reason. A depth-latch transition writes a second metric from the same single assessment dispatch. Assessment spend is tracked separately from routed spend.
@@ -196,10 +196,10 @@ Covers the transition the classifier cannot see: a gather session that keeps acc
 ## 6. Escalation mechanisms (3 distinct paths)
 
 ### 1. Main-conversation capability escalation
-Run `/router-escalate [dimension]` yourself, or let the serving model call `route_up` before a substantive answer. No argument raises one tier; an explicit dimension weaker than the last routed one is rejected. At the same dimension, a quality-first capability repick excludes the requesting model. Override lasts `escalationTtlTurns` turns or 5 minutes.
+Run `/router-escalate [dimension]` yourself. No argument raises one tier; an explicit dimension weaker than the last routed one is rejected. At the same dimension, a quality-first capability repick excludes the requesting model. Models do not self-escalate. Objective trajectory friction (repeated action/observation, persistent verifier failure, confirmed stagnation, pre-output reasoning loops) sets a pending same-dimension quality-first repick for the next provider invocation, or hops immediately when replay is still safe.
 
 ### 2. Main-stream automatic fallback
-The delegation loop reacts only to objective pre-answer failures. No semantic-quality inference, no replay after visible output.
+The delegation loop reacts only to objective pre-answer failures. No semantic-quality inference, no replay after visible output, a tool call, or a thinking-overflow commit.
 
 ### 3. Synchronous subagent retry
 Parent-assisted respawn described in §4. User-pinned roles are never overridden.
@@ -245,7 +245,7 @@ Pure, fail-open, invocation-bounded state transitions gating `edit`/`write` tool
 
 ### Assessor v2 contract (`assessment-prompt.ts`)
 
-`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. The assessor returns the same `{ kind, complexity, scope, compound, confidence, reasoning }` shape as the terminal classifier (`ParsedAssessment`/`RoutingAssessment`), replacing the prior `dimension`/`outcome`/`scope: AssessmentScope` contract. Successful verdicts are adopted under the caps in §1 and recorded as `assessment-metric` entries. The assessor's `complexity`/`compound` fields inform terminal classification only — they never gate routing directly, and there is no automatic verify-phase down-routing.
+`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. The assessor returns the `{ kind, complexity, scope, compound, confidence, reasoning }` shape as defined by the terminal classifier (`ParsedAssessment`/`RoutingAssessment`). Successful verdicts are adopted under the caps in §1 and recorded as `assessment-metric` entries. The assessor's `complexity`/`compound` fields inform terminal classification only — they never gate routing directly, and there is no automatic verify-phase down-routing.
 
 ### Decision surfacing
 
@@ -269,9 +269,18 @@ The **Artificial Analysis** Data API (free tier, `x-api-key` header) provides th
 
 Benchmark slugs are fuzzy-matched against Pi's live registry model IDs. Manual overrides are available via `/router-fix` when matching fails; until an override lands, the unmatched model has no quality data and routes on registry metadata only.
 
+### Session state & lifecycle
+
+Routing state is encapsulated into instantiable domain aggregates:
+- `RouterSession`: Root session container owning session generation, last decision/served model, candidate expansion cache, embedding tallies, and domain sub-objects. Cleared on `session_start` or test resets.
+- `BlacklistState`: Encapsulates model and provider runtime exclusions, as well as session glob patterns with case-insensitive normalization.
+- `AssessmentState`: Tracks assessor spend, input/output usage EMA, and per-model strike counts.
+- `IntentState`: Manages cached routing intent across tool loops, depth-latch generation, latch veto intent key, and compound work-phase state.
+- `RuntimeBindings`: Stores Pi's `ExtensionContext`, active `modelRegistry`, and provider registration signature. Persists across `session_start` resets and clears only on extension shutdown or reload.
+
 ### Decision log
 
-Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, and `assessment-metric` records. Caused values: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `model-escalation`, `capability-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
+Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, and `assessment-metric` records. Caused values: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `capability-escalation`, `trajectory-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
 
 ### Timing log
 
@@ -288,8 +297,6 @@ Options in `~/.pi/agent/pi8/config.json`:
 | `artificialAnalysisApiKey` | — | Saved by `/router-sync` |
 | `models` | `[]` (all) | Allowlist: provider/id glob patterns |
 | `blacklist` | `[]` | Persisted exclude patterns |
-| `escalationTool` | `true` | Register `route_up` tool |
-| `escalationTtlTurns` | `4` | Model `route_up` override duration |
 | `consultRouter` | `true` | Master switch for semantic assessment |
 | `consultModel` | — | Optional assessor model override |
 | `assessmentDeadlineMs` | `1500` | End-to-end assessor budget |

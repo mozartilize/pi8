@@ -560,31 +560,6 @@ describe('provider orchestration', () => {
     expect(targets.some((id) => id.startsWith('router/'))).toBe(false);
   });
 
-  it('injects route-up guidance into the delegated context system prompt', async () => {
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    await harness.serve(context);
-
-    const { context: delegatedContext } = harness.delegatedCall();
-    expect(delegatedContext.systemPrompt).toContain('[router/auto]');
-    expect(delegatedContext.systemPrompt).toContain('route_up');
-    // The original caller context must not be mutated.
-    expect(context.systemPrompt).toBeUndefined();
-  });
-
-  it('injects plan-tier route-up guidance when an alternative candidate exists', async () => {
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    const planContext = {
-      messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }],
-    } as unknown as Context;
-    await harness.serve(planContext);
-
-    const { context: delegatedContext } = harness.delegatedCall();
-    expect(delegatedContext.systemPrompt).toContain('[router/auto]');
-    expect(delegatedContext.systemPrompt).toContain('stronger model');
-  });
-
   // ─── concrete subagent model delegation ─────────────────────────────
 
   it('serves the winning candidate at its measured effort', async () => {
@@ -792,7 +767,6 @@ describe('provider orchestration', () => {
     // The token mechanism is gone: routing comes from the ordinary passive
     // path, and the prompt text earns no escalation cause of its own.
     expect(lastDecision?.cause).not.toBe('user-escalation');
-    expect(lastDecision?.cause).not.toBe('model-escalation');
     expect(lastDecision?.contextPressure).toBeDefined();
     expect(lastDecision?.reason).not.toContain('[manual:');
     expect(lastDecision?.reason).toContain('[context-pressure: prefer fresh planner handoff]');
@@ -1249,27 +1223,6 @@ describe('M4/M4b — consult and model escalation on first prompt', () => {
     });
   });
 
-  it('honours a route_up escalation on the first prompt', async () => {
-    await setupWithConfig({ escalationTool: true, escalationTtlTurns: 4 });
-
-    // Request escalation before the first router/auto turn.
-    const { requestEscalation } = await import('./escalation.js');
-    requestEscalation('plan', 'this needs architecture thinking', 4);
-
-    const ctx = { messages: [{ role: 'user', content: 'hi there' }] } as unknown as Context;
-    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
-
-    await harness.serve(ctx);
-
-    const decision = harness.getProviderState().lastDecision;
-    expect(decision).toBeDefined();
-    expect(decision!.escalation).toBeDefined();
-    expect(decision!.escalation?.heuristicDimension).toBe('lightweight');
-    expect(decision!.routedUp).toBe(true);
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'plan', cause: 'model-escalation' } });
-  });
-
   it('raises gather one tier once the live context exceeds the depth threshold', async () => {
     await setupWithConfig({
       consultRouter: false,
@@ -1674,19 +1627,6 @@ describe('assessment orchestration', () => {
     expect(decision?.cause).toBe('user-escalation');
   });
 
-  it('a model escalation still outranks an assessment verdict', async () => {
-    const session = await newSession({ consultRouter: true });
-    const { requestEscalation } = await import('./escalation.js');
-    requestEscalation('implement', 'the model asked for a stronger tier', 4);
-
-    const decision = await session.routeTurn('list the main features of docs/plan.md', {
-      assessorReply:
-        'Kind: lightweight\nComplexity: trivial\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: x',
-    });
-    expect(decision?.dimension).toBe('implement');
-    expect(decision?.cause).toBe('model-escalation');
-  });
-
   it('reuses the verdict on later tool-loop turns of the same entry', async () => {
     const session = await newSession({ consultRouter: true });
     const first = await session.routeTurn('list the main features of docs/plan.md', {
@@ -1869,42 +1809,17 @@ describe('latch veto', () => {
 
 });
 
-describe('capability escalation and plan-tier route-up', () => {
-  let harness: ProviderTestHarness;
-
-  const sourceModel = registryModel('alpha/source', {
-    contextWindow: 200000,
-    maxTokens: 8192,
-    cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
-  });
-  const weakModel = registryModel('beta/weak', {
-    contextWindow: 200000,
-    maxTokens: 8192,
-    cost: { input: 0.2, output: 0.4, cacheRead: 0, cacheWrite: 0 },
-  });
-  const strongModel = registryModel('gamma/strong', {
-    contextWindow: 200000,
-    maxTokens: 8192,
-    cost: { input: 100, output: 400, cacheRead: 0, cacheWrite: 0 },
-  });
-
-  async function setupCapabilityScenario(models = [sourceModel, weakModel, strongModel]) {
-    harness = await setupProviderTest({
+describe('trajectory capability escalation', () => {
+  it('repicks a strictly stronger model on the next invocation', async () => {
+    const harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false, escalationTool: true, switchMargin: 0.15 },
+      config: { consultRouter: false, switchMargin: 0.15 },
       benchmarks: [
         {
           registryId: 'alpha/source',
           benchSlug: 'source',
           active: true,
           quality: { intelligence: 90, coding: 90, agenticCoding: 90 },
-          source: 'test',
-        },
-        {
-          registryId: 'beta/weak',
-          benchSlug: 'weak',
-          active: true,
-          quality: { intelligence: 80, coding: 80, agenticCoding: 80 },
           source: 'test',
         },
         {
@@ -1915,157 +1830,124 @@ describe('capability escalation and plan-tier route-up', () => {
           source: 'test',
         },
       ],
-      models,
-      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
+      models: [
+        registryModel('alpha/source', {
+          contextWindow: 200000,
+          maxTokens: 8192,
+          cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
+        }),
+        registryModel('gamma/strong', {
+          contextWindow: 200000,
+          maxTokens: 8192,
+          cost: { input: 100, output: 400, cacheRead: 0, cacheWrite: 0 },
+        }),
+      ],
     });
-    const { requestEscalation } = await import('./escalation.js');
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
-    return { getProviderState: () => harness.getProviderState(), requestEscalation };
-  }
-
-  function resetOutput() {
+    const context = {
+      messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }],
+    } as unknown as Context;
+    await harness.serve(context);
+    const served = harness.session.getLastServed();
+    const fromModel = served?.registryId
+      ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
+      : harness.session.getLastDecision()?.chosen;
+    harness.session.armTrajectoryEscalation(
+      {
+        escalate: true,
+        tfi: 1,
+        signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }],
+      },
+      fromModel,
+      harness.session.getLastDecision()?.dimension,
+      false,
+    );
     harness.outStream.events = [];
     harness.outStream.ended = false;
     vi.mocked(streamSimple).mockClear();
-  }
-
-  it('repicks a quality-first model after same-dimension plan capability escalation', async () => {
-    const { getProviderState, requestEscalation } = await setupCapabilityScenario();
-    const context = {
-      messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }],
-    } as unknown as Context;
-
+    harness.scriptReply([{ type: 'text_delta', delta: 'stronger' }, { type: 'done' }]);
     await harness.serve(context);
-    expect(getProviderState().lastServed?.registryId).toBe('alpha/source');
-    expect(requestEscalation('plan', 'the architecture needs a stronger model', 1).ok).toBe(true);
-
-    resetOutput();
-    await harness.serve(context);
-
-    const decision = getProviderState().lastDecision;
-    expect(decision?.fallbackChain[0]).toBe('gamma/strong');
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({
-      ...handles,
-      match: { chosen: 'gamma/strong', cause: 'capability-escalation', dimension: 'plan' },
-    });
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.chosen).toBe('gamma/strong');
+    expect(decision?.cause).toBe('trajectory-escalation');
+    expect(decision?.trajectoryFriction?.fromModel).toBe(fromModel);
   });
 
-  it('repicks but retains model-escalation cause after a lower-dimension capability escalation', async () => {
-    const { getProviderState, requestEscalation } = await setupCapabilityScenario();
-    const context = { messages: [{ role: 'user', content: 'hi' }] } as unknown as Context;
-
-    await harness.serve(context);
-    expect(getProviderState().lastServed?.registryId).toBe('alpha/source');
-    expect(requestEscalation('gather', 'this lookup needs a stronger model', 1).ok).toBe(true);
-
-    resetOutput();
-    await harness.serve(context);
-
-    const decision = getProviderState().lastDecision;
-    expect(decision?.fallbackChain[0]).toBe('gamma/strong');
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({
-      ...handles,
-      match: { chosen: 'gamma/strong', cause: 'model-escalation', dimension: 'gather' },
-    });
-  });
-
-  it('retains the prior cause when same-dimension capability escalation has no alternative', async () => {
-    const { getProviderState, requestEscalation } = await setupCapabilityScenario([sourceModel]);
-    const context = {
-      messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }],
-    } as unknown as Context;
-
-    await harness.serve(context);
-    expect(getProviderState().lastDecision?.cause).toBe('heuristic');
-    expect(requestEscalation('plan', 'the architecture needs a stronger model', 1).ok).toBe(true);
-
-    resetOutput();
-    await harness.serve(context);
-
-    const decision = getProviderState().lastDecision;
-    // No valid escalation target exists, so the router must fail closed rather
-    // than replaying the source model after route_up.
-    expect(decision?.chosen).toBe('');
-    expect(decision?.fallbackChain).toEqual([]);
-    expect(decision?.escalation?.requestedDimension).toBe('plan');
-    expect(decision?.cause).toBe('heuristic');
-    const error = harness.outStream.events.find((event) => event.type === 'error');
-    expect(JSON.stringify(error)).toContain('no valid escalation target');
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expect(handles.log.at(-1)?.chosen).toBe('');
-    expect(handles.ui.join('\n')).toContain('no valid escalation target');
-  });
-
-  it('does not derive any escalation cause from literal "!escalate" prompt text', async () => {
-    const { getProviderState, requestEscalation } = await setupCapabilityScenario();
-    const context = { messages: [{ role: 'user', content: 'hi !escalate' }] } as unknown as Context;
-
-    await harness.serve(context);
-    expect(getProviderState().lastServed?.registryId).toBe('alpha/source');
-    expect(getProviderState().lastDecision?.cause).toBe('heuristic');
-    expect(requestEscalation('gather', 'this needs a stronger model', 1).ok).toBe(true);
-
-    resetOutput();
-    await harness.serve(context);
-
-    const decision = getProviderState().lastDecision;
-    // With the token gone the base dimension is no longer pre-raised, so the
-    // model's route_up request genuinely raises it and owns the cause.
-    expect(decision?.cause).toBe('model-escalation');
-    expect(decision?.escalation).toBeDefined();
-    expect(decision?.escalation?.reason).toContain('stronger model');
-    expect(decision?.chosen).not.toBe('alpha/source');
-  });
-
-  it('omits route-up guidance when an effort floor makes the sibling equal to the served effort', async () => {
-    harness = await setupProviderTest({
+  it('does not consume pending evidence when a weaker recovery candidate serves', async () => {
+    const harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false, escalationTool: true },
+      config: { consultRouter: false, switchMargin: 0.15 },
+      credentials: { 'gamma/strong': { ok: false, error: 'denied' } },
       benchmarks: [
         {
-          registryId: 'alpha/shared',
-          benchSlug: 'shared-alpha',
-          effort: 'low',
+          registryId: 'alpha/source',
+          benchSlug: 'source',
           active: true,
           quality: { intelligence: 90, coding: 90, agenticCoding: 90 },
           source: 'test',
         },
         {
-          registryId: 'beta/shared',
-          benchSlug: 'shared-beta',
-          effort: 'medium',
+          registryId: 'gamma/strong',
+          benchSlug: 'strong',
           active: true,
-          quality: { intelligence: 90, coding: 90, agenticCoding: 90 },
+          quality: { intelligence: 95, coding: 95, agenticCoding: 95 },
+          source: 'test',
+        },
+        {
+          registryId: 'delta/cheap',
+          benchSlug: 'cheap',
+          active: true,
+          quality: { intelligence: 50, coding: 50, agenticCoding: 50 },
           source: 'test',
         },
       ],
       models: [
-        registryModel('alpha/shared', { contextWindow: 200000, maxTokens: 8192 }),
-        registryModel('beta/shared', { contextWindow: 200000, maxTokens: 8192 }),
+        registryModel('alpha/source', {
+          contextWindow: 200000,
+          maxTokens: 8192,
+          cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
+        }),
+        registryModel('gamma/strong', {
+          contextWindow: 200000,
+          maxTokens: 8192,
+          cost: { input: 100, output: 400, cacheRead: 0, cacheWrite: 0 },
+        }),
+        registryModel('delta/cheap', {
+          contextWindow: 200000,
+          maxTokens: 8192,
+          cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
+        }),
       ],
-      pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
     });
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
     const context = {
       messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }],
     } as unknown as Context;
-
     await harness.serve(context);
-
-    expect(harness.delegatedCall().context.systemPrompt ?? '').not.toContain('[router/auto]');
-  });
-
-  it('omits plan-tier route-up guidance for a single-candidate pool', async () => {
-    await setupCapabilityScenario([sourceModel]);
-    const context = {
-      messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }],
-    } as unknown as Context;
-
+    const served = harness.session.getLastServed();
+    const fromModel = served?.registryId
+      ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
+      : harness.session.getLastDecision()?.chosen;
+    const pending = {
+      escalate: true as const,
+      tfi: 1,
+      signals: [{ kind: 'aor' as const, severity: 'severe' as const, evidenceIds: ['a:o'], evidenceCount: 1 }],
+    };
+    harness.session.armTrajectoryEscalation(
+      pending,
+      fromModel,
+      harness.session.getLastDecision()?.dimension,
+      false,
+    );
+    const armed = harness.session.peekPendingTrajectoryEscalation();
+    expect(armed).toBeDefined();
+    harness.outStream.events = [];
+    harness.outStream.ended = false;
+    vi.mocked(streamSimple).mockClear();
+    harness.scriptReply([{ type: 'text_delta', delta: 'recovered' }, { type: 'done' }]);
     await harness.serve(context);
-
-    expect(harness.delegatedCall().context.systemPrompt ?? '').not.toContain('[router/auto]');
+    expect(harness.getProviderState().lastDecision?.chosen).toBe('delta/cheap');
+    expect(harness.session.peekPendingTrajectoryEscalation()).toBe(armed);
   });
 });
 
@@ -2373,17 +2255,18 @@ describe('multi-work phase engagement', () => {
       config: { consultRouter: false },
       benchmarks: multiWorkBenchmarks,
     });
-    // A route_up override only carries `fromModel` once a concrete model has
-    // actually served, so establish a serving model on an unrelated turn
-    // first — otherwise applyEscalation() is a same-dimension no-op below.
+    // A same-dimension user-escalation override only carries `fromModel` once a
+    // concrete model has actually served, so establish a serving model on an
+    // unrelated turn first — otherwise applyEscalationPrecedence() is a
+    // same-dimension no-op below.
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
     await harness.serve(nonCompoundImplementContext);
 
-    const { requestEscalation } = await import('./escalation.js');
-    // Already at 'implement' (compoundPrompt's keyword dimension), so this
-    // escalation cannot raise the dimension — it only marks the invocation as
-    // a same-dimension capability repick, which must suppress engagement.
-    requestEscalation('implement', 'model asked for a different model at the same tier', 4);
+    const served = harness.session.getLastServed();
+    const fromModel = served?.registryId
+      ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
+      : harness.session.getLastDecision()?.chosen;
+    harness.session.setPendingUserEscalation({ target: 'implement', fromModel });
     harness.resetEventStream();
     harness.scriptReply([{ type: 'text_delta', delta: 'serve' }, { type: 'done' }]);
 
@@ -2507,8 +2390,11 @@ describe('multi-work phase engagement', () => {
     await harness.serve(compoundContext);
     expect(harness.getProviderState().workPhaseState).toMatchObject({ phase: 'inspect', multiWorkEngaged: true });
 
-    const { requestEscalation } = await import('./escalation.js');
-    requestEscalation('review', 'the model asked for a stronger tier', 4);
+    const served = harness.session.getLastServed();
+    const fromModel = served?.registryId
+      ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
+      : harness.session.getLastDecision()?.chosen;
+    harness.session.setPendingUserEscalation({ target: 'review', fromModel });
     harness.resetEventStream();
     harness.scriptReply([{ type: 'text_delta', delta: 'reviewed' }, { type: 'done' }]);
     await harness.serve(compoundContext);

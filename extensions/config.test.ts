@@ -123,7 +123,6 @@ it('drops malformed values and clamps routing policy to documented defaults', ()
   expect(config.switchMargin).toBe(DEFAULT_SWITCH_MARGIN);
   expect(config.lowConfidenceThreshold).toBe(DEFAULT_LOW_CONFIDENCE_THRESHOLD);
   expect(config.depthEscalationTokens).toBe(DEFAULT_DEPTH_ESCALATION_TOKENS);
-  expect(config.escalationTtlTurns).toBe(4);
   expect(config.models).toEqual(['alpha/*']);
   expect(config.blacklist).toEqual(['*/broken']);
   expect(config.dimensionWeights.implement).toEqual({
@@ -218,11 +217,6 @@ describe('malformed config values are normalized to defaults', () => {
   it('coerces a numeric depthEscalation to true (default on)', () => {
     writeFileSync(getConfigPath(), JSON.stringify({ depthEscalation: 1 }), 'utf8');
     expect(loadConfig().depthEscalation).toBe(true);
-  });
-
-  it('coerces a non-boolean escalationTool to true (default on)', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ escalationTool: 'off' }), 'utf8');
-    expect(loadConfig().escalationTool).toBe(true);
   });
 
   it('coerces a non-boolean prompt to true (default on)', () => {

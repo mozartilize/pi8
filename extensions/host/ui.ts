@@ -127,6 +127,15 @@ export function formatDecisionDetail(
       lines.push('  gate:       mutation allowed with degraded capability');
     }
   }
+  if (decision.trajectoryFriction) {
+    const tf = decision.trajectoryFriction;
+    const kinds = tf.signals.map((signal) => `${signal.kind}:${signal.severity}`).join(', ');
+    lines.push(
+      tf.unavailable
+        ? `  trajectory: tfi ${tf.tfi.toFixed(2)} from ${tf.fromModel}; no stronger candidate`
+        : `  trajectory: tfi ${tf.tfi.toFixed(2)} from ${tf.fromModel}${kinds ? ` (${kinds})` : ''}`,
+    );
+  }
   if (decision.switched) {
     lines.push('  note:       switched model from the previous turn');
   }
@@ -197,24 +206,6 @@ export function notifyRouting(
     if (served.viaFallback) parts.push('· fallback');
     if (decision?.routedUp && decision.routedPickChanged) parts.push('· routed-up');
     ctx?.ui?.notify?.(parts.join(' '), 'info');
-  } catch {
-    // Notifications are cosmetic; never break a turn.
-  }
-}
-
-/**
- * TUI notification when a serving model's `route_up` call is accepted. Distinct
- * from {@link notifyRouting}: this fires on the escalation request itself, one
- * turn before the stronger model actually serves. Best-effort.
- */
-export function notifyEscalation(
-  ctx: ExtensionContext | undefined,
-  dimension: string,
-  reason: string | undefined,
-): void {
-  try {
-    const text = `⏫ route_up → ${dimension}${reason ? `: ${reason}` : ''} · next turn uses a stronger model`;
-    ctx?.ui?.notify?.(text, 'info');
   } catch {
     // Notifications are cosmetic; never break a turn.
   }

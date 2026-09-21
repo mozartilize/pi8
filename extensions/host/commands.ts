@@ -24,7 +24,6 @@ import { readRecentEntries, type DecisionLogEntry } from './decisionlog.js';
 import { detectToolGaps } from './gap-detector.js';
 import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
 import { provisionEmbedding } from '../embed/embedding-provision.js';
-import { clearActiveEscalation } from '../serve/escalation.js';
 import {
   RouterSession,
   defaultRouterSession,
@@ -383,11 +382,13 @@ async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> 
   let routedTotal = 0;
   let baselineTotal = 0;
   let priced = 0;
+  let incompleteTurns = 0;
   let baselineDrift = false;
   let firstBaseline: string | undefined;
   const byDimension = new Map<string, number>();
   for (const e of decisions) {
     byDimension.set(e.dimension, (byDimension.get(e.dimension) ?? 0) + 1);
+    if (e.spendIncomplete) incompleteTurns += 1;
     if (typeof e.routedCost === 'number' && typeof e.baselineCost === 'number') {
       routedTotal += e.routedCost;
       baselineTotal += e.baselineCost;
@@ -420,6 +421,9 @@ async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> 
       : []),
     `Baseline spend (${firstBaseline ?? 'n/a'}${baselineDrift ? ', baseline changed mid-session' : ''}): $${baselineTotal.toFixed(4)}`,
     `Saved: $${saved.toFixed(4)} (${pctSaved.toFixed(1)}%)`,
+    ...(incompleteTurns > 0
+      ? [`${incompleteTurns} turn(s) have incomplete usage — routed spend is a lower bound, not complete savings.`]
+      : []),
     '',
     'Dimension distribution:',
     ...[...byDimension.entries()]
@@ -503,7 +507,7 @@ async function handleEscalateCommand(
   pi: ExtensionAPI,
   session: RouterSession,
 ): Promise<void> {
-  // route_up-adjacent surface: inert unless the session actually routes.
+  // Inert unless the session actually routes.
   // On a concrete model there is no routing loop to consume the request.
   const model = ctx.model as { provider?: string; id?: string } | undefined;
   if (model?.provider !== ROUTER_PROVIDER_ID || model?.id !== AUTO_MODEL_ID) {
@@ -554,8 +558,6 @@ async function handleEscalateCommand(
     ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
     : last.chosen;
   session.setPendingUserEscalation({ target, fromModel });
-  // An explicit user request supersedes a model's pending route_up.
-  clearActiveEscalation();
 
   await pi.sendMessage(
     {

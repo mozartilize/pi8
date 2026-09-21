@@ -1,31 +1,26 @@
 /**
  * Pure routing-decision policy.
  *
- * Owns: user-escalation application, model-escalation application, depth
- * escalation, scoring invocation, capability-escalation repick, context-
- * pressure metadata (advisory only), and all decision metadata/reason
- * suffixes. No I/O, no global-state reads or writes — everything is
- * threaded through the input and the returned result.
+ * Owns: user-escalation application, depth escalation, scoring invocation,
+ * capability-escalation repick, trajectory-friction handoff, context-pressure
+ * metadata (advisory only), and all decision metadata/reason suffixes. No I/O,
+ * no global-state reads or writes — everything is threaded through the input
+ * and the returned result.
  *
  * The caller (provider.ts) is responsible for: registry wait, config load,
  * classification/consult cache, candidate construction, thinking resolution,
- * guidance injection, and delegation.
+ * and delegation.
  */
 import type { Candidate, DecisionCause, Dimension, MultiWorkScoringPolicy, RoutingDecision } from '../../types.js';
 import type { ClassifyResult } from '../classify/classifier.js';
 import type { AutoRouterConfig } from '../../types.js';
 import type { PendingUserEscalation } from '../../serve/router-session-state.js';
 import { DIMENSION_STRENGTH } from '../classify/classifier-keywords.js';
-import { pickBest, pickEscalation, isValidEscalationCandidate, candidateKey, capabilityForDimension, type ScoreOpts } from '../score/scorer.js';
+import type { ThinkingLevel } from '@earendil-works/pi-ai';
+import { pickBest, pickEscalation, isStrictlyStrongerCandidate, findSourceCandidate, candidateKey, capabilityForDimension, applyCandidateGuards, type ScoreOpts } from '../score/scorer.js';
+import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 
 // ─── Public interfaces ───────────────────────────────────────────────
-
-export interface AppliedEscalation {
-  dimension: Dimension;
-  cause: DecisionCause;
-  reason: string;
-  fromModel?: string;
-}
 
 export interface RoutingPolicyInput {
   candidates: Candidate[];
@@ -34,7 +29,15 @@ export interface RoutingPolicyInput {
   baseCause: DecisionCause;
   /** One-shot `/router-escalate` request for this invocation. */
   userEscalation?: PendingUserEscalation;
-  escalation?: AppliedEscalation;
+  /** Same-dimension quality-first repick from objective trajectory friction. */
+  trajectoryEscalation?: PendingTrajectoryEscalation;
+  /**
+   * Explicit user/session thinking request. When `userReasoningOverride` is
+   * set, trajectory stronger-proofs must compare the effort that will actually
+   * serve, not the labelled candidate effort.
+   */
+  userReasoning?: ThinkingLevel;
+  userReasoningOverride?: boolean;
   estimatedContextTokens: number;
   /**
    * Estimated tokens in the static prompt prefix (system prompt) an incumbent
@@ -83,6 +86,8 @@ export interface RoutingPolicyInput {
 
 export interface RoutingPolicyResult {
   decision: RoutingDecision;
+  /** True when trajectory friction selected a stronger head pick. */
+  trajectoryApplied: boolean;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -166,7 +171,6 @@ export interface EscalationPrecedenceInput {
   dimension: Dimension;
   cause: DecisionCause;
   userEscalation?: PendingUserEscalation;
-  escalation?: AppliedEscalation;
 }
 
 /** Output of {@link applyEscalationPrecedence}. */
@@ -175,15 +179,13 @@ export interface EscalationPrecedenceResult {
   cause: DecisionCause;
   userApplied: boolean;
   userRaised: boolean;
-  escalationApplied: boolean;
-  escalationRaised: boolean;
 }
 
 /**
- * Resolve user- and model-escalation precedence over a base dimension and
- * cause. Shared by the depth-escalation probe in provider.ts so it computes
- * the latch transition from the same post-escalation state that
- * resolveRoutingDecision's depth gate sees, keeping the two from drifting.
+ * Resolve user-escalation precedence over a base dimension and cause. Shared
+ * by the depth-escalation probe in provider.ts so it computes the latch
+ * transition from the same post-escalation state that resolveRoutingDecision's
+ * depth gate sees, keeping the two from drifting.
  *
  * Pure: reads only its inputs.
  */
@@ -193,9 +195,9 @@ export function applyEscalationPrecedence(
   let dimension: Dimension = input.dimension;
   let cause: DecisionCause = input.cause;
 
-  // Step 2: apply an explicit user escalation. A no-arg request raises one
-  // tier; an explicit target is honoured as-is. An equal target is meaningful
-  // — it asks for a different model at the same dimension.
+  // An explicit user request: a no-arg request raises one tier; an explicit
+  // target is honoured as-is. An equal target is meaningful — it asks for a
+  // different model at the same dimension.
   let userApplied = false;
   let userRaised = false;
   if (input.userEscalation) {
@@ -208,88 +210,10 @@ export function applyEscalationPrecedence(
     }
   }
 
-  // Step 3: apply active model escalation when it is at least as strong.
-  // An explicit user request outranks a model's earlier route_up for this
-  // invocation, so the override may still contribute metadata but must not
-  // move the dimension or claim the cause.
-  let escalationApplied = false;
-  let escalationRaised = false;
-  if (
-    input.escalation &&
-    !userApplied &&
-    DIMENSION_STRENGTH[input.escalation.dimension] >= DIMENSION_STRENGTH[dimension]
-  ) {
-    escalationRaised =
-      DIMENSION_STRENGTH[input.escalation.dimension] > DIMENSION_STRENGTH[dimension];
-    dimension = input.escalation.dimension;
-    if (escalationRaised) cause = 'model-escalation';
-    escalationApplied = true;
-  }
-
-  return { dimension, cause, userApplied, userRaised, escalationApplied, escalationRaised };
+  return { dimension, cause, userApplied, userRaised };
 }
 
 // ─── Decision steps ──────────────────────────────────────────────────
-
-/**
- * Choose the scoring set and dispatch pickBest / pickEscalation.
- *
- * A model route-up is strict about the status-reported source attempt.
- * Forbidden same-model equal/lower-effort candidates are removed before
- * ordinary scoring so a stale source cannot leak an invalid provider handoff.
- * A model-requested route-up is a quality-first repick, including when the
- * target dimension is unchanged or the source is not in this live set.
- */
-function selectScoredDecision(
-  candidates: Candidate[],
-  dimension: Dimension,
-  precedence: EscalationPrecedenceResult,
-  escalation: AppliedEscalation | undefined,
-  baseOpts: ScoreOpts,
-  pickOpts: ScoreOpts,
-  weights: RoutingPolicyInput['config']['dimensionWeights'],
-): RoutingDecision {
-  const strictModelEscalation =
-    precedence.escalationApplied && !precedence.userApplied && escalation?.fromModel;
-  const scoringCandidates = strictModelEscalation
-    ? candidates.filter((candidate) =>
-        isValidEscalationCandidate(candidateKey(candidate), escalation.fromModel!),
-      )
-    : candidates;
-  if (scoringCandidates.length === 0) {
-    return {
-      dimension,
-      chosen: '',
-      reason: `no valid escalation target from ${escalation?.fromModel ?? 'unknown source'}`,
-      confidence: 0.8,
-      routedUp: true,
-      routedDown: false,
-      cause: 'model-escalation',
-      fallbackChain: [],
-    };
-  }
-  if (strictModelEscalation) {
-    return (
-      pickEscalation(
-        scoringCandidates,
-        dimension,
-        escalation.fromModel!,
-        baseOpts,
-        true,
-      ) ?? {
-        dimension,
-        chosen: '',
-        reason: `no valid escalation target from ${escalation.fromModel}`,
-        confidence: 0.8,
-        routedUp: true,
-        routedDown: false,
-        cause: 'model-escalation',
-        fallbackChain: [],
-      }
-    );
-  }
-  return pickBest(scoringCandidates, dimension, weights[dimension], pickOpts);
-}
 
 /**
  * Repick away from the source model when scoring would keep it, or when the
@@ -309,40 +233,82 @@ function applyEscalationRepick(
   dimension: Dimension,
   precedence: EscalationPrecedenceResult,
   userEscalation: PendingUserEscalation | undefined,
-  escalation: AppliedEscalation | undefined,
   baseOpts: ScoreOpts,
 ): { decision: RoutingDecision; cause: DecisionCause } {
-  const strictModelEscalation =
-    precedence.escalationApplied && !precedence.userApplied && escalation?.fromModel;
-  if (strictModelEscalation) {
-    if (decision.chosen !== '' && !precedence.escalationRaised && POLICY_PASSIVE_CAUSES.has(cause)) {
-      cause = 'capability-escalation';
-    }
-    return { decision, cause };
-  }
-
-  const repick = precedence.userApplied
-    ? { fromModel: userEscalation?.fromModel, raisedDimension: precedence.userRaised }
-    : undefined;
+  const fromModel = precedence.userApplied ? userEscalation?.fromModel : undefined;
   if (
-    repick?.fromModel &&
-    (decision.chosen === repick.fromModel || !repick.raisedDimension)
+    fromModel &&
+    (decision.chosen === fromModel || !precedence.userRaised)
   ) {
     const escalationDecision = pickEscalation(
       candidates,
       dimension,
-      repick.fromModel,
+      fromModel,
       baseOpts,
       false,
     );
     if (escalationDecision) {
       decision = escalationDecision;
-      if (!repick.raisedDimension && POLICY_PASSIVE_CAUSES.has(cause)) {
+      if (!precedence.userRaised && POLICY_PASSIVE_CAUSES.has(cause)) {
         cause = 'capability-escalation';
       }
     }
   }
   return { decision, cause };
+}
+
+function applyTrajectoryRepick(
+  decision: RoutingDecision,
+  cause: DecisionCause,
+  candidates: Candidate[],
+  dimension: Dimension,
+  trajectory: PendingTrajectoryEscalation | undefined,
+  userApplied: boolean,
+  baseOpts: ScoreOpts,
+  compareOpts: { userReasoning?: ThinkingLevel; userReasoningOverride?: boolean },
+): { decision: RoutingDecision; cause: DecisionCause; applied: boolean } {
+  if (!trajectory || userApplied) return { decision, cause, applied: false };
+  const source = findSourceCandidate(candidates, trajectory.fromModel);
+  const strongerOpts = { ...compareOpts, candidates };
+  // Ordinary context/vision eligibility first. Scoring a stronger-only subset
+  // would fail open inside that subset and pick a stronger model that cannot
+  // hold the image or the context window.
+  const eligible = applyCandidateGuards(candidates, baseOpts);
+  const stronger = eligible.filter((candidate) =>
+    isStrictlyStrongerCandidate(candidate, trajectory.fromModel, dimension, source, strongerOpts),
+  );
+  const friction = {
+    tfi: trajectory.tfi,
+    signals: trajectory.signals.map((signal) => ({
+      kind: signal.kind,
+      severity: signal.severity as 'warning' | 'severe',
+      evidenceCount: signal.evidenceCount,
+    })),
+    fromModel: trajectory.fromModel,
+    preOutput: trajectory.preOutput,
+  };
+  if (stronger.length === 0) {
+    decision.trajectoryFriction = { ...friction, unavailable: true };
+    return { decision, cause, applied: false };
+  }
+  const picked = pickEscalation(stronger, dimension, trajectory.fromModel, baseOpts, true);
+  if (!picked || picked.chosen === '') {
+    decision.trajectoryFriction = { ...friction, unavailable: true };
+    return { decision, cause, applied: false };
+  }
+  // Friction only owns the head pick. Everything behind it is objective-failure
+  // recovery, so the ordinary chain stays reachable: a stronger model that
+  // 421s or has no credentials must not strand the turn behind a
+  // stronger-only chain. The struggling source itself stays excluded — the
+  // evidence is about that exact (model, effort).
+  const recovery = decision.fallbackChain.filter((key) => key !== trajectory.fromModel);
+  decision = {
+    ...picked,
+    fallbackChain: [...new Set([...picked.fallbackChain, ...recovery])],
+    trajectoryFriction: friction,
+  };
+  if (POLICY_PASSIVE_CAUSES.has(cause)) cause = 'trajectory-escalation';
+  return { decision, cause, applied: true };
 }
 
 /**
@@ -424,21 +390,12 @@ function annotateDecision(
   candidates: Candidate[],
   estimatedContextTokens: number,
   incumbentRegistryId: string | undefined,
-  escalation: AppliedEscalation | undefined,
-  escalationReason: string | undefined,
   config: RoutingPolicyInput['config'],
   baseOpts: ScoreOpts,
 ): void {
   decision.dimension = dimension;
   decision.confidence = classifyResult.confidence;
   decision.cause = cause;
-  if (escalation) {
-    decision.escalation = {
-      requestedDimension: escalation.dimension,
-      heuristicDimension: classifyResult.dimension,
-      reason: escalation.reason,
-    };
-  }
   // "Changed" is not "stronger". Direction has to come from the strength
   // ordering, because the downstream consumers — context-pressure advice, the
   // status widget, `/router-why` — mean different things for each direction.
@@ -486,10 +443,10 @@ function annotateDecision(
   if (cause === 'no-data') {
     decision.reason += ' [no benchmark quality data]';
   }
-  if (cause === 'model-escalation' && escalationReason) {
-    decision.reason += ` [escalated: ${escalationReason}]`;
-  } else if (cause === 'user-escalation') {
+  if (cause === 'user-escalation') {
     decision.reason += ` [user escalation → ${dimension}]`;
+  } else if (cause === 'trajectory-escalation') {
+    decision.reason += ` [trajectory-escalation from ${decision.trajectoryFriction?.fromModel ?? 'source'}]`;
   } else if (cause === 'router-consult' && decision.assessment) {
     decision.reason +=
       ` [assessment ${decision.assessment.kind} ` +
@@ -513,7 +470,9 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     baseDimension,
     baseCause,
     userEscalation,
-    escalation,
+    trajectoryEscalation,
+    userReasoning,
+    userReasoningOverride,
     estimatedContextTokens,
     staticPrefixTokens,
     needsVision,
@@ -524,21 +483,16 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     multiWorkPolicy,
   } = input;
 
-  // Step 1-3: start from base dimension/cause then apply user and model
-  // escalation via the shared precedence helper so the provider's depth probe
-  // and the policy's depth gate agree on the pre-depth state.
+  // Step 1-3: start from base dimension/cause then apply user escalation via
+  // the shared precedence helper so the provider's depth probe and the
+  // policy's depth gate agree on the pre-depth state.
   const precedence = applyEscalationPrecedence({
     dimension: baseDimension,
     cause: baseCause,
     userEscalation,
-    escalation,
   });
   let dimension: Dimension = precedence.dimension;
   let cause: DecisionCause = precedence.cause;
-  let escalationReason: string | undefined;
-  if (precedence.escalationApplied) {
-    escalationReason = escalation?.reason;
-  }
 
   const hasAnyBenchmark = candidates.some((candidate) => candidate.bench !== undefined);
   if (!hasAnyBenchmark && cause === 'heuristic') cause = 'no-data';
@@ -574,15 +528,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     ...(staticPrefixTokens != null ? { staticPrefixTokens } : {}),
   };
   const pickOpts: ScoreOpts = multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
-  let decision = selectScoredDecision(
-    candidates,
-    dimension,
-    precedence,
-    escalation,
-    baseOpts,
-    pickOpts,
-    config.dimensionWeights,
-  );
+  let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
 
   // Step 6: repick away from the source model when scoring would keep it, or
   // when the request is a same-dimension capability repick.
@@ -593,11 +539,23 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     dimension,
     precedence,
     userEscalation,
-    escalation,
     baseOpts,
   );
   decision = repicked.decision;
   cause = repicked.cause;
+
+  const trajectory = applyTrajectoryRepick(
+    decision,
+    cause,
+    candidates,
+    dimension,
+    trajectoryEscalation,
+    precedence.userApplied,
+    baseOpts,
+    { userReasoning, userReasoningOverride },
+  );
+  decision = trajectory.decision;
+  cause = trajectory.cause;
 
   // The floor stands down for the sanctioned downward moves, never widening
   // them (R3): an explicit user pick and any active escalation own the model
@@ -620,7 +578,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     DIMENSION_STRENGTH[dimension] <= DIMENSION_STRENGTH['gather'];
   const incumbentFloorStandsDown =
     precedence.userApplied ||
-    precedence.escalationApplied ||
+    trajectory.applied ||
     inspectPhasePromotion ||
     consultLoweredDimension ||
     offTopicReset;
@@ -651,11 +609,9 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     candidates,
     estimatedContextTokens,
     incumbentRegistryId,
-    escalation,
-    escalationReason,
     config,
     baseOpts,
   );
 
-  return { decision };
+  return { decision, trajectoryApplied: trajectory.applied };
 }

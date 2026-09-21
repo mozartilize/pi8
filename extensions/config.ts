@@ -49,8 +49,6 @@ export interface PersistedConfig {
   assessmentMaxInputChars?: number;
   /** Assessor intelligence floor as a ratio of the best routable (default 0.5). */
   assessorQualityRatio?: number;
-  escalationTool?: boolean;
-  escalationTtlTurns?: number;
   /**
    * Automatic one-tier raise for lightweight/gather dimensions once the live
    * context exceeds `depthEscalationTokens` (default true).
@@ -214,8 +212,6 @@ export function loadConfig(): AutoRouterConfig {
       persisted.depthEscalationTokens,
       DEFAULT_DEPTH_ESCALATION_TOKENS,
     ),
-    escalationTool: typeof persisted.escalationTool === 'boolean' ? persisted.escalationTool : true,
-    escalationTtlTurns: positiveInteger(persisted.escalationTtlTurns, 4),
     prompt: typeof persisted.prompt === 'boolean' ? persisted.prompt : true,
     models: stringList(persisted.models),
     blacklist: Array.isArray(persisted.blacklist)
@@ -248,6 +244,8 @@ export function loadConfig(): AutoRouterConfig {
  */
 const REMOVED_CONFIG_KEYS = [
   'escalationToken',
+  'escalationTool',
+  'escalationTtlTurns',
   'assessmentMode',
   'assessmentShadowDeadlineMs',
 ] as const;

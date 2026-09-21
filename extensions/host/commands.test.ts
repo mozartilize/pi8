@@ -29,7 +29,6 @@ import {
   setLastDecision,
   setLastServed,
 } from '../serve/router-session-state.js';
-import { applyEscalation, requestEscalation, resetEscalation } from '../serve/escalation.js';
 
 let dir: string;
 let prevEnv: string | undefined;
@@ -473,6 +472,29 @@ describe('/router-report', () => {
     expect(msg).toContain('gather      1');
   });
 
+  it('names incomplete usage so missing spend is not presented as complete savings', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+    appendDecision(
+      {
+        dimension: 'implement',
+        chosen: 'beta/cheap',
+        reason: 'scored',
+        confidence: 0.8,
+        routedUp: false,
+        routedDown: false,
+        cause: 'heuristic',
+        fallbackChain: ['beta/cheap'],
+        baseline: { registryId: 'alpha/strong', source: 'auto' },
+        spend: { routedCost: 0.2, baselineCost: 2.0, incomplete: true },
+      },
+      { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.2 },
+    );
+    await handlers.get('router-report')!('', ctx);
+    expect(messages.at(-1)).toContain('incomplete usage');
+  });
+
   it('flags baseline drift when the counterfactual baseline changed mid-session', async () => {
     const { pi, handlers } = fakePi();
     registerCommands(pi);
@@ -632,7 +654,6 @@ describe('/router-escalate', () => {
 
   beforeEach(() => {
     resetRouterSession();
-    resetEscalation();
   });
 
   it('records a no-arg escalation and queues exactly one hidden follow-up', async () => {
@@ -744,18 +765,6 @@ describe('/router-escalate', () => {
     await handlers.get('router-escalate')!('', ctx);
 
     expect(peekPendingUserEscalation()?.fromModel).toBe('test/actually-served');
-  });
-
-  it('clears an active model escalation override so the user request supersedes it', async () => {
-    const { pi, handlers } = fakePi();
-    registerCommands(pi);
-    const { ctx } = fakeCtx();
-    setLastDecision(decision());
-    requestEscalation('review', 'model asked', 4);
-
-    await handlers.get('router-escalate')!('plan', ctx);
-
-    expect(applyEscalation('gather')).toBeUndefined();
   });
 
   it('stays fail-open when the follow-up message cannot be delivered', async () => {

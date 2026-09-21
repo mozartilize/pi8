@@ -8,7 +8,6 @@ import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 
 import autoModelRouterExtension from './index.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
-import { applyEscalation, requestEscalation, resetEscalation } from './serve/escalation.js';
 import { computeRoleModels } from './agents/subagents.js';
 import { multiWorkRoutingMeta, routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
 import { formatDecisionDetail } from './host/ui.js';
@@ -102,13 +101,6 @@ function contextWithRegistry(
 }
 
 describe('session lifecycle', () => {
-  beforeEach(() => {
-    resetEscalation();
-  });
-
-  afterEach(() => {
-    resetEscalation();
-  });
 
 describe('registry-only role routing', () => {
   it('assigns a concrete model to a worker subagent when the benchmark store is absent', async () => {
@@ -592,29 +584,6 @@ describe('region-restricted parallel reviewers', () => {
   });
 });
 
-  it('clears a pending escalation and its cooldown at session_start', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    expect(requestEscalation('gather', 'first session request', 2).ok).toBe(true);
-
-    const sessionStart = handlers.get('session_start');
-    expect(sessionStart).toBeDefined();
-    await sessionStart?.(
-      { reason: 'new' },
-      {
-        modelRegistry: {},
-        sessionManager: { getSessionFile: () => undefined },
-      } as unknown as ExtensionContext,
-    );
-
-    expect(applyEscalation('lightweight')).toBeUndefined();
-    expect(requestEscalation('plan', 'new session request', 1).ok).toBe(true);
-  });
 });
 
 describe('assessment lifecycle resets', () => {
@@ -757,6 +726,26 @@ describe('mutation gate hooks', () => {
     expect(getWorkPhaseState()).toEqual(before);
   });
 
+  it('does not flush trajectory on turn_start when the session model is concrete', async () => {
+    const handlers = await makeToolHandlers();
+    const turnStart = handlers.get('turn_start')!;
+    const flush = vi.spyOn(defaultRouterSession, 'flushAndArmUnresolvedTrajectory');
+    const models = [registryModel('alpha/cheap')];
+    await turnStart({}, contextWithRegistry(models, { provider: 'openai-codex', id: 'gpt-5.3' }));
+    expect(flush).not.toHaveBeenCalled();
+    flush.mockRestore();
+  });
+
+  it('flushes unresolved trajectory on turn_start when router/auto is active', async () => {
+    const handlers = await makeToolHandlers();
+    const turnStart = handlers.get('turn_start')!;
+    const flush = vi.spyOn(defaultRouterSession, 'flushAndArmUnresolvedTrajectory');
+    const models = [registryModel('alpha/cheap')];
+    await turnStart({}, contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID }));
+    expect(flush).toHaveBeenCalledTimes(1);
+    flush.mockRestore();
+  });
+
   it('returns a non-terminating intentional block for router/auto', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
@@ -807,6 +796,32 @@ describe('mutation gate hooks', () => {
     expect(formatDecisionDetail(getLastDecision(), undefined).join('\n')).toContain(
       'mutation blocked at invocation 1',
     );
+  });
+
+  it('does not register a locally blocked mutation into the trajectory batch', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    commitWorkPhaseState(inspectState());
+    setLastServed({
+      registryId: 'test/inspect',
+      viaFallback: false,
+      accumulatedCost: 0,
+      capability: {
+        providerInvocation: 1,
+        terminalFloor: 0.85,
+        terminalCapableInScoringSet: true,
+        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
+      },
+    });
+    const note = vi.spyOn(defaultRouterSession, 'noteTrajectoryToolCall');
+
+    const blocked = await toolCall({ toolName: 'edit', toolCallId: 'blocked', input: {} }, routerAutoCtx);
+    expect(blocked).toEqual({ block: true, reason: expect.any(String) });
+    expect(note).not.toHaveBeenCalled();
+
+    await toolCall({ toolName: 'read', toolCallId: 'ok', input: { path: 'a.ts' } }, routerAutoCtx);
+    expect(note).toHaveBeenCalledTimes(1);
+    note.mockRestore();
   });
 
   it('projects the escape and its degradation onto the live decision', async () => {

@@ -67,6 +67,31 @@ describe('decision log', () => {
     expect(entry.baselineCost).toBe(2.0);
   });
 
+  it('round-trips trajectory friction and incomplete spend', () => {
+    const decision: RoutingDecision = {
+      ...DECISION,
+      cause: 'trajectory-escalation',
+      trajectoryFriction: {
+        tfi: 1,
+        signals: [{ kind: 'aor', severity: 'severe', evidenceCount: 1 }],
+        fromModel: 'test/weak:low',
+        preOutput: false,
+      },
+      spend: { routedCost: 0.01, baselineCost: 1, incomplete: true },
+    };
+    appendDecision(
+      decision,
+      { registryId: 'test/strong', viaFallback: true, accumulatedCost: 0.01 },
+      dir,
+    );
+    const path = join(dir, DECISION_LOG_FILE);
+    const entry = JSON.parse(readFileSync(path, 'utf8').trim().split('\n')[0]);
+    expect(entry.cause).toBe('trajectory-escalation');
+    expect(entry.trajectoryFriction.fromModel).toBe('test/weak:low');
+    expect(entry.spendIncomplete).toBe(true);
+    expect(entry.escalation).toBeUndefined();
+  });
+
   it('appends a JSONL line with the served model and no fallback', () => {
     appendDecision(
       DECISION,
@@ -147,15 +172,10 @@ describe('decision log', () => {
     expect(existsSync(join(dir, DECISION_LOG_FILE))).toBe(true);
   });
 
-  it('preserves escalation, context-pressure, and candidate diagnostic metadata', () => {
+  it('preserves context-pressure and candidate diagnostic metadata', () => {
     const decision: RoutingDecision = {
       ...DECISION,
       cause: 'router-consult',
-      escalation: {
-        requestedDimension: 'plan',
-        heuristicDimension: 'gather',
-        reason: 'needs design thinking',
-      },
       contextPressure: {
         usageRatio: 0.71,
         threshold: 0.6,
@@ -172,8 +192,7 @@ describe('decision log', () => {
       dir,
     );
     const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.escalation.requestedDimension).toBe('plan');
-    expect(entry.escalation.reason).toBe('needs design thinking');
+    expect(entry.escalation).toBeUndefined();
     expect(entry.contextPressure.usageRatio).toBe(0.71);
     expect(entry.candidateDiagnostics).toEqual([
       { candidateKey: 'cheap/model', excludedReason: 'promoted' },

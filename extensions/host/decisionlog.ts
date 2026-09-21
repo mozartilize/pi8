@@ -15,7 +15,6 @@ import { dirname, join } from 'node:path';
 import type {
   AssessmentFallbackReason,
   CandidateDiagnostic,
-  DecisionCause,
   Dimension,
   RoutingAssessment,
   RoutingDecision,
@@ -87,6 +86,10 @@ export interface DecisionLogEntry {
    */
   routedCost?: number;
   baselineCost?: number;
+  /** True when an attempt ended without observed usage; routed spend is a lower bound. */
+  spendIncomplete?: boolean;
+  /** Objective trajectory-friction evidence when it influenced the pick. */
+  trajectoryFriction?: RoutingDecision['trajectoryFriction'];
   /** Set on `kind: 'subagent-spend'` records only. */
   subagentSpend?: {
     role?: string;
@@ -130,7 +133,7 @@ export interface DecisionLogEntry {
     verdict?: string;
     adopted?: boolean;
   };
-  /** Populated when the serving model escalated the conversation. */
+  /** Historical route_up records only; live decisions no longer write this. */
   escalation?: {
     requestedDimension: string;
     heuristicDimension: string;
@@ -277,60 +280,15 @@ export function appendDecision(
       baselineSource: decision.baseline?.source,
       routedCost: decision.spend?.routedCost,
       baselineCost: decision.spend?.baselineCost,
+      spendIncomplete: decision.spend?.incomplete,
       intentKey: decision.intentKey,
       fallbackReason: decision.fallbackReason,
       provenance: decision.provenanceCounts,
       assessment: serializeAssessment(decision.assessment),
       assessmentPromptVersion: decision.assessment ? ASSESSMENT_PROMPT_VERSION : undefined,
-      escalation: decision.escalation,
+      trajectoryFriction: decision.trajectoryFriction,
       contextPressure: decision.contextPressure,
       candidateDiagnostics: decision.candidateDiagnostics,
-    };
-    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
-  } catch {
-    // Logging is best-effort.
-  }
-}
-
-/**
- * Append an immediate record of an accepted `route_up` escalation request. The
- * escalation also surfaces in the NEXT turn's decision entry (once a stronger
- * model actually serves), but logging it here gives a durable record at
- * request time — even if the session ends before the next turn. `chosen`/
- * `served` carry the model that was serving when it asked to escalate.
- */
-export function appendEscalationSignal(
-  event: {
-    requestedDimension: string;
-    heuristicDimension?: string;
-    reason: string;
-    servingModel?: string;
-    cause: Extract<DecisionCause, 'model-escalation' | 'capability-escalation'>;
-    routedUp: boolean;
-  },
-  storageBase?: string,
-): void {
-  try {
-    const path = decisionLogPath(storageBase);
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const model = event.servingModel ?? 'unknown/unknown';
-    const entry: DecisionLogEntry = {
-      ts: Date.now(),
-      dimension: event.requestedDimension,
-      chosen: model,
-      served: model,
-      viaFallback: false,
-      confidence: 1,
-      routedUp: event.routedUp,
-      cause: event.cause,
-      reason: `route_up requested: ${event.reason}`,
-      chain: [model],
-      escalation: {
-        requestedDimension: event.requestedDimension,
-        heuristicDimension: event.heuristicDimension ?? event.requestedDimension,
-        reason: event.reason,
-      },
     };
     appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
   } catch {

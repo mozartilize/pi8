@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { terminalAssessment } from '../test-support/router-fixtures.js';
+import { terminalAssessment, routingDecision } from '../test-support/router-fixtures.js';
 import {
   addAccumulatedCost,
   addAssessmentCost,
@@ -274,5 +274,34 @@ describe('RouterSession independent instances', () => {
       fromModel: 'beta/strong',
     });
     expect(isolated.peekPendingUserEscalation()).toBeUndefined();
+  });
+});
+
+describe('trajectory flush-and-arm', () => {
+  it('arms pending escalation from a blocked-sibling batch at the provider boundary', () => {
+    const session = new RouterSession();
+    session.setLastDecision(routingDecision(['test/weak:low']));
+    session.setLastServed({
+      registryId: 'test/weak',
+      thinkingLevel: 'low',
+      viaFallback: false,
+      accumulatedCost: 0,
+    });
+    session.bindTrajectoryIntent('intent-a');
+    const sameRead = (id: string) => ({
+      toolName: 'read',
+      toolCallId: id,
+      input: { path: 'a.ts' },
+      content: [{ type: 'text', text: 'v1' }],
+    });
+    session.observeTrajectory(sameRead('r1'), 1);
+    session.observeTrajectory(sameRead('r2'), 2);
+    session.observeTrajectory(sameRead('r3'), 3);
+    session.noteTrajectoryToolCall('bash', 'blocked', { command: 'pytest' });
+    session.noteTrajectoryToolCall('read', 'r4', { path: 'a.ts' });
+    expect(session.observeTrajectory(sameRead('r4'), 4)).toBeUndefined();
+    expect(session.peekPendingTrajectoryEscalation()).toBeUndefined();
+    session.flushAndArmUnresolvedTrajectory();
+    expect(session.peekPendingTrajectoryEscalation()?.fromModel).toBe('test/weak:low');
   });
 });

@@ -11,6 +11,9 @@ import {
   levelFrom,
   resolveThinkingLevel,
   relativeQualities,
+  findSourceCandidate,
+  isStrictlyStrongerCandidate,
+  servedEffort,
   type RegistryModelInfo,
 } from './scorer.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../../constants.js';
@@ -2108,5 +2111,122 @@ describe('scorer — multiWorkPolicy request-local floors', () => {
       multiWorkPolicy: frontierInspectPolicy,
     });
     expect(withPolicy.multiWork?.terminalCapableInScoringSet).toBe(true);
+  });
+});
+
+describe('isStrictlyStrongerCandidate', () => {
+  const weak = candidate('test/weak', {
+    bench: benchRow('test/weak', { quality: { intelligence: 60, coding: 60, agenticCoding: 60 } }),
+  });
+  const strong = candidate('test/strong', {
+    bench: benchRow('test/strong', { quality: { intelligence: 90, coding: 90, agenticCoding: 90 } }),
+  });
+
+  it('resolves an unsuffixed source against an effective served effort', () => {
+    const source = findSourceCandidate([weak, strong], 'test/weak:medium');
+    expect(source?.registryId).toBe('test/weak');
+    expect(isStrictlyStrongerCandidate(strong, 'test/weak:medium', 'implement', source)).toBe(true);
+  });
+
+  it('fails closed when the source is missing', () => {
+    expect(isStrictlyStrongerCandidate(strong, 'test/missing:medium', 'implement', undefined)).toBe(false);
+  });
+
+  it('fails closed on estimated quality on either side', () => {
+    const estimatedDest = candidate('test/guess', {
+      bench: { ...benchRow('test/guess', { quality: { intelligence: 99 } }), qualityEstimated: true },
+    });
+    const estimatedSource = candidate('test/weak', {
+      bench: { ...benchRow('test/weak', { quality: { intelligence: 60 } }), qualityEstimated: true },
+    });
+    expect(isStrictlyStrongerCandidate(estimatedDest, 'test/weak', 'implement', weak)).toBe(false);
+    expect(isStrictlyStrongerCandidate(strong, 'test/weak', 'implement', estimatedSource)).toBe(false);
+  });
+
+  it('rejects a weaker measured destination', () => {
+    expect(isStrictlyStrongerCandidate(weak, 'test/strong', 'implement', strong)).toBe(false);
+  });
+
+  it('accepts same-model higher effort and rejects equal effort', () => {
+    const medium = candidate('test/model', { effort: 'medium', bench: benchRow('test/model') });
+    const high = candidate('test/model', { effort: 'high', bench: benchRow('test/model') });
+    expect(isStrictlyStrongerCandidate(high, 'test/model:medium', 'implement', medium)).toBe(true);
+    expect(isStrictlyStrongerCandidate(medium, 'test/model:medium', 'implement', medium)).toBe(false);
+  });
+
+  it('compares the effort that will actually serve, not the labelled destination effort', () => {
+    const medium = candidate('test/model', {
+      effort: 'medium',
+      reasoning: true,
+      bench: benchRow('test/model', { effort: 'medium', quality: { intelligence: 70, coding: 70, agenticCoding: 70 } }),
+    });
+    const high = candidate('test/model', {
+      effort: 'high',
+      reasoning: true,
+      bench: benchRow('test/model', { effort: 'high', quality: { intelligence: 90, coding: 90, agenticCoding: 90 } }),
+    });
+    expect(isStrictlyStrongerCandidate(high, 'test/model:medium', 'implement', medium, {
+      userReasoning: 'medium',
+      userReasoningOverride: true,
+      candidates: [medium, high],
+    })).toBe(false);
+
+    const source = candidate('test/weak', {
+      effort: 'medium',
+      reasoning: true,
+      bench: benchRow('test/weak', { effort: 'medium', quality: { intelligence: 60, coding: 60, agenticCoding: 60 } }),
+    });
+    const destHigh = candidate('test/strong', {
+      effort: 'high',
+      reasoning: true,
+      bench: benchRow('test/strong', { effort: 'high', quality: { intelligence: 95, coding: 95, agenticCoding: 95 } }),
+    });
+    const destMedium = candidate('test/strong', {
+      effort: 'medium',
+      reasoning: true,
+      bench: benchRow('test/strong', { effort: 'medium', quality: { intelligence: 55, coding: 55, agenticCoding: 55 } }),
+    });
+    expect(isStrictlyStrongerCandidate(destHigh, 'test/weak:medium', 'implement', source, {
+      userReasoning: 'medium',
+      userReasoningOverride: true,
+      candidates: [source, destHigh, destMedium],
+    })).toBe(false);
+  });
+
+  it('does not treat a labelled-high destination as stronger when that effort cannot serve', () => {
+    const source = candidate('test/weak', {
+      effort: 'medium',
+      reasoning: true,
+      bench: benchRow('test/weak', { effort: 'medium', quality: { intelligence: 60, coding: 60, agenticCoding: 60 } }),
+    });
+    const dest = candidate('test/strong', {
+      effort: 'high',
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: 'low',
+        low: 'low',
+        medium: 'medium',
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+      bench: benchRow('test/strong', { effort: 'high', quality: { intelligence: 95, coding: 95, agenticCoding: 95 } }),
+    });
+    expect(servedEffort(dest, 'implement')).toBeUndefined();
+    expect(isStrictlyStrongerCandidate(dest, 'test/weak:medium', 'implement', source, {
+      candidates: [source, dest],
+    })).toBe(false);
+  });
+
+  it('does not use a different effort variant as the source measurement', () => {
+    const low = candidate('test/model', {
+      effort: 'low',
+      bench: benchRow('test/model', { effort: 'low', quality: { intelligence: 40 } }),
+    });
+    const high = candidate('test/model', {
+      effort: 'high',
+      bench: benchRow('test/model', { effort: 'high', quality: { intelligence: 90 } }),
+    });
+    expect(findSourceCandidate([low, high], 'test/model:medium')).toBeUndefined();
   });
 });

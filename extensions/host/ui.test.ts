@@ -225,7 +225,7 @@ describe('formatDecisionDetail', () => {
   });
 });
 
-import { notifyRouting, notifyEscalation } from './ui.js';
+import { notifyRouting } from './ui.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 describe('notifyRouting', () => {
@@ -254,17 +254,6 @@ describe('notifyRouting', () => {
     expect(msgs[0][0]).toContain('a/b ');
     expect(msgs[0][0]).not.toContain('a/b:');
     expect(msgs[1][0]).not.toContain('c/d:');
-  });
-});
-
-describe('notifyEscalation', () => {
-  it('names the target dimension and reason', () => {
-    const msgs: Array<[string, string | undefined]> = [];
-    const ctx = { ui: { notify: (m: string, t?: string) => msgs.push([m, t]) } } as unknown as ExtensionContext;
-    notifyEscalation(ctx, 'plan', 'needs architecture');
-    expect(msgs[0][0]).toMatch(/route_up → plan/);
-    expect(msgs[0][0]).toContain('needs architecture');
-    expect(msgs[0][1]).toBe('info');
   });
 });
 

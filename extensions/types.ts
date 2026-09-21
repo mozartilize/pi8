@@ -238,8 +238,8 @@ export type DecisionCause =
   | 'embedding-classify'
   | 'error-fallback'
   | 'no-data'
-  | 'model-escalation'
   | 'capability-escalation'
+  | 'trajectory-escalation'
   | 'context-depth'
   | 'self-healing-gap';
 
@@ -288,11 +288,17 @@ export interface RoutingDecision {
   candidateDiagnostics?: CandidateDiagnostic[];
   /** True if the chosen model differs from the previous turn's model. */
   switched?: boolean;
-  /** Escalation metadata when a serving model requested route_up. */
-  escalation?: {
-    requestedDimension: Dimension;
-    heuristicDimension: Dimension;
-    reason: string;
+  /** Objective trajectory-friction evidence when it influenced the pick. */
+  trajectoryFriction?: {
+    tfi: number;
+    signals: Array<{
+      kind: 'aor' | 'failure-persistence' | 'backtracking' | 'stagnation' | 'reasoning-loop';
+      severity: 'warning' | 'severe';
+      evidenceCount: number;
+    }>;
+    fromModel: string;
+    preOutput: boolean;
+    unavailable?: boolean;
   };
   /** Cache-related usage from the delegated stream, populated after the turn. */
   usage?: {
@@ -329,8 +335,12 @@ export interface RoutingDecision {
    * sums every attempt's own price (including failed attempts that still
    * spent tokens); `baselineCost` reprices that same total at the baseline
    * model's rate. Absent `baselineCost` means no baseline was resolved.
+   * `incomplete` is true when an attempt ended without terminal usage, so
+   * routed spend is a lower bound and must not be presented as complete
+   * savings. Partial/zero-initialized usage during an abandoned stream is
+   * counted once but does not make the turn complete.
    */
-  spend?: { routedCost: number; baselineCost?: number };
+  spend?: { routedCost: number; baselineCost?: number; incomplete?: boolean };
 }
 
 export type Role = 'researcher' | 'planner' | 'worker' | 'reviewer' | 'advisor';
@@ -402,10 +412,6 @@ export interface AutoRouterConfig {
   depthEscalation: boolean;
   /** Context-token threshold for depth escalation. */
   depthEscalationTokens: number;
-  /** If true, register the route_up self-escalation tool (default true). */
-  escalationTool: boolean;
-  /** Number of turns a model escalation override stays active. */
-  escalationTtlTurns: number;
   /**
    * Show a TUI notification when the router picks/switches the model for a
    * turn (default true). The footer status widget updates regardless.

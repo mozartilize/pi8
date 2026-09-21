@@ -44,7 +44,7 @@ import {
   buildSubagentProviderAuthFilter,
   getBlacklistDebugState,
 } from './serve/provider.js';
-import { registerRouteUpTool, resetEscalationSession } from './serve/escalation.js';
+
 import { computeRoleModels, pickSubagentDefaultModel } from './agents/subagents.js';
 import { SubagentEscalationHooks } from './agents/subagent-escalation-hooks.js';
 import { SubagentRoutingState } from './agents/subagent-routing-state.js';
@@ -78,7 +78,7 @@ const SUBAGENT_TOOL = 'subagent';
 
 /**
  * True only when the session's currently active model IS the router/auto
- * synthetic provider. All subagent-injection and route_up routing logic must
+ * synthetic provider. All subagent-injection and trajectory routing logic must
  * be gated behind this: when the user has deliberately picked a concrete
  * model, this extension's presence must be completely inert and pi /
  * pi-subagents must behave exactly as if it were not installed.
@@ -201,7 +201,6 @@ async function handleSessionStart(
   });
   try {
     session.reset();
-    resetEscalationSession();
     session.clearSessionBlacklist();
     // Seed config blacklist so the session can temporarily override it via
     // remove/clear. Config writes stay authoritative: next session_start
@@ -354,6 +353,16 @@ function handleTurnStart(
     model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
     ...getBlacklistDebugState(),
   });
+  // Hard rule 9: trajectory arming is routing side-effect. Provider
+  // registration below stays ungated so a later switch to router/auto
+  // can still find the synthetic model.
+  if (isRouterAutoActive(ctx?.model)) {
+    try {
+      session.flushAndArmUnresolvedTrajectory();
+    } catch {
+      // ignore
+    }
+  }
   try {
     registerAutoRouterProvider(pi, ctx, session, runtime);
   } catch {
@@ -561,15 +570,38 @@ function handleMutationToolResult(
   }
 }
 
+function handleTrajectoryToolResult(event: ToolResultEvent, session: RouterSession): void {
+  try {
+    const invocation = session.getWorkPhaseState()?.providerInvocation ?? 0;
+    const decision = session.observeTrajectory(
+      {
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        input: (event as { input?: unknown }).input,
+        content: event.content,
+        details: event.details,
+        isError: (event as { isError?: boolean }).isError,
+      },
+      invocation,
+    );
+    if (!decision) return;
+    session.armTrajectoryEscalation(
+      decision,
+      session.servedTrajectoryKey(),
+      session.getLastDecision()?.dimension,
+      false,
+    );
+  } catch {
+    // Trajectory observation must never fail a tool result.
+  }
+}
+
 export default async function autoModelRouterExtension(
   pi: ExtensionAPI,
   session: RouterSession = defaultRouterSession,
   runtime: RuntimeBindings = defaultRuntimeBindings,
 ) {
   registerCommands(pi, session);
-
-  // M4b: self-escalation tool. Costs nothing unless a model calls it.
-  registerRouteUpTool(pi);
 
   // Register `router/auto` synchronously at extension-init time (no session
   // ctx) so it lands in the runtime's pendingProviderRegistrations BEFORE Pi
@@ -616,7 +648,22 @@ export default async function autoModelRouterExtension(
       handleSubagentToolCall(event, ctx, session, routingState, subagentEscalationHooks);
       return;
     }
-    return handleMutationToolCall(event, session);
+    try {
+      const block = handleMutationToolCall(event, session);
+      if (block?.block) return block;
+      const flushed = session.noteTrajectoryToolCall(event.toolName, event.toolCallId, event.input);
+      if (flushed) {
+        session.armTrajectoryEscalation(
+          flushed,
+          session.servedTrajectoryKey(),
+          session.getLastDecision()?.dimension,
+          false,
+        );
+      }
+    } catch {
+      // Trajectory observation must never fail a tool call.
+    }
+    return undefined;
   });
 
   pi.on('tool_result', (event, ctx) => {
@@ -632,5 +679,6 @@ export default async function autoModelRouterExtension(
       );
     }
     handleMutationToolResult(event, session);
+    handleTrajectoryToolResult(event, session);
   });
 }

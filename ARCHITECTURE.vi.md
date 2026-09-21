@@ -45,7 +45,7 @@ Mỗi user entry thực chỉ có một assessment, bị giới hạn bởi mộ
 Verdict được áp dụng dưới các giới hạn nghiêm ngặt:
 
 - Khi không chắc chắn, luôn route lên: assessment confidence thấp sẽ cho kết quả `max(heuristic, oneTierAbove(verdict))`, không bao giờ thấp hơn heuristic.
-- Chỉ verdict **confidence cao, `scope: bounded`** mới được phép hạ dimension, tối đa **một tier**, không bao giờ hạ từ `implement` hoặc `review`, và không bao giờ khi depth latch đang hoạt động.
+- Chỉ verdict **confidence cao, `scope: bounded`** mới được phép hạ dimension, tối đa **một tier** (hoặc giải phóng bump nhập nhằng từ keyword về `rawHeuristic`), không bao giờ hạ từ `implement` hoặc `review`, và không bao giờ khi depth latch đang hoạt động.
 - Capability repick: consult đã nâng dimension sẽ sở hữu quyết định đó (`router-consult` vẫn là cause đang hoạt động cho mục đích capability repick).
 
 Mỗi lần assessment ghi một record `assessment-metric` vào decision log, join bằng `intentKey`, để giữ lại heuristic delta hoặc fallback reason. Một depth-latch transition ghi metric thứ hai từ cùng một assessment dispatch duy nhất. Chi phí assessment được theo dõi riêng với chi phí routing.
@@ -189,7 +189,7 @@ Cơ chế này bao phủ một chuyển tiếp mà classifier không nhìn thấ
 
 ### 1. Capability escalation trong hội thoại chính
 
-Tự chạy `/router-escalate [dimension]`, hoặc để serving model gọi `route_up` trước khi có câu trả lời mang tính thực chất. Không có argument sẽ nâng một tier; dimension tường minh yếu hơn dimension được route gần nhất sẽ bị từ chối. Ở cùng dimension, capability repick ưu tiên chất lượng sẽ loại model đang yêu cầu. Override kéo dài `escalationTtlTurns` lượt hoặc 5 phút.
+Tự chạy `/router-escalate [dimension]`. Không có argument sẽ nâng một tier; dimension tường minh yếu hơn dimension được route gần nhất sẽ bị từ chối. Ở cùng dimension, capability repick ưu tiên chất lượng sẽ loại model đang yêu cầu. Model không tự escalate. Trajectory friction khách quan (lặp action/observation, failure dai dẳng, stagnation đã xác nhận, reasoning loop trước output) đặt pending same-dimension quality-first repick cho provider invocation kế tiếp, hoặc hop ngay khi replay vẫn an toàn.
 
 ### 2. Automatic fallback trên main stream
 
@@ -240,7 +240,7 @@ Các state transition thuần, fail-open, giới hạn theo invocation, gate cá
 
 ### Assessor v2 contract (`assessment-prompt.ts`)
 
-`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. Assessor trả về cùng shape `{ kind, complexity, scope, compound, confidence, reasoning }` như terminal classifier (`ParsedAssessment`/`RoutingAssessment`), thay thế contract `dimension`/`outcome`/`scope: AssessmentScope` trước đó. Verdict thành công được áp dụng theo các giới hạn trong §1 và ghi thành record `assessment-metric`. Các field `complexity`/`compound` của assessor chỉ cung cấp thông tin cho terminal classification — chúng không bao giờ gate routing trực tiếp, và không có down-routing tự động cho verify-phase.
+`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. Assessor trả về shape `{ kind, complexity, scope, compound, confidence, reasoning }` như terminal classifier (`ParsedAssessment`/`RoutingAssessment`). Verdict thành công được áp dụng theo các giới hạn trong §1 và ghi thành record `assessment-metric`. Các field `complexity`/`compound` của assessor chỉ cung cấp thông tin cho terminal classification — chúng không bao giờ gate routing trực tiếp, và không có down-routing tự động cho verify-phase.
 
 ### Hiển thị decision
 
@@ -264,9 +264,18 @@ Các state transition thuần, fail-open, giới hạn theo invocation, gate cá
 
 Benchmark slug được fuzzy-match với model ID trong live registry của Pi. Có thể dùng manual override qua `/router-fix` khi matching thất bại; cho đến khi có override, model chưa match sẽ không có quality data và chỉ route dựa trên registry metadata.
 
+### Session state & lifecycle
+
+Routing state được đóng gói thành các domain aggregate có thể khởi tạo độc lập:
+- `RouterSession`: Container root sở hữu session generation, decision/model được serve gần nhất, candidate expansion cache, embedding tallies và các domain sub-object. Được clear khi `session_start` hoặc khi reset test.
+- `BlacklistState`: Đóng gói các exclusion lúc runtime cho model và provider, cũng như các session glob pattern chuẩn hóa không phân biệt hoa thường.
+- `AssessmentState`: Theo dõi chi phí assessor, EMA ước lượng usage input/output và strike count theo từng model.
+- `IntentState`: Quản lý cached routing intent qua các vòng tool loop, depth-latch generation, latch veto intent key và compound work-phase state.
+- `RuntimeBindings`: Lưu trữ `ExtensionContext` của Pi, `modelRegistry` hiện hành và signature đăng ký provider. Tồn tại qua các lần reset `session_start` và chỉ bị xóa khi extension shutdown hoặc reload.
+
 ### Decision log
 
-Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict và record `assessment-metric`. Các giá trị cause: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `model-escalation`, `capability-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
+Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict và record `assessment-metric`. Các giá trị cause: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `capability-escalation`, `trajectory-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
 
 ### Timing log
 
@@ -283,8 +292,6 @@ Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 | `artificialAnalysisApiKey` | — | Được lưu bởi `/router-sync` |
 | `models` | `[]` (tất cả) | Allowlist: glob pattern `provider/id` |
 | `blacklist` | `[]` | Các exclude pattern được lưu bền vững |
-| `escalationTool` | `true` | Đăng ký tool `route_up` |
-| `escalationTtlTurns` | `4` | Thời lượng override của model `route_up` |
 | `consultRouter` | `true` | Công tắc tổng cho semantic assessment |
 | `consultModel` | — | Model assessor override, tùy chọn |
 | `assessmentDeadlineMs` | `1500` | Ngân sách end-to-end cho assessor |

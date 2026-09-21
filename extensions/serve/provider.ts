@@ -18,7 +18,7 @@ import {
   type Message,
 } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
+import type { ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
 
 import type { BenchModel, Candidate, Dimension, DecisionCause, AutoRouterConfig } from '../types.js';
 import { ROUTER_PROVIDER_ID, AUTO_MODEL_ID } from '../types.js';
@@ -33,7 +33,7 @@ import { loadConfig } from '../config.js';
 import { runAssessment, type AssessmentConfig } from '../routing/consult/consult.js';
 import { adoptAssessment, shouldVetoLatch } from '../routing/consult/assessment-adoption.js';
 import { latestSummaryText, countToolActivity } from '../routing/consult/message-provenance.js';
-import { applyEscalation, ROUTE_UP_TOOL } from './escalation.js';
+
 import { appendDecision, appendAssessmentMetric } from '../host/decisionlog.js';
 import { renderRouterStatus } from '../host/ui.js';
 import {
@@ -785,9 +785,7 @@ function advanceWorkPhase(args: {
     !args.vetoDepthEscalation && args.depthWouldEscalate
       ? (args.preDepth.dimension === 'lightweight' ? 'gather' : 'implement')
       : args.preDepth.dimension;
-  const capabilityRepickActive =
-    (args.preDepth.userApplied && !args.preDepth.userRaised) ||
-    (args.preDepth.escalationApplied && !args.preDepth.escalationRaised);
+  const capabilityRepickActive = args.preDepth.userApplied && !args.preDepth.userRaised;
 
   let workPhaseState = args.session.getWorkPhaseState();
   if (!args.cacheHit) {
@@ -995,15 +993,17 @@ export function registerAutoRouterProvider(
             const { cacheHit, cachedIntent, classifyResult, confidence } = intent;
             let { baseDimension, baseCause } = intent;
 
-            // Consume an active route_up request once per low-level Pi turn, as
-            // before. Its effect is applied after the cached base intent is
-            // resolved so escalation itself is never cached.
-            const escalation = applyEscalation(classifyResult.dimension);
+            session.bindTrajectoryIntent(turnInput.key);
+            // Blocked preflights never emit tool_result. Finalize that batch
+            // here, before peeking, so a sibling's evidence can arm this
+            // invocation rather than stalling behind an impossible result.
+            session.flushAndArmUnresolvedTrajectory();
 
             // Peek only: a pending /router-escalate request is consumed after
             // the decision is recorded, so a router-internal failure before
             // that point cannot silently swallow the user's request.
             const userEscalation = session.peekPendingUserEscalation();
+            const trajectoryEscalation = session.peekPendingTrajectoryEscalation();
 
             const candidates = buildRoutableCandidates({
               regModels: regModels as unknown[],
@@ -1102,7 +1102,6 @@ export function registerAutoRouterProvider(
               dimension: baseDimension,
               cause: baseCause,
               userEscalation,
-              escalation,
             });
             const depthWouldEscalate = wouldDepthEscalate({
               dimension: preDepth.dimension,
@@ -1162,13 +1161,19 @@ export function registerAutoRouterProvider(
               session,
             });
 
+            const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
+            const userReasoningOverride =
+              requestedReasoning != null
+              && requestedReasoning !== session.getLastResolvedThinkingLevel();
             const policy = resolveRoutingDecision({
               candidates: routableCandidates,
               classifyResult,
               baseDimension,
               baseCause,
               userEscalation,
-              escalation,
+              trajectoryEscalation,
+              userReasoning: requestedReasoning as ThinkingLevel | undefined,
+              userReasoningOverride,
               estimatedContextTokens: estContextTokens,
               staticPrefixTokens,
               needsVision,
@@ -1198,6 +1203,10 @@ export function registerAutoRouterProvider(
             }
             session.setLastDecision(decision);
             if (userEscalation) session.consumePendingUserEscalation();
+            // Trajectory pending is consumed only after a successful serve of
+            // an applied handoff. Peeking it here must not drop evidence when
+            // no stronger target exists, user escalation won, or delegation
+            // fails.
 
             debugLog('decision', {
               dimension: decision.dimension,
@@ -1216,7 +1225,6 @@ export function registerAutoRouterProvider(
               resolvedReasoning,
               delegatedOptions,
               inheritedReasoning,
-              requestedReasoning,
             } = resolveTurnEffort({
               chosenCandidate,
               options,
@@ -1224,15 +1232,6 @@ export function registerAutoRouterProvider(
               pi,
               session,
             });
-
-            // Guidance is decided per delegation attempt because effort floors,
-            // model maps, and fallback can change the source effort actually
-            // shown in status. Never advertise route_up without a valid target
-            // from the attempt that receives the prompt.
-            const enableRouteUpGuidance =
-              config.escalationTool !== false &&
-              (!context.tools ||
-                context.tools.some((t) => (t as { name?: string }).name === ROUTE_UP_TOOL));
 
             if (decision.fallbackChain.length === 0) {
               // A strict escalation can legitimately have no eligible target.
@@ -1249,13 +1248,15 @@ export function registerAutoRouterProvider(
               return;
             }
 
+            const pendingTrajectory = session.peekPendingTrajectoryEscalation();
+            const delegationSessionGeneration = session.getSessionGeneration();
             const result = await runDelegationLoop(
               {
                 decision,
                 registry: registry!,
                 context,
                 options: delegatedOptions,
-                enableRouteUpGuidance,
+                candidates: routableCandidates,
                 reasoning: resolvedReasoning as string | undefined,
                 userReasoningOverride:
                   !inheritedReasoning && requestedReasoning != null,
@@ -1266,6 +1267,17 @@ export function registerAutoRouterProvider(
               },
               stream,
             );
+
+            if (
+              result.capabilityHandoff
+              && pendingTrajectory
+              && result.capabilityHandoff.fromModel === pendingTrajectory.fromModel
+              && session.peekPendingTrajectoryEscalation() === pendingTrajectory
+              && session.getSessionGeneration() === delegationSessionGeneration
+              && assessmentStillCurrent()
+            ) {
+              session.consumePendingTrajectoryEscalation();
+            }
 
             if (!result.streamFinalized && !result.success) {
               stream.push(

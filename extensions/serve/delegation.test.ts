@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Model, Api } from '@earendil-works/pi-ai';
 
-import { multiWorkRoutingMeta, routingDecision, registryModel } from '../test-support/router-fixtures.js';
+import { multiWorkRoutingMeta, routingDecision, registryModel, candidate, benchRow } from '../test-support/router-fixtures.js';
 import { createDelegationHarness, rejectingReturnStream, hangingReturnStream } from '../test-support/delegation-harness.js';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { setDecisionLogBase } from '../host/decisionlog.js';
@@ -53,24 +53,6 @@ afterAll(() => {
 });
 
 describe('runDelegationLoop contracts', () => {
-  it('does not advertise a failed earlier candidate as a route_up target to fallback', async () => {
-    const h = createDelegationHarness({
-      chain: ['alpha/strong:high', 'beta/fallback:medium'],
-      enableRouteUpGuidance: true,
-      scripts: {
-        'alpha/strong': [new Error('stream exploded')],
-        'beta/fallback': [[
-          { type: 'text_delta', delta: 'served' },
-          { type: 'done', message: { stopReason: 'stop' } },
-        ]],
-      },
-    });
-
-    expect((await h.run()).success).toBe(true);
-    expect(h.systemPrompts[0]).toContain('[router/auto]');
-    expect(h.systemPrompts.at(-1) ?? '').not.toContain('[router/auto]');
-  });
-
   it('never forwards a failed candidate\'s answerless done into the consumer stream', async () => {
     // A provider that completes with a terminal `done` before any output (a
     // bridge returning an empty completion) must not finalize the caller's
@@ -1117,5 +1099,277 @@ describe('runDelegationLoop custom provider streamSimple dispatch', () => {
 
     expect(result.success).toBe(true);
     expect(h.attempts).toEqual(['alpha/model']);
+  });
+});
+
+function reasoningLoopEvents(extra: readonly unknown[] = []): unknown[] {
+  const block = 'abcdefghij'.repeat(13).slice(0, 128);
+  const pad = Array.from({ length: 800 }, () => 'alpha').join(' ');
+  return [
+    { type: 'start' },
+    {
+      type: 'thinking_delta',
+      delta: pad,
+      partial: { usage: { input: 11, output: 22, cacheRead: 0, cacheWrite: 0 } },
+    },
+    { type: 'thinking_delta', delta: block },
+    { type: 'thinking_delta', delta: block },
+    { type: 'thinking_delta', delta: block },
+    ...extra,
+  ];
+}
+
+const loopSource = candidate('alpha/loop', {
+  bench: benchRow('alpha/loop', { quality: { intelligence: 60, coding: 60, agenticCoding: 60 } }),
+  cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+});
+const loopStrong = candidate('beta/strong', {
+  bench: benchRow('beta/strong', { quality: { intelligence: 90, coding: 90, agenticCoding: 90 } }),
+  cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+});
+const loopCheap = candidate('gamma/cheap', {
+  bench: benchRow('gamma/cheap', { quality: { intelligence: 50, coding: 50, agenticCoding: 50 } }),
+  cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+});
+
+describe('pre-output reasoning-loop handoff', () => {
+  it('hops to a stronger candidate, records trajectory cause, and does not blacklist', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong', 'gamma/cheap'],
+      candidates: [loopSource, loopStrong, loopCheap],
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents([{ type: 'text_delta', delta: 'should not serve' }])],
+        'beta/strong': [[{ type: 'text_delta', delta: 'stronger' }, { type: 'done', message: { stopReason: 'stop', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'beta/strong']);
+    expect(h.blacklist).toEqual([]);
+    expect(h.abortSignals[0]?.aborted).toBe(true);
+    const decision = h.session.getLastDecision();
+    expect(decision?.cause).toBe('trajectory-escalation');
+    expect(decision?.trajectoryFriction?.fromModel).toMatch(/^alpha\/loop/);
+    expect(decision?.spend?.incomplete).toBe(true);
+    expect(decision?.usage?.inputTokens).toBeGreaterThan(0);
+    expect(result.capabilityHandoff?.fromModel).toMatch(/^alpha\/loop/);
+  });
+
+  it('recovers a weaker candidate after the stronger hop target fails auth', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong', 'gamma/cheap'],
+      candidates: [loopSource, loopStrong, loopCheap],
+      credentials: { 'beta/strong': { ok: false } },
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents()],
+        'gamma/cheap': [[{ type: 'text_delta', delta: 'recovered' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'gamma/cheap']);
+    expect(h.session.getLastDecision()?.cause).toBe('error-fallback');
+    expect(result.capabilityHandoff).toBeUndefined();
+  });
+
+  it('recovers a cheaper candidate sitting before the stronger hop target', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'gamma/cheap', 'beta/strong'],
+      candidates: [loopSource, loopStrong, loopCheap],
+      credentials: { 'beta/strong': { ok: false } },
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents()],
+        'gamma/cheap': [[{ type: 'text_delta', delta: 'recovered' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'gamma/cheap']);
+    expect(result.capabilityHandoff).toBeUndefined();
+  });
+
+  it('recovers after a hop when the stronger head is already circuit-broken', async () => {
+    const betaA = candidate('beta/a', {
+      bench: benchRow('beta/a', { quality: { intelligence: 70, coding: 70, agenticCoding: 70 } }),
+    });
+    const betaB = candidate('beta/b', {
+      bench: benchRow('beta/b', { quality: { intelligence: 70, coding: 70, agenticCoding: 70 } }),
+    });
+    const betaC = candidate('beta/c', {
+      bench: benchRow('beta/c', { quality: { intelligence: 70, coding: 70, agenticCoding: 70 } }),
+    });
+    const h = createDelegationHarness({
+      chain: ['beta/a', 'beta/b', 'beta/c', 'alpha/loop', 'gamma/cheap', 'beta/strong'],
+      candidates: [betaA, betaB, betaC, loopSource, loopStrong, loopCheap],
+      credentials: {
+        'beta/a': { ok: false },
+        'beta/b': { ok: false },
+        'beta/c': { ok: false },
+      },
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents()],
+        'beta/strong': [[{ type: 'text_delta', delta: 'stronger' }, { type: 'done', message: { stopReason: 'stop' } }]],
+        'gamma/cheap': [[{ type: 'text_delta', delta: 'recovered' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'gamma/cheap']);
+    expect(result.capabilityHandoff).toBeUndefined();
+  });
+
+  it('keeps a dimension-owning cause on an immediate hop', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong'],
+      candidates: [loopSource, loopStrong],
+      decision: {
+        ...routingDecision(['alpha/loop', 'beta/strong']),
+        cause: 'router-consult',
+      },
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents()],
+        'beta/strong': [[{ type: 'text_delta', delta: 'stronger' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    await h.run();
+    expect(h.session.getLastDecision()?.cause).toBe('router-consult');
+    expect(h.session.getLastDecision()?.trajectoryFriction?.fromModel).toMatch(/^alpha\/loop/);
+  });
+
+  it('does not hop after visible text or a tool call', async () => {
+    const afterText = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong'],
+      candidates: [loopSource, loopStrong],
+      scripts: {
+        'alpha/loop': [[
+          { type: 'start' },
+          { type: 'text_delta', delta: 'visible' },
+          ...reasoningLoopEvents().slice(1),
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+    expect((await afterText.run()).success).toBe(true);
+    expect(afterText.attempts).toEqual(['alpha/loop']);
+
+    const afterTool = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong'],
+      candidates: [loopSource, loopStrong],
+      scripts: {
+        'alpha/loop': [[
+          { type: 'start' },
+          { type: 'toolcall_start', toolCallId: 't1', toolName: 'read' },
+          { type: 'thinking_delta', delta: Array.from({ length: 800 }, () => 'alpha').join(' ') },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+    expect((await afterTool.run()).success).toBe(true);
+    expect(afterTool.attempts).toEqual(['alpha/loop']);
+  });
+
+  it('marks spend incomplete when an abandoned attempt has no usage', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong'],
+      candidates: [loopSource, loopStrong],
+      scripts: {
+        'alpha/loop': [[
+          { type: 'start' },
+          { type: 'thinking_delta', delta: Array.from({ length: 800 }, () => 'alpha').join(' ') },
+          { type: 'thinking_delta', delta: 'abcdefghij'.repeat(13).slice(0, 128) },
+          { type: 'thinking_delta', delta: 'abcdefghij'.repeat(13).slice(0, 128) },
+          { type: 'thinking_delta', delta: 'abcdefghij'.repeat(13).slice(0, 128) },
+        ]],
+        'beta/strong': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    await h.run();
+    expect(h.session.getLastDecision()?.spend?.incomplete).toBe(true);
+  });
+
+  it('marks spend incomplete when an abandoned attempt has only zero-initialized partial usage', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong'],
+      candidates: [loopSource, loopStrong],
+      scripts: {
+        'alpha/loop': [[
+          { type: 'start' },
+          {
+            type: 'thinking_delta',
+            delta: Array.from({ length: 800 }, () => 'alpha').join(' '),
+            partial: { usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+          },
+          { type: 'thinking_delta', delta: 'abcdefghij'.repeat(13).slice(0, 128) },
+          { type: 'thinking_delta', delta: 'abcdefghij'.repeat(13).slice(0, 128) },
+          { type: 'thinking_delta', delta: 'abcdefghij'.repeat(13).slice(0, 128) },
+        ]],
+        'beta/strong': [[{
+          type: 'text_delta',
+          delta: 'ok',
+        }, { type: 'done', message: { stopReason: 'stop', usage: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0 } } }]],
+      },
+    });
+    await h.run();
+    expect(h.session.getLastDecision()?.spend?.incomplete).toBe(true);
+    expect(h.session.getLastDecision()?.usage?.inputTokens).toBe(3);
+  });
+
+  it('aborts an independently running producer on a reasoning-loop hop even when iterator cleanup hangs', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong'],
+      candidates: [loopSource, loopStrong],
+      scripts: {
+        'alpha/loop': [hangingReturnStream(reasoningLoopEvents())],
+        'beta/strong': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.abortSignals[0]?.aborted).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'beta/strong']);
+  });
+
+  it('does not persist a served decision after the session generation advances', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const delayed: AsyncIterable<unknown> = {
+      async *[Symbol.asyncIterator]() {
+        await held;
+        yield { type: 'text_delta', delta: 'stale' };
+        yield { type: 'done', message: { stopReason: 'stop' } };
+      },
+    };
+    const h = createDelegationHarness({
+      chain: ['alpha/model'],
+      scripts: { 'alpha/model': [delayed] },
+    });
+    const pending = h.run();
+    await h.waitForAttempts(1);
+    const marker = routingDecision(['newer/model']);
+    h.session.reset();
+    h.session.setLastDecision(marker);
+    release();
+    await pending;
+    expect(h.session.getLastDecision()?.chosen).toBe('newer/model');
+  });
+
+  it('forwards caller cancellation onto the attempt abort signal', async () => {
+    const controller = new AbortController();
+    const h = createDelegationHarness({
+      chain: ['alpha/model'],
+      signal: controller.signal,
+      scripts: {
+        'alpha/model': [[{ type: 'start' }, { type: 'text_delta', delta: 'x' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const pending = h.run();
+    await h.waitForAttempts(1);
+    // After serve the attempt is already aborted in finally; aborting the caller
+    // after completion must not throw (listener removed).
+    controller.abort();
+    await pending;
+    expect(h.abortSignals[0]?.aborted).toBe(true);
   });
 });

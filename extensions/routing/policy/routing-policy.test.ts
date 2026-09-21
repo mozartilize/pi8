@@ -3,12 +3,12 @@ import {
   resolveRoutingDecision,
   wouldDepthEscalate,
   POLICY_PASSIVE_CAUSES,
-  type AppliedEscalation,
   type RoutingPolicyInput,
 } from './routing-policy.js';
 import type { Candidate, Dimension } from '../../types.js';
+import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../../constants.js';
-import { candidate, terminalAssessment } from '../../test-support/router-fixtures.js';
+import { candidate, terminalAssessment, benchRow } from '../../test-support/router-fixtures.js';
 
 // ─── Fixtures ───────────────────────────────────────────────────────
 
@@ -311,202 +311,217 @@ describe('resolveRoutingDecision', () => {
     });
   });
 
-  describe('escalation integration', () => {
-    it('applies model escalation to raise dimension', () => {
-      const escalation: AppliedEscalation = {
-        dimension: 'plan',
-        cause: 'model-escalation',
-        reason: 'needs deeper planning',
-        fromModel: undefined,
-      };
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'heuristic',
-          baseDimension: 'gather',
-          escalation,
-          candidates: benchmarkCandidates,
-        }),
-      );
-      expect(result.decision).toMatchObject({
-        cause: 'model-escalation',
-        dimension: 'plan',
+  describe('trajectory handoff', () => {
+    const weak = candidate('test/weak', {
+      bench: benchRow('test/weak', { quality: { intelligence: 60, coding: 60, agenticCoding: 60 } }),
+    });
+    const strong = candidate('test/strong', {
+      bench: benchRow('test/strong', { quality: { intelligence: 90, coding: 90, agenticCoding: 90 } }),
+      cost: { input: 100, output: 400, cacheRead: 0, cacheWrite: 0 },
+    });
+    const pending = (fromModel: string): PendingTrajectoryEscalation => ({
+      fromModel,
+      dimension: 'implement',
+      signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }],
+      tfi: 1,
+      preOutput: false,
+    });
+
+    it('repicks a measured stronger model and keeps objective recovery behind it', () => {
+      const cheap = candidate('test/cheap', {
+        bench: benchRow('test/cheap', { quality: { intelligence: 50, coding: 50, agenticCoding: 50 } }),
       });
-      expect(result.decision.reason).toContain('escalated: needs deeper planning');
-    });
-
-    it('repicks the same model id through another provider at higher effort', () => {
-      const source = candidate('github-copilot/gpt-5.6-luna', {
-        effort: 'medium',
-        bench: {
-          registryId: 'github-copilot/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-medium', active: true,
-          effort: 'medium', quality: { intelligence: 95, coding: 95 }, source: 'aa',
-        },
-      });
-      const sibling = candidate('openai-codex/gpt-5.6-luna', {
-        effort: 'max',
-        bench: {
-          registryId: 'openai-codex/gpt-5.6-luna', benchSlug: 'gpt-5.6-luna-max', active: true,
-          effort: 'max', quality: { intelligence: 95, coding: 95 }, source: 'aa',
-        },
-      });
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'heuristic',
-          baseDimension: 'gather',
-          escalation: {
-            dimension: 'plan',
-            cause: 'model-escalation',
-            reason: 'needs stronger planning',
-            fromModel: 'github-copilot/gpt-5.6-luna:medium',
-          },
-          candidates: [source, sibling],
-        }),
-      );
-
-      expect(result.decision.dimension).toBe('plan');
-      expect(result.decision.chosen).toBe('openai-codex/gpt-5.6-luna:max');
-    });
-
-    it('does not leak an equal-effort sibling when the source is unavailable', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'heuristic',
-          baseDimension: 'gather',
-          escalation: {
-            dimension: 'plan',
-            cause: 'model-escalation',
-            reason: 'needs stronger planning',
-            fromModel: 'github-copilot/gpt-5.6-luna:medium',
-          },
-          candidates: [candidate('openai-codex/gpt-5.6-luna', { effort: 'medium' })],
-        }),
-      );
-
-      expect(result.decision.chosen).toBe('');
-      expect(result.decision.fallbackChain).toEqual([]);
-    });
-
-    it('uses only strictly higher effort when source effort is effective', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'heuristic',
-          baseDimension: 'gather',
-          escalation: {
-            dimension: 'plan',
-            cause: 'model-escalation',
-            reason: 'needs stronger planning',
-            fromModel: 'github-copilot/gpt-5.6-luna:medium',
-          },
-          candidates: [
-            candidate('github-copilot/gpt-5.6-luna', { effort: 'medium' }),
-            candidate('openai-codex/gpt-5.6-luna', { effort: 'max' }),
-          ],
-        }),
-      );
-
-      expect(result.decision.chosen).toBe('openai-codex/gpt-5.6-luna:max');
-    });
-
-    it('applies pickEscalation when fromModel would remain chosen', () => {
-      const chosen = benchmarkCandidates[0]!.registryId;
-      const escalation: AppliedEscalation = {
-        dimension: 'implement',
-        cause: 'capability-escalation',
-        reason: 'not good enough',
-        fromModel: chosen,
-      };
       const result = resolveRoutingDecision(
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          escalation,
-          candidates: benchmarkCandidates,
-          estimatedContextTokens: 1_000,
+          classifyDimension: 'implement',
+          candidates: [weak, strong, cheap],
+          trajectoryEscalation: pending('test/weak'),
         }),
       );
-      // pickEscalation should exclude `chosen` and pick the other candidate
-      expect(result.decision.chosen).not.toBe(chosen);
+      expect(result.trajectoryApplied).toBe(true);
+      expect(result.decision.chosen).toBe('test/strong');
+      expect(result.decision.cause).toBe('trajectory-escalation');
+      expect(result.decision.fallbackChain[0]).toBe('test/strong');
+      expect(result.decision.fallbackChain).toContain('test/cheap');
+      expect(result.decision.fallbackChain).not.toContain('test/weak');
     });
 
-    it('preserves user-escalation cause when a same-dimension capability repick fires', () => {
-      // Scenario: the user raised gather→implement, then model-escalation at
-      // implement triggers a capability repick (sticky scoring). The user
-      // request owns the dimension; capability-escalation must not overwrite it.
-      const chosen = benchmarkCandidates[0]!.registryId;
-      const escalation: AppliedEscalation = {
-        dimension: 'implement',
-        cause: 'capability-escalation',
-        reason: 'not good enough',
-        fromModel: chosen,
-      };
+    it('does not treat an unsuffixed source plus effective effort as unknown', () => {
+      const unsuffixed = candidate('test/mid', {
+        bench: benchRow('test/mid', { quality: { intelligence: 70, coding: 70, agenticCoding: 70 } }),
+      });
+      const result = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          candidates: [unsuffixed, strong],
+          trajectoryEscalation: pending('test/mid:medium'),
+        }),
+      );
+      expect(result.trajectoryApplied).toBe(true);
+      expect(result.decision.chosen).toBe('test/strong');
+    });
+
+    it('fails closed when the source is unavailable', () => {
+      const result = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          candidates: [strong],
+          trajectoryEscalation: pending('test/missing:medium'),
+        }),
+      );
+      expect(result.trajectoryApplied).toBe(false);
+      expect(result.decision.trajectoryFriction?.unavailable).toBe(true);
+      expect(result.decision.chosen).toBe('test/strong');
+    });
+
+    it('fails closed on estimated or weaker measured destinations', () => {
+      const estimated = candidate('test/guess', {
+        bench: {
+          ...benchRow('test/guess', { quality: { intelligence: 99, coding: 99, agenticCoding: 99 } }),
+          qualityEstimated: true,
+        },
+      });
+      const weaker = candidate('test/weaker', {
+        bench: benchRow('test/weaker', { quality: { intelligence: 40, coding: 40, agenticCoding: 40 } }),
+      });
+      const estimatedResult = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          candidates: [weak, estimated],
+          trajectoryEscalation: pending('test/weak'),
+        }),
+      );
+      expect(estimatedResult.trajectoryApplied).toBe(false);
+      const weakerResult = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          candidates: [weak, weaker],
+          trajectoryEscalation: pending('test/weak'),
+        }),
+      );
+      expect(weakerResult.trajectoryApplied).toBe(false);
+    });
+
+    it('allows same-model higher effort and rejects equal effort', () => {
+      const medium = candidate('test/model', {
+        effort: 'medium',
+        bench: benchRow('test/model', { effort: 'medium', quality: { intelligence: 80, coding: 80 } }),
+      });
+      const high = candidate('test/model', {
+        effort: 'high',
+        bench: benchRow('test/model', { effort: 'high', quality: { intelligence: 80, coding: 80 } }),
+      });
+      const higher = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          candidates: [medium, high],
+          trajectoryEscalation: pending('test/model:medium'),
+        }),
+      );
+      expect(higher.trajectoryApplied).toBe(true);
+      expect(higher.decision.chosen).toBe('test/model:high');
+
+      const equal = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          candidates: [medium],
+          trajectoryEscalation: pending('test/model:medium'),
+        }),
+      );
+      expect(equal.trajectoryApplied).toBe(false);
+    });
+
+    it('does not pick a stronger target that fails ordinary context or vision guards', () => {
+      const visionSource = candidate('test/weak', {
+        vision: true,
+        contextWindow: 200_000,
+        bench: benchRow('test/weak', { quality: { intelligence: 60, coding: 60, agenticCoding: 60 } }),
+      });
+      const strongerBlind = candidate('test/strong', {
+        vision: false,
+        contextWindow: 32_000,
+        bench: benchRow('test/strong', { quality: { intelligence: 90, coding: 90, agenticCoding: 90 } }),
+      });
+      const vision = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          needsVision: true,
+          estimatedContextTokens: 1_000,
+          candidates: [visionSource, strongerBlind],
+          trajectoryEscalation: pending('test/weak'),
+        }),
+      );
+      expect(vision.trajectoryApplied).toBe(false);
+      expect(vision.decision.chosen).toBe('test/weak');
+
+      const deep = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          needsVision: false,
+          estimatedContextTokens: 100_000,
+          candidates: [visionSource, strongerBlind],
+          trajectoryEscalation: pending('test/weak'),
+        }),
+      );
+      expect(deep.trajectoryApplied).toBe(false);
+      expect(deep.decision.chosen).toBe('test/weak');
+    });
+
+    it('does not treat a labelled-high destination as stronger under a medium override', () => {
+      const medium = candidate('test/model', {
+        effort: 'medium',
+        reasoning: true,
+        bench: benchRow('test/model', { effort: 'medium', quality: { intelligence: 80, coding: 80, agenticCoding: 80 } }),
+      });
+      const high = candidate('test/model', {
+        effort: 'high',
+        reasoning: true,
+        bench: benchRow('test/model', { effort: 'high', quality: { intelligence: 80, coding: 80, agenticCoding: 80 } }),
+      });
+      const result = resolveRoutingDecision(
+        makePolicyInput({
+          baseCause: 'heuristic',
+          baseDimension: 'implement',
+          classifyDimension: 'implement',
+          candidates: [medium, high],
+          trajectoryEscalation: pending('test/model:medium'),
+          userReasoning: 'medium',
+          userReasoningOverride: true,
+        }),
+      );
+      expect(result.trajectoryApplied).toBe(false);
+    });
+
+    it('yields to user escalation without consuming the trajectory claim in policy', () => {
       const result = resolveRoutingDecision(
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'gather',
           userEscalation: { target: 'implement' },
-          escalation,
-          candidates: benchmarkCandidates,
-          estimatedContextTokens: 1_000,
+          candidates: [weak, strong],
+          trajectoryEscalation: pending('test/weak'),
         }),
       );
-      // The user raised gather→implement; the capability repick excludes the
-      // incumbent but does not claim the cause — the dimension was already
-      // elevated by the user request.
+      expect(result.trajectoryApplied).toBe(false);
       expect(result.decision.cause).toBe('user-escalation');
-      expect(result.decision.dimension).toBe('implement');
-      expect(result.decision.chosen).not.toBe(chosen);
-    });
-
-    it('preserves consult cause when a same-dimension capability repick fires', () => {
-      // Scenario: consult raised gather→implement, then model-escalation at
-      // implement triggers a capability repick. The consult owns the
-      // dimension; capability-escalation must not overwrite it.
-      const chosen = benchmarkCandidates[0]!.registryId;
-      const escalation: AppliedEscalation = {
-        dimension: 'implement',
-        cause: 'capability-escalation',
-        reason: 'not good enough',
-        fromModel: chosen,
-      };
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'router-consult',
-          baseDimension: 'implement',
-          escalation,
-          candidates: benchmarkCandidates,
-          estimatedContextTokens: 1_000,
-        }),
-      );
-      // Consult owns the dimension; capability repick is secondary model selection.
-      expect(result.decision.cause).toBe('router-consult');
-      expect(result.decision.dimension).toBe('implement');
-      expect(result.decision.chosen).not.toBe(chosen);
-    });
-
-    it('lets capability-escalation claim the cause when no prior step raised dimension', () => {
-      // Scenario: base dimension is implement, heuristic cause, model
-      // escalation at same dimension with a sticky scorer triggers a
-      // capability repick. No prior step changed the dimension, so the
-      // repick IS the most significant event.
-      const chosen = benchmarkCandidates[0]!.registryId;
-      const escalation: AppliedEscalation = {
-        dimension: 'implement',
-        cause: 'capability-escalation',
-        reason: 'not good enough',
-        fromModel: chosen,
-      };
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'heuristic',
-          baseDimension: 'implement',
-          escalation,
-          candidates: benchmarkCandidates,
-          estimatedContextTokens: 1_000,
-        }),
-      );
-      expect(result.decision.cause).toBe('capability-escalation');
-      expect(result.decision.dimension).toBe('implement');
-      expect(result.decision.chosen).not.toBe(chosen);
     });
   });
 
@@ -616,24 +631,6 @@ describe('resolveRoutingDecision', () => {
         }),
       );
       expect(result.decision.chosen).not.toBe(fromModel);
-      expect(result.decision.cause).toBe('user-escalation');
-    });
-
-    it('wins over a stale model escalation on the same invocation', () => {
-      const escalation: AppliedEscalation = {
-        dimension: 'review',
-        cause: 'model-escalation',
-        reason: 'model asked earlier',
-      };
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseDimension: 'gather',
-          userEscalation: { target: 'implement' },
-          escalation,
-          candidates: benchmarkCandidates,
-        }),
-      );
-      expect(result.decision.dimension).toBe('implement');
       expect(result.decision.cause).toBe('user-escalation');
     });
 
@@ -867,26 +864,25 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).toContain('incumbent-floor');
   });
 
-  it('stands down for an active escalation and never restores the excluded source', () => {
-    // pickEscalation excludes the requesting model; the floor must not resurrect
-    // it, which would re-serve the requester under a model-escalation cause.
+  it('stands down for an applied trajectory handoff and never restores the excluded source', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
-        baseDimension: 'gather',
+        classifyDimension: 'implement',
+        baseDimension: 'implement',
         confidence: 0.1,
-        incumbentRegistryId: 'bench/strong',
-        escalation: {
+        incumbentRegistryId: 'bench/cheap',
+        trajectoryEscalation: {
+          fromModel: 'bench/cheap',
           dimension: 'implement',
-          cause: 'model-escalation',
-          reason: 'route_up',
-          fromModel: 'bench/strong',
+          signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }],
+          tfi: 1,
+          preOutput: false,
         },
         estimatedContextTokens: 1_000,
       }),
     );
-    expect(result.decision.chosen).not.toBe('bench/strong');
+    expect(result.decision.chosen).not.toBe('bench/cheap');
     expect(result.decision.reason).not.toContain('incumbent-floor');
   });
 
@@ -998,7 +994,6 @@ describe('depth-escalation probe and veto', () => {
   it.each([
     { cause: 'router-consult' as const, expectEscalate: true },
     { cause: 'user-escalation' as const, expectEscalate: false },
-    { cause: 'model-escalation' as const, expectEscalate: false },
     { cause: 'capability-escalation' as const, expectEscalate: false },
     { cause: 'error-fallback' as const, expectEscalate: false },
     { cause: 'context-depth' as const, expectEscalate: false },

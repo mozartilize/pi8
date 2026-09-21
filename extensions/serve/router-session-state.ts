@@ -21,6 +21,9 @@ import type {
 import type { ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
+import { TrajectoryState } from '../routing/struggle/trajectory.js';
+import type { PendingTrajectoryEscalation, StruggleDecision } from '../routing/struggle/types.js';
+import type { ToolCycleInput } from '../routing/struggle/fingerprints.js';
 
 export interface CachedRoutingIntent {
   key: string;
@@ -216,6 +219,7 @@ export class RouterSession {
   public readonly blacklist: BlacklistState;
   public readonly assessment: AssessmentState;
   public readonly intent: IntentState;
+  private readonly trajectory = new TrajectoryState();
 
   private sessionGen = 0;
   private decision: RoutingDecision | undefined;
@@ -450,6 +454,65 @@ export class RouterSession {
     this.intent.commitWorkPhaseState(next);
   }
 
+  bindTrajectoryIntent(intentKey: string): void {
+    this.trajectory.bindIntent(intentKey);
+  }
+
+  observeTrajectory(event: ToolCycleInput, invocation: number): StruggleDecision | undefined {
+    return this.trajectory.observeToolResult(event, invocation);
+  }
+
+  servedTrajectoryKey(): string | undefined {
+    const served = this.getLastServed();
+    if (served?.registryId) {
+      return served.thinkingLevel
+        ? `${served.registryId}:${served.thinkingLevel}`
+        : served.registryId;
+    }
+    return this.getLastDecision()?.chosen;
+  }
+
+  noteTrajectoryToolCall(toolName: string, toolCallId: string, input?: unknown): StruggleDecision | undefined {
+    return this.trajectory.noteToolCall(toolName, toolCallId, input);
+  }
+
+  abandonUnresolvedTrajectoryCalls(): StruggleDecision | undefined {
+    return this.trajectory.abandonUnresolvedCalls();
+  }
+
+  /**
+   * Complete a tool batch whose remaining calls never produced results
+   * (blocked preflights from this extension or another) and arm pending
+   * escalation from that evidence before the next routing peek.
+   */
+  flushAndArmUnresolvedTrajectory(): void {
+    const decision = this.trajectory.abandonUnresolvedCalls();
+    if (!decision) return;
+    this.armTrajectoryEscalation(
+      decision,
+      this.servedTrajectoryKey(),
+      this.getLastDecision()?.dimension,
+      false,
+    );
+  }
+
+  armTrajectoryEscalation(
+    decision: StruggleDecision,
+    fromModel: string | undefined,
+    dimension: Dimension | undefined,
+    preOutput: boolean,
+  ): void {
+    this.trajectory.maybeArmPending(decision, fromModel, dimension, preOutput);
+  }
+
+  peekPendingTrajectoryEscalation(): PendingTrajectoryEscalation | undefined {
+    return this.trajectory.peekPending();
+  }
+
+  consumePendingTrajectoryEscalation(): PendingTrajectoryEscalation | undefined {
+    return this.trajectory.consumePending();
+  }
+
   /**
    * Reset session-scoped state on `session_start` or test teardown.
    * Increments session generation and clears all session-bound data.
@@ -472,6 +535,7 @@ export class RouterSession {
 
     this.assessment.reset();
     this.intent.reset();
+    this.trajectory.reset();
     // Note: blacklist exclusions are cleared independently via blacklist.clearSessionBlacklist()
   }
 }

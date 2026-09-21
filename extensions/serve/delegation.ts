@@ -23,7 +23,7 @@ import {
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { ROUTER_PROVIDER_ID } from '../types.js';
-import type { Candidate, Dimension, RoutingDecision } from '../types.js';
+import type { Candidate, DecisionCause, Dimension, RoutingDecision } from '../types.js';
 import {
   RouterSession,
   defaultRouterSession,
@@ -32,14 +32,18 @@ import { renderRouterStatus, notifyRouting, type ServedInfo } from '../host/ui.j
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { appendDecision } from '../host/decisionlog.js';
 import { makeTerminalErrorEvent } from './error-event.js';
-import { appendRouteUpGuidance } from './escalation.js';
 import {
-  clampEffortToFloor,
+  isStrictlyStrongerCandidate,
   isValidEscalationCandidate,
-  levelFrom,
+  findSourceCandidate,
+  candidateKey,
   parseCandidateKey,
-  resolveThinkingLevel,
+  servedEffort,
+  type StrongerCompareOpts,
 } from '../routing/score/scorer.js';
+import { POLICY_PASSIVE_CAUSES } from '../routing/policy/routing-policy.js';
+import { ReasoningLoopDetector } from '../routing/struggle/reasoning-loop.js';
+import type { PendingTrajectoryEscalation } from '../routing/struggle/types.js';
 import { isUsageLimitErrorMessage } from './usage-limit.js';
 import { priceTokens } from './baseline.js';
 
@@ -126,8 +130,8 @@ export interface DelegationOptions {
   userReasoningOverride?: boolean;
   /** Per-session Pi extension context, for status widget updates. */
   extensionContext: ExtensionContext | undefined;
-  /** When true, add route_up guidance only to attempts with a valid target. */
-  enableRouteUpGuidance?: boolean;
+  /** Live routable set, used to require a strictly stronger pre-output hop. */
+  candidates?: Candidate[];
   /** When true, show a TUI notification on a model pick/switch (config.prompt). */
   notifyOnRoute?: boolean;
   /** Total-turn timer, used for final debug log timestamps. */
@@ -147,6 +151,8 @@ export interface DelegationResult {
   streamFinalized: boolean;
   lastError?: string;
   lastServed?: ServedInfo;
+  /** Set when a strictly stronger trajectory hop actually served the turn. */
+  capabilityHandoff?: { fromModel: string; served: string };
 }
 
 /**
@@ -169,14 +175,13 @@ function resolveAttemptEffort(
   chosen: Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
   turnReasoning: string | undefined,
 ): ModelThinkingLevel | undefined {
-  if (entryEffort != null && !userReasoningOverride) {
-    const clamped = clampEffortToFloor(entryEffort, effortFloorDimension);
-    return levelFrom(clamped, chosen);
-  }
-  return resolveThinkingLevel(
-    chosen,
-    typeof turnReasoning === 'string' ? (turnReasoning as ThinkingLevel) : undefined,
+  return servedEffort(
+    { ...chosen, effort: entryEffort },
     effortFloorDimension,
+    {
+      userReasoning: typeof turnReasoning === 'string' ? (turnReasoning as ThinkingLevel) : undefined,
+      userReasoningOverride,
+    },
   );
 }
 
@@ -337,6 +342,27 @@ function accumulateAttemptUsage(
   acc.cacheWriteTokens += usage.cacheWrite ?? 0;
 }
 
+function usageFromUnknown(value: unknown): Parameters<typeof accumulateAttemptUsage>[0] {
+  if (!value || typeof value !== 'object') return undefined;
+  const usage = (value as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== 'object') return undefined;
+  const rec = usage as {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    cost?: { total?: number };
+  };
+  return rec;
+}
+
+/** Latest usage on a stream event: terminal message, error payload, or partial. */
+function eventUsage(event: unknown): Parameters<typeof accumulateAttemptUsage>[0] {
+  if (!event || typeof event !== 'object') return undefined;
+  const rec = event as Record<string, unknown>;
+  return usageFromUnknown(rec.message) ?? usageFromUnknown(rec.error) ?? usageFromUnknown(rec.partial);
+}
+
 /**
  * Walk decision after a pre-content catch. Abort is request lifecycle and
  * stays in the catch above this. `finalize` is the replay lock: visible
@@ -393,14 +419,40 @@ function recordServedAttempt(args: {
   notifyOnRoute: boolean | undefined;
   extensionContext: ExtensionContext | undefined;
   session: RouterSession;
+  /** Evidence when this attempt is a pre-output capability hop, not a failure. */
+  trajectoryHop: PendingTrajectoryEscalation | undefined;
+  /** False when a newer session/intent owns state; skip session writes. */
+  persist: boolean;
 }): { lastServed: ServedInfo; finalDecision: RoutingDecision } {
   const viaFallback = args.candidateIndex > 0;
+  // A capability hop and a failure fallback reach the same later candidate by
+  // different mechanisms, and `/router-why` distinguishes them by cause.
+  const hop = args.trajectoryHop;
+  const hopCause: DecisionCause = hop
+    ? (POLICY_PASSIVE_CAUSES.has(args.decision.cause) ? 'trajectory-escalation' : args.decision.cause)
+    : 'error-fallback';
   const baseDecision = viaFallback
     ? {
         ...args.decision,
         chosen: args.candidateId,
-        cause: 'error-fallback' as const,
-        reason: `${args.decision.reason}; fallback served after an earlier candidate failed`,
+        cause: hopCause,
+        ...(hop
+          ? {
+              trajectoryFriction: {
+                tfi: hop.tfi,
+                signals: hop.signals.map((signal) => ({
+                  kind: signal.kind,
+                  severity: signal.severity as 'warning' | 'severe',
+                  evidenceCount: signal.evidenceCount,
+                })),
+                fromModel: hop.fromModel,
+                preOutput: true,
+              },
+            }
+          : {}),
+        reason: hop
+          ? `${args.decision.reason}; capability hop after pre-output reasoning loop on ${hop.fromModel}`
+          : `${args.decision.reason}; fallback served after an earlier candidate failed`,
         fallbackChain: [
           ...new Set([
             ...args.decision.fallbackChain.slice(args.candidateIndex),
@@ -440,13 +492,15 @@ function recordServedAttempt(args: {
         }
       : {}),
   };
-  args.session.setLastServed(lastServed);
-  args.session.setLastDecision(finalDecision);
-  renderRouterStatus(args.extensionContext, finalDecision, lastServed);
-  if (args.notifyOnRoute && args.candidateId !== args.session.getLastNotifiedModel()) {
-    notifyRouting(args.extensionContext, finalDecision, lastServed);
+  if (args.persist) {
+    args.session.setLastServed(lastServed);
+    args.session.setLastDecision(finalDecision);
+    renderRouterStatus(args.extensionContext, finalDecision, lastServed);
+    if (args.notifyOnRoute && args.candidateId !== args.session.getLastNotifiedModel()) {
+      notifyRouting(args.extensionContext, finalDecision, lastServed);
+    }
+    args.session.setLastNotifiedModel(args.candidateId);
   }
-  args.session.setLastNotifiedModel(args.candidateId);
   return { lastServed, finalDecision };
 }
 
@@ -465,6 +519,17 @@ export async function runDelegationLoop(
 ): Promise<DelegationResult> {
   const { decision, registry, context, options, extensionContext, turnTimer } = opts;
   const session = opts.session ?? defaultRouterSession;
+  const startGeneration = session.getSessionGeneration();
+  const startIntent = decision.intentKey;
+  const stillCurrent = (): boolean =>
+    session.getSessionGeneration() === startGeneration
+    && (startIntent == null || session.getCachedIntent()?.key === startIntent);
+  const compareOpts: StrongerCompareOpts = {
+    userReasoning: typeof opts.reasoning === 'string' ? (opts.reasoning as ThinkingLevel) : undefined,
+    userReasoningOverride: opts.userReasoningOverride,
+    candidates: opts.candidates,
+  };
+  session.flushAndArmUnresolvedTrajectory();
 
   let success = false;
   let lastError: string | undefined;
@@ -485,10 +550,23 @@ export async function runDelegationLoop(
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    incomplete: false,
   };
 
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
+  /**
+   * Set only for the single hop that immediately follows a pre-output
+   * reasoning loop. It gates the *destination* of that hop and is cleared as
+   * soon as one candidate is chosen for it, because everything after that is
+   * ordinary objective-failure recovery: a stronger model that 421s must not
+   * strand the turn behind a stronger-only chain.
+   */
+  let capabilityHop: PendingTrajectoryEscalation | undefined;
+  /** Evidence carried onto the decision of whichever candidate serves the hop. */
+  let servingHop: PendingTrajectoryEscalation | undefined;
+  /** Exact (model, effort) that a pre-output hop abandoned; never retried. */
+  let excludeSource: string | undefined;
   /**
    * Provider circuit strikes are scoped to provider-health failures only
    * (credential/auth/transport errors and provider `stopReason: 'error'`).
@@ -523,6 +601,26 @@ export async function runDelegationLoop(
 
   for (const [candidateIndex, candidateId] of decision.fallbackChain.entries()) {
     const { provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId);
+    if (excludeSource && !isValidEscalationCandidate(candidateId, excludeSource)) continue;
+    let hopTargetThisCandidate = false;
+    if (capabilityHop) {
+      // Remaining chain is already stronger-then-recovery. This is one-shot:
+      // land on this candidate if it is stronger, otherwise give way to
+      // ordinary recovery. Skipping while seeking a stronger target would
+      // drop a healthy recovery sitting behind a dead or missing head.
+      const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === candidateId);
+      const source = opts.candidates
+        ? findSourceCandidate(opts.candidates, capabilityHop.fromModel)
+        : undefined;
+      if (
+        dest
+        && isStrictlyStrongerCandidate(dest, capabilityHop.fromModel, decision.dimension, source, compareOpts)
+      ) {
+        servingHop = capabilityHop;
+        hopTargetThisCandidate = true;
+      }
+      capabilityHop = undefined;
+    }
     if (provider === ROUTER_PROVIDER_ID) continue;
     if (deadProviders.has(provider)) continue;
     attemptIndex++;
@@ -575,6 +673,7 @@ export async function runDelegationLoop(
     let served = false;
     let candidateTransient = false;
     let candidateOutputLimitExhausted = false;
+    let candidateTrajectoryEscalation = false;
 
     // If the request was already aborted before this candidate began, surface
     // the canonical aborted terminal event without blacklisting or retrying.
@@ -630,19 +729,31 @@ export async function runDelegationLoop(
       // thinking token disabling the deadline outright.
       let answerDeadline = Date.now() + firstEventTimeoutMs;
       const effectiveSource = `${provider}/${modelId}:${effectiveReasoning ?? 'off'}`;
-      const attemptCanRouteUp =
-        opts.enableRouteUpGuidance === true &&
-        decision.fallbackChain.slice(candidateIndex + 1).some((candidate) =>
-          isValidEscalationCandidate(candidate, effectiveSource),
-        );
-      const attemptContext = attemptCanRouteUp
-        ? { ...context, systemPrompt: appendRouteUpGuidance(context.systemPrompt) }
-        : context;
-      const delegatedStream = providerStreamSimple(modelForStream, attemptContext, {
+      const sourceCandidate = opts.candidates
+        ? findSourceCandidate(opts.candidates, effectiveSource)
+        : undefined;
+      const remainingHasStronger = decision.fallbackChain.slice(candidateIndex + 1).some((key) => {
+        const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === key);
+        return dest
+          ? isStrictlyStrongerCandidate(dest, effectiveSource, decision.dimension, sourceCandidate, compareOpts)
+          : false;
+      });
+      const reasoningLoop = new ReasoningLoopDetector();
+      // Closing the iterator does not stop the provider: Pi's EventStream
+      // iterator only detaches this consumer, while the producer keeps
+      // generating (and billing) against `options.signal`. An attempt-local
+      // controller, chained to the caller's signal so a user abort still
+      // propagates, is the only way to actually end an abandoned attempt.
+      const attemptAbort = new AbortController();
+      const callerSignal = options?.signal;
+      const forwardAbort = () => attemptAbort.abort();
+      callerSignal?.addEventListener('abort', forwardAbort, { once: true });
+      const delegatedStream = providerStreamSimple(modelForStream, context, {
         ...options,
         ...(effectiveReasoning && effectiveReasoning !== 'off'
           ? { reasoning: effectiveReasoning }
           : {}),
+        signal: attemptAbort.signal,
         apiKey: auth.apiKey,
         headers: auth.headers,
       });
@@ -656,8 +767,25 @@ export async function runDelegationLoop(
       let meaningfulOutputReceived = false;
       let networkTimeout = false;
       let errorMessageObj: { stopReason?: string; errorMessage?: string } | undefined;
+      let observedUsage: Parameters<typeof accumulateAttemptUsage>[0];
+      let terminalAccounting = false;
+      let usageCommitted = false;
       const streamTimer = startTimer();
       const attemptBuffer = createAttemptBuffer(stream, candidateId);
+      const commitAttemptUsage = (status: 'observed' | 'missing'): void => {
+        if (usageCommitted) return;
+        usageCommitted = true;
+        if (observedUsage) {
+          accumulateAttemptUsage(
+            observedUsage,
+            (chosen as unknown as { cost?: Candidate['cost'] }).cost,
+            turnSpend,
+            session,
+          );
+        }
+        if (!terminalAccounting) turnSpend.incomplete = true;
+        debugLog('attempt.usage', { candidate: candidateId, usage: status });
+      };
       try {
         for (;;) {
           let step: IteratorResult<{ type: string }>;
@@ -687,6 +815,11 @@ export async function runDelegationLoop(
           sawFirstEvent = true;
           if (step.done) break;
           const event = step.value;
+          const latestUsage = eventUsage(event);
+          if (latestUsage) {
+            observedUsage = latestUsage;
+            if (event.type === 'done' || event.type === 'error') terminalAccounting = true;
+          }
           // Only an answer — text or a tool call — proves the candidate served
           // this turn. Thinking is the model's own pre-answer reasoning: it
           // keeps liveness alive (below) but must NOT disarm the answer
@@ -699,28 +832,30 @@ export async function runDelegationLoop(
           if (event.type === 'thinking_delta') {
             thinkingReceived = true;
             answerDeadline = Date.now() + firstEventTimeoutMs;
+            const rec = event as { delta?: unknown; text?: unknown; content?: unknown };
+            const delta = typeof rec.delta === 'string'
+              ? rec.delta
+              : typeof rec.text === 'string'
+                ? rec.text
+                : typeof rec.content === 'string'
+                  ? rec.content
+                  : '';
+            reasoningLoop.update(delta);
+            if (
+              remainingHasStronger
+              && !meaningfulOutputReceived
+              && !attemptBuffer.committedToStream
+              && reasoningLoop.severity() === 'severe'
+            ) {
+              const err = new Error(`trajectory reasoning-loop: ${candidateId}`) as Error & {
+                trajectoryEscalation?: boolean;
+              };
+              err.trajectoryEscalation = true;
+              throw err;
+            }
           }
           if (isToolCallEvent(event.type)) toolCallReceived = true;
 
-          if (event.type === 'done') {
-            const message = (event as unknown as {
-              message?: {
-                usage?: {
-                  input?: number;
-                  output?: number;
-                  cacheRead?: number;
-                  cacheWrite?: number;
-                  cost?: { total?: number };
-                };
-              };
-            }).message;
-            accumulateAttemptUsage(
-              message?.usage,
-              (chosen as unknown as { cost?: Candidate['cost'] }).cost,
-              turnSpend,
-              session,
-            );
-          }
           const classified = classifyTerminalEvent(
             event,
             visibleTextReceived,
@@ -757,6 +892,8 @@ export async function runDelegationLoop(
               notifyOnRoute: opts.notifyOnRoute,
               extensionContext,
               session,
+              trajectoryHop: hopTargetThisCandidate ? servingHop : undefined,
+              persist: stillCurrent(),
             });
             lastServed = recorded.lastServed;
             finalDecision = recorded.finalDecision;
@@ -779,7 +916,7 @@ export async function runDelegationLoop(
           retries: tries,
           streamMs: streamTimer(),
         });
-        if (lastServed) {
+        if (lastServed && stillCurrent()) {
           session.updateLastServed({ accumulatedCost: session.getAccumulatedCost() });
           renderRouterStatus(extensionContext, finalDecision, { ...lastServed, accumulatedCost: session.getAccumulatedCost() });
         }
@@ -796,7 +933,63 @@ export async function runDelegationLoop(
             error: message.slice(0, 120),
           });
         }
-        closeIterator(iterator as AsyncIterator<unknown>);
+        if ((_err as { trajectoryEscalation?: boolean }).trajectoryEscalation === true) {
+          candidateTrajectoryEscalation = true;
+          excludeSource = effectiveSource;
+          capabilityHop = {
+            fromModel: effectiveSource,
+            dimension: decision.dimension,
+            signals: [{
+              kind: 'reasoning-loop',
+              severity: 'severe',
+              evidenceIds: [`rl:${candidateId}`],
+              evidenceCount: 1,
+            }],
+            tfi: 1,
+            preOutput: true,
+          };
+          const remaining = decision.fallbackChain.slice(candidateIndex + 1);
+          const hopSource = opts.candidates
+            ? findSourceCandidate(opts.candidates, effectiveSource)
+            : undefined;
+          const stronger: string[] = [];
+          const recovery: string[] = [];
+          for (const key of remaining) {
+            if (!isValidEscalationCandidate(key, effectiveSource)) continue;
+            const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === key);
+            if (
+              dest
+              && isStrictlyStrongerCandidate(
+                dest,
+                effectiveSource,
+                decision.dimension,
+                hopSource,
+                compareOpts,
+              )
+            ) {
+              stronger.push(key);
+            } else {
+              recovery.push(key);
+            }
+          }
+          // Mutate the live chain in place. The outer walk iterates
+          // `fallbackChain.entries()`; replacing the array would leave that
+          // iterator on the pre-hop order and skip recovery sitting before
+          // the stronger target.
+          decision.fallbackChain.splice(
+            candidateIndex + 1,
+            decision.fallbackChain.length - (candidateIndex + 1),
+            ...stronger,
+            ...recovery,
+          );
+          if (stronger.length === 0) capabilityHop = undefined;
+          debugLog('attempt.trajectory', {
+            candidate: candidateId,
+            reason: 'reasoning-loop',
+            usage: observedUsage ? 'partial' : 'missing',
+          });
+          break;
+        }
         if (userAborted) {
           // User cancelled the request. Surface the standard aborted terminal
           // event, but do not blacklist or penalize the model.
@@ -830,16 +1023,24 @@ export async function runDelegationLoop(
         candidateTransient = failure.transient;
         if (failure.action === 'retry') continue;
         break;
+      } finally {
+        commitAttemptUsage(observedUsage ? 'observed' : 'missing');
+        callerSignal?.removeEventListener('abort', forwardAbort);
+        if (!attemptAbort.signal.aborted) attemptAbort.abort();
+        closeIterator(iterator as AsyncIterator<unknown>);
       }
     }
 
     if (served) break; // a candidate served the turn — done
+
+    if (hopTargetThisCandidate) servingHop = undefined;
 
     // Candidate failed after any same-model retries. Transient provider errors
     // and output-limit exhaustion do not prove the model itself is unusable for
     // later turns, so neither failure mode blacklists it for this session.
     // Only provider-health failures count toward circuit strikes; model-level
     // output-limit exhaustion does not.
+    if (candidateTrajectoryEscalation) continue;
     if (!candidateTransient && !candidateOutputLimitExhausted) session.blacklistModel(candidateId);
     recordFailure(provider, candidateOutputLimitExhausted ? 'model' : 'provider');
     continue;
@@ -873,11 +1074,31 @@ export async function runDelegationLoop(
       spend: {
         routedCost: turnSpend.routedCost,
         baselineCost: priceTokens(finalDecision.baseline?.cost, turnUsage),
+        ...(turnSpend.incomplete ? { incomplete: true } : {}),
       },
     };
-    appendDecision(finalDecision, lastServed);
+    if (stillCurrent()) {
+      session.setLastDecision(finalDecision);
+      appendDecision(finalDecision, lastServed);
+    }
   }
-  return { success: true, streamFinalized: false, lastServed };
+  const fromModel = finalDecision.trajectoryFriction?.fromModel ?? excludeSource;
+  let capabilityHandoff: DelegationResult['capabilityHandoff'];
+  if (success && lastServed && fromModel && opts.candidates) {
+    const servedKey = lastServed.thinkingLevel
+      ? `${lastServed.registryId}:${lastServed.thinkingLevel}`
+      : lastServed.registryId;
+    const dest = opts.candidates.find((candidate) => candidateKey(candidate) === servedKey)
+      ?? findSourceCandidate(opts.candidates, servedKey);
+    const source = findSourceCandidate(opts.candidates, fromModel);
+    if (
+      dest
+      && isStrictlyStrongerCandidate(dest, fromModel, decision.dimension, source, compareOpts)
+    ) {
+      capabilityHandoff = { fromModel, served: servedKey };
+    }
+  }
+  return { success: true, streamFinalized: false, lastServed, capabilityHandoff };
 }
 
 /**

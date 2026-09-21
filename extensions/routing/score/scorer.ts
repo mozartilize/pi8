@@ -548,6 +548,127 @@ export function isValidEscalationCandidate(candidate: string, fromModel: string)
 }
 
 /**
+ * Resolve the struggling source's own candidate row from a live routable set.
+ *
+ * The served identity carries the effective effort (`provider/id:medium`) even
+ * when the benchmark row that measured it is unsuffixed, so an exact key match
+ * would silently lose the source's measured quality — and a comparison against
+ * an unknown source cannot prove an upgrade. Match on the base `provider/id`
+ * and prefer the exact effort variant when the set actually holds one.
+ */
+export function findSourceCandidate(
+  candidates: readonly Candidate[],
+  fromModel: string,
+): Candidate | undefined {
+  const exact = candidates.find((c) => candidateKey(c) === fromModel);
+  if (exact) return exact;
+  const parsed = parseCandidateKey(fromModel);
+  const base = `${parsed.provider}/${parsed.id}`;
+  const sameBase = candidates.filter((c) => c.registryId === base);
+  if (parsed.effort != null) {
+    const sameEffort = sameBase.find((c) => c.effort === parsed.effort);
+    if (sameEffort) return sameEffort;
+  }
+  // Served identity carries effective effort (`provider/id:medium`) even when
+  // the measured row is unsuffixed. A different effort variant is a different
+  // measurement and cannot stand in for the source.
+  return sameBase.find((c) => c.effort == null);
+}
+
+export interface StrongerCompareOpts {
+  /** Explicit user/session thinking request, when it outranks labelled effort. */
+  userReasoning?: ThinkingLevel;
+  userReasoningOverride?: boolean;
+  /** Pool used to resolve a sibling row at the effort that will actually serve. */
+  candidates?: readonly Candidate[];
+}
+
+/**
+ * Effort the candidate will actually serve after the dimension floor, the
+ * model's support map, and an explicit user override. Same walk as
+ * delegation's attempt resolution: labelled efforts go through `levelFrom`,
+ * so a stronger-hop proof cannot use a labelled effort that will never be
+ * sent.
+ */
+export function servedEffort(
+  candidate: Pick<Candidate, 'effort' | 'reasoning' | 'thinkingLevelMap'>,
+  dimension: Dimension,
+  opts?: Pick<StrongerCompareOpts, 'userReasoning' | 'userReasoningOverride'>,
+): ModelThinkingLevel | undefined {
+  if (candidate.effort != null && !opts?.userReasoningOverride) {
+    return levelFrom(clampEffortToFloor(candidate.effort, dimension), candidate);
+  }
+  return resolveThinkingLevel(candidate, opts?.userReasoning, dimension);
+}
+
+function destServingKey(
+  dest: Candidate,
+  dim: Dimension,
+  opts?: StrongerCompareOpts,
+): string {
+  const effort = servedEffort(dest, dim, opts);
+  if (effort == null) {
+    // A reasoning model that cannot serve its labelled effort must not
+    // look like a higher-effort hop. Non-reasoning labelled rows keep
+    // their identity: effort there is the bench measurement, not a
+    // thinking level the stream will send.
+    return dest.reasoning ? dest.registryId : candidateKey(dest);
+  }
+  if (dest.effort === effort) return candidateKey(dest);
+  return `${dest.registryId}:${effort}`;
+}
+
+function destAtServedEffort(
+  dest: Candidate,
+  dim: Dimension,
+  opts?: StrongerCompareOpts,
+): Candidate | undefined {
+  const effort = servedEffort(dest, dim, opts);
+  if (effort == null) {
+    if (dest.effort == null || !dest.reasoning) return dest;
+    return undefined;
+  }
+  if (dest.effort === effort) return dest;
+  const sibling = opts?.candidates?.find(
+    (candidate) => candidate.registryId === dest.registryId && candidate.effort === effort,
+  );
+  if (sibling) return sibling;
+  // An unsuffixed row describes the model's served mode; a labelled row
+  // at a different effort cannot stand in for the attempt that will run.
+  return dest.effort == null ? dest : undefined;
+}
+
+/**
+ * Whether dest is a strictly stronger serving pick than the struggling source.
+ * Same model at higher effort counts. A different model must have measured
+ * quality above the source on this dimension — unknown or estimated quality on
+ * either side cannot prove an upgrade, so an unresolvable source fails closed.
+ * Destination quality is the row for the effort that will actually serve,
+ * not the labelled candidate effort.
+ */
+export function isStrictlyStrongerCandidate(
+  dest: Candidate,
+  fromModel: string,
+  dim: Dimension,
+  source?: Candidate,
+  opts?: StrongerCompareOpts,
+): boolean {
+  const destKey = destServingKey(dest, dim, opts);
+  if (!isValidEscalationCandidate(destKey, fromModel)) return false;
+  const sourceParsed = parseCandidateKey(fromModel);
+  const destParsed = parseCandidateKey(destKey);
+  if (destParsed.id === sourceParsed.id) return true;
+  const measured = destAtServedEffort(dest, dim, opts);
+  if (!measured) return false;
+  const destQuality = capabilityForDimension(measured, dim);
+  if (destQuality == null || measured.bench?.qualityEstimated === true) return false;
+  if (!source || source.bench?.qualityEstimated === true) return false;
+  const sourceQuality = capabilityForDimension(source, dim);
+  if (sourceQuality == null) return false;
+  return destQuality > sourceQuality;
+}
+
+/**
  * Pure same-dimension capability escalation: given the model that just
  * served the turn, pick a different candidate using quality-only weights.
  * This is intentionally narrow — it reuses `pickBest` for context/vision
@@ -586,7 +707,7 @@ export function pickEscalation(
  * here — the scorer is pure; the caller detects the image via `needsVision`
  * and owns any surfacing of a degraded vision route.
  */
-function applyCandidateGuards(
+export function applyCandidateGuards(
   candidates: Candidate[],
   opts: ScoreOpts,
 ): Candidate[] {

@@ -61,7 +61,7 @@ All `router/auto` intents run through this same pipeline. For an explicit compou
 | `/router-sync embedding [--force]` | Download the E5-small embedding model (~135 MB) for multilingual classification |
 | `/router-status` | Show freshness, coverage, last decision |
 | `/router-why` | Explain why the last model was chosen |
-| `/router-escalate [dimension]` | Re-route to a stronger model |
+| `/router-escalate [dimension]` | Re-route to a stronger model (user request; models no longer self-escalate) |
 | `/router-models` | Show allowlist and matching models |
 | `/router-agents` | Show which model each subagent role resolves to |
 | `/router-fix <slug> <id>` | Override a benchmark-to-registry mapping |

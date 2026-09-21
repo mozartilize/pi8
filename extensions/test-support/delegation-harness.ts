@@ -16,7 +16,7 @@ import { RouterSession, resetRouterSession } from '../serve/router-session-state
 import { clearBlacklistedModels, clearBlacklistedProviders } from '../serve/blacklist.js';
 import { makeTerminalErrorEvent } from '../serve/error-event.js';
 import { routingDecision, registryModel } from './router-fixtures.js';
-import type { RoutingDecision } from '../types.js';
+import type { Candidate, RoutingDecision } from '../types.js';
 
 /** One registryId maps to an ordered list of attempt scripts (one per retry). */
 export interface DelegationScript {
@@ -106,14 +106,14 @@ export interface DelegationHarnessOptions {
   reasoning?: string;
   /** Marks `reasoning` as an explicit user request that entry efforts must not override. */
   userReasoningOverride?: boolean;
-  /** Enable per-attempt route_up guidance. */
-  enableRouteUpGuidance?: boolean;
   /** Extra registry methods to override the defaults. */
   registry?: Partial<ExtensionContext['modelRegistry']>;
   /** Per-model credential results keyed by `provider/id`. */
   credentials?: Record<string, { ok: boolean; apiKey?: string; headers?: Record<string, string> } | Error>;
   /** Override the registry's provider-auth/base-URL probe (may hang or throw). */
   getProviderAuth?: (provider: string) => Promise<{ auth?: { baseUrl?: string } } | undefined>;
+  /** Live routable set, required for pre-output capability hops. */
+  candidates?: Candidate[];
 }
 
 export interface DelegationHarness {
@@ -125,6 +125,8 @@ export interface DelegationHarness {
   streamedModels: { provider: string; id: string; baseUrl: string }[];
   /** Reasoning option passed to `streamSimple`, per call (undefined = omitted). */
   reasoningOptions: (string | undefined)[];
+  /** Abort signals passed to each `streamSimple` call. */
+  abortSignals: (AbortSignal | undefined)[];
   /** System prompt passed to each delegated attempt. */
   systemPrompts: (string | undefined)[];
   blacklist: string[];
@@ -157,7 +159,7 @@ function buildRegistry(
 }
 
 export function createDelegationHarness(options: DelegationHarnessOptions): DelegationHarness {
-  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, enableRouteUpGuidance, registry: registryOverrides, credentials, getProviderAuth } = options;
+  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates } = options;
 
   // Per-model ordered attempt queues; each entry is consumed on one streamSimple call.
   type ScriptEntry = readonly unknown[] | Error | AsyncIterable<unknown>;
@@ -171,6 +173,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
   const reasoningOptions: (string | undefined)[] = [];
   const systemPrompts: (string | undefined)[] = [];
   const streamedModels: { provider: string; id: string; baseUrl: string }[] = [];
+  const abortSignals: (AbortSignal | undefined)[] = [];
   const recordingStream: RecordingStream = {
     push: (event: unknown) => {
       output.push(event);
@@ -187,6 +190,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     reasoningOptions.push((options as { reasoning?: string } | undefined)?.reasoning);
     systemPrompts.push((delegatedContext as { systemPrompt?: string } | undefined)?.systemPrompt);
     streamedModels.push({ provider: model.provider, id: model.id, baseUrl: model.baseUrl });
+    abortSignals.push((options as { signal?: AbortSignal } | undefined)?.signal);
     const queue = queuesByModel.get(id);
     const script = queue?.shift();
     if (script === undefined) return scriptedStream([]);
@@ -207,6 +211,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     reasoningOptions,
     systemPrompts,
     streamedModels,
+    abortSignals,
     registry,
     get blacklist(): string[] {
       return [...session.getBlacklistedModels()].sort();
@@ -231,6 +236,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
       clearBlacklistedProviders();
       attempts.length = 0;
       output.length = 0;
+      abortSignals.length = 0;
       recordingStream.ended = false;
 
       const decision = decisionOverride ?? routingDecision(chain);
@@ -245,11 +251,11 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
           options: signal ? { signal } : undefined,
           reasoning,
           userReasoningOverride,
-          enableRouteUpGuidance,
           turnTimer: () => 0,
           extensionContext: undefined,
           notifyOnRoute: false,
           session,
+          candidates,
         },
         recordingStream as unknown as Parameters<typeof runDelegationLoop>[1],
       );
