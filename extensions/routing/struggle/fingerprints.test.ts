@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cycleFromToolResult,
   lineDistance,
+  MAX_DIFF_CHARS,
   MAX_DIFF_LINES,
   type ToolCycleInput,
 } from './fingerprints.js';
@@ -46,6 +47,11 @@ describe('lineDistance', () => {
     const result = lineDistance(scrambled(12_000, 7), scrambled(12_000, 13));
     expect(Date.now() - started).toBeLessThan(1_000);
     expect(result.available).toBe(false);
+  });
+
+  it('refuses a huge one-line input before diffing', () => {
+    const huge = 'x'.repeat(MAX_DIFF_CHARS);
+    expect(lineDistance(huge, 'y')).toEqual({ available: false, reason: 'too-large' });
   });
 
   it('refuses outright above the line ceiling', () => {

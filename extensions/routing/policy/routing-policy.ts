@@ -15,7 +15,14 @@ import type { ClassifyResult } from '../classify/classifier.js';
 import type { AutoRouterConfig } from '../../types.js';
 import { DIMENSION_STRENGTH } from '../classify/classifier-keywords.js';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
-import { pickBest, escalationChain, candidateKey, capabilityForDimension, type ScoreOpts } from '../score/scorer.js';
+import {
+  pickBest,
+  escalationChain,
+  isValidEscalationCandidate,
+  candidateKey,
+  capabilityForDimension,
+  type ScoreOpts,
+} from '../score/scorer.js';
 import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 
 // ─── Public interfaces ───────────────────────────────────────────────
@@ -196,7 +203,8 @@ function applyTrajectoryRepick(
   // 421s or has no credentials must not strand the turn behind a
   // stronger-only chain. The struggling source itself stays excluded — the
   // evidence is about that exact (model, effort).
-  const recovery = decision.fallbackChain.filter((key) => key !== trajectory.fromModel);
+  const recovery = decision.fallbackChain.filter((key) =>
+    isValidEscalationCandidate(key, trajectory.fromModel));
   decision = {
     ...picked,
     fallbackChain: [...new Set([...picked.fallbackChain, ...recovery])],

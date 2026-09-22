@@ -330,6 +330,7 @@ describe('resolveRoutingDecision', () => {
       );
       expect(result.trajectoryApplied).toBe(true);
       expect(result.decision.chosen).toBe('test/strong');
+      expect(result.decision.fallbackChain).not.toContain('test/mid');
     });
 
     it('fails closed when the source is unavailable', () => {

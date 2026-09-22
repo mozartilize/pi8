@@ -1181,6 +1181,28 @@ describe('pre-output reasoning-loop handoff', () => {
     expect(result.capabilityHandoff?.fromModel).toMatch(/^alpha\/loop/);
   });
 
+  it('drops hop metadata when beforeFallback substitutes a weaker model', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong', 'gamma/cheap'],
+      candidates: [loopSource, loopStrong, loopCheap],
+      beforeFallback: async () => 'gamma/cheap',
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents()],
+        'gamma/cheap': [[
+          { type: 'text_delta', delta: 'manual replacement' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'gamma/cheap']);
+    expect(h.session.getLastDecision()?.cause).toBe('error-fallback');
+    expect(h.session.getLastDecision()?.trajectoryFriction).toBeUndefined();
+    expect(h.session.getLastDecision()?.reason).not.toContain('capability hop');
+    expect(result.capabilityHandoff).toBeUndefined();
+  });
+
   it('recovers a weaker candidate after the stronger hop target fails auth', async () => {
     const h = createDelegationHarness({
       chain: ['alpha/loop', 'beta/strong', 'gamma/cheap'],

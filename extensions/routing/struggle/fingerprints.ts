@@ -196,6 +196,8 @@ export function diffLineDistance(diff: string): { added: number; deleted: number
   return { added, deleted };
 }
 
+/** Combined UTF-16 character count above which comparison is refused before scanning. */
+export const MAX_DIFF_CHARS = 2_000_000;
 /** Combined line count above which an exact distance is refused outright. */
 export const MAX_DIFF_LINES = 50_000;
 /** Largest edit script the router will pay for before giving up. */
@@ -211,14 +213,18 @@ export type LineDistanceResult =
  * Line-level added+deleted displacement between two snapshots, or an explicit
  * unavailable result.
  *
- * This runs synchronously inside trajectory observation, so the comparison is
- * bounded twice over: jsdiff returns `undefined` once the edit script passes
- * `maxEditLength` or the deadline expires. An exhausted budget must surface as
- * unavailable — never as an approximation, which could manufacture
+ * This runs synchronously inside trajectory observation, so character and line
+ * ceilings reject oversized inputs before diffing; jsdiff returns `undefined`
+ * once the edit script passes `maxEditLength` or the deadline expires. An
+ * exhausted budget must surface as unavailable — never as an approximation,
+ * which could manufacture
  * backtracking evidence out of work the router declined to do.
  */
 export function lineDistance(from: string, to: string): LineDistanceResult {
   if (from === to) return { available: true, added: 0, deleted: 0 };
+  if (from.length + to.length > MAX_DIFF_CHARS) {
+    return { available: false, reason: 'too-large' };
+  }
   if (countLines(from) + countLines(to) > MAX_DIFF_LINES) {
     return { available: false, reason: 'too-large' };
   }

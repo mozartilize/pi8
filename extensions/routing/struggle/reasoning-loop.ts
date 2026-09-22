@@ -20,6 +20,7 @@ export const RL_SEVERE_RESETS = 4;
 export const RL_EXACT_BLOCK_CHARS = 128;
 export const RL_EXACT_BLOCK_REPEAT = 3;
 const MAX_WINDOWS = 24;
+const MAX_EXACT_HASHES = 512;
 
 const REFLECTION_MARKERS = [
   'wait',
@@ -113,7 +114,6 @@ export class ReasoningLoopDetector {
   private reflectionTransitions = 0;
   private maxSimilarity = 0;
   private exactCounts = new Map<string, number>();
-  private exactOnce: string[] = [];
   private exactRepeat = 0;
   private normTail = '';
   private cursor = 0;
@@ -135,20 +135,19 @@ export class ReasoningLoopDetector {
     this.normTail += delta.toLowerCase().replace(/\s+/g, ' ');
     // Slide one character at a time so identical 128-char blocks still match
     // when a leftover shifts the non-overlapping cut, or when the same text
-    // arrives as many tiny deltas. Keep one-shot hashes for the last 256
-    // windows so a copy 128 characters later is not evicted first.
+    // arrives as many tiny deltas. Refresh hashes on access and retain only the
+    // most recent bounded set; losing an old count is safer than unbounded state.
     while (this.normTail.length >= RL_EXACT_BLOCK_CHARS) {
       const block = this.normTail.slice(0, RL_EXACT_BLOCK_CHARS);
       this.normTail = this.normTail.slice(1);
       const hashed = fingerprint([block]);
       const next = (this.exactCounts.get(hashed) ?? 0) + 1;
+      this.exactCounts.delete(hashed);
       this.exactCounts.set(hashed, next);
-      if (next === 1) {
-        this.exactOnce.push(hashed);
-        while (this.exactOnce.length > 256) {
-          const old = this.exactOnce.shift();
-          if (old && (this.exactCounts.get(old) ?? 0) < 2) this.exactCounts.delete(old);
-        }
+      while (this.exactCounts.size > MAX_EXACT_HASHES) {
+        const oldest = this.exactCounts.keys().next().value;
+        if (oldest == null) break;
+        this.exactCounts.delete(oldest);
       }
       if (next > this.exactRepeat) this.exactRepeat = next;
     }
@@ -214,7 +213,6 @@ export class ReasoningLoopDetector {
     this.reflectionTransitions = 0;
     this.maxSimilarity = 0;
     this.exactCounts.clear();
-    this.exactOnce = [];
     this.exactRepeat = 0;
     this.normTail = '';
     this.cursor = 0;

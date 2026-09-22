@@ -980,24 +980,12 @@ export async function runDelegationLoop(
     if (provider === ROUTER_PROVIDER_ID) continue;
     if (deadProviders.has(provider)) continue;
     let hopTargetThisCandidate = false;
-    if (capabilityHop) {
-      // Remaining chain is already stronger-then-recovery. This is one-shot:
-      // land on this candidate if it is stronger, otherwise give way to
-      // ordinary recovery. Skipping while seeking a stronger target would
-      // drop a healthy recovery sitting behind a dead or missing head.
-      const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === candidateId);
-      const source = opts.candidates
-        ? findSourceCandidate(opts.candidates, capabilityHop.fromModel)
-        : undefined;
-      if (
-        dest
-        && isStrictlyStrongerCandidate(dest, capabilityHop.fromModel, decision.dimension, source, compareOpts)
-      ) {
-        servingHop = capabilityHop;
-        hopTargetThisCandidate = true;
-      }
-      capabilityHop = undefined;
-    }
+    // `beforeFallback` may replace the proposed candidate and mutate the live
+    // candidate pool. Preserve the source row now, but bind and consume the hop
+    // only after the actual candidate has passed registry validation.
+    const hopSource = capabilityHop && opts.candidates
+      ? findSourceCandidate(opts.candidates, capabilityHop.fromModel)
+      : undefined;
     attemptIndex++;
     let chosen = registry?.find(provider, modelId);
     if (!chosen) {
@@ -1026,6 +1014,27 @@ export async function runDelegationLoop(
           continue;
         }
       }
+    }
+    if (capabilityHop) {
+      // Remaining chain is stronger-then-recovery, but semi mode can substitute
+      // another model. The one-shot provenance belongs only to the actual model
+      // that will be attempted, and only when it is still a proven upgrade.
+      const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === candidateId);
+      servingHop = undefined;
+      if (
+        dest
+        && isStrictlyStrongerCandidate(
+          dest,
+          capabilityHop.fromModel,
+          decision.dimension,
+          hopSource,
+          compareOpts,
+        )
+      ) {
+        servingHop = capabilityHop;
+        hopTargetThisCandidate = true;
+      }
+      capabilityHop = undefined;
     }
     lastAttemptedId = candidateId;
 

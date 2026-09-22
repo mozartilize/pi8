@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ReasoningLoopDetector,
+  RL_EXACT_BLOCK_CHARS,
   RL_MIN_TOKENS,
   RL_STRIDE,
   RL_WINDOW,
@@ -127,5 +128,17 @@ describe('ReasoningLoopDetector', () => {
     });
     expect(serialized).not.toContain(secret);
     expect(loop.snapshot().tokenCount).toBeGreaterThan(RL_WINDOW);
+  });
+
+  it('caps exact hash state when many distinct blocks repeat twice', () => {
+    const loop = new ReasoningLoopDetector();
+    for (let i = 0; i < 300; i += 1) {
+      const seed = `block-${i.toString().padStart(4, '0')}-`;
+      const block = seed.repeat(Math.ceil(RL_EXACT_BLOCK_CHARS / seed.length))
+        .slice(0, RL_EXACT_BLOCK_CHARS);
+      loop.update(block + block);
+    }
+    const counts = (loop as unknown as { exactCounts: Map<string, number> }).exactCounts;
+    expect(counts.size).toBeLessThanOrEqual(512);
   });
 });
