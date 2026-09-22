@@ -15,7 +15,7 @@ import type { ClassifyResult } from '../classify/classifier.js';
 import type { AutoRouterConfig } from '../../types.js';
 import { DIMENSION_STRENGTH } from '../classify/classifier-keywords.js';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
-import { pickBest, pickEscalation, isStrictlyStrongerCandidate, findSourceCandidate, candidateKey, capabilityForDimension, applyCandidateGuards, type ScoreOpts } from '../score/scorer.js';
+import { pickBest, escalationChain, candidateKey, capabilityForDimension, type ScoreOpts } from '../score/scorer.js';
 import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 
 // ─── Public interfaces ───────────────────────────────────────────────
@@ -172,15 +172,6 @@ function applyTrajectoryRepick(
   compareOpts: { userReasoning?: ThinkingLevel; userReasoningOverride?: boolean },
 ): { decision: RoutingDecision; cause: DecisionCause; applied: boolean } {
   if (!trajectory) return { decision, cause, applied: false };
-  const source = findSourceCandidate(candidates, trajectory.fromModel);
-  const strongerOpts = { ...compareOpts, candidates };
-  // Ordinary context/vision eligibility first. Scoring a stronger-only subset
-  // would fail open inside that subset and pick a stronger model that cannot
-  // hold the image or the context window.
-  const eligible = applyCandidateGuards(candidates, baseOpts);
-  const stronger = eligible.filter((candidate) =>
-    isStrictlyStrongerCandidate(candidate, trajectory.fromModel, dimension, source, strongerOpts),
-  );
   const friction = {
     tfi: trajectory.tfi,
     signals: trajectory.signals.map((signal) => ({
@@ -191,12 +182,12 @@ function applyTrajectoryRepick(
     fromModel: trajectory.fromModel,
     preOutput: trajectory.preOutput,
   };
-  if (stronger.length === 0) {
-    decision.trajectoryFriction = { ...friction, unavailable: true };
-    return { decision, cause, applied: false };
-  }
-  const picked = pickEscalation(stronger, dimension, trajectory.fromModel, baseOpts);
-  if (!picked || picked.chosen === '') {
+  // Context/vision guards, strictly-stronger filter, and strongest-by-quality
+  // pick all live in `escalationChain` so this and the pre-output hop can never
+  // disagree on the target. No stronger reachable → keep the routed decision
+  // and mark the friction unavailable (the provider gate owns what to do next).
+  const picked = escalationChain(candidates, dimension, trajectory.fromModel, baseOpts, compareOpts);
+  if (!picked) {
     decision.trajectoryFriction = { ...friction, unavailable: true };
     return { decision, cause, applied: false };
   }

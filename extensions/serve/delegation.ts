@@ -34,10 +34,12 @@ import {
   isStrictlyStrongerCandidate,
   isValidEscalationCandidate,
   findSourceCandidate,
+  escalationChain,
   candidateKey,
   parseCandidateKey,
   servedEffort,
   type StrongerCompareOpts,
+  type ScoreOpts,
 } from '../routing/score/scorer.js';
 import { POLICY_PASSIVE_CAUSES } from '../routing/policy/routing-policy.js';
 import { ReasoningLoopDetector } from '../routing/struggle/reasoning-loop.js';
@@ -867,6 +869,10 @@ export async function runDelegationLoop(
     userReasoningOverride: opts.userReasoningOverride,
     candidates: opts.candidates,
   };
+  // Escalation target selection reuses the scorer's guards + quality pick. The
+  // remaining chain was already context/vision-guarded at routing time, so no
+  // context estimate is needed here.
+  const escOpts: ScoreOpts = { estimatedContextTokens: 0 };
   session.flushAndArmUnresolvedTrajectory();
 
   let success = false;
@@ -894,6 +900,13 @@ export async function runDelegationLoop(
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
   const ctx: DelegationContext = { opts, stream, decision, turnSpend, session, stillCurrent };
+  // The pre-output hop may only revisit the not-yet-attempted tail. Target
+  // selection itself is shared with the between-turn repick through
+  // `escalationChain`, so both surfaces choose the same strongest upgrade.
+  const remainingCandidates = (index: number): Candidate[] =>
+    decision.fallbackChain.slice(index + 1)
+      .map((key) => opts.candidates?.find((c) => candidateKey(c) === key))
+      .filter((c): c is Candidate => c != null);
   /**
    * Set only for the single hop that immediately follows a pre-output
    * reasoning loop. It gates the *destination* of that hop and is cleared as
@@ -1010,19 +1023,17 @@ export async function runDelegationLoop(
       opts.reasoning,
     );
     const effectiveSource = `${provider}/${modelId}:${effectiveReasoning ?? 'off'}`;
-    const sourceCandidate = opts.candidates
-      ? findSourceCandidate(opts.candidates, effectiveSource)
-      : undefined;
     // Resolved once per candidate, not per retry: a retry changes only the
-    // attempt number. A trajectory hop does rewrite the remaining chain, but
-    // it leaves this candidate immediately, so the next candidate recomputes
-    // this against the rewritten chain.
-    const remainingHasStronger = decision.fallbackChain.slice(candidateIndex + 1).some((key) => {
-      const dest = opts.candidates?.find((entry) => candidateKey(entry) === key);
-      return dest
-        ? isStrictlyStrongerCandidate(dest, effectiveSource, decision.dimension, sourceCandidate, compareOpts)
-        : false;
-    });
+    // attempt number. The early-abort probe and the hop itself ask the same
+    // shared selector over the same remaining target pool.
+    const remainingHasStronger =
+      escalationChain(
+        remainingCandidates(candidateIndex),
+        decision.dimension,
+        effectiveSource,
+        escOpts,
+        compareOpts,
+      ) !== undefined;
     const prepared: PreparedCandidate = {
       candidateId,
       candidateIndex,
@@ -1092,56 +1103,47 @@ export async function runDelegationLoop(
       if (attempt.kind === 'trajectory') {
         candidateTrajectoryEscalation = true;
         excludeSource = attempt.effectiveSource;
-        capabilityHop = {
-          fromModel: attempt.effectiveSource,
-          dimension: decision.dimension,
-          signals: [{
-            kind: 'reasoning-loop',
-            severity: 'severe',
-            evidenceIds: [`rl:${candidateId}`],
-            evidenceCount: 1,
-          }],
-          tfi: 1,
-          preOutput: true,
-        };
         const remaining = decision.fallbackChain.slice(candidateIndex + 1);
-        const hopSource = opts.candidates
-          ? findSourceCandidate(opts.candidates, attempt.effectiveSource)
-          : undefined;
-        const stronger: string[] = [];
-        const recovery: string[] = [];
-        for (const key of remaining) {
-          if (!isValidEscalationCandidate(key, attempt.effectiveSource)) continue;
-          const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === key);
-          if (
-            dest
-            && isStrictlyStrongerCandidate(
-              dest,
-              attempt.effectiveSource,
-              decision.dimension,
-              hopSource,
-              compareOpts,
-            )
-          ) {
-            stronger.push(key);
-          } else {
-            recovery.push(key);
-          }
-        }
-        // Mutate the live chain in place. The outer walk iterates
-        // `fallbackChain.entries()`; replacing the array would leave that
-        // iterator on the pre-hop order and skip recovery sitting before
-        // the stronger target.
-        decision.fallbackChain.splice(
-          candidateIndex + 1,
-          decision.fallbackChain.length - (candidateIndex + 1),
-          ...stronger,
-          ...recovery,
+        const esc = escalationChain(
+          remainingCandidates(candidateIndex),
+          decision.dimension,
+          attempt.effectiveSource,
+          escOpts,
+          compareOpts,
         );
-        if (stronger.length === 0) capabilityHop = undefined;
+        if (esc) {
+          capabilityHop = {
+            fromModel: attempt.effectiveSource,
+            dimension: decision.dimension,
+            signals: [{
+              kind: 'reasoning-loop',
+              severity: 'severe',
+              evidenceIds: [`rl:${candidateId}`],
+              evidenceCount: 1,
+            }],
+            tfi: 1,
+            preOutput: true,
+          };
+          const strongerKeys = esc.fallbackChain;
+          const strongerSet = new Set(strongerKeys);
+          const recovery = remaining.filter((key) => !strongerSet.has(key));
+          // Mutate the live chain in place. The outer walk iterates
+          // `fallbackChain.entries()`; replacing the array would leave that
+          // iterator on the pre-hop order and skip recovery sitting before the
+          // stronger head.
+          decision.fallbackChain.splice(
+            candidateIndex + 1,
+            remaining.length,
+            ...strongerKeys,
+            ...recovery,
+          );
+        } else {
+          capabilityHop = undefined;
+        }
         debugLog('attempt.trajectory', {
           candidate: candidateId,
           reason: 'reasoning-loop',
+          target: esc?.chosen ?? 'none',
           usage: attempt.usageObserved ? 'partial' : 'missing',
         });
         break;

@@ -708,6 +708,43 @@ export function pickEscalation(
   };
 }
 
+/**
+ * Shared escalation target selection for both the between-turn repick and the
+ * pre-output in-delegation hop. Apply context/vision guards, keep only the
+ * strictly-stronger reachable candidates, then pick the *strongest* by quality
+ * via `pickEscalation`. Both surfaces must land on the same target for the same
+ * struggle, so selection lives here and cannot diverge: one scans the remaining
+ * unattempted chain, the other the full routable set, but neither re-implements
+ * "which stronger model". Returns `undefined` when nothing strictly stronger is
+ * reachable — the caller owns the no-target policy (keep serving, never route
+ * down on the struggle alone).
+ */
+export function escalationChain(
+  candidates: readonly Candidate[],
+  dimension: Dimension,
+  fromModel: string,
+  opts: ScoreOpts,
+  compareOpts: StrongerCompareOpts,
+): RoutingDecision | undefined {
+  // `candidates` is the target pool (the pre-output hop passes only the
+  // reachable, unattempted tail, which excludes the struggling source). The
+  // source and any served-effort siblings must resolve against the full pool,
+  // so prefer `compareOpts.candidates`; the between-turn caller passes the full
+  // routable set as `candidates` and leaves `compareOpts.candidates` unset, so
+  // the fallback keeps that path unchanged.
+  const sourcePool = compareOpts.candidates ?? candidates;
+  const source = findSourceCandidate(sourcePool, fromModel);
+  const strongerOpts: StrongerCompareOpts = { ...compareOpts, candidates: sourcePool };
+  const eligible = applyCandidateGuards([...candidates], opts);
+  const stronger = eligible.filter((candidate) =>
+    isStrictlyStrongerCandidate(candidate, fromModel, dimension, source, strongerOpts),
+  );
+  if (stronger.length === 0) return undefined;
+  const picked = pickEscalation(stronger, dimension, fromModel, opts);
+  if (!picked || picked.chosen === '') return undefined;
+  return picked;
+}
+
 // ─── pickBest steps ───────────────────────────────────────────────────
 
 /**
