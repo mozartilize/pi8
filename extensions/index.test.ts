@@ -409,7 +409,7 @@ describe('registry-only role routing', () => {
 });
 
 describe('region-restricted parallel reviewers', () => {
-  it('blacklists the failed model and emits per-task retry directives', async () => {
+  it('injects routed models and leaves a child failure fail-open (no retry, no blacklist)', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -427,6 +427,7 @@ describe('region-restricted parallel reviewers', () => {
     const models = [registryModel('gamma/moderate'), registryModel('delta/strong')];
     const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
     await sessionStart!({ reason: 'new' }, ctx);
+    defaultRouterSession.clearSessionBlacklist();
 
     const input: {
       tasks: Array<{ agent: string; task: string; model?: string }>;
@@ -442,6 +443,8 @@ describe('region-restricted parallel reviewers', () => {
     expect(input.tasks[1].model).toBe('gamma/moderate');
     expect(input.tasks[2].model).toBe('user/explicit');
 
+    // A child hard-failure no longer blacklists the model or appends a retry
+    // directive: the router injects once and leaves recovery to the parent.
     const plan = (await toolResult!(
       {
         toolName: 'subagent',
@@ -473,13 +476,12 @@ describe('region-restricted parallel reviewers', () => {
         ...ctx,
         modelRegistry: { getAvailable: () => models as unknown as unknown[] },
       },
-    )) as { content?: Array<{ type: string; text?: string }> };
+    )) as { content?: Array<{ type: string; text?: string }> } | undefined;
 
-    expect(defaultRouterSession.getBlacklistedModels().has('gamma/moderate')).toBe(true);
-    expect(plan?.content?.some((part: { type?: string; text?: string }) =>
-      part.type === 'text' && part.text?.includes('delta/strong'),
-    )).toBe(true);
+    expect(defaultRouterSession.getBlacklistedModels().size).toBe(0);
+    expect(plan?.content).toBeUndefined();
 
+    // The next spawn still routes to the same model — nothing was blacklisted.
     const retry: {
       tasks: Array<{ agent: string; task: string; model?: string }>;
     } = {
@@ -489,8 +491,107 @@ describe('region-restricted parallel reviewers', () => {
       ],
     };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-retry', input: retry }, ctx);
-    expect(retry.tasks.map((task) => task.model)).toEqual(['delta/strong', 'delta/strong']);
+    expect(retry.tasks.map((task) => task.model)).toEqual(['gamma/moderate', 'gamma/moderate']);
     expect(input.tasks[2].model).toBe('user/explicit');
+  });
+
+  it('blacklists the whole provider when a child hits a usage limit', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const pi = {
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool: vi.fn(),
+    } as unknown as ExtensionAPI;
+    await autoModelRouterExtension(pi);
+
+    const sessionStart = handlers.get('session_start');
+    const toolCall = handlers.get('tool_call');
+    const toolResult = handlers.get('tool_result');
+
+    const models = [registryModel('gamma/moderate'), registryModel('delta/strong')];
+    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
+    await sessionStart!({ reason: 'new' }, ctx);
+    defaultRouterSession.clearSessionBlacklist();
+
+    const input: { agent: string; task: string; model?: string } = { agent: 'reviewer', task: 'review routing' };
+    toolCall!({ toolName: 'subagent', toolCallId: 'call-cap', input }, ctx);
+    expect(input.model).toBe('gamma/moderate');
+
+    const cap = '429 {"type":"GoUsageLimitError","message":"Weekly usage limit reached"}';
+    await toolResult!(
+      {
+        toolName: 'subagent',
+        toolCallId: 'call-cap',
+        content: [],
+        isError: false,
+        details: {
+          results: [
+            {
+              index: 0,
+              agent: 'reviewer',
+              model: 'gamma/moderate:high',
+              exitCode: 1,
+              error: cap,
+              modelAttempts: [{ model: 'gamma/moderate:high', success: false, error: cap }],
+            },
+          ],
+        },
+      },
+      { ...ctx, modelRegistry: { getAvailable: () => models as unknown as unknown[] } },
+    );
+
+    // Provider-wide (AGENTS rule 8): the whole provider is excluded, not just the model.
+    expect(defaultRouterSession.getBlacklistedProviders().has('gamma')).toBe(true);
+
+    // The next spawn skips the capped provider and routes to the sibling.
+    const retry: { agent: string; task: string; model?: string } = { agent: 'reviewer', task: 'review routing' };
+    toolCall!({ toolName: 'subagent', toolCallId: 'call-cap-retry', input: retry }, ctx);
+    expect(retry.model).toBe('delta/strong');
+  });
+
+  it('leaves a non-usage-limit child failure fail-open (no provider blacklist)', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const pi = {
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool: vi.fn(),
+    } as unknown as ExtensionAPI;
+    await autoModelRouterExtension(pi);
+
+    const sessionStart = handlers.get('session_start');
+    const toolCall = handlers.get('tool_call');
+    const toolResult = handlers.get('tool_result');
+
+    const models = [registryModel('gamma/moderate'), registryModel('delta/strong')];
+    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
+    await sessionStart!({ reason: 'new' }, ctx);
+    defaultRouterSession.clearSessionBlacklist();
+
+    const input: { agent: string; task: string; model?: string } = { agent: 'reviewer', task: 'review routing' };
+    toolCall!({ toolName: 'subagent', toolCallId: 'call-transient', input }, ctx);
+
+    await toolResult!(
+      {
+        toolName: 'subagent',
+        toolCallId: 'call-transient',
+        content: [],
+        isError: false,
+        details: {
+          results: [
+            {
+              index: 0,
+              agent: 'reviewer',
+              model: 'gamma/moderate:high',
+              exitCode: 1,
+              error: 'connection reset before headers',
+              modelAttempts: [{ model: 'gamma/moderate:high', success: false, error: 'connection reset before headers' }],
+            },
+          ],
+        },
+      },
+      { ...ctx, modelRegistry: { getAvailable: () => models as unknown as unknown[] } },
+    );
+
+    expect(defaultRouterSession.getBlacklistedProviders().has('gamma')).toBe(false);
+    expect(defaultRouterSession.getBlacklistedModels().has('gamma/moderate')).toBe(false);
   });
 
   it('keeps async and unknown-span dynamic fanout failures fail-open', async () => {

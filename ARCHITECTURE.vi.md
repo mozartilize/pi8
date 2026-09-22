@@ -162,11 +162,9 @@ Các role của pi-subagents (`researcher`, `planner`, `worker`, `reviewer`, `ad
 
 Không ghi gì vào `settings.json` — việc chèn chỉ áp dụng cho từng spawn. Lựa chọn model tường minh và các pin của người dùng/project (`source` ≠ `pi8`) luôn được ưu tiên. Một child cụ thể không thể đổi model giữa chừng.
 
-### Escalation cho subagent (parent hỗ trợ respawn)
+### Loại trừ theo usage-limit
 
-Một router-owned child chạy đồng bộ với stable result index có thể xác định được sẽ nhận một bounded self-report contract. Nếu nó chỉ trả về contract marker (giới hạn capability), router sẽ nối thêm một retry directive vào tool result, chỉ rõ model tiếp theo trong fallback chain của role đó. **Parent phải đồng bộ respawn lại đúng role/task đó một lần, không truyền model tường minh**, để router chèn one-shot override.
-
-Các task song song cố định cùng role sẽ key directive theo task gốc. Dynamic fanout có giới hạn giữ lại một role-wide override; async child và fanout không biết span sẽ fail open (vẫn chèn concrete model, bỏ escalation contract).
+Một foreground child thất bại với lỗi usage-limit của provider (quota/billing/subscription cap, khớp bởi `isUsageLimitErrorMessage` — cùng classifier mà main stream dùng) sẽ loại toàn bộ provider đó khỏi session, nên spawn sau và main turn đều bỏ qua mọi model trên nó (rule 8: cap được chia sẻ cho cả provider). Lỗi theo từng attempt gán cap cho đúng model. Đây là failure duy nhất của child được giữ lại: lỗi transient được pi-subagents/model retry, và lỗi đặc thù theo request (invalid request, refusal) không nói gì về sức khỏe provider. Router không bao giờ retry hay respawn child — việc khôi phục là quyết định của parent.
 
 ### Bộ lọc auth theo provider
 
@@ -185,7 +183,7 @@ Cơ chế này bao phủ một chuyển tiếp mà classifier không nhìn thấ
 
 ---
 
-## 6. Các cơ chế escalation (3 đường riêng biệt)
+## 6. Các cơ chế escalation (2 đường riêng biệt)
 
 ### 1. Capability escalation trong hội thoại chính
 
@@ -194,10 +192,6 @@ Tự chạy `/router-escalate [dimension]`. Không có argument sẽ nâng một
 ### 2. Automatic fallback trên main stream
 
 Delegation loop chỉ phản ứng với lỗi khách quan trước khi có câu trả lời. Không suy luận chất lượng ngữ nghĩa, không replay sau khi đã có output hiển thị.
-
-### 3. Retry subagent đồng bộ
-
-Parent-assisted respawn được mô tả trong §4. Các role bị người dùng pin sẽ không bao giờ bị override.
 
 ---
 
@@ -334,4 +328,4 @@ Các module cốt lõi:
 - `provider.ts` — orchestrator: chờ registry, classify/escalate/consult, score, delegate; đồng thời sở hữu `buildSubagentProviderAuthFilter`, credential probe 3 giây theo từng provider
 - `index.ts` — hook wiring; chạy credential probe trước khi gán role
 - `adapters/` — nguồn benchmark data (hiện chỉ có `artificial-analysis.ts`)
-- `subagents.ts` — role injection, escalation contract (không tự thực hiện probe)
+- `subagents.ts` — role injection (không tự thực hiện probe)

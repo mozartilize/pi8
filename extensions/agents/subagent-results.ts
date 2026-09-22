@@ -7,7 +7,7 @@ export interface SubagentResultRow {
   finalOutput?: string;
   exitCode?: number;
   error?: string;
-  modelAttempts: Array<{ model?: string; success?: boolean }>;
+  modelAttempts: Array<{ model?: string; success?: boolean; error?: string }>;
   /**
    * Terminal usage for one foreground child. `cost` is pi-subagents'
    * provider-reported billing and is kept only as a cross-check — spend
@@ -64,6 +64,7 @@ export function parseSubagentResultRows(details: unknown): SubagentResultRow[] {
               .map((item) => ({
                 model: typeof item.model === 'string' ? item.model : undefined,
                 success: typeof item.success === 'boolean' ? item.success : undefined,
+                error: typeof item.error === 'string' ? item.error : undefined,
               }))
           : [],
       },

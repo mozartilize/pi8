@@ -40,7 +40,6 @@ import { expandModelCandidates } from '../serve/provider.js';
 import { effortDropsPerStep } from '../routing/score/effort-estimate.js';
 import { loadModelFilter } from '../routing/policy/allowlist.js';
 import { identityKey } from '../bench/matcher.js';
-import { appendSubagentEscalationContract } from './subagent-escalation.js';
 
 /** Marker so we can distinguish router-authored overrides from user pins. */
 export const AUTO_ROUTER_SOURCE = 'pi8';
@@ -628,7 +627,7 @@ export interface SubagentChildSpec {
   role?: Role;
   model?: string;
   routerOwned: boolean;
-  /** Task before the router appended its escalation contract. */
+  /** Task as launched. */
   originalTask?: string;
   /**
    * The explicit model requested by the caller before a router-owned session
@@ -655,16 +654,10 @@ export interface SubagentRoutingTraversal {
 export const ROUTER_AUTO_SENTINEL = 'router/auto';
 
 export interface SubagentRoutingOptions {
-  consumeOverride?: (
-    role: Role,
-    originalTask?: string,
-    fallbackChain?: readonly string[],
-  ) => string | undefined;
   /** Select structured children before mutation; workflowScript is excluded. */
   selectChildren?: (
     requests: readonly SubagentTaskRequest[],
   ) => ReadonlyMap<string, RoleRoutingSelection>;
-  appendEscalationContract?: boolean;
   /**
    * Tool-level model for workflow-scripted spawns. pi-subagents defines
    * children inside the `workflowScript` string, which the structured walker
@@ -763,7 +756,7 @@ export function injectSubagentRoutingWithMetadata(
 
       if (role) {
         // Membership in the base map establishes router ownership. A user pin
-        // is absent, so even a stale override can never replace it.
+        // is absent from the map, so the router never touches it.
         // Ownership: omitted model or explicit `router/auto` sentinel → owned;
         // any other concrete model → caller's choice wins.
         const baseModel = roleModels.get(role);
@@ -772,16 +765,8 @@ export function injectSubagentRoutingWithMetadata(
           requestedModel === undefined || requestedModel === ROUTER_AUTO_SENTINEL;
         if (baseModel && callerOptedIntoRouting) {
           const fallbackChain = selection?.fallbackChain ?? [];
-          const override = opts.consumeOverride?.(role, originalTask, fallbackChain);
-          const model = override ?? selection?.model ?? baseModel;
+          const model = selection?.model ?? baseModel;
           (spec as Record<string, unknown>).model = model;
-          if (
-            stableIndexKnown &&
-            originalTask !== undefined &&
-            opts.appendEscalationContract !== false
-          ) {
-            (spec as Record<string, unknown>).task = appendSubagentEscalationContract(originalTask);
-          }
           const owned: InjectedSubagentSpec = {
             ...(childIndex !== undefined ? { childIndex } : {}),
             ...(childIndexSpan !== null && childIndexSpan !== 1 ? { childIndexSpan } : {}),

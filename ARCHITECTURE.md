@@ -170,11 +170,9 @@ pi-subagents roles (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) ea
 
 Nothing is written to `settings.json` — injection is per-spawn only. Explicit model choices and user/project pins (`source` ≠ `pi8`) always win. A concrete child cannot switch models mid-process.
 
-### Subagent escalation (parent-assisted respawn)
+### Usage-limit exclusion
 
-A synchronous router-owned child with a knowable stable result index receives a bounded self-report contract. If it returns only the contract marker (capability limitation), the router appends a retry directive naming the next model in the role's fallback chain to the tool result. The **parent must synchronously respawn the same role/task once, omitting an explicit model**, so the router injects the one-shot override.
-
-Fixed parallel same-role tasks key the directive to the original task. Bounded dynamic fanout preserves one role-wide override; async children and unknown-span fanout fail open (concrete injection continues, escalation contract omitted).
+A foreground child that fails with a provider usage-limit error (quota/billing/subscription cap, matched by `isUsageLimitErrorMessage` — the same classifier the main stream uses) excludes that whole provider for the session, so later spawns and main turns skip every model on it (rule 8: the cap is shared provider-wide). Per-attempt errors attribute the cap to the exact model. This is the only non-retryable child failure that persists: transient errors are retried by pi-subagents/the model, and request-specific failures (invalid request, refusal) say nothing about provider health. The router never retries or respawns the child — recovery is the parent's decision.
 
 ### Provider auth filter
 
@@ -193,16 +191,13 @@ Covers the transition the classifier cannot see: a gather session that keeps acc
 
 ---
 
-## 6. Escalation mechanisms (3 distinct paths)
+## 6. Escalation mechanisms (2 distinct paths)
 
 ### 1. Main-conversation capability escalation
 Run `/router-escalate [dimension]` yourself. No argument raises one tier; an explicit dimension weaker than the last routed one is rejected. At the same dimension, a quality-first capability repick excludes the requesting model. Models do not self-escalate. Objective trajectory friction (repeated action/observation, persistent verifier failure, confirmed stagnation, pre-output reasoning loops) sets a pending same-dimension quality-first repick for the next provider invocation, or hops immediately when replay is still safe.
 
 ### 2. Main-stream automatic fallback
 The delegation loop reacts only to objective pre-answer failures. No semantic-quality inference, no replay after visible output, a tool call, or a thinking-overflow commit.
-
-### 3. Synchronous subagent retry
-Parent-assisted respawn described in §4. User-pinned roles are never overridden.
 
 ---
 
@@ -338,4 +333,4 @@ Core modules:
 - `provider.ts` — orchestrator: registry wait, classify/escalate/consult, score, delegate; also owns `buildSubagentProviderAuthFilter`, the 3s per-provider credential probe
 - `index.ts` — hook wiring; runs the credential probe before role assignment
 - `adapters/` — benchmark data sources (currently only `artificial-analysis.ts`)
-- `subagents.ts` — role injection, escalation contracts (no probe of its own)
+- `subagents.ts` — role injection (no probe of its own)

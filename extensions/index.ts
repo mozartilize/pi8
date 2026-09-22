@@ -31,13 +31,6 @@ interface ModelSelectEventLike {
   previousModel?: { provider: string; id: string };
 }
 
-/**
- * Content blocks a `tool_result` handler may substitute. The package does not
- * export its `ToolResultEventResult`, so the one field this extension sets is
- * derived from the event's own content type.
- */
-type ToolResultContent = ToolResultEvent['content'];
-
 import { registerCommands } from './host/commands.js';
 import {
   registerAutoRouterProvider,
@@ -45,11 +38,21 @@ import {
   getBlacklistDebugState,
 } from './serve/provider.js';
 
-import { computeRoleModels, pickSubagentDefaultModel } from './agents/subagents.js';
-import { SubagentEscalationHooks } from './agents/subagent-escalation-hooks.js';
+import {
+  computeRoleModels,
+  injectSubagentRoutingWithMetadata,
+  pickSubagentDefaultModel,
+  stripThinkingSuffix,
+} from './agents/subagents.js';
 import { SubagentRoutingState } from './agents/subagent-routing-state.js';
 import { extractMissingTools } from './host/gap-detector.js';
-import { collectSubagentResultText, parseSubagentResultRows } from './agents/subagent-results.js';
+import {
+  collectSubagentResultText,
+  parseSubagentResultRows,
+  isFailedResult,
+  type SubagentResultRow,
+} from './agents/subagent-results.js';
+import { isUsageLimitErrorMessage } from './serve/usage-limit.js';
 import { computeSubagentSpend } from './agents/subagent-spend.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './routing/policy/allowlist.js';
 import { loadConfig } from './config.js';
@@ -57,7 +60,7 @@ import { ensureEmbeddingEngine } from './embed/embedding.js';
 import { setSessionFile } from './sessionpaths.js';
 import { debugLog, setConfigDebug } from './host/debuglog.js';
 import type { RegistryModelInfo } from './routing/score/scorer.js';
-import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from './types.js';
+import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 import {
   appendMutationGateSignal,
   appendSubagentGapSignal,
@@ -75,6 +78,11 @@ import { classifyMutationCall } from './routing/policy/mutation-detector.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
 const SUBAGENT_TOOL = 'subagent';
+
+interface SubagentCallObservation {
+  observedModels: string[];
+  observedRoles: Role[];
+}
 
 /**
  * True only when the session's currently active model IS the router/auto
@@ -181,7 +189,7 @@ async function handleSessionStart(
   pi: ExtensionAPI,
   session: RouterSession,
   runtime: RuntimeBindings,
-  subagentEscalationHooks: SubagentEscalationHooks,
+  subagentCalls: Map<string, SubagentCallObservation>,
   routingState: SubagentRoutingState,
   refreshRoleModels: RoleModelRefresher,
 ): Promise<void> {
@@ -206,7 +214,7 @@ async function handleSessionStart(
     // remove/clear. Config writes stay authoritative: next session_start
     // re-seeds the authoritative list.
     session.addSessionBlacklistPatterns(loadConfig().blacklist ?? []);
-    subagentEscalationHooks.reset();
+    subagentCalls.clear();
     routingState.reset();
   } catch {
     // Session cleanup is best-effort and must not block startup.
@@ -375,7 +383,7 @@ function handleSubagentToolCall(
   ctx: ExtensionContext,
   session: RouterSession,
   routingState: SubagentRoutingState,
-  subagentEscalationHooks: SubagentEscalationHooks,
+  subagentCalls: Map<string, SubagentCallObservation>,
 ): void {
   try {
     // Resolve each role's model against the LIVE session blacklist: a model
@@ -399,16 +407,14 @@ function handleSubagentToolCall(
     const currentTokens = typeof usage?.tokens === 'number' && usage.tokens > 0
       ? usage.tokens
       : 0;
-    const defaultModel = pickSubagentDefaultModel(live.roleModels);
-    subagentEscalationHooks.toolCall(
-      event.toolCallId,
-      event.input,
-      live.roleModels,
-      live.roleFallbacks,
-      isExcluded,
-      defaultModel,
-      (requests) => routingState.selectChildren(requests, isExcluded, currentTokens),
-    );
+    const traversal = injectSubagentRoutingWithMetadata(event.input, live.roleModels, {
+      selectChildren: (requests) => routingState.selectChildren(requests, isExcluded, currentTokens),
+      defaultModel: pickSubagentDefaultModel(live.roleModels),
+    });
+    subagentCalls.set(event.toolCallId, {
+      observedModels: [...new Set(traversal.children.flatMap((child) => child.model ? [child.model] : []))],
+      observedRoles: [...new Set(traversal.children.flatMap((child) => child.role ? [child.role] : []))],
+    });
   } catch {
     // Never block or break a subagent spawn because of routing.
   }
@@ -483,32 +489,71 @@ function handleMutationToolCall(
   return undefined;
 }
 
+/** Provider of a `provider/id[:effort]` model id, or undefined if unparseable. */
+function providerOf(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  const bare = stripThinkingSuffix(model);
+  const slash = bare.indexOf('/');
+  return slash > 0 ? bare.slice(0, slash) : undefined;
+}
+
+/**
+ * Providers a failed child proved are usage-capped. A quota/billing/subscription
+ * limit is the one non-retryable failure worth persisting from a child result:
+ * the cap is shared by every model on the provider (AGENTS rule 8), so a later
+ * spawn or main turn on any sibling model would fail the same way. Transient
+ * errors are retried by pi-subagents/the model, and request-specific failures
+ * (invalid request, refusal) say nothing about provider health, so neither is
+ * matched here. Per-attempt errors attribute the cap to the exact model.
+ */
+function usageLimitProvidersFromRows(rows: readonly SubagentResultRow[]): string[] {
+  const providers = new Set<string>();
+  for (const row of rows) {
+    if (!isFailedResult(row)) continue;
+    const sources: Array<{ model?: string; error?: string }> = [
+      { model: row.model, error: row.error },
+      ...row.modelAttempts.filter((attempt) => attempt.success !== true),
+    ];
+    for (const { model, error } of sources) {
+      if (!isUsageLimitErrorMessage(error)) continue;
+      const provider = providerOf(model);
+      if (provider) providers.add(provider);
+    }
+  }
+  return [...providers];
+}
+
 function handleSubagentToolResult(
   event: ToolResultEvent,
   ctx: ExtensionContext,
   session: RouterSession,
   routingState: SubagentRoutingState,
-  subagentEscalationHooks: SubagentEscalationHooks,
+  subagentCalls: Map<string, SubagentCallObservation>,
   refreshRoleModels: RoleModelRefresher,
-): { content: ToolResultContent } | undefined {
+): void {
   try {
     const snapshot = routingState.snapshot();
-    const plan = subagentEscalationHooks.toolResult(
-      event.toolCallId,
-      event as never,
-      snapshot.roleFallbacks,
-      (model) => {
-        session.blacklistModel(model);
-      },
-    );
+    const pending = subagentCalls.get(event.toolCallId);
+    subagentCalls.delete(event.toolCallId);
+    const observedModels = pending?.observedModels ?? [];
+    const observedRoles = pending?.observedRoles ?? [];
+    const rows = parseSubagentResultRows(event.details);
+
+    // A child that hit a provider-wide usage cap excludes that provider for the
+    // session, so later spawns and main turns skip every model on it. This does
+    // not retry or respawn the child — recovery is the parent's decision.
+    const cappedProviders = usageLimitProvidersFromRows(rows);
+    for (const provider of cappedProviders) {
+      session.blacklistProvider(provider);
+      debugLog('subagent.usage-limit', { provider });
+    }
 
     // Harvest tool-gap signals independently of model ownership: explicit
-    // children remain visible for observability but never gain router retry
-    // or blacklist ownership.
+    // children remain visible for observability.
     const missingTools = extractMissingTools(collectSubagentResultText(event));
     if (missingTools.length > 0) {
-      const role = plan.observedRoles[0];
-      const model = plan.blacklistModels[0] ?? plan.observedModels[0];
+      const role = observedRoles[0];
+      const model = observedModels[0];
       for (const tool of missingTools) {
         appendSubagentGapSignal({ role, tool, model });
       }
@@ -521,25 +566,22 @@ function handleSubagentToolResult(
     // did not route.
     const candidates = snapshot.routingSnapshot?.candidates;
     if (candidates && candidates.length > 0) {
-      const records = computeSubagentSpend(parseSubagentResultRows(event.details), {
+      const records = computeSubagentSpend(rows, {
         candidates,
         configBaselineModel: loadConfig().baselineModel,
-        ...(plan.observedRoles.length === 1 ? { role: plan.observedRoles[0] } : {}),
-        routerOwnedModels: plan.observedModels,
+        ...(observedRoles.length === 1 ? { role: observedRoles[0] } : {}),
+        routerOwnedModels: observedModels,
       });
       for (const record of records) appendSubagentSpend(record);
     }
 
-    // Only recompute role assignments when a blacklist actually changed them.
-    // The refresh is generation-guarded: if a newer refresh started while we
-    // were processing this result, this refresh is ignored rather than
-    // overwriting newer maps.
-    if (plan.blacklistModels.length > 0) void refreshRoleModels(ctx.modelRegistry, ctx);
-    if (plan.content) return { content: plan.content as ToolResultContent };
+    // Recompute role assignments only when a provider was excluded, so the next
+    // spawn's role maps drop the now-capped provider. Generation-guarded: a
+    // newer refresh already in flight wins.
+    if (cappedProviders.length > 0) void refreshRoleModels(ctx.modelRegistry, ctx);
   } catch {
     // A routing/observability failure must never surface as a tool error.
   }
-  return undefined;
 }
 
 function handleMutationToolResult(
@@ -611,7 +653,7 @@ export default async function autoModelRouterExtension(
   registerAutoRouterProvider(pi, undefined, session, runtime);
 
   const routingState = new SubagentRoutingState();
-  const subagentEscalationHooks = new SubagentEscalationHooks();
+  const subagentCalls = new Map<string, SubagentCallObservation>();
 
   const refreshRoleModels: RoleModelRefresher = (modelRegistry, ctx) =>
     refreshRoleModelsState(routingState, session, modelRegistry, ctx);
@@ -623,7 +665,7 @@ export default async function autoModelRouterExtension(
       pi,
       session,
       runtime,
-      subagentEscalationHooks,
+      subagentCalls,
       routingState,
       refreshRoleModels,
     ),
@@ -645,7 +687,7 @@ export default async function autoModelRouterExtension(
   pi.on('tool_call', (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
     if (event.toolName === SUBAGENT_TOOL) {
-      handleSubagentToolCall(event, ctx, session, routingState, subagentEscalationHooks);
+      handleSubagentToolCall(event, ctx, session, routingState, subagentCalls);
       return;
     }
     try {
@@ -669,14 +711,8 @@ export default async function autoModelRouterExtension(
   pi.on('tool_result', (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
     if (event.toolName === SUBAGENT_TOOL) {
-      return handleSubagentToolResult(
-        event,
-        ctx,
-        session,
-        routingState,
-        subagentEscalationHooks,
-        refreshRoleModels,
-      );
+      handleSubagentToolResult(event, ctx, session, routingState, subagentCalls, refreshRoleModels);
+      return;
     }
     handleMutationToolResult(event, session);
     handleTrajectoryToolResult(event, session);

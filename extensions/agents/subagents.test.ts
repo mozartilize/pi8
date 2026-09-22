@@ -33,7 +33,6 @@ import {
 import { candidateKey, type RegistryModelInfo } from '../routing/score/scorer.js';
 import { buildModelFilter } from '../routing/policy/allowlist.js';
 import type { BenchModel, Candidate, Role } from '../types.js';
-import { SUBAGENT_ESCALATION_MARKER } from './subagent-escalation.js';
 import { benchRow, registryModel } from '../test-support/router-fixtures.js';
 
 // ─── Fixtures ─────────────────────────────────────────────────────────
@@ -814,44 +813,37 @@ describe('count-repeated tasks', () => {
   });
 });
 
-describe('escalation contract injection', () => {
+describe('subagent routing injection', () => {
   const roleModels = new Map<Role, string>([
     ['reviewer', 'openai/gpt-5'],
     ['worker', 'deepseek/deepseek-v3'],
   ]);
 
-  it('appends the contract to a router-owned single spec after concrete model injection', () => {
+  it('injects a concrete model without rewriting the child task', () => {
     const input: { agent: string; task: string; model?: string } = { agent: 'worker', task: 'build it' };
     const { injected } = injectSubagentRoutingWithMetadata(input, roleModels);
 
     expect(input.model).toBe('deepseek/deepseek-v3');
-    expect(input.task).toContain(SUBAGENT_ESCALATION_MARKER);
+    expect(input.task).toBe('build it');
     expect(injected).toMatchObject([
       { role: 'worker', model: 'deepseek/deepseek-v3', originalTask: 'build it' },
     ]);
   });
 
-  it('covers tasks, chains, and nested parallel specs without duplicating the contract', () => {
-    const alreadyContracted: { agent: string; task: string; model?: string } = { agent: 'worker', task: 'repeat' };
-    injectSubagentRoutingWithMetadata(alreadyContracted, roleModels);
-    delete alreadyContracted.model;
+  it('covers tasks, chains, and nested parallel specs without rewriting tasks', () => {
+    const nested: { agent: string; task: string; model?: string } = { agent: 'worker', task: 'repeat' };
     const input = {
       tasks: [{ agent: 'reviewer', task: 'a' }],
       chain: [
-        alreadyContracted,
+        nested,
         { parallel: [{ agent: 'worker', task: 'c' }] },
       ],
     };
 
     expect(injectSubagentRoutingWithMetadata(input, roleModels).injected).toHaveLength(3);
-    const tasks = [
-      input.tasks[0].task,
-      alreadyContracted.task,
-      (input.chain[1] as { parallel: Array<{ task: string }> }).parallel[0]!.task,
-    ];
-    for (const task of tasks) {
-      expect(task.match(/\[router-escalate\]/g)).toHaveLength(1);
-    }
+    expect(input.tasks[0].task).toBe('a');
+    expect(nested.task).toBe('repeat');
+    expect((input.chain[1] as { parallel: Array<{ task: string }> }).parallel[0]!.task).toBe('c');
   });
 
   it('injects object-valued dynamic parallel templates with ownership metadata', () => {
@@ -874,7 +866,7 @@ describe('escalation contract injection', () => {
     }]);
     const template = input.chain[0]!.parallel as { model?: string; task: string };
     expect(template.model).toBe('deepseek/deepseek-v3');
-    expect(template.task).toContain(SUBAGENT_ESCALATION_MARKER);
+    expect(template.task).toBe('inspect {item}');
   });
 
   it('fails open after a dynamic template whose globally configured span is unknown', () => {
@@ -900,52 +892,8 @@ describe('escalation contract injection', () => {
     const later = input.chain[1] as { model?: string; task: string };
     expect(template.model).toBe('deepseek/deepseek-v3');
     expect(later.model).toBe('deepseek/deepseek-v3');
-    expect(template.task).not.toContain(SUBAGENT_ESCALATION_MARKER);
-    expect(later.task).not.toContain(SUBAGENT_ESCALATION_MARKER);
-  });
-
-  it('keeps async model injection but omits the synchronous escalation contract', () => {
-    const input: { agent: string; task: string; async: boolean; model?: string } = {
-      agent: 'worker',
-      task: 'background',
-      async: true,
-    };
-
-    // Async children are model-injected but get no escalation contract — the
-    // same option the production tool_call hook passes for async launches.
-    const { injected } = injectSubagentRoutingWithMetadata(
-      input,
-      roleModels,
-      { appendEscalationContract: false },
-    );
-    expect(injected).toHaveLength(1);
-    expect(input.model).toBe('deepseek/deepseek-v3');
-    expect(input.task).not.toContain(SUBAGENT_ESCALATION_MARKER);
-  });
-
-  it('consumes a one-shot override only for the next router-owned spec of that role', () => {
-    const overrides = new Map<Role, string>([['worker', 'provider/strong']]);
-    const input = {
-      tasks: [
-        { agent: 'worker', model: 'user/explicit', task: 'explicit' },
-        { agent: 'worker', task: 'first routed' },
-        { agent: 'worker', task: 'second routed' },
-      ],
-    };
-
-    injectSubagentRoutingWithMetadata(input, roleModels, {
-      consumeOverride: (role) => {
-        const model = overrides.get(role);
-        overrides.delete(role);
-        return model;
-      },
-    });
-    expect(input.tasks.map((task) => task.model)).toEqual([
-      'user/explicit',
-      'provider/strong',
-      'deepseek/deepseek-v3',
-    ]);
-    expect(overrides.size).toBe(0);
+    expect(template.task).toBe('inspect {item}');
+    expect(later.task).toBe('summarize');
   });
 
   it('leaves explicit models, user-pinned roles, and non-string tasks untouched', () => {
