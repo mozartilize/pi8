@@ -233,7 +233,6 @@ export interface RoutingAssessment {
 export type DecisionCause =
   | 'heuristic'
   | 'continuation-context'
-  | 'user-escalation'
   | 'router-consult'
   | 'embedding-classify'
   | 'error-fallback'

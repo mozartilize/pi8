@@ -1143,6 +1143,12 @@ describe('scorer — log-cost normalization', () => {
     ]);
   });
 
+  it('keeps distinct prices finite when their logarithms round equal', () => {
+    const utilities = logCostUtilities([999_999.999_999_997, 999_999.999_999_997_1]);
+    expect(utilities.every((value) => value != null && Number.isFinite(value))).toBe(true);
+    expect(utilities[0]!).toBeGreaterThanOrEqual(utilities[1]!);
+  });
+
   it('is invariant to the price unit scale', () => {
     const base = logCostUtilities([0, 1, 9, 81]);
     const scaled = logCostUtilities([0, 1_000, 9_000, 81_000]);

@@ -38,13 +38,6 @@ export interface CachedRoutingIntent {
   fallbackReason?: AssessmentFallbackReason;
 }
 
-export interface PendingUserEscalation {
-  /** Explicit target dimension; absent means "one tier up". */
-  target?: Dimension;
-  /** Candidate key the user is escaping from, so the exact attempt can be excluded. */
-  fromModel?: string;
-}
-
 /** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */
 export interface EmbeddingStats {
   /** Inference returned a verdict (a vector was classified). */
@@ -228,7 +221,6 @@ export class RouterSession {
   private notifiedModel: string | undefined;
   private accumCost = 0;
   private resolvedThinkingLevel: string | undefined;
-  private pendingEscalation: PendingUserEscalation | undefined;
   private activeSkills: readonly string[] = [];
   private readonly embedStats: EmbeddingStats = {
     fired: 0,
@@ -300,20 +292,6 @@ export class RouterSession {
 
   setLastResolvedThinkingLevel(level: string | undefined): void {
     this.resolvedThinkingLevel = level;
-  }
-
-  peekPendingUserEscalation(): PendingUserEscalation | undefined {
-    return this.pendingEscalation;
-  }
-
-  setPendingUserEscalation(pending: PendingUserEscalation | undefined): void {
-    this.pendingEscalation = pending;
-  }
-
-  consumePendingUserEscalation(): PendingUserEscalation | undefined {
-    const pending = this.pendingEscalation;
-    this.pendingEscalation = undefined;
-    return pending;
   }
 
   getActiveSkillNames(): readonly string[] {
@@ -466,8 +444,8 @@ export class RouterSession {
   /**
    * Bind struggle evidence to whichever capability is serving before that
    * evidence is recorded. Every owner change goes through here — a trajectory
-   * handoff, an objective-failure fallback, or a user escalation — so a
-   * pending claim always names the model whose own cycles produced it.
+   * handoff or an objective-failure fallback — so a pending claim always names
+   * the model whose own cycles produced it.
    */
   private syncTrajectoryOwner(): void {
     // Served identity only. The decision fallback names a pick that has not
@@ -544,7 +522,6 @@ export class RouterSession {
     this.notifiedModel = undefined;
     this.accumCost = 0;
     this.resolvedThinkingLevel = undefined;
-    this.pendingEscalation = undefined;
     this.activeSkills = [];
     this.embedStats.fired = 0;
     this.embedStats.promoted = 0;
@@ -583,16 +560,6 @@ export const getCurrentModelRegistry = (): ExtensionContext['modelRegistry'] | u
   defaultRuntimeBindings.getCurrentModelRegistry();
 export const getLastRegisteredModels = (): string =>
   defaultRuntimeBindings.getLastRegisteredModels();
-
-export const peekPendingUserEscalation = (): PendingUserEscalation | undefined =>
-  defaultRouterSession.peekPendingUserEscalation();
-
-export const setPendingUserEscalation = (pending: PendingUserEscalation | undefined): void => {
-  defaultRouterSession.setPendingUserEscalation(pending);
-};
-
-export const consumePendingUserEscalation = (): PendingUserEscalation | undefined =>
-  defaultRouterSession.consumePendingUserEscalation();
 
 export const setLastDecision = (d: RoutingDecision): void => {
   defaultRouterSession.setLastDecision(d);

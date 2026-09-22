@@ -149,32 +149,6 @@ describe('resolveRoutingDecision', () => {
         expectedDimension: 'implement',
       },
       {
-        name: 'user escalation beats depth escalation',
-        input: {
-          baseCause: 'heuristic' as const,
-          baseDimension: 'gather' as const,
-          userEscalation: { target: undefined },
-          candidates: registryOnlyCandidates,
-          // depth would fire (tokens >= 32768, passive cause, gather) but the
-          // explicit user request owns the dimension.
-          estimatedContextTokens: 100_000,
-        },
-        expectedCause: 'user-escalation',
-        expectedDimension: 'implement',
-      },
-      {
-        name: 'explicit user escalation target is honoured',
-        input: {
-          baseCause: 'heuristic' as const,
-          baseDimension: 'gather' as const,
-          userEscalation: { target: 'plan' as const },
-          candidates: registryOnlyCandidates,
-          estimatedContextTokens: 1_000,
-        },
-        expectedCause: 'user-escalation',
-        expectedDimension: 'plan',
-      },
-      {
         name: 'depth escalation replaces passive heuristic',
         input: {
           baseCause: 'heuristic' as const,
@@ -212,15 +186,8 @@ describe('resolveRoutingDecision', () => {
       baseDimension: 'implement',
       candidates: registryOnlyCandidates,
     }));
-    const user = resolveRoutingDecision(makePolicyInput({
-      baseCause: 'heuristic',
-      baseDimension: 'gather',
-      userEscalation: { target: undefined },
-      candidates: registryOnlyCandidates,
-    }));
 
     expect(continuation.decision.cause).toBe('continuation-context');
-    expect(user.decision.cause).toBe('user-escalation');
   });
 
   it('uses configured weights for the active dimension', () => {
@@ -509,20 +476,6 @@ describe('resolveRoutingDecision', () => {
       );
       expect(result.trajectoryApplied).toBe(false);
     });
-
-    it('yields to user escalation without consuming the trajectory claim in policy', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'heuristic',
-          baseDimension: 'gather',
-          userEscalation: { target: 'implement' },
-          candidates: [weak, strong],
-          trajectoryEscalation: pending('test/weak'),
-        }),
-      );
-      expect(result.trajectoryApplied).toBe(false);
-      expect(result.decision.cause).toBe('user-escalation');
-    });
   });
 
   describe('metadata', () => {
@@ -574,75 +527,9 @@ describe('resolveRoutingDecision', () => {
       expect(POLICY_PASSIVE_CAUSES.has('continuation-context')).toBe(true);
       expect(POLICY_PASSIVE_CAUSES.has('no-data')).toBe(true);
       // Active causes must NOT be passive — they own the dimension and are
-      // not overridable by depth escalation or capability repicks.
+      // not overridable by depth escalation or trajectory repicks.
       expect(POLICY_PASSIVE_CAUSES.has('router-consult')).toBe(false);
-      expect(POLICY_PASSIVE_CAUSES.has('user-escalation')).toBe(false);
       expect(POLICY_PASSIVE_CAUSES.has('context-depth')).toBe(false);
-    });
-  });
-
-  describe('user escalation', () => {
-    it('raises one tier when no explicit target is given', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseDimension: 'gather',
-          userEscalation: { target: undefined },
-          candidates: benchmarkCandidates,
-        }),
-      );
-      expect(result.decision.dimension).toBe('implement');
-      expect(result.decision.cause).toBe('user-escalation');
-    });
-
-    it('caps a no-arg escalation at the top dimension', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseDimension: 'plan',
-          classifyResult: {
-            dimension: 'plan',
-            confidence: 0.8,
-            signals: [],
-            terminal: terminalAssessment(),
-      hasCategoricalEvidence: true,
-          },
-          userEscalation: { target: undefined, fromModel: benchmarkCandidates[0]!.registryId },
-          candidates: benchmarkCandidates,
-        }),
-      );
-      expect(result.decision.dimension).toBe('plan');
-      expect(result.decision.cause).toBe('user-escalation');
-    });
-
-    it('performs a quality-first repick at the top dimension instead of retaining the source model', () => {
-      const fromModel = benchmarkCandidates[0]!.registryId;
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseDimension: 'plan',
-          classifyResult: {
-            dimension: 'plan',
-            confidence: 0.8,
-            signals: [],
-            terminal: terminalAssessment(),
-      hasCategoricalEvidence: true,
-          },
-          userEscalation: { target: 'plan', fromModel },
-          candidates: benchmarkCandidates,
-          incumbentRegistryId: fromModel,
-        }),
-      );
-      expect(result.decision.chosen).not.toBe(fromModel);
-      expect(result.decision.cause).toBe('user-escalation');
-    });
-
-    it('keeps user-escalation cause when no candidate has benchmark data', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseDimension: 'gather',
-          userEscalation: { target: undefined },
-          candidates: registryOnlyCandidates,
-        }),
-      );
-      expect(result.decision.cause).toBe('user-escalation');
     });
   });
 });
@@ -717,7 +604,7 @@ describe('incumbent capability floor', () => {
   // Contract: within one task the served model stays at or above the
   // incumbent's measured capability. Uncertainty holds the floor; only a
   // genuine new entry with a high-confidence trivial classification resets to a
-  // cheaper model. Sanctioned downward moves (user pick, escalation, inspect
+  // cheaper model. Sanctioned downward moves (trajectory escalation, inspect
   // promotion, consult that lowered the dimension) stand the floor down.
   it('baseline (no incumbent) picks the cheap model at gather', () => {
     const result = resolveRoutingDecision(
@@ -827,22 +714,6 @@ describe('incumbent capability floor', () => {
       }),
     );
     expect(result.decision.chosen).toBe('bench/cheap');
-    expect(result.decision.reason).not.toContain('incumbent-floor');
-  });
-
-  it('stands down for an explicit user escalation', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
-        baseDimension: 'gather',
-        confidence: 0.1,
-        incumbentRegistryId: 'bench/strong',
-        userEscalation: { target: undefined },
-        estimatedContextTokens: 1_000,
-      }),
-    );
-    // The user owns the pick; the floor must not append its marker.
     expect(result.decision.reason).not.toContain('incumbent-floor');
   });
 
@@ -980,9 +851,6 @@ describe('depth-escalation probe and veto', () => {
     expect(wouldDepthEscalate({ ...base, estimatedContextTokens: 10_000 })).toBe(false);
     expect(wouldDepthEscalate({ ...base, dimension: 'plan', estimatedContextTokens: 90_000 })).toBe(false);
     expect(
-      wouldDepthEscalate({ ...base, cause: 'user-escalation', estimatedContextTokens: 90_000 }),
-    ).toBe(false);
-    expect(
       wouldDepthEscalate({
         ...base,
         config: { depthEscalation: false, depthEscalationTokens: 32_768 },
@@ -993,7 +861,6 @@ describe('depth-escalation probe and veto', () => {
 
   it.each([
     { cause: 'router-consult' as const, expectEscalate: true },
-    { cause: 'user-escalation' as const, expectEscalate: false },
     { cause: 'capability-escalation' as const, expectEscalate: false },
     { cause: 'error-fallback' as const, expectEscalate: false },
     { cause: 'context-depth' as const, expectEscalate: false },

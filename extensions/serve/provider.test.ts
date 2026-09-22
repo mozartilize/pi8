@@ -764,9 +764,8 @@ describe('provider orchestration', () => {
     await harness.serve(longEscalatedContext);
 
     const { lastDecision } = harness.getProviderState();
-    // The token mechanism is gone: routing comes from the ordinary passive
-    // path, and the prompt text earns no escalation cause of its own.
-    expect(lastDecision?.cause).not.toBe('user-escalation');
+    // Routing comes from the ordinary passive path; the prompt text earns no
+    // escalation cause of its own.
     expect(lastDecision?.contextPressure).toBeDefined();
     expect(lastDecision?.reason).not.toContain('[manual:');
     expect(lastDecision?.reason).toContain('[context-pressure: prefer fresh planner handoff]');
@@ -1614,19 +1613,6 @@ describe('assessment orchestration', () => {
     expect(decision?.fallbackReason).toBe('expiry');
   });
 
-  it('a user escalation still outranks an assessment verdict', async () => {
-    const session = await newSession({ consultRouter: true });
-    const { setPendingUserEscalation } = await import('./router-session-state.js');
-    setPendingUserEscalation({ target: 'plan', fromModel: 'alpha/cheap' });
-
-    const decision = await session.routeTurn('list the main features of docs/plan.md', {
-      assessorReply:
-        'Kind: lightweight\nComplexity: trivial\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: x',
-    });
-    expect(decision?.dimension).toBe('plan');
-    expect(decision?.cause).toBe('user-escalation');
-  });
-
   it('reuses the verdict on later tool-loop turns of the same entry', async () => {
     const session = await newSession({ consultRouter: true });
     const first = await session.routeTurn('list the main features of docs/plan.md', {
@@ -1769,16 +1755,6 @@ describe('latch veto', () => {
     // entry escalates through the ordinary depth path again.
     expect(next?.dimension).toBe('implement');
     expect(next?.cause).toBe('context-depth');
-  });
-
-  it('a pending user escalation does not consume the one-shot latch assessment', async () => {
-    const session = await newSession({ consultRouter: true });
-    const { setPendingUserEscalation } = await import('./router-session-state.js');
-    setPendingUserEscalation({ target: 'plan' });
-    await session.routeTurn('investigate the flaky test', { estimatedContextTokens: 90_000 });
-    // User escalation owns the dimension, so depth never fires and the latch
-    // must remain armed for the real first transition later in the session.
-    expect(session.latchGeneration).toBe(0);
   });
 
   it('a veto holds for the whole tool loop of the vetoed entry', async () => {
@@ -2249,35 +2225,6 @@ describe('multi-work phase engagement', () => {
     });
   });
 
-  it('does not engage a fresh intent that is itself a same-dimension model repick', async () => {
-    const harness = await setupProviderTest({
-      dir: temp.path,
-      config: { consultRouter: false },
-      benchmarks: multiWorkBenchmarks,
-    });
-    // A same-dimension user-escalation override only carries `fromModel` once a
-    // concrete model has actually served, so establish a serving model on an
-    // unrelated turn first — otherwise applyEscalationPrecedence() is a
-    // same-dimension no-op below.
-    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
-    await harness.serve(nonCompoundImplementContext);
-
-    const served = harness.session.getLastServed();
-    const fromModel = served?.registryId
-      ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
-      : harness.session.getLastDecision()?.chosen;
-    harness.session.setPendingUserEscalation({ target: 'implement', fromModel });
-    harness.resetEventStream();
-    harness.scriptReply([{ type: 'text_delta', delta: 'serve' }, { type: 'done' }]);
-
-    await harness.serve(compoundContext);
-
-    expect(harness.getProviderState().workPhaseState).toMatchObject({
-      multiWorkEngaged: false,
-      phase: 'mutate',
-    });
-  });
-
   it('does not let assessor compound diagnostics engage multi-work in active v2 mode', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
@@ -2380,30 +2327,6 @@ describe('multi-work phase engagement', () => {
     expect(decision.cause).toBe(baseline.cause);
   });
 
-  it('permanently advances an engaged inspect phase to mutate when a stronger dimension takes ownership', async () => {
-    const harness = await setupProviderTest({
-      dir: temp.path,
-      config: { consultRouter: false },
-      benchmarks: multiWorkBenchmarks,
-    });
-    harness.scriptReply([{ type: 'text_delta', delta: 'inspect' }, { type: 'done' }]);
-    await harness.serve(compoundContext);
-    expect(harness.getProviderState().workPhaseState).toMatchObject({ phase: 'inspect', multiWorkEngaged: true });
-
-    const served = harness.session.getLastServed();
-    const fromModel = served?.registryId
-      ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
-      : harness.session.getLastDecision()?.chosen;
-    harness.session.setPendingUserEscalation({ target: 'review', fromModel });
-    harness.resetEventStream();
-    harness.scriptReply([{ type: 'text_delta', delta: 'reviewed' }, { type: 'done' }]);
-    await harness.serve(compoundContext);
-
-    expect(harness.getProviderState().workPhaseState).toMatchObject({
-      phase: 'mutate',
-      phaseReason: 'stronger-routing-owner',
-    });
-  });
 });
 
 describe('router-report counterfactual baseline', () => {

@@ -46,7 +46,7 @@ Verdict được áp dụng dưới các giới hạn nghiêm ngặt:
 
 - Khi không chắc chắn, luôn route lên: assessment confidence thấp sẽ cho kết quả `max(heuristic, oneTierAbove(verdict))`, không bao giờ thấp hơn heuristic.
 - Chỉ verdict **confidence cao, `scope: bounded`** mới được phép hạ dimension, tối đa **một tier** (hoặc giải phóng bump nhập nhằng từ keyword về `rawHeuristic`), không bao giờ hạ từ `implement` hoặc `review`, và không bao giờ khi depth latch đang hoạt động.
-- Capability repick: consult đã nâng dimension sẽ sở hữu quyết định đó (`router-consult` vẫn là cause đang hoạt động cho mục đích capability repick).
+- Trajectory repick: consult đã nâng dimension sẽ sở hữu quyết định đó (`router-consult` vẫn là cause đang hoạt động cho mục đích trajectory repick).
 
 Mỗi lần assessment ghi một record `assessment-metric` vào decision log, join bằng `intentKey`, để giữ lại heuristic delta hoặc fallback reason. Một depth-latch transition ghi metric thứ hai từ cùng một assessment dispatch duy nhất. Chi phí assessment được theo dõi riêng với chi phí routing.
 
@@ -176,7 +176,7 @@ Trước khi gán role cho subagent, một credential probe theo provider (timeo
 
 Cơ chế này bao phủ một chuyển tiếp mà classifier không nhìn thấy: một gather session liên tục tích lũy context đã trở thành quá trình tổng hợp trên material đã thu thập, loại công việc mà các tier rẻ xử lý kém.
 
-- **Trigger**: live context vượt `depthEscalationTokens` (mặc định 32768), lượt được phân loại là `lightweight`/`gather`, không có active routing intent (escalation/user override)
+- **Trigger**: live context vượt `depthEscalationTokens` (mặc định 32768), pre-depth dimension là `lightweight`/`gather`, và cause thuộc nhóm depth-passive (`heuristic`, `continuation-context`, `no-data`, hoặc `router-consult`)
 - **Effect**: nâng một tier cho invocation đó (cause: `context-depth`)
 - **Thuộc tính**: chỉ nâng lên, không bao giờ cache, đánh giá theo từng invocation
 - **Latch veto**: lần chuyển depth-latch đầu tiên trong mỗi session có thể bị veto bởi assessment confidence cao, `scope: bounded`. Veto nghĩa là từ chối escalation — dimension và cause giữ nguyên — và tái sử dụng assessment verdict hiện có của entry thay vì dispatch assessment thứ hai. Mọi failure path (timeout, không có assessor, reply không parse được, assessment bị tắt) đều escalation mà không có veto.
@@ -185,9 +185,9 @@ Cơ chế này bao phủ một chuyển tiếp mà classifier không nhìn thấ
 
 ## 6. Các cơ chế escalation (2 đường riêng biệt)
 
-### 1. Capability escalation trong hội thoại chính
+### 1. Objective trajectory escalation
 
-Tự chạy `/router-escalate [dimension]`. Không có argument sẽ nâng một tier; dimension tường minh yếu hơn dimension được route gần nhất sẽ bị từ chối. Ở cùng dimension, capability repick ưu tiên chất lượng sẽ loại model đang yêu cầu. Model không tự escalate. Trajectory friction khách quan (lặp action/observation, failure dai dẳng, stagnation đã xác nhận, reasoning loop trước output) đặt pending same-dimension quality-first repick cho provider invocation kế tiếp, hoặc hop ngay khi replay vẫn an toàn.
+Trajectory friction khách quan (lặp action/observation, failure dai dẳng, stagnation đã xác nhận, reasoning loop trước output) đặt pending same-dimension quality-first repick cho provider invocation kế tiếp, hoặc hop ngay khi replay vẫn an toàn. Model không tự escalate.
 
 ### 2. Automatic fallback trên main stream
 
@@ -218,7 +218,7 @@ requirement = clamp01(KIND_BASE[kind] + 0.5 × COMPLEXITY[complexity] + (scope =
 
 ### Vòng đời phase
 
-Mỗi intent sở hữu một `WorkPhase`: `answer` (lightweight), `inspect` (gather, hoặc phase mở đầu của một compound implementation đã engage), `reason` (plan/review), `mutate` (implement, hoặc một compound implementation sau khi đã rời `inspect`). Multi-work chỉ *engage* — cấp discount cho inspect phase — khi terminal kind là implement compound-eligible, band là `strong` hoặc `frontier`, confidence không thấp, resolved dimension là `implement`, và không có capability repick đang active. Sau khi engage, phase tiến `inspect` → `mutate` khi một routing owner mạnh hơn tiếp quản (dimension đổi khỏi `implement`, hoặc một capability repick kích hoạt) — không bao giờ tự động lùi lại, và không bao giờ một khi turn đã rời `inspect`.
+Mỗi intent sở hữu một `WorkPhase`: `answer` (lightweight), `inspect` (gather, hoặc phase mở đầu của một compound implementation đã engage), `reason` (plan/review), `mutate` (implement, hoặc một compound implementation sau khi đã rời `inspect`). Multi-work chỉ *engage* — cấp discount cho inspect phase — khi terminal kind là implement compound-eligible, band là `strong` hoặc `frontier`, confidence không thấp, và resolved dimension là `implement`. Sau khi engage, phase tiến `inspect` → `mutate` khi một routing owner mạnh hơn tiếp quản (resolved dimension đổi khỏi `implement`) — không bao giờ tự động lùi lại, và không bao giờ một khi turn đã rời `inspect`.
 
 ### Scoring policy (`scorer.ts`)
 
@@ -269,7 +269,7 @@ Routing state được đóng gói thành các domain aggregate có thể khởi
 
 ### Decision log
 
-Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict và record `assessment-metric`. Các giá trị cause: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `capability-escalation`, `trajectory-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
+Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict và record `assessment-metric`. Các giá trị cause: `heuristic`, `continuation-context`, `router-consult`, `embedding-classify`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `context-depth`, `self-healing-gap`.
 
 ### Timing log
 

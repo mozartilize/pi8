@@ -63,7 +63,7 @@ import {
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop } from './delegation.js';
 import { makeTerminalErrorEvent } from './error-event.js';
-import { resolveRoutingDecision, wouldDepthEscalate, applyEscalationPrecedence } from '../routing/policy/routing-policy.js';
+import { resolveRoutingDecision, wouldDepthEscalate } from '../routing/policy/routing-policy.js';
 import {
   advanceForRoutingOwner,
   capabilityBandFor,
@@ -692,7 +692,7 @@ async function runEntryAssessment(
 /**
  * Latch transition. Receives the parent-computed depthWouldEscalate boolean;
  * ANDs with the session's latch generation being 0 itself. Does not call
- * applyEscalationPrecedence or wouldDepthEscalate. Does not touch the stream.
+ * wouldDepthEscalate. Does not touch the stream.
  */
 async function evaluateDepthLatch(
   env: AssessmentEnv,
@@ -743,14 +743,13 @@ function advanceWorkPhase(args: {
   classifyResult: ReturnType<typeof classify>;
   vetoDepthEscalation: boolean;
   depthWouldEscalate: boolean;
-  preDepth: ReturnType<typeof applyEscalationPrecedence>;
+  baseDimension: Dimension;
   session: RouterSession;
 }) {
   const resolvedDimensionForPhase: Dimension =
     !args.vetoDepthEscalation && args.depthWouldEscalate
-      ? (args.preDepth.dimension === 'lightweight' ? 'gather' : 'implement')
-      : args.preDepth.dimension;
-  const capabilityRepickActive = args.preDepth.userApplied && !args.preDepth.userRaised;
+      ? (args.baseDimension === 'lightweight' ? 'gather' : 'implement')
+      : args.baseDimension;
 
   let workPhaseState = args.session.getWorkPhaseState();
   if (!args.cacheHit) {
@@ -763,7 +762,6 @@ function advanceWorkPhase(args: {
             const band = capabilityBandFor(requirement);
             const initial = deriveInitialPhase(terminal, band, {
               resolvedDimension: resolvedDimensionForPhase,
-              capabilityRepickActive,
             });
             return {
               intentKey: args.turnInput.key,
@@ -789,11 +787,10 @@ function advanceWorkPhase(args: {
     workPhaseState = advanceForRoutingOwner(
       workPhaseState,
       resolvedDimensionForPhase,
-      capabilityRepickActive,
     );
   }
   const multiWorkPolicy = workPhaseState
-    ? scoringPolicyForState(workPhaseState, resolvedDimensionForPhase, capabilityRepickActive)
+    ? scoringPolicyForState(workPhaseState, resolvedDimensionForPhase)
     : undefined;
   args.session.commitWorkPhaseState(workPhaseState);
   return { multiWorkPolicy };
@@ -886,7 +883,6 @@ interface PreparedTurn {
   config: AutoRouterConfig;
   measured: ReturnType<typeof measureTurnInput>;
   intent: Awaited<ReturnType<typeof resolveBaseIntent>>;
-  userEscalation: ReturnType<RouterSession['peekPendingUserEscalation']>;
   trajectoryEscalation: ReturnType<RouterSession['peekPendingTrajectoryEscalation']>;
   /**
    * Pre-exclusion pool. Kept because an awaited assessment can blacklist a
@@ -901,7 +897,6 @@ interface AssessedTurn {
   fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
   baseDimension: Dimension;
   baseCause: DecisionCause;
-  preDepth: ReturnType<typeof applyEscalationPrecedence>;
   depthWouldEscalate: boolean;
   vetoDepthEscalation: boolean;
   assessmentStillCurrent: () => boolean;
@@ -942,10 +937,6 @@ async function prepareRouterTurn(args: {
   // invocation rather than stalling behind an impossible result.
   session.flushAndArmUnresolvedTrajectory();
 
-  // Peek only: a pending /router-escalate request is consumed after
-  // the decision is recorded, so a router-internal failure before
-  // that point cannot silently swallow the user's request.
-  const userEscalation = session.peekPendingUserEscalation();
   const trajectoryEscalation = session.peekPendingTrajectoryEscalation();
 
   const candidates = buildRoutableCandidates({
@@ -965,7 +956,6 @@ async function prepareRouterTurn(args: {
       config,
       measured,
       intent,
-      userEscalation,
       trajectoryEscalation,
       candidates,
       routableCandidates,
@@ -981,7 +971,7 @@ async function assessRouterTurn(args: {
   session: RouterSession;
 }): Promise<{ kind: 'ready'; assessed: AssessedTurn } | RouterTurnOutcome> {
   const { prepared, context, pi, session } = args;
-  const { config, measured, intent, registry, routableCandidates, userEscalation } = prepared;
+  const { config, measured, intent, registry, routableCandidates } = prepared;
   const { turnInput, estContextTokens } = measured;
   const { cacheHit, cachedIntent, classifyResult } = intent;
 
@@ -1046,14 +1036,9 @@ async function assessRouterTurn(args: {
   // policy's depth gate agree. Computed once here; the latch ANDs
   // with generation === 0 itself, and the phase engine reuses the
   // boolean rather than probing again.
-  const preDepth = applyEscalationPrecedence({
+  const depthWouldEscalate = wouldDepthEscalate({
     dimension: baseDimension,
     cause: baseCause,
-    userEscalation,
-  });
-  const depthWouldEscalate = wouldDepthEscalate({
-    dimension: preDepth.dimension,
-    cause: preDepth.cause,
     estimatedContextTokens: estContextTokens,
     config,
   });
@@ -1075,7 +1060,6 @@ async function assessRouterTurn(args: {
       fallbackReason: state.fallbackReason,
       baseDimension,
       baseCause,
-      preDepth,
       depthWouldEscalate,
       vetoDepthEscalation: latch.vetoDepthEscalation,
       assessmentStillCurrent,
@@ -1091,10 +1075,10 @@ function scoreRouterTurn(args: {
   session: RouterSession;
 }): { kind: 'ready'; scored: ScoredTurn } | RouterTurnOutcome {
   const { prepared, assessed, options, session } = args;
-  const { config, measured, intent, candidates, userEscalation, trajectoryEscalation } = prepared;
+  const { config, measured, intent, candidates, trajectoryEscalation } = prepared;
   const { turnInput, needsVision, estContextTokens, staticPrefixTokens } = measured;
   const { classifyResult, cacheHit, confidence } = intent;
-  const { baseDimension, baseCause, preDepth, depthWouldEscalate, vetoDepthEscalation } = assessed;
+  const { baseDimension, baseCause, depthWouldEscalate, vetoDepthEscalation } = assessed;
 
   // An awaited assessment can add a provider-wide usage-limit
   // exclusion after this turn's initial candidate snapshot. Apply
@@ -1110,7 +1094,7 @@ function scoreRouterTurn(args: {
     classifyResult,
     vetoDepthEscalation,
     depthWouldEscalate,
-    preDepth,
+    baseDimension,
     session,
   });
 
@@ -1122,7 +1106,6 @@ function scoreRouterTurn(args: {
     classifyResult,
     baseDimension,
     baseCause,
-    userEscalation,
     trajectoryEscalation,
     userReasoning: requestedReasoning as ThinkingLevel | undefined,
     userReasoningOverride,
@@ -1151,11 +1134,9 @@ function scoreRouterTurn(args: {
     // Best-effort telemetry only.
   }
   session.setLastDecision(decision);
-  if (userEscalation) session.consumePendingUserEscalation();
   // Trajectory pending is consumed only after a successful serve of
   // an applied handoff. Peeking it here must not drop evidence when
-  // no stronger target exists, user escalation won, or delegation
-  // fails.
+  // no stronger target exists or delegation fails.
 
   debugLog('decision', {
     dimension: decision.dimension,

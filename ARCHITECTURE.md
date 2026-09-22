@@ -46,7 +46,7 @@ Verdicts are adopted under strict caps:
 
 - Uncertainty always routes up: low-confidence assessments yield `max(heuristic, oneTierAbove(verdict))`, never anything below the heuristic.
 - Only a **high-confidence, `scope: bounded`** verdict may lower the dimension, by **at most one tier** (or release an unassisted keyword ambiguity bump to `rawHeuristic`), never from `implement` or `review`, and never while the depth latch is engaged.
-- Capability repick: a consult that raised the dimension owns that decision (`router-consult` cause remains active for capability repick purposes).
+- Trajectory repick: a consult that raised the dimension owns that decision (`router-consult` cause remains active for trajectory repick purposes).
 
 Each attempt writes an `assessment-metric` decision-log record joined by `intentKey`, preserving the heuristic delta or fallback reason. A depth-latch transition writes a second metric from the same single assessment dispatch. Assessment spend is tracked separately from routed spend.
 
@@ -184,7 +184,7 @@ Before subagent role assignment, a per-provider credential probe (timeout 3s) fi
 
 Covers the transition the classifier cannot see: a gather session that keeps accumulating context has become synthesis over gathered material, which cheap tiers serve badly.
 
-- **Trigger**: live context exceeds `depthEscalationTokens` (default 32768), turn is classified lightweight/gather, no active routing intent (escalation/user override)
+- **Trigger**: live context exceeds `depthEscalationTokens` (default 32768), the pre-depth dimension is lightweight/gather, and the cause is depth-passive (`heuristic`, `continuation-context`, `no-data`, or `router-consult`)
 - **Effect**: raise one tier for that invocation (cause: `context-depth`)
 - **Properties**: up-only, never cached, per-invocation evaluation
 - **Latch veto**: the first depth-latch transition per session may be vetoed by a high-confidence, `scope: bounded` assessment. A veto is a refusal to escalate — dimension and cause stay unchanged — and it reuses the entry's existing assessment verdict rather than dispatching a second one. Every failure path (timeout, no assessor, unparseable reply, disabled assessment) escalates without a veto.
@@ -193,8 +193,8 @@ Covers the transition the classifier cannot see: a gather session that keeps acc
 
 ## 6. Escalation mechanisms (2 distinct paths)
 
-### 1. Main-conversation capability escalation
-Run `/router-escalate [dimension]` yourself. No argument raises one tier; an explicit dimension weaker than the last routed one is rejected. At the same dimension, a quality-first capability repick excludes the requesting model. Models do not self-escalate. Objective trajectory friction (repeated action/observation, persistent verifier failure, confirmed stagnation, pre-output reasoning loops) sets a pending same-dimension quality-first repick for the next provider invocation, or hops immediately when replay is still safe.
+### 1. Objective trajectory escalation
+Objective trajectory friction (repeated action/observation, persistent verifier failure, confirmed stagnation, pre-output reasoning loops) sets a pending same-dimension quality-first repick for the next provider invocation, or hops immediately when replay is still safe. Models do not self-escalate.
 
 ### 2. Main-stream automatic fallback
 The delegation loop reacts only to objective pre-answer failures. No semantic-quality inference, no replay after visible output, a tool call, or a thinking-overflow commit.
@@ -224,7 +224,7 @@ requirement = clamp01(KIND_BASE[kind] + 0.5 × COMPLEXITY[complexity] + (scope =
 
 ### Phase lifecycle
 
-Each intent owns one `WorkPhase`: `answer` (lightweight), `inspect` (gather, or an engaged compound implementation's opening phase), `reason` (plan/review), `mutate` (implement, or a compound implementation once it has left `inspect`). Multi-work only *engages* — granting the inspect-phase discount — when the terminal kind is compound-eligible implement, band is `strong` or `frontier`, confidence isn't low, the resolved dimension is `implement`, and no capability repick is active. Once engaged, phase advances `inspect` → `mutate` when a stronger routing owner takes over (dimension changes away from `implement`, or a capability repick activates) — never automatically downward, and never once the turn leaves `inspect`.
+Each intent owns one `WorkPhase`: `answer` (lightweight), `inspect` (gather, or an engaged compound implementation's opening phase), `reason` (plan/review), `mutate` (implement, or a compound implementation once it has left `inspect`). Multi-work only *engages* — granting the inspect-phase discount — when the terminal kind is compound-eligible implement, band is `strong` or `frontier`, confidence isn't low, and the resolved dimension is `implement`. Once engaged, phase advances `inspect` → `mutate` when a stronger routing owner takes over (the resolved dimension changes away from `implement`) — never automatically downward, and never once the turn leaves `inspect`.
 
 ### Scoring policy (`scorer.ts`)
 
@@ -275,7 +275,7 @@ Routing state is encapsulated into instantiable domain aggregates:
 
 ### Decision log
 
-Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, and `assessment-metric` records. Caused values: `heuristic`, `continuation-context`, `user-escalation`, `router-consult`, `capability-escalation`, `trajectory-escalation`, `error-fallback`, `no-data`, `context-depth`, `self-healing-gap`.
+Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, and `assessment-metric` records. Cause values: `heuristic`, `continuation-context`, `router-consult`, `embedding-classify`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `context-depth`, `self-healing-gap`.
 
 ### Timing log
 

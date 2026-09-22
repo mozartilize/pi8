@@ -22,36 +22,15 @@ import {
 } from '../agents/subagents.js';
 import { readRecentEntries, type DecisionLogEntry } from './decisionlog.js';
 import { detectToolGaps } from './gap-detector.js';
-import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
 import { provisionEmbedding } from '../embed/embedding-provision.js';
 import {
   RouterSession,
   defaultRouterSession,
 } from '../serve/router-session-state.js';
-import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Dimension } from '../types.js';
 
 /**
- * Dimensions a user may escalate to. `lightweight` is excluded: escalation is
- * up-only, and asking for the weakest tier is never an escalation.
+ * Alias to keep command code readable.
  */
-const ESCALATABLE_DIMENSIONS: Dimension[] = ['gather', 'implement', 'review', 'plan'];
-
-const ESCALATE_USAGE = `Usage: /router-escalate [${ESCALATABLE_DIMENSIONS.join('|')}]`;
-
-/**
- * Hidden follow-up that makes an escalation take effect immediately instead of
- * waiting for the user's next message.
- *
- * Delivered as a follow-up rather than a user message so it cannot replace the
- * cached per-user-entry classification key, and never as a steer/abort so a
- * stream that already produced output is not replayed on another model.
- */
-const HANDOFF_PROMPT =
-  'The user escalated the router to a stronger model. Continue the unresolved task ' +
-  'from the existing conversation context without recapping the escalation. ' +
-  'If no work remains, acknowledge briefly.';
-
-/** Alias to keep command code readable. */
 const readRecentDecisions = (limit?: number): DecisionLogEntry[] => readRecentEntries(limit);
 
 type CommandHandler = (
@@ -501,75 +480,6 @@ async function handleModelsCommand(ctx: ExtensionCommandContext): Promise<void> 
   ctx.ui.notify(lines.join('\n'), 'info');
 }
 
-async function handleEscalateCommand(
-  args: string,
-  ctx: ExtensionCommandContext,
-  pi: ExtensionAPI,
-  session: RouterSession,
-): Promise<void> {
-  // Inert unless the session actually routes.
-  // On a concrete model there is no routing loop to consume the request.
-  const model = ctx.model as { provider?: string; id?: string } | undefined;
-  if (model?.provider !== ROUTER_PROVIDER_ID || model?.id !== AUTO_MODEL_ID) {
-    ctx.ui.notify(
-      '/router-escalate has no effect: the session model is not router/auto.',
-      'warning',
-    );
-    return;
-  }
-
-  const parsed = splitArgs(args);
-  if (parsed.length > 1) {
-    ctx.ui.notify(ESCALATE_USAGE, 'error');
-    return;
-  }
-  const [rawTarget] = parsed;
-  if (rawTarget && !ESCALATABLE_DIMENSIONS.includes(rawTarget as Dimension)) {
-    ctx.ui.notify(ESCALATE_USAGE, 'error');
-    return;
-  }
-  const target = rawTarget as Dimension | undefined;
-
-  const last = session.getLastDecision();
-  if (!last) {
-    ctx.ui.notify(
-      'Nothing to escalate yet — the router has not served a turn in this session.',
-      'warning',
-    );
-    return;
-  }
-
-  // Equal is allowed: it requests a different model at the same dimension.
-  if (target && DIMENSION_STRENGTH[target] < DIMENSION_STRENGTH[last.dimension]) {
-    ctx.ui.notify(
-      `Escalation is up-only: the last turn already routed to ${last.dimension}, ` +
-        `which is stronger than ${target}.`,
-      'error',
-    );
-    return;
-  }
-
-  // The served model is the one the user actually saw; preserve its effort
-  // variant so an exact repeat is excluded while a higher-effort retry stays
-  // eligible. Fall back to the chosen candidate when delegation never
-  // recorded a serve.
-  const served = session.getLastServed();
-  const fromModel = served?.registryId
-    ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
-    : last.chosen;
-  session.setPendingUserEscalation({ target, fromModel });
-
-  await pi.sendMessage(
-    {
-      customType: 'pi8:handoff',
-      content: HANDOFF_PROMPT,
-      display: false,
-      details: { kind: 'user-escalation', target, fromModel },
-    },
-    { triggerTurn: true, deliverAs: 'followUp' },
-  );
-}
-
 async function handleAgentsCommand(ctx: ExtensionCommandContext): Promise<void> {
   const registryModels = (ctx.modelRegistry?.getAvailable() ?? []) as unknown as Array<{
     provider: string;
@@ -692,13 +602,6 @@ export function registerCommands(
   pi.registerCommand('router-models', {
     description: 'Show the `models` allowlist and which registry models it selects',
     handler: safeCommand('/router-models', (_args, ctx) => handleModelsCommand(ctx)),
-  });
-
-  pi.registerCommand('router-escalate', {
-    description: `Immediately re-route the current task to a stronger model: ${ESCALATE_USAGE}`,
-    handler: safeCommand('/router-escalate', (args, ctx) =>
-      handleEscalateCommand(args, ctx, pi, session),
-    ),
   });
 
   pi.registerCommand('router-agents', {

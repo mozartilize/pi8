@@ -13,7 +13,6 @@ const FLOOR = { economy: undefined, standard: 0.45, strong: 0.70, frontier: 0.85
 
 export interface InitialPhasePolicy {
   resolvedDimension: Dimension;
-  capabilityRepickActive: boolean;
 }
 
 export interface InitialPhaseDecision {
@@ -71,7 +70,7 @@ export function deriveInitialPhase(
   if (terminal.kind === 'plan' || terminal.kind === 'review') return { phase: 'reason', phaseReason: `terminal-${terminal.kind}`, multiWorkEngaged: false };
   const eligible = terminal.compound && terminal.discountEligible && terminal.confidence !== 'low' &&
     BAND_ORDER.indexOf(terminalBand) >= BAND_ORDER.indexOf('strong') &&
-    policy.resolvedDimension === 'implement' && !policy.capabilityRepickActive;
+    policy.resolvedDimension === 'implement';
   return eligible
     ? { phase: 'inspect', phaseReason: 'explicit-compound-inspect', multiWorkEngaged: true }
     : { phase: 'mutate', phaseReason: 'terminal-implement', multiWorkEngaged: false };
@@ -80,10 +79,9 @@ export function deriveInitialPhase(
 export function advanceForRoutingOwner(
   state: WorkPhaseState,
   resolvedDimension: Dimension,
-  capabilityRepickActive: boolean,
 ): WorkPhaseState {
   const mustAdvance = state.multiWorkEngaged && state.phase === 'inspect' &&
-    (resolvedDimension !== 'implement' || capabilityRepickActive);
+    resolvedDimension !== 'implement';
   return mustAdvance
     ? { ...state, phase: 'mutate', phaseReason: 'stronger-routing-owner' }
     : { ...state, pendingMutationToolCallIds: new Set(state.pendingMutationToolCallIds) };
@@ -92,9 +90,8 @@ export function advanceForRoutingOwner(
 export function scoringPolicyForState(
   state: WorkPhaseState,
   resolvedDimension: Dimension,
-  capabilityRepickActive: boolean,
 ): MultiWorkScoringPolicy | undefined {
-  if (!state.multiWorkEngaged || resolvedDimension !== 'implement' || capabilityRepickActive) return undefined;
+  if (!state.multiWorkEngaged || resolvedDimension !== 'implement') return undefined;
   const terminalFloor = floorForBand(state.terminalBand);
   if (terminalFloor == null) return undefined;
   const index = BAND_ORDER.indexOf(state.terminalBand);

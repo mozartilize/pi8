@@ -434,6 +434,17 @@ export function logCostUtilities(
   const logMax = Math.log(max + shift);
   const span = logMax - logMin;
 
+  // Distinct finite costs can collapse to the same logarithm, or max + shift
+  // can overflow. Linear normalization keeps the degenerate case finite and
+  // preserves the only required ordering: cheaper costs never score lower.
+  if (!Number.isFinite(span) || span <= 0) {
+    const linearSpan = max - min;
+    return costs.map((cost) => {
+      if (cost == null || !Number.isFinite(cost) || cost < 0) return undefined;
+      return clamp(1 - (cost - min) / linearSpan, 0, 1);
+    });
+  }
+
   return costs.map((cost) => {
     if (cost == null || !Number.isFinite(cost) || cost < 0) return undefined;
     return clamp(1 - (Math.log(cost + shift) - logMin) / span, 0, 1);
@@ -684,14 +695,9 @@ export function pickEscalation(
   dimension: Dimension,
   fromModel: string,
   opts: ScoreOpts = { estimatedContextTokens: 0 },
-  strictEffort = true,
 ): RoutingDecision | undefined {
   // Model route-up must increase capability, not merely change transport.
-  const alternatives = candidates.filter((c) =>
-    strictEffort
-      ? isValidEscalationCandidate(candidateKey(c), fromModel)
-      : candidateKey(c) !== fromModel,
-  );
+  const alternatives = candidates.filter((c) => isValidEscalationCandidate(candidateKey(c), fromModel));
   if (alternatives.length === 0) return undefined;
 
   const decision = pickBest(alternatives, dimension, { quality: 1, cost: 0, speed: 0 }, opts);

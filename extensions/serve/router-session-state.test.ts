@@ -5,7 +5,6 @@ import {
   addAssessmentCost,
   bumpLatchGeneration,
   commitWorkPhaseState,
-  consumePendingUserEscalation,
   getAccumulatedCost,
   getActiveSkillNames,
   getAssessmentCost,
@@ -18,14 +17,12 @@ import {
   getLatchGeneration,
   getSessionGeneration,
   getWorkPhaseState,
-  peekPendingUserEscalation,
   recordSuccessfulAssessorUsage,
   resetRouterSession,
   setActiveSkillNames,
   setCachedRoutingIntent,
   setLastDecision,
   setLastResolvedThinkingLevel,
-  setPendingUserEscalation,
   getLatchVetoIntentKey,
   setLatchVetoIntentKey,
   RouterSession,
@@ -87,25 +84,6 @@ describe('candidate expansion memo', () => {
     setCandidateExpansion({ key: 'sig-1', candidates: [] });
     resetRouterSession();
     expect(getCandidateExpansion()).toBeUndefined();
-  });
-});
-
-describe('pending user escalation', () => {
-  it('is consumed exactly once', () => {
-    resetRouterSession();
-    setPendingUserEscalation({ target: 'plan', fromModel: 'test/current' });
-
-    // Peeking must not consume: routing reads it before a decision exists.
-    expect(peekPendingUserEscalation()).toEqual({ target: 'plan', fromModel: 'test/current' });
-    expect(consumePendingUserEscalation()).toEqual({ target: 'plan', fromModel: 'test/current' });
-    expect(consumePendingUserEscalation()).toBeUndefined();
-    expect(peekPendingUserEscalation()).toBeUndefined();
-  });
-
-  it('does not survive a session reset', () => {
-    setPendingUserEscalation({ target: 'review' });
-    resetRouterSession();
-    expect(peekPendingUserEscalation()).toBeUndefined();
   });
 });
 
@@ -231,17 +209,16 @@ describe('RouterSession independent instances', () => {
     expect(s2.getBlacklistedModels().has('model-1')).toBe(false);
   });
 
-  // The serving path resolves blacklists, escalation, and the incumbent from
-  // the session it was handed. An injected session that wrote through to the
-  // default one would let a second session inherit the first's exclusions and
-  // incumbent, and would survive a reset of the instance that owns them.
+  // The serving path resolves blacklists and the incumbent from the session
+  // it was handed. An injected session that wrote through to the default one
+  // would let a second session inherit the first's exclusions and incumbent,
+  // and would survive a reset of the instance that owns them.
   it('keeps an injected session out of the default session', () => {
     resetRouterSession();
     const isolated = new RouterSession();
 
     isolated.blacklistModel('alpha/failed');
     isolated.blacklistProvider('alpha');
-    isolated.setPendingUserEscalation({ target: 'plan', fromModel: 'alpha/failed' });
     isolated.setLastDecision({
       dimension: 'implement',
       chosen: 'beta/strong',
@@ -255,25 +232,7 @@ describe('RouterSession independent instances', () => {
 
     expect(getBlacklistedModels().has('alpha/failed')).toBe(false);
     expect(getBlacklistedProviders().has('alpha')).toBe(false);
-    expect(peekPendingUserEscalation()).toBeUndefined();
     expect(getLastChosenRegistryId()).toBeUndefined();
-  });
-
-  // A pending request must be visible to, and consumable by, the same owner:
-  // peeking one session and consuming another silently drops the request.
-  it('peeks and consumes a pending escalation on the same session', () => {
-    const isolated = new RouterSession();
-    isolated.setPendingUserEscalation({ target: 'review', fromModel: 'beta/strong' });
-
-    expect(isolated.peekPendingUserEscalation()).toEqual({
-      target: 'review',
-      fromModel: 'beta/strong',
-    });
-    expect(isolated.consumePendingUserEscalation()).toEqual({
-      target: 'review',
-      fromModel: 'beta/strong',
-    });
-    expect(isolated.peekPendingUserEscalation()).toBeUndefined();
   });
 });
 

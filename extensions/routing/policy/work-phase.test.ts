@@ -53,19 +53,17 @@ describe('terminal capability math', () => {
   it('engages inspect only with explicit non-defaulted evidence', () => {
     expect(deriveInitialPhase(terminal(), 'frontier', {
       resolvedDimension: 'implement',
-      capabilityRepickActive: false,
     })).toEqual({ phase: 'inspect', phaseReason: 'explicit-compound-inspect', multiWorkEngaged: true });
 
     expect(deriveInitialPhase(terminal({ discountEligible: false }), 'frontier', {
       resolvedDimension: 'implement',
-      capabilityRepickActive: false,
     }).multiWorkEngaged).toBe(false);
   });
 });
 
 describe('scoring policy', () => {
   it('lowers only the inspect floor by one band while inspecting', () => {
-    expect(scoringPolicyForState(engagedState(), 'implement', false)).toMatchObject({
+    expect(scoringPolicyForState(engagedState(), 'implement')).toMatchObject({
       terminalFloor: 0.85,
       inspectFloor: 0.70,
       phase: 'inspect',
@@ -76,14 +74,12 @@ describe('scoring policy', () => {
     expect(scoringPolicyForState(
       engagedState({ phase: 'mutate', phaseReason: 'stronger-routing-owner' }),
       'implement',
-      false,
     )).toMatchObject({ terminalFloor: 0.85, inspectFloor: 0.85 });
   });
 
-  it('supplies no policy without engagement, on another dimension, or under a repick', () => {
-    expect(scoringPolicyForState(engagedState({ multiWorkEngaged: false }), 'implement', false)).toBeUndefined();
-    expect(scoringPolicyForState(engagedState(), 'review', false)).toBeUndefined();
-    expect(scoringPolicyForState(engagedState(), 'implement', true)).toBeUndefined();
+  it('supplies no policy without engagement or on another dimension', () => {
+    expect(scoringPolicyForState(engagedState({ multiWorkEngaged: false }), 'implement')).toBeUndefined();
+    expect(scoringPolicyForState(engagedState(), 'review')).toBeUndefined();
   });
 });
 
@@ -99,24 +95,19 @@ describe('nextProviderInvocation', () => {
 
 describe('advanceForRoutingOwner', () => {
   it('forces mutate when a stronger owner claims an inspecting intent', () => {
-    const next = advanceForRoutingOwner(engagedState({ phase: 'inspect' }), 'review', false);
+    const next = advanceForRoutingOwner(engagedState({ phase: 'inspect' }), 'review');
     expect(next.phase).toBe('mutate');
     expect(next.phaseReason).toBe('stronger-routing-owner');
   });
 
-  it('forces mutate under an active capability repick even on the implement dimension', () => {
-    const next = advanceForRoutingOwner(engagedState({ phase: 'inspect' }), 'implement', true);
-    expect(next.phase).toBe('mutate');
-  });
-
   it('leaves an already-mutating or unengaged state untouched', () => {
     const mutating = engagedState({ phase: 'mutate', phaseReason: 'terminal-implement' });
-    expect(advanceForRoutingOwner(mutating, 'review', false)).toMatchObject({
+    expect(advanceForRoutingOwner(mutating, 'review')).toMatchObject({
       phase: 'mutate',
       phaseReason: 'terminal-implement',
     });
     const unengaged = engagedState({ multiWorkEngaged: false, phase: 'inspect' });
-    expect(advanceForRoutingOwner(unengaged, 'review', false)).toMatchObject({ phase: 'inspect' });
+    expect(advanceForRoutingOwner(unengaged, 'review')).toMatchObject({ phase: 'inspect' });
   });
 });
 
