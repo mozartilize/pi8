@@ -7,8 +7,9 @@ import {
   type ExtensionCommandContext,
 } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
+import { resolveManualModel } from '../serve/manual-model.js';
 
-import { saveApiKey, loadConfig, getConfigPath, saveBlacklist } from '../config.js';
+import { saveApiKey, loadConfig, getConfigPath, saveBlacklist, saveSemi } from '../config.js';
 import { buildModelFilter } from '../routing/policy/allowlist.js';
 import { syncBenchmarks, syncSummary } from '../bench/sync.js';
 import type { AdapterName } from '../adapters/index.js';
@@ -272,10 +273,12 @@ async function handleStatusCommand(
 ): Promise<void> {
   const { lastDecision, lastServed } = getProviderState(session);
   const manualStatus = `Manual override: ${session.getManualModel() ?? 'none (auto routing)'}`;
+  const semiStatus = `Semi-auto: ${loadConfig().semi ? 'on (ask before model switches)' : 'off'}`;
   const store = loadStore();
   if (!store || !store.syncedAt) {
     const msg = [
       manualStatus,
+      semiStatus,
       'Auto-router has no benchmark data — run `/router-sync <key>` with a free key from https://artificialanalysis.ai/.',
     ].join('\n');
     ctx.ui.notify(msg, 'warning');
@@ -293,6 +296,7 @@ async function handleStatusCommand(
   const covered = active.filter((m) => registryIds.has(m.registryId)).length;
   const lines = [
     manualStatus,
+    semiStatus,
     `Synced: ${new Date(store.syncedAt).toISOString()}${stale ? ' (stale)' : ''}`,
     `Active models in store: ${active.length}`,
     `Registry coverage: ${covered}/${registryIds.size} models have benchmark data`,
@@ -545,7 +549,7 @@ async function handleManualCommand(
 ): Promise<void> {
   const tokens = splitArgs(args);
   if (tokens.length > 1) {
-    ctx.ui.notify('Usage: /router-manual [provider/model|resume]', 'error');
+      ctx.ui.notify('Usage: /router-manual [provider/model[:thinking]|resume]', 'error');
     return;
   }
 
@@ -555,7 +559,7 @@ async function handleManualCommand(
       const current = session.getManualModel() ?? 'none (auto routing)';
       const models = manualModelIds(ctx);
       ctx.ui.notify(
-        [`Manual override: ${current}`, '', ...models, '', 'Usage: /router-manual <provider/model|resume>'].join('\n'),
+        [`Manual override: ${current}`, '', ...models, '', 'Usage: /router-manual <provider/model[:thinking]|resume>'].join('\n'),
         'info',
       );
       return;
@@ -575,8 +579,7 @@ async function handleManualCommand(
     return;
   }
 
-  const routable = manualModelIds(ctx);
-  if (!routable.includes(selection)) {
+  if (!resolveManualModel(selection, manualModelList(ctx))) {
     ctx.ui.notify(
       `Model is not routable: ${selection}. Run /router-manual with no argument to choose from the available models.`,
       'error',
@@ -586,6 +589,29 @@ async function handleManualCommand(
 
   session.setManualModel(selection);
   ctx.ui.notify(`Manual override: ${selection} (this session, pinned-only).`, 'info');
+}
+
+async function handleSemiCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+  const token = splitArgs(args)[0]?.toLowerCase();
+  if (token === undefined) {
+    ctx.ui.notify(
+      `Semi-auto: ${loadConfig().semi ? 'on (ask before model switches)' : 'off'}. Usage: /router-semi [on|off]`,
+      'info',
+    );
+    return;
+  }
+  if (token !== 'on' && token !== 'off') {
+    ctx.ui.notify('Usage: /router-semi [on|off]', 'error');
+    return;
+  }
+  const enabled = token === 'on';
+  saveSemi(enabled);
+  ctx.ui.notify(
+    enabled
+      ? 'Semi-auto on: ask before switching away from the last served model.'
+      : 'Semi-auto off: route without confirmation.',
+    'info',
+  );
 }
 
 async function handleModelsCommand(ctx: ExtensionCommandContext): Promise<void> {
@@ -735,7 +761,7 @@ export function registerCommands(
   });
 
   pi.registerCommand('router-manual', {
-    description: 'Pin one model for this session: /router-manual [provider/model|resume]',
+    description: 'Pin one model for this session: /router-manual [provider/model[:thinking]|resume]',
     getArgumentCompletions: (prefix) => {
       try {
         return manualModelCatalogContext
@@ -749,6 +775,22 @@ export function registerCommands(
       updateManualModelCompletionContext(ctx);
       return handleManualCommand(args, ctx, session);
     }),
+  });
+
+  pi.registerCommand('router-semi', {
+    description: 'Ask before model switches: /router-semi [on|off]',
+    getArgumentCompletions: (prefix) => {
+      try {
+        const entries = [
+          { value: 'on', label: 'on', description: 'ask before model switches' },
+          { value: 'off', label: 'off', description: 'route without confirmation' },
+        ].filter((entry) => entry.value.startsWith(prefix.trim().toLowerCase()));
+        return entries.length > 0 ? entries : null;
+      } catch {
+        return null;
+      }
+    },
+    handler: safeCommand('/router-semi', (args, ctx) => handleSemiCommand(args, ctx)),
   });
 
   pi.registerCommand('router-status', {

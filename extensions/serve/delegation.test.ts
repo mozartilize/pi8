@@ -78,6 +78,31 @@ describe('runDelegationLoop contracts', () => {
     expect(h.output[1]).toEqual({ type: 'text_delta', delta: 'served' });
   });
 
+  it('asks beforeFallback only for a real model change, not a missing chain entry', async () => {
+    const asked: Array<[string, string]> = [];
+    const h = createDelegationHarness({
+      chain: ['missing/ghost', 'alpha/first', 'beta/second'],
+      scripts: {
+        'alpha/first': [[{ type: 'error', error: { errorMessage: '421' } }]],
+        'beta/second': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+      registry: {
+        find: (provider: string, id: string) =>
+          provider === 'missing' ? undefined : registryModel(`${provider}/${id}`) as never,
+      },
+      beforeFallback: async (candidateId, previousId) => {
+        asked.push([candidateId, previousId]);
+        return candidateId;
+      },
+    });
+
+    expect((await h.run()).success).toBe(true);
+    // missing/ghost never attempted, so the first real model is not a switch.
+    // The hop from alpha/first → beta/second is.
+    expect(asked).toEqual([['beta/second', 'alpha/first']]);
+    expect(h.attempts).toEqual(['alpha/first', 'beta/second']);
+  });
+
   it('falls back when a candidate spams events before meaningful output', async () => {
     // The per-attempt buffer is capped so a provider that floods lifecycle
     // events until the meaningful-output deadline fails the candidate

@@ -218,6 +218,9 @@ export class RouterSession {
   private decision: RoutingDecision | undefined;
   private chosenRegistryId: string | undefined;
   private served: ServedInfo | undefined;
+  /** Preserve the incumbent while the next provider invocation is in flight. */
+  private previousServed: ServedInfo | undefined;
+  private semiHold: { intentKey: string; model: string } | undefined;
   private notifiedModel: string | undefined;
   /**
    * Session-scoped manual model pin (`provider/id`) set via `/router-manual`.
@@ -276,6 +279,24 @@ export class RouterSession {
 
   getLastServed(): ServedInfo | undefined {
     return this.served;
+  }
+
+  rotateServedForNewTurn(): void {
+    if (this.served) this.previousServed = this.served;
+    this.served = undefined;
+  }
+
+  getPreviousServed(): ServedInfo | undefined {
+    return this.previousServed;
+  }
+
+  setSemiHold(intentKey: string, model: string): void {
+    this.semiHold = { intentKey, model };
+  }
+
+  getSemiHold(intentKey: string): string | undefined {
+    if (this.semiHold?.intentKey !== intentKey) this.semiHold = undefined;
+    return this.semiHold?.model;
   }
 
   setLastServed(s: ServedInfo | undefined): void {
@@ -581,6 +602,8 @@ export class RouterSession {
     this.sessionGen += 1;
     this.decision = undefined;
     this.chosenRegistryId = undefined;
+    this.previousServed = undefined;
+    this.semiHold = undefined;
     this.served = undefined;
     this.notifiedModel = undefined;
     this.manualModel = undefined;

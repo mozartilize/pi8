@@ -63,6 +63,11 @@ export interface PersistedConfig {
    */
   prompt?: boolean;
   /**
+   * Semi-automatic mode: ask before switching away from the previously-served
+   * model. Default false. See AutoRouterConfig.semi.
+   */
+  semi?: boolean;
+  /**
    * Allowlist of routable models as `provider/id` patterns, e.g.
    * `["github-copilot/*", "opencode-go/deepseek-v4-pro"]`. Absent or empty
    * means every registry model is routable. See allowlist.ts.
@@ -213,6 +218,7 @@ export function loadConfig(): AutoRouterConfig {
       DEFAULT_DEPTH_ESCALATION_TOKENS,
     ),
     prompt: typeof persisted.prompt === 'boolean' ? persisted.prompt : true,
+    semi: typeof persisted.semi === 'boolean' ? persisted.semi : false,
     models: stringList(persisted.models),
     blacklist: Array.isArray(persisted.blacklist)
       ? (stringList(persisted.blacklist) ?? [])
@@ -271,5 +277,13 @@ export function saveBlacklist(patterns: readonly string[]): void {
   const path = getConfigPath();
   const persisted = readPersisted(path);
   const next: PersistedConfig = { ...withoutRemovedKeys(persisted), blacklist: [...patterns] };
+  writeJsonAtomic(path, next, 0o600);
+}
+
+/** Persist semi-automatic confirmation (`semi` in config.json). */
+export function saveSemi(enabled: boolean): void {
+  const path = getConfigPath();
+  const persisted = readPersisted(path);
+  const next: PersistedConfig = { ...withoutRemovedKeys(persisted), semi: enabled };
   writeJsonAtomic(path, next, 0o600);
 }

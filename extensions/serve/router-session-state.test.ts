@@ -89,6 +89,24 @@ describe('router session state', () => {
     expect(session.resolveResumeDecision('entry-1')).toBeUndefined();
   });
 
+  it('preserves the last served model across the per-turn reset', () => {
+    const session = new RouterSession();
+    session.setLastServed({ registryId: 'alpha/first', viaFallback: false, accumulatedCost: 0 });
+    session.rotateServedForNewTurn();
+    expect(session.getLastServed()).toBeUndefined();
+    expect(session.getPreviousServed()?.registryId).toBe('alpha/first');
+    session.reset();
+    expect(session.getPreviousServed()).toBeUndefined();
+  });
+
+  it('scopes a semi hold to one user entry', () => {
+    const session = new RouterSession();
+    session.setSemiHold('entry-1', 'beta/second');
+    expect(session.getSemiHold('entry-1')).toBe('beta/second');
+    expect(session.getSemiHold('entry-2')).toBeUndefined();
+    expect(session.getSemiHold('entry-1')).toBeUndefined();
+  });
+
   it('does not resume while a pin is still active', () => {
     const session = new RouterSession();
     session.setLastDecision(routingDecision(['beta/strong']));

@@ -254,7 +254,46 @@ describe('/router-manual', () => {
     await handlers.get('router-status')!('', ctx);
 
     expect(messages.at(-1)).toContain('Manual override: alpha/first');
+    expect(messages.at(-1)).toContain('Semi-auto: off');
     expect(messages.at(-1)).toContain('no benchmark data');
+  });
+
+  it('pins provider/id:thinking when the model supports that level', async () => {
+    const session = new RouterSession();
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx } = fakeCtx([
+      { provider: 'alpha', id: 'first', reasoning: true, thinkingLevelMap: { high: 'high' } } as never,
+    ]);
+
+    await handlers.get('router-manual')!('alpha/first:high', ctx);
+
+    expect(session.getManualModel()).toBe('alpha/first:high');
+  });
+
+  it('rejects an unsupported thinking suffix without changing the pin', async () => {
+    const session = new RouterSession();
+    session.setManualModel('alpha/first');
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, messages } = fakeCtx(models);
+
+    await handlers.get('router-manual')!('alpha/first:high', ctx);
+
+    expect(session.getManualModel()).toBe('alpha/first');
+    expect(messages.at(-1)).toContain('not routable');
+  });
+
+  it('shows semi-auto on in status when configured', async () => {
+    writeFileSync(getConfigPath(), JSON.stringify({ semi: true }), 'utf8');
+    const session = new RouterSession();
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, messages } = fakeCtx(models);
+
+    await handlers.get('router-status')!('', ctx);
+
+    expect(messages.at(-1)).toContain('Semi-auto: on');
   });
 
   it('rejects a model outside the routable registry without changing the pin', async () => {
@@ -268,6 +307,30 @@ describe('/router-manual', () => {
 
     expect(session.getManualModel()).toBe('alpha/first');
     expect(messages.at(-1)).toContain('Model is not routable');
+  });
+});
+
+describe('/router-semi', () => {
+  it('reports the current value and persists on/off', async () => {
+    const { pi, handlers, commands } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+
+    await handlers.get('router-semi')!('', ctx);
+    expect(messages.at(-1)).toContain('Semi-auto: off');
+
+    await handlers.get('router-semi')!('on', ctx);
+    expect(loadConfig().semi).toBe(true);
+    expect(messages.at(-1)).toContain('Semi-auto on');
+
+    await handlers.get('router-semi')!('off', ctx);
+    expect(loadConfig().semi).toBe(false);
+    expect(messages.at(-1)).toContain('Semi-auto off');
+
+    expect(commands.get('router-semi')!.getArgumentCompletions!('o')).toEqual([
+      { value: 'on', label: 'on', description: 'ask before model switches' },
+      { value: 'off', label: 'off', description: 'route without confirmation' },
+    ]);
   });
 });
 

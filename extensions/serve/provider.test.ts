@@ -854,6 +854,211 @@ describe('provider orchestration', () => {
   });
 });
 
+describe('semi-automatic confirmation gate', () => {
+  // Force `alpha/first` to be the routed pick so a `beta/second` incumbent is a
+  // real switch; `beta/second` stays a routable candidate (it just loses on
+  // quality), so the "keep" path has something to serve.
+  const semiConfig = {
+    semi: true,
+    consultRouter: false,
+    dimensionWeights: { implement: { quality: 1, cost: 0, speed: 0 } },
+  };
+  // Both measured (no unknown-quality upgrade): quality weight 1 then makes
+  // alpha/first the unambiguous winner over the weaker beta/second.
+  const semiBenchmarks = [
+    {
+      registryId: 'alpha/first',
+      benchSlug: 'a',
+      active: true,
+      source: 'test',
+      quality: { intelligence: 100, coding: 100, agenticCoding: 100 },
+    },
+    {
+      registryId: 'beta/second',
+      benchSlug: 'b',
+      active: true,
+      source: 'test',
+      quality: { intelligence: 10, coding: 10, agenticCoding: 10 },
+    },
+  ] as unknown as Parameters<typeof setupProviderTest>[0]['benchmarks'];
+  const implementTurn = {
+    messages: [{ role: 'user', content: 'implement the parser' }],
+  } as unknown as Context;
+
+  type UiMock = {
+    select: ReturnType<typeof vi.fn>;
+    input: ReturnType<typeof vi.fn>;
+    notify: ReturnType<typeof vi.fn>;
+  };
+  function makeUi(over: Partial<UiMock> = {}): UiMock {
+    return {
+      select: vi.fn(async () => undefined),
+      input: vi.fn(async () => undefined),
+      notify: vi.fn(),
+      ...over,
+    };
+  }
+  async function semiHarness(ui?: UiMock): Promise<ProviderTestHarness> {
+    return setupProviderTest({
+      dir: temp.path,
+      config: semiConfig,
+      benchmarks: semiBenchmarks,
+      ...(ui ? { ctx: { hasUI: true, ui: ui as unknown as ExtensionContext['ui'] } } : {}),
+    });
+  }
+  const incumbent = () => ({ registryId: 'beta/second', viaFallback: false, accumulatedCost: 0 });
+
+  it('accepts the switch when the user picks "Use <new>"', async () => {
+    const ui = makeUi({ select: vi.fn(async (_t: string, opts: string[]) => opts[0]) });
+    const harness = await semiHarness(ui);
+    harness.session.setLastServed(incumbent());
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(implementTurn);
+
+    expect(ui.select).toHaveBeenCalledTimes(1);
+    expect(ui.input).not.toHaveBeenCalled();
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    // "Use" keeps the router's own cause; it is not a hold or a pin.
+    expect(harness.getProviderState().lastDecision?.cause).not.toBe('semi-hold');
+    expect(harness.getProviderState().lastDecision?.cause).not.toBe('manual-override');
+  });
+
+  it('keeps the incumbent for this turn only when the user declines', async () => {
+    const ui = makeUi({ select: vi.fn(async (_t: string, opts: string[]) => opts[1]) });
+    const harness = await semiHarness(ui);
+    harness.session.setLastServed(incumbent());
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(implementTurn);
+
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.cause).toBe('semi-hold');
+    expect(decision?.chosen).toBe('beta/second');
+    expect(decision?.fallbackChain).toEqual(['beta/second']);
+    expect(harness.streamedModels()).toEqual(['beta/second']);
+    // A hold is transient: it must not create a persistent manual pin.
+    expect(harness.session.getManualModel()).toBeUndefined();
+  });
+
+  it('pins a specific model (acts as /router-manual) when the user picks one', async () => {
+    const ui = makeUi({
+      select: vi.fn(async (_t: string, opts: string[]) => opts[2]),
+      input: vi.fn(async () => 'beta/second'),
+    });
+    const harness = await semiHarness(ui);
+    harness.session.setLastServed(incumbent());
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(implementTurn);
+
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.cause).toBe('manual-override');
+    expect(decision?.chosen).toBe('beta/second');
+    expect(harness.streamedModels()).toEqual(['beta/second']);
+    // The pin persists so subsequent turns take the manual path.
+    expect(harness.session.getManualModel()).toBe('beta/second');
+  });
+
+  it('does not prompt on the first pick (no incumbent to switch from)', async () => {
+    const ui = makeUi();
+    const harness = await semiHarness(ui);
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(implementTurn);
+
+    expect(ui.select).not.toHaveBeenCalled();
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+  });
+
+  it('does not prompt when the routed pick equals the incumbent', async () => {
+    const ui = makeUi();
+    const harness = await semiHarness(ui);
+    harness.session.setLastServed({ registryId: 'alpha/first', viaFallback: false, accumulatedCost: 0 });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(implementTurn);
+
+    expect(ui.select).not.toHaveBeenCalled();
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+  });
+
+  it('is a no-op without an interactive UI', async () => {
+    const harness = await semiHarness(); // no ctx.ui
+    harness.session.setLastServed(incumbent());
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(implementTurn);
+
+    // Semi cannot ask, so it must degrade to the router's pick, never block.
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.getProviderState().lastDecision?.cause).not.toBe('semi-hold');
+  });
+
+  it('cancels the turn when the switch prompt is dismissed', async () => {
+    const ui = makeUi();
+    const harness = await semiHarness(ui);
+    harness.session.setLastServed(incumbent());
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(implementTurn);
+
+    expect(ui.select).toHaveBeenCalledTimes(1);
+    expect(harness.streamedModels()).toEqual([]);
+    expect(harness.outStream.events.some((event) => event.type === 'error')).toBe(true);
+  });
+
+  it('pins provider/id:thinking as a manual override', async () => {
+    const ui = makeUi({
+      select: vi.fn(async (_t: string, opts: string[]) => opts[2]),
+      input: vi.fn(async () => 'beta/second:high'),
+    });
+    const harness = await semiHarness(ui);
+    harness.session.setLastServed(incumbent());
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(implementTurn);
+
+    expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
+    expect(harness.session.getManualModel()).toBe('beta/second:high');
+    expect(harness.streamedModels()).toEqual(['beta/second']);
+    expect(harness.delegatedCall().options?.reasoning).toBe('high');
+  });
+
+  it('asks before serving a fallback candidate', async () => {
+    const ui = makeUi({ select: vi.fn(async (_t: string, opts: string[]) => opts[0]) });
+    const harness = await semiHarness(ui);
+    harness.scriptReply((model) => {
+      if (`${model.provider}/${model.id}` === 'alpha/first') {
+        return asStream([{ type: 'error', error: { errorMessage: '421' } }]);
+      }
+      return asStream([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    });
+
+    await harness.serve(implementTurn);
+
+    expect(ui.select).toHaveBeenCalledTimes(1);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
+  });
+
+  it('cancels a fallback switch when the user declines', async () => {
+    const ui = makeUi({ select: vi.fn(async (_t: string, opts: string[]) => opts[1]) });
+    const harness = await semiHarness(ui);
+    harness.scriptReply((model) => {
+      if (`${model.provider}/${model.id}` === 'alpha/first') {
+        return asStream([{ type: 'error', error: { errorMessage: '421' } }]);
+      }
+      return asStream([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    });
+
+    await harness.serve(implementTurn);
+
+    expect(ui.select).toHaveBeenCalledTimes(1);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.outStream.events.some((event) => event.type === 'error')).toBe(true);
+  });
+});
+
 describe('incumbent effort floor carries across invocations', () => {
   // The effort floor is a secondary field on a decision (it does not change
   // `dimension`), so a naive carry that reads only `getLastDecision()?.dimension`

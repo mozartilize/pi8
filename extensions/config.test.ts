@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { loadConfig, saveBlacklist, saveApiKey, getConfigPath } from './config.js';
+import { loadConfig, saveBlacklist, saveApiKey, getConfigPath, saveSemi } from './config.js';
 import {
   DEFAULT_DEPTH_ESCALATION_TOKENS,
   DEFAULT_DIMENSION_WEIGHTS,
@@ -97,6 +97,26 @@ describe('prompt option', () => {
   it('respects an explicit false in the config file', () => {
     writeFileSync(getConfigPath(), JSON.stringify({ prompt: false }), 'utf8');
     expect(loadConfig().prompt).toBe(false);
+  });
+});
+
+describe('semi option', () => {
+  it('defaults to false when absent', () => {
+    expect(loadConfig().semi).toBe(false);
+  });
+
+  it('respects an explicit true in the config file', () => {
+    writeFileSync(getConfigPath(), JSON.stringify({ semi: true }), 'utf8');
+    expect(loadConfig().semi).toBe(true);
+  });
+});
+
+describe('saveSemi', () => {
+  it('persists on and off through loadConfig', () => {
+    saveSemi(true);
+    expect(loadConfig().semi).toBe(true);
+    saveSemi(false);
+    expect(loadConfig().semi).toBe(false);
   });
 });
 

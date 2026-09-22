@@ -115,6 +115,8 @@ export interface DelegationHarnessOptions {
   getProviderAuth?: (provider: string) => Promise<{ auth?: { baseUrl?: string } } | undefined>;
   /** Live routable set, required for pre-output capability hops. */
   candidates?: Candidate[];
+  /** Confirm a fallback before any provider request; undefined cancels the turn. */
+  beforeFallback?: (candidateId: string, previousId: string) => Promise<string | undefined>;
 }
 
 export interface DelegationHarness {
@@ -162,7 +164,7 @@ function buildRegistry(
 }
 
 export function createDelegationHarness(options: DelegationHarnessOptions): DelegationHarness {
-  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates } = options;
+  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates, beforeFallback } = options;
 
   // Per-model ordered attempt queues; each entry is consumed on one streamSimple call.
   type ScriptEntry = readonly unknown[] | Error | AsyncIterable<unknown>;
@@ -259,6 +261,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
           notifyOnRoute: false,
           session,
           candidates,
+          beforeFallback,
         },
         recordingStream as unknown as Parameters<typeof runDelegationLoop>[1],
       );

@@ -60,7 +60,8 @@ All `router/auto` intents run through this same pipeline. For an explicit compou
 | `/router-sync [key]` | Fetch fresh benchmark data |
 | `/router-sync embedding [--force]` | Download the E5-small embedding model (~135 MB) for multilingual classification |
 | `/router-status` | Show freshness, coverage, manual-pin state, last decision |
-| `/router-manual [provider/model\|resume]` | Pin one model for this session; Space shows searchable model completions, Enter opens Pi's native `/model` picker, and `resume` reuses the pre-pin route for the next turn |
+| `/router-manual [provider/model[:thinking]\|resume]` | Pin one model for this session; Space shows searchable model completions, Enter opens Pi's native `/model` picker, and `resume` reuses the pre-pin route for the next turn |
+| `/router-semi [on\|off]` | Ask before switching away from the last served model (persists `semi` in config) |
 | `/router-why` | Explain why the last model was chosen |
 | `/router-models` | Show allowlist and matching models |
 | `/router-agents` | Show which model each subagent role resolves to |
@@ -79,6 +80,7 @@ All `router/auto` intents run through this same pipeline. For an explicit compou
   "blacklist": ["*/gemini-experimental"], // persisted exclude patterns
   "consultRouter": true,                 // await and apply semantic assessment
   "prompt": true,                        // notify when model switches
+  "semi": false,                         // ask before switching away from the last served model
   "switchMargin": 0.15,                 // cache-preservation bonus for incumbent
   "routerContextWindow": 200000,         // window advertised for router/auto (default: largest routable)
   "debug": false,                        // enable timing log
@@ -90,6 +92,7 @@ All `router/auto` intents run through this same pipeline. For an explicit compou
 
 - `models` / `blacklist`: `*` wildcards, case-insensitive. Bare provider name = `provider/*`.
 - `consultRouter`: when `true`, awaits one bounded assessment per real user entry and applies its verdict under strict safety caps. Set `false` for fully local routing with no assessment egress.
+- `semi`: when `true`, the router asks before switching away from the model that served the previous turn (Yes / keep this turn / pin `provider/model-id[:thinking]`, which acts as `/router-manual`). No prompt on the first pick of a session, and a no-op without an interactive UI.
 - `switchMargin`: how strongly the router prefers keeping the current model to preserve prompt cache. Set to `0` to disable.
 - `routerContextWindow`: the context window advertised for the synthetic `router/auto` model. Pi tunes compaction to the session model's window, so the default (the largest window among models your `models`/`blacklist` config actually lets the router pick) delays compaction on long sessions and biases them toward large-window models as context grows past each smaller model's window. Set this to the effective window you want to route within to make Pi compact earlier and keep cheaper, smaller-window models eligible longer. An override above the largest routable window is clamped down to it — you cannot advertise capacity no routable model actually has.
 - `debug`: `true` or a file path enables per-turn millisecond timing logs.

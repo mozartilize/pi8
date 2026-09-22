@@ -128,11 +128,13 @@ Tính khả dụng của provider chỉ được xác định tại thời đi�
 
 ### Manual pin theo session
 
-`/router-manual [provider/model|resume]` vẫn giữ `router/auto` là model đang hoạt động của Pi và chỉ lưu pin trong `RouterSession`; `reset()` sẽ xóa pin. Manual turn bỏ qua assessment dispatch, giới hạn việc chấm điểm vào các candidate của model đã pin, ghi cause `manual-override`, và rút fallback chain xuống effort variant được chọn. Vì vậy delegation chỉ có một model trong chain: failure được báo ra thay vì thay bằng model khác (chính sách retry cùng model thông thường vẫn áp dụng).
+`/router-manual [provider/model[:thinking]|resume]` vẫn giữ `router/auto` là model đang hoạt động của Pi và chỉ lưu pin trong `RouterSession`; `reset()` sẽ xóa pin. Manual turn bỏ qua assessment dispatch, giới hạn việc chấm điểm vào các candidate của model đã pin, ghi cause `manual-override`, và rút fallback chain xuống effort variant được chọn. Vì vậy delegation chỉ có một model trong chain: failure được báo ra thay vì thay bằng model khác (chính sách retry cùng model thông thường vẫn áp dụng).
 
 `/router-manual resume` rời manual mode và tái sử dụng route trước khi pin. Lần pin đầu tiên chụp lại auto decision đang có hiệu lực (`resumeSnapshot`); `resume` kích hoạt snapshot đó và xóa pending trajectory escalation thu thập dưới pin để automatic routing không hành động theo evidence cũ. Router turn kế tiếp serve thẳng chosen model và fallback chain của snapshot — không classify, assessment hay scoring — dưới cause `resume`, đã lọc theo các entry trong chain còn routable (nếu rỗng thì rơi về routing thông thường). One-shot này giới hạn trong đúng một user entry qua `resumeIntentKey`: các tool-loop continuation cùng entry tái dùng nó, entry kế tiếp làm hết hiệu lực và tính lại. Khi không có pin (hoặc snapshot đã kích hoạt), `resume` là no-op.
 
 Argument completer của command cung cấp danh sách model có thể tìm kiếm kiểu `/model ` sau khi nhấn Space. Command không có argument tái sử dụng `ModelSelectorComponent` do Pi export (UI search/navigation native của `/model`). Vì pin là override tường minh, danh sách phản ánh chính xác `/model` của Pi — model theo session scope khi session bị scope, ngược lại là mọi model đã xác thực trong registry — và cố tình **không** áp dụng allowlist, config/session blacklist, usage-limit hay scoped filter của router; chỉ loại provider tổng hợp `router/*`. Khi serve một pin nằm ngoài candidate pool của router, pin được expand ngay từ registry (bỏ qua các filter routing lúc build); các runtime exclusion trực tiếp vẫn áp dụng, đúng với hợp đồng pinned-only, surface-failure. Không ghi gì vào `settings.json` hoặc config.
+
+Khi `semi: true`, pick đã chấm điểm khác với model vừa serve sẽ chờ `ctx.ui.select` trước khi delegate: Yes dùng model mới, No giữ incumbent cho đúng user entry này (cause `semi-hold`; tool-loop continuation cùng entry tái dùng), và `provider/model-id[:thinking]` cụ thể gài pin session như `/router-manual`. Fallback sau lần thử thất bại hỏi lại. Dismiss/abort hủy turn thay vì chuyển. Session không interactive bỏ qua cổng này. `/router-semi [on|off]` ghi cờ này.
 
 ### Các lỗi trước khi có câu trả lời
 
@@ -277,7 +279,7 @@ Routing state được đóng gói thành các domain aggregate có thể khởi
 
 ### Decision log
 
-Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict và record `assessment-metric`. Các giá trị cause: `heuristic`, `continuation-context`, `router-consult`, `embedding-classify`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `context-depth`, `self-healing-gap`, `manual-override`, `resume`.
+Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): dimension, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict và record `assessment-metric`. Các giá trị cause: `heuristic`, `continuation-context`, `router-consult`, `embedding-classify`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `context-depth`, `self-healing-gap`, `manual-override`, `resume`, `semi-hold`.
 
 ### Timing log
 
@@ -302,6 +304,7 @@ Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 | `depthEscalation` | `true` | Tự động nâng khi context sâu |
 | `depthEscalationTokens` | `32768` | Ngưỡng context token |
 | `prompt` | `true` | Thông báo TUI khi đổi model |
+| `semi` | `false` | Hỏi trước khi chuyển khỏi model vừa serve |
 | `switchMargin` | `0.15` | Giới hạn cache-preservation cho incumbent |
 | `debug` | `false` | Đường dẫn timing log hoặc `true` |
 | `syntheticPrefixes` | `[]` | Các literal prefix đánh dấu synthetic message |

@@ -242,7 +242,8 @@ export type DecisionCause =
   | 'context-depth'
   | 'self-healing-gap'
   | 'manual-override'
-  | 'resume';
+  | 'resume'
+  | 'semi-hold';
 
 export interface RoutingDecision {
   dimension: Dimension;
@@ -418,6 +419,14 @@ export interface AutoRouterConfig {
    * turn (default true). The footer status widget updates regardless.
    */
   prompt: boolean;
+  /**
+   * Semi-automatic mode (default false). When true and the router would switch
+   * away from the model that served the previous turn, the user is asked to
+   * confirm the switch before delegating: accept the new model, keep the
+   * current one for this turn only, or pin a specific model (acts as
+   * `/router-manual`). Requires an interactive UI; a no-op without one.
+   */
+  semi: boolean;
   /**
    * Allowlist of routable models as `provider/id` patterns, e.g.
    * `["github-copilot/*", "opencode-go/deepseek-v4-pro"]`.

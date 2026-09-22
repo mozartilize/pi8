@@ -40,12 +40,14 @@ import {
   buildCandidate,
   buildRouterThinkingLevelMap,
   candidateKey,
+  parseCandidateKey,
   isThinkingSupportedByRegistryModel,
   resolveThinkingLevel,
   MODEL_THINKING_LEVELS,
   type RegistryModelInfo,
 } from '../routing/score/scorer.js';
 import { pickBaseline } from './baseline.js';
+import { resolveManualModel } from './manual-model.js';
 import {
   completeMeasuredRow,
   effortDropsPerStep,
@@ -61,7 +63,7 @@ import {
   getCurrentModelRegistry,
 } from './router-session-state.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
-import { runDelegationLoop } from './delegation.js';
+import { runDelegationLoop, type DelegationOptions } from './delegation.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import { resolveRoutingDecision, wouldDepthEscalate } from '../routing/policy/routing-policy.js';
 import {
@@ -800,14 +802,15 @@ function resolveTurnEffort(args: {
   chosenCandidate: Candidate | undefined;
   options: SimpleStreamOptions | undefined;
   decision: { dimension: Dimension; chosen: string };
+  explicitThinking?: ModelThinkingLevel;
   pi: ExtensionAPI;
   session: RouterSession;
 }) {
-  const requestedReasoning = typeof args.options?.reasoning === 'string' ? args.options.reasoning : undefined;
-  const inheritedReasoning = requestedReasoning === args.session.getLastResolvedThinkingLevel();
+  const requestedReasoning = args.explicitThinking ?? (typeof args.options?.reasoning === 'string' ? args.options.reasoning : undefined);
+  const inheritedReasoning = args.explicitThinking == null && requestedReasoning === args.session.getLastResolvedThinkingLevel();
   const reasoning = resolveThinkingLevel(
     args.chosenCandidate,
-    inheritedReasoning ? undefined : requestedReasoning,
+    inheritedReasoning ? undefined : requestedReasoning as ThinkingLevel | undefined,
     args.decision.dimension,
   );
   args.session.setLastResolvedThinkingLevel(reasoning);
@@ -946,7 +949,7 @@ async function prepareRouterTurn(args: {
     session,
   });
   const routableCandidates = applyRuntimeExclusions(candidates, session);
-  if (routableCandidates.length === 0) return noRoutableCandidates(session);
+  if (routableCandidates.length === 0 && !session.getManualModel() && !session.getSemiHold(measured.turnInput.key)) return noRoutableCandidates(session);
 
   return {
     kind: 'ready',
@@ -1166,12 +1169,16 @@ async function delegateRouterTurn(args: {
   const { prepared, assessed, scored, context, options, pi, session, turnTimer, stream } = args;
   const { config, extensionContext, registry } = prepared;
   const { decision, routableCandidates, requestedReasoning } = scored;
+  const pin = session.getManualModel() ?? session.getSemiHold(prepared.measured.turnInput.key);
+  const registryModels = (registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
+  const explicitThinking = pin ? resolveManualModel(pin, registryModels)?.thinking : undefined;
 
   const chosenCandidate = routableCandidates.find((c) => candidateKey(c) === decision.chosen);
   const { resolvedReasoning, delegatedOptions, inheritedReasoning } = resolveTurnEffort({
     chosenCandidate,
     options,
     decision,
+    explicitThinking,
     pi,
     session,
   });
@@ -1191,22 +1198,51 @@ async function delegateRouterTurn(args: {
 
   const pendingTrajectory = session.peekPendingTrajectoryEscalation();
   const delegationSessionGeneration = session.getSessionGeneration();
-  const result = await runDelegationLoop(
-    {
-      decision,
-      registry: registry!,
-      context,
-      options: delegatedOptions,
-      candidates: routableCandidates,
-      reasoning: resolvedReasoning as string | undefined,
-      userReasoningOverride: !inheritedReasoning && requestedReasoning != null,
-      extensionContext,
-      notifyOnRoute: config.prompt,
-      turnTimer,
-      session,
-    },
-    stream,
-  );
+  const delegationOptions: DelegationOptions = {
+    decision,
+    registry: registry!,
+    context,
+    options: delegatedOptions,
+    candidates: routableCandidates,
+    reasoning: explicitThinking ?? resolvedReasoning,
+    userReasoningOverride: explicitThinking != null || (!inheritedReasoning && requestedReasoning != null),
+    extensionContext,
+    notifyOnRoute: config.prompt,
+    turnTimer,
+    session,
+  };
+  if (config.semi && extensionContext?.hasUI && !pin) {
+    delegationOptions.beforeFallback = async (candidateId, previousId) => {
+      const previous = parseCandidateKey(previousId);
+      const semi = await resolveSemiGate({
+        prepared,
+        scored: { ...scored, decision: { ...decision, chosen: candidateId } },
+        options,
+        session,
+        incumbent: `${previous.provider}/${previous.id}`,
+        fallback: true,
+      });
+      if (semi.kind === 'terminal') return undefined;
+      if (semi.kind === 'proceed') return candidateId;
+      const next = semi.scored.decision.chosen;
+      const chain = decision.fallbackChain;
+      const from = chain.indexOf(candidateId);
+      chain.splice(from >= 0 ? from : chain.length, chain.length, next);
+      Object.assign(decision, semi.scored.decision, { fallbackChain: chain });
+      delete decision.routedPickChanged;
+      delete decision.trajectoryFriction;
+      // Keep the live candidate-array identity used by capability comparisons.
+      routableCandidates.splice(0, routableCandidates.length, ...semi.scored.routableCandidates);
+      const manual = session.getManualModel() ?? session.getSemiHold(prepared.measured.turnInput.key);
+      const thinking = manual ? resolveManualModel(manual, registryModels)?.thinking : undefined;
+      if (thinking) {
+        delegationOptions.reasoning = thinking;
+        delegationOptions.userReasoningOverride = true;
+      }
+      return decision.chosen;
+    };
+  }
+  const result = await runDelegationLoop(delegationOptions, stream);
 
   if (
     result.capabilityHandoff
@@ -1239,23 +1275,179 @@ async function delegateRouterTurn(args: {
  * in scoring, matching the pinned-only, surface-failure contract.
  */
 function manualCandidates(prepared: PreparedTurn, manualModel: string): Candidate[] {
-  const inPool = prepared.candidates.filter((candidate) => candidate.registryId === manualModel);
-  if (inPool.length > 0) return inPool;
-
   const regModels = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
-  const rm = regModels.find((m) => `${m.provider}/${m.id}` === manualModel);
-  if (!rm || rm.provider === ROUTER_PROVIDER_ID) return [];
+  const pin = resolveManualModel(manualModel, regModels);
+  if (!pin) return [];
+  let candidates = prepared.candidates.filter((candidate) => candidate.registryId === pin.registryId);
+  if (candidates.length === 0) {
+    const rm = regModels.find((m) => `${m.provider}/${m.id}` === pin.registryId)!;
+    const store = loadStore();
+    const benchModels = store ? activeModels(store) : [];
+    candidates = expandModelCandidates(rm, benchModels.filter((b) => b.registryId === pin.registryId), effortDropsPerStep(benchModels));
+  }
+  if (pin.thinking) {
+    const measured = candidates.find((c) => c.effort === pin.thinking);
+    const base = candidates[0];
+    return measured ? [measured] : base ? [{ ...base, effort: pin.thinking }] : [];
+  }
+  return candidates;
+}
 
-  const store = loadStore();
-  const benchModels = store ? activeModels(store) : [];
-  const rows = benchModels.filter((b) => b.registryId === manualModel);
-  return expandModelCandidates(rm, rows, effortDropsPerStep(benchModels));
+/** Rebuild a decision that pins one candidate for this turn (semi hold/pin). */
+function pinnedScored(args: {
+  base: ScoredTurn;
+  chosen: Candidate;
+  routableCandidates: Candidate[];
+  cause: DecisionCause;
+  reason: string;
+  prepared: PreparedTurn;
+  session: RouterSession;
+}): ScoredTurn {
+  const { base, chosen, routableCandidates, cause, reason, prepared, session } = args;
+  const key = candidateKey(chosen);
+  const decision: RoutingDecision = {
+    ...base.decision,
+    chosen: key,
+    fallbackChain: [key],
+    cause,
+    reason,
+    routedUp: false,
+    routedDown: false,
+  };
+  // These annotations belonged to the auto pick this override replaces.
+  delete decision.routedPickChanged;
+  delete decision.trajectoryFriction;
+  try {
+    decision.baseline = pickBaseline(
+      applyRuntimeExclusions(prepared.candidates, session),
+      decision.dimension,
+      prepared.config.baselineModel,
+    );
+  } catch {
+    // Best-effort report telemetry only (rule 2).
+  }
+  session.setLastDecision(decision);
+  return { decision, routableCandidates, requestedReasoning: base.requestedReasoning };
+}
+
+type SemiOutcome = { kind: 'proceed' } | { kind: 'override'; scored: ScoredTurn } | { kind: 'terminal'; reason: 'error' | 'aborted'; message: string };
+
+/**
+ * Semi-automatic confirmation gate. When `semi` is on and the routed pick
+ * differs from the model that served the previous turn, ask the user before
+ * delegating. Runs once per turn, after scoring, transforming the already-
+ * scored decision in place (never a second `scoreRouterTurn`, which would
+ * double-advance the work phase). Unexpected failures degrade to the router's
+ * pick (rule 2); dismissing the dialog cancels the turn instead of switching.
+ */
+async function resolveSemiGate(args: {
+  prepared: PreparedTurn;
+  scored: ScoredTurn;
+  options: SimpleStreamOptions | undefined;
+  session: RouterSession;
+  incumbent?: string;
+  fallback?: boolean;
+}): Promise<SemiOutcome> {
+  const { prepared, scored, options, session } = args;
+  const generation = session.getSessionGeneration();
+  const pinAtStart = session.getManualModel();
+  const cancelled = (): boolean => options?.signal?.aborted === true
+    || session.getSessionGeneration() !== generation
+    || session.getManualModel() !== pinAtStart;
+  const aborted = { kind: 'terminal', reason: 'aborted', message: 'Model switch cancelled.' } as const;
+  try {
+    if (!prepared.config.semi) return { kind: 'proceed' };
+    // Same-entry tool-loop continuations are not a new switch (rule 12). A
+    // declined switch is reused via `getSemiHold` before scoring; an accepted
+    // one sticks through ordinary incumbent scoring.
+    if (prepared.intent.cacheHit && !args.fallback) return { kind: 'proceed' };
+    const ctx = prepared.extensionContext;
+    if (!ctx?.hasUI) return { kind: 'proceed' };
+    const ui = ctx.ui;
+    const previous = session.getPreviousServed();
+    const incumbent = args.incumbent ?? previous?.registryId;
+    // Only a switch away from an established incumbent is a "model changed".
+    if (!incumbent) return { kind: 'proceed' };
+    const routed = parseCandidateKey(scored.decision.chosen);
+    const routedId = `${routed.provider}/${routed.id}`;
+    if (routedId === incumbent) return { kind: 'proceed' };
+
+    const dialogOpts = options?.signal ? { signal: options.signal } : undefined;
+    const useNew = `Yes — use ${routedId}`;
+    const keep = `No — keep ${incumbent}`;
+    const pickOther = 'Specific model…';
+    const choice = await ui.select(
+      `Router wants to switch: ${incumbent} \u2192 ${routedId}`,
+      [useNew, keep, pickOther],
+      dialogOpts,
+    );
+    if (cancelled() || choice === undefined) return aborted;
+    if (choice === useNew) return { kind: 'proceed' };
+
+    if (choice === keep) {
+      // A fallback ask means the previous candidate already failed. "No" is
+      // refuse-the-switch, not retry-the-dead-model.
+      if (args.fallback) return aborted;
+      const level = previous?.registryId === incumbent ? previous.thinkingLevel : undefined;
+      const preferred = level ? `${incumbent}:${level}` : incumbent;
+      const heldCandidates = applyRuntimeExclusions(manualCandidates(prepared, preferred), session);
+      const candidates = heldCandidates.length > 0
+        ? heldCandidates
+        : applyRuntimeExclusions(manualCandidates(prepared, incumbent), session);
+      const held = candidates[0];
+      if (!held) return { kind: 'terminal', reason: 'error', message: `Cannot keep ${incumbent}: model is unavailable.` };
+      session.setSemiHold(
+        prepared.measured.turnInput.key,
+        heldCandidates.length > 0 ? preferred : incumbent,
+      );
+      return {
+        kind: 'override',
+        scored: pinnedScored({
+          base: scored,
+          chosen: held,
+          routableCandidates: candidates,
+          cause: 'semi-hold',
+          reason: `Semi mode: kept ${incumbent} for this turn`,
+          prepared,
+          session,
+        }),
+      };
+    }
+
+    if (choice !== pickOther) return aborted;
+    for (;;) {
+      const raw = await ui.input('Model to pin: provider/model-id[:thinking]', incumbent, dialogOpts);
+      if (cancelled() || raw === undefined) return aborted;
+      const model = raw.trim();
+      const candidates = applyRuntimeExclusions(manualCandidates(prepared, model), session);
+      if (candidates.length === 0) {
+        ui.notify('Model or thinking level is unavailable. Choose another model.', 'warning');
+        continue;
+      }
+      session.setManualModel(model);
+      return {
+        kind: 'override',
+        scored: pinnedScored({
+          base: scored,
+          chosen: candidates[0]!,
+          routableCandidates: candidates,
+          cause: 'manual-override',
+          reason: `Manual model pin: ${model}`,
+          prepared,
+          session,
+        }),
+      };
+    }
+  } catch {
+    return { kind: 'proceed' };
+  }
 }
 
 /** Serve the session-scoped manual pin and nothing else. */
 async function runManualTurn(args: {
   prepared: PreparedTurn;
   manualModel: string;
+  cause?: 'manual-override' | 'semi-hold';
   context: Context;
   options: SimpleStreamOptions | undefined;
   pi: ExtensionAPI;
@@ -1263,7 +1455,7 @@ async function runManualTurn(args: {
   turnTimer: () => number;
   stream: AssistantMessageEventStream;
 }): Promise<RouterTurnOutcome> {
-  const { prepared, manualModel, context, options, pi, session, turnTimer, stream } = args;
+  const { prepared, manualModel, cause = 'manual-override', context, options, pi, session, turnTimer, stream } = args;
   if (!prepared.intent.cacheHit) {
     const { turnInput } = prepared.measured;
     session.setCachedIntent({
@@ -1296,7 +1488,7 @@ async function runManualTurn(args: {
     assessment: undefined,
     fallbackReason: undefined,
     baseDimension: prepared.intent.baseDimension,
-    baseCause: 'manual-override',
+    baseCause: cause,
     depthWouldEscalate: false,
     vetoDepthEscalation: true,
     assessmentStillCurrent: () => true,
@@ -1305,8 +1497,8 @@ async function runManualTurn(args: {
   if (scoring.kind !== 'ready') return scoring;
 
   const { decision } = scoring.scored;
-  decision.cause = 'manual-override';
-  decision.reason = `Manual model pin: ${manualModel}`;
+  decision.cause = cause;
+  decision.reason = cause === 'semi-hold' ? `Semi mode: kept ${manualModel} for this turn` : `Manual model pin: ${manualModel}`;
   decision.routedUp = false;
   decision.routedDown = false;
   delete decision.routedPickChanged;
@@ -1462,6 +1654,11 @@ async function runRouterTurn(args: {
     });
   }
 
+  const hold = session.getSemiHold(prepared.measured.turnInput.key);
+  if (prepared.config.semi && hold) {
+    return runManualTurn({ prepared, manualModel: hold, cause: 'semi-hold', context, options, pi, session, turnTimer, stream });
+  }
+
   const resume = session.resolveResumeDecision(prepared.measured.turnInput.key);
   if (resume) {
     const outcome = await runResumeTurn({
@@ -1484,10 +1681,14 @@ async function runRouterTurn(args: {
   const scoring = scoreRouterTurn({ prepared, assessed, options, session });
   if (scoring.kind !== 'ready') return scoring;
 
+  const semi = await resolveSemiGate({ prepared, scored: scoring.scored, options, session });
+  if (semi.kind === 'terminal') return semi;
+  const scored = semi.kind === 'override' ? semi.scored : scoring.scored;
+
   return delegateRouterTurn({
     prepared,
     assessed,
-    scored: scoring.scored,
+    scored,
     context,
     options,
     pi,
@@ -1590,7 +1791,9 @@ export function registerAutoRouterProvider(
         const stream = createAssistantMessageEventStream();
 
         (async () => {
-          session.setLastServed(undefined);
+          // Preserve the prior served model for the semi-mode switch gate before
+          // clearing it for this turn.
+          session.rotateServedForNewTurn();
           const turnTimer = startTimer();
           try {
             const outcome = await runRouterTurn({

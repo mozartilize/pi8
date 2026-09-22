@@ -138,6 +138,8 @@ export interface DelegationOptions {
   candidates?: Candidate[];
   /** When true, show a TUI notification on a model pick/switch (config.prompt). */
   notifyOnRoute?: boolean;
+  /** Confirm a fallback before any provider request; undefined cancels the turn. */
+  beforeFallback?: (candidateId: string, previousId: string) => Promise<string | undefined>;
   /** Total-turn timer, used for final debug log timestamps. */
   turnTimer: () => number;
   /** Owning session state for this delegation loop. */
@@ -407,7 +409,7 @@ function decideAfterFailure(
 /**
  * Record the model that actually produced this turn's first answer.
  * First assignment must use the setter, not `updateLastServed`: the turn
- * starts with `setLastServed(undefined)`, and `updateLastServed` is a no-op
+ * starts with `rotateServedForNewTurn()`, and `updateLastServed` is a no-op
  * patch while state is undefined. Notify against `lastNotifiedModel`, not
  * `lastChosenRegistryId`, because the provider already recorded this turn's
  * decision before delegation starts.
@@ -919,8 +921,22 @@ export async function runDelegationLoop(
     if (n >= MAX_FAILURES_PER_PROVIDER) deadProviders.add(provider);
   };
 
-  for (const [candidateIndex, candidateId] of decision.fallbackChain.entries()) {
-    const { provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId);
+  const registryIdOf = (key: string): string => {
+    const parsed = parseCandidateKey(key);
+    return `${parsed.provider}/${parsed.id}`;
+  };
+  const cancelSwitch = () => {
+    stream.push(makeTerminalErrorEvent('aborted', 'Model switch cancelled.'));
+    stream.end();
+    return { success: false, streamFinalized: true, lastError: 'Model switch cancelled.', lastServed };
+  };
+  // Last candidate that actually entered an attempt. Semi-mode asks only when
+  // the next attempt would change model — skipped/missing entries are not a
+  // switch, and same-model retries stay inside the inner loop.
+  let lastAttemptedId: string | undefined;
+  for (const [candidateIndex, proposedId] of decision.fallbackChain.entries()) {
+    let candidateId = proposedId;
+    let { provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId);
     if (excludeSource && !isValidEscalationCandidate(candidateId, excludeSource)) continue;
     let hopTargetThisCandidate = false;
     if (capabilityHop) {
@@ -944,13 +960,35 @@ export async function runDelegationLoop(
     if (provider === ROUTER_PROVIDER_ID) continue;
     if (deadProviders.has(provider)) continue;
     attemptIndex++;
-    const chosen = registry?.find(provider, modelId);
+    let chosen = registry?.find(provider, modelId);
     if (!chosen) {
       lastError = `not in registry: ${candidateId}`;
       session.blacklistModel(candidateId);
       recordFailure(provider, 'model');
       continue;
     }
+
+    const previousAttempt = lastAttemptedId;
+    if (
+      opts.beforeFallback
+      && previousAttempt
+      && registryIdOf(candidateId) !== registryIdOf(previousAttempt)
+    ) {
+      const confirmed = await opts.beforeFallback(candidateId, previousAttempt);
+      if (confirmed === undefined || !stillCurrent()) return cancelSwitch();
+      if (confirmed !== candidateId) {
+        candidateId = confirmed;
+        ({ provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId));
+        if (provider === ROUTER_PROVIDER_ID || deadProviders.has(provider)) continue;
+        chosen = registry?.find(provider, modelId);
+        if (!chosen) {
+          lastError = `not in registry: ${candidateId}`;
+          session.blacklistModel(candidateId);
+          continue;
+        }
+      }
+    }
+    lastAttemptedId = candidateId;
 
     // A candidate may be retried in place on a transient/generic provider
     // error before we fall over to the next model. `served` breaks the outer
