@@ -240,7 +240,9 @@ export type DecisionCause =
   | 'capability-escalation'
   | 'trajectory-escalation'
   | 'context-depth'
-  | 'self-healing-gap';
+  | 'self-healing-gap'
+  | 'manual-override'
+  | 'resume';
 
 export interface RoutingDecision {
   dimension: Dimension;

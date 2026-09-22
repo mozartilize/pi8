@@ -134,6 +134,14 @@ The loop walks the ranked fallback chain (each entry is a `provider/id:effort` k
 
 Provider availability is only resolved at stream time. Registry auth-filtering is per-provider, not per-model, and the per-attempt credential check is the real gate — an authenticated provider can still 421/hang/error on a specific model. The fallback chain absorbs the failure, but the first attempt's latency is already spent.
 
+### Session-scoped manual pin
+
+`/router-manual [provider/model|resume]` leaves `router/auto` as Pi's active model and stores the pin only in `RouterSession`; `reset()` clears it. A manual turn skips the assessment dispatch, restricts scoring to the pinned model's candidates, records cause `manual-override`, and truncates the fallback chain to the chosen effort variant. Delegation therefore has one model in its chain: failure is surfaced rather than substituting another model (ordinary same-model retry policy still applies).
+
+`/router-manual resume` leaves manual mode and reuses the pre-pin route. Setting the first pin snapshots the auto decision then in effect (`resumeSnapshot`); `resume` arms that snapshot and discards pin-owned pending trajectory escalation so automatic routing does not act on stale evidence. The next router turn serves the snapshot's chosen model and fallback chain directly — no classification, assessment, or scoring — under cause `resume`, filtered to the still-routable chain entries (an empty result falls through to ordinary routing). The one-shot is scoped to a single user entry by `resumeIntentKey`: same-entry tool-loop continuations reuse it, the next entry expires it and recomputes. When no pin (or armed snapshot) is active, `resume` is a no-op.
+
+The command's argument completer provides the `/model `-style searchable model list after Space. The no-argument command reuses Pi's exported `ModelSelectorComponent` (the native `/model` search/navigation UI). Because a pin is an explicit override, the list mirrors Pi's own `/model` exactly — session-scoped models when the session is scoped, otherwise every authenticated registry model — and deliberately does **not** apply the router's allowlist, config/session blacklist, usage-limit, or scoped filters; only the synthetic `router/*` provider is dropped. Serving a pin outside the router's candidate pool expands it on demand from the registry (bypassing the build-time routing filters); live runtime exclusions still apply, matching the pinned-only, surface-failure contract. Nothing is written to `settings.json` or config.
+
 ### Pre-answer failure modes
 
 | Failure | Handling |
@@ -275,7 +283,7 @@ Routing state is encapsulated into instantiable domain aggregates:
 
 ### Decision log
 
-Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, and `assessment-metric` records. Cause values: `heuristic`, `continuation-context`, `router-consult`, `embedding-classify`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `context-depth`, `self-healing-gap`.
+Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, and `assessment-metric` records. Cause values: `heuristic`, `continuation-context`, `router-consult`, `embedding-classify`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `context-depth`, `self-healing-gap`, `manual-override`, `resume`.
 
 ### Timing log
 

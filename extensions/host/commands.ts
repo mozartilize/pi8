@@ -1,13 +1,18 @@
 /**
  * Slash commands for the auto model router.
  */
-import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
+import {
+  ModelSelectorComponent,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+} from '@earendil-works/pi-coding-agent';
+import type { Model } from '@earendil-works/pi-ai';
 
 import { saveApiKey, loadConfig, getConfigPath, saveBlacklist } from '../config.js';
 import { buildModelFilter } from '../routing/policy/allowlist.js';
 import { syncBenchmarks, syncSummary } from '../bench/sync.js';
 import type { AdapterName } from '../adapters/index.js';
-import { ROLE_DIMENSIONS } from '../types.js';
+import { ROLE_DIMENSIONS, ROUTER_PROVIDER_ID } from '../types.js';
 import { activeModels, isStale, loadStore, addAlias, saveStore } from '../bench/store.js';
 import {
   getProviderState,
@@ -266,10 +271,13 @@ async function handleStatusCommand(
   session: RouterSession,
 ): Promise<void> {
   const { lastDecision, lastServed } = getProviderState(session);
+  const manualStatus = `Manual override: ${session.getManualModel() ?? 'none (auto routing)'}`;
   const store = loadStore();
   if (!store || !store.syncedAt) {
-    const msg =
-      'Auto-router has no benchmark data — run `/router-sync <key>` with a free key from https://artificialanalysis.ai/.';
+    const msg = [
+      manualStatus,
+      'Auto-router has no benchmark data — run `/router-sync <key>` with a free key from https://artificialanalysis.ai/.',
+    ].join('\n');
     ctx.ui.notify(msg, 'warning');
     return;
   }
@@ -284,6 +292,7 @@ async function handleStatusCommand(
   );
   const covered = active.filter((m) => registryIds.has(m.registryId)).length;
   const lines = [
+    manualStatus,
     `Synced: ${new Date(store.syncedAt).toISOString()}${stale ? ' (stale)' : ''}`,
     `Active models in store: ${active.length}`,
     `Registry coverage: ${covered}/${registryIds.size} models have benchmark data`,
@@ -438,6 +447,147 @@ async function handleFixCommand(
   ctx.ui.notify(msg, 'info');
 }
 
+type ManualModelCatalogContext = Pick<ExtensionCommandContext, 'modelRegistry' | 'scopedModels'>;
+export type ManualModelCompletionUpdater = (ctx: ManualModelCatalogContext) => void;
+
+// A manual pin is an explicit user choice, so its list mirrors Pi's own
+// `/model`: session-scoped models when the session is scoped (`--models` /
+// `enabledModels`), otherwise every authenticated registry model. The router's
+// own allowlist / config-blacklist / session-blacklist / scoped filters are
+// deliberately NOT applied here — the whole point of a manual pin is to reach a
+// model automatic routing would skip. Only the synthetic `router/*` provider is
+// dropped, since `router/auto` is not a pinnable target (`resume` returns to it).
+function manualModelList(ctx: ManualModelCatalogContext): Model<any>[] {
+  const registryModels = ctx.scopedModels.length > 0
+    ? ctx.scopedModels.map((entry) => entry.model)
+    : ctx.modelRegistry?.getAvailable() ?? [];
+
+  return registryModels
+    .filter((model) => model.provider !== ROUTER_PROVIDER_ID)
+    .sort((a, b) => `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`));
+}
+
+function manualModelIds(ctx: ManualModelCatalogContext): string[] {
+  return manualModelList(ctx).map((model) => `${model.provider}/${model.id}`);
+}
+
+function isFuzzyMatch(searchText: string, prefix: string): boolean {
+  const text = searchText.toLowerCase();
+  return prefix.trim().toLowerCase().split(/\s+/).every((term) => {
+    let cursor = 0;
+    for (const char of text) {
+      if (char === term[cursor]) cursor++;
+      if (cursor === term.length) return true;
+    }
+    return term.length === 0;
+  });
+}
+
+function manualModelCompletions(
+  ctx: ManualModelCatalogContext,
+  prefix: string,
+) {
+  const entries = [
+    { value: 'resume', label: 'resume', description: 'reuse the prior route', search: 'resume prior route auto automatic' },
+    ...manualModelList(ctx).map((model) => ({
+      value: `${model.provider}/${model.id}`,
+      label: model.id,
+      description: model.provider,
+      search: `${model.id} ${model.provider} ${model.provider}/${model.id} ${model.name ?? ''}`,
+    })),
+  ].filter((entry) => isFuzzyMatch(entry.search, prefix));
+  return entries.length > 0
+    ? entries.map(({ value, label, description }) => ({ value, label, description }))
+    : null;
+}
+
+async function showManualModelPicker(
+  ctx: ExtensionCommandContext,
+  session: RouterSession,
+): Promise<string | undefined> {
+  const resumeModel = {
+    provider: ROUTER_PROVIDER_ID,
+    id: 'resume',
+    name: 'Resume prior route',
+  } as Model<any>;
+  const models = [resumeModel, ...manualModelList(ctx)];
+  const byId = new Map(models.map((model) => [`${model.provider}/${model.id}`, model]));
+  const current = session.getManualModel();
+  const currentModel = current ? byId.get(current) : resumeModel;
+  // ModelSelectorComponent is Pi's actual /model picker. It needs ModelRuntime,
+  // but the extension API exposes only a read-only registry snapshot; this
+  // structural adapter deliberately disables catalogue mutation/refresh.
+  const staticRuntime = {
+    getAvailableSnapshot: (): readonly Model<any>[] => models,
+    getModel: (provider: string, id: string): Model<any> | undefined => byId.get(`${provider}/${id}`),
+    getError: (): undefined => undefined,
+    refresh: async () => ({ aborted: false, errors: new Map<string, Error>() }),
+  };
+  const scopedModels = ctx.scopedModels.length > 0
+    ? models.map((model) => ({ model }))
+    : [];
+
+  return ctx.ui.custom<string | undefined>((tui, _theme, _keybindings, done) =>
+    new ModelSelectorComponent(
+      tui,
+      currentModel,
+      staticRuntime as never,
+      scopedModels,
+      (model) => done(model === resumeModel ? 'resume' : `${model.provider}/${model.id}`),
+      () => done(undefined),
+    ));
+}
+
+async function handleManualCommand(
+  args: string,
+  ctx: ExtensionCommandContext,
+  session: RouterSession,
+): Promise<void> {
+  const tokens = splitArgs(args);
+  if (tokens.length > 1) {
+    ctx.ui.notify('Usage: /router-manual [provider/model|resume]', 'error');
+    return;
+  }
+
+  let selection: string | undefined = tokens[0];
+  if (!selection) {
+    if (!ctx.hasUI) {
+      const current = session.getManualModel() ?? 'none (auto routing)';
+      const models = manualModelIds(ctx);
+      ctx.ui.notify(
+        [`Manual override: ${current}`, '', ...models, '', 'Usage: /router-manual <provider/model|resume>'].join('\n'),
+        'info',
+      );
+      return;
+    }
+    selection = await showManualModelPicker(ctx, session);
+    if (!selection) return;
+  }
+
+  if (selection.toLowerCase() === 'resume') {
+    const active = session.resumeManual();
+    ctx.ui.notify(
+      active
+        ? 'Manual override off; reusing the prior route for the next turn, then automatic routing resumes.'
+        : 'No manual override active; automatic routing continues.',
+      'info',
+    );
+    return;
+  }
+
+  const routable = manualModelIds(ctx);
+  if (!routable.includes(selection)) {
+    ctx.ui.notify(
+      `Model is not routable: ${selection}. Run /router-manual with no argument to choose from the available models.`,
+      'error',
+    );
+    return;
+  }
+
+  session.setManualModel(selection);
+  ctx.ui.notify(`Manual override: ${selection} (this session, pinned-only).`, 'info');
+}
+
 async function handleModelsCommand(ctx: ExtensionCommandContext): Promise<void> {
   const config = loadConfig();
   const patterns = config.models;
@@ -545,7 +695,12 @@ async function handleAgentsCommand(ctx: ExtensionCommandContext): Promise<void> 
 export function registerCommands(
   pi: ExtensionAPI,
   session: RouterSession = defaultRouterSession,
-): void {
+): ManualModelCompletionUpdater {
+  let manualModelCatalogContext: ManualModelCatalogContext | undefined;
+  const updateManualModelCompletionContext: ManualModelCompletionUpdater = (ctx) => {
+    manualModelCatalogContext = ctx;
+  };
+
   pi.registerCommand('router-sync', {
     description: 'Fetch fresh benchmark data and update the model routing table',
     handler: safeCommand('/router-sync', (args, ctx) => handleSyncCommand(args, ctx)),
@@ -579,6 +734,23 @@ export function registerCommands(
     }),
   });
 
+  pi.registerCommand('router-manual', {
+    description: 'Pin one model for this session: /router-manual [provider/model|resume]',
+    getArgumentCompletions: (prefix) => {
+      try {
+        return manualModelCatalogContext
+          ? manualModelCompletions(manualModelCatalogContext, prefix)
+          : null;
+      } catch {
+        return null;
+      }
+    },
+    handler: safeCommand('/router-manual', (args, ctx) => {
+      updateManualModelCompletionContext(ctx);
+      return handleManualCommand(args, ctx, session);
+    }),
+  });
+
   pi.registerCommand('router-status', {
     description: 'Show pi8 status, freshness, coverage and the last routing decision',
     handler: safeCommand('/router-status', (_args, ctx) => handleStatusCommand(ctx, session)),
@@ -608,4 +780,6 @@ export function registerCommands(
     description: 'Show which model each pi-subagents role gets (researcher/planner/worker/reviewer/advisor)',
     handler: safeCommand('/router-agents', (_args, ctx) => handleAgentsCommand(ctx)),
   });
+
+  return updateManualModelCompletionContext;
 }

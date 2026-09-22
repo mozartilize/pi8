@@ -31,7 +31,10 @@ interface ModelSelectEventLike {
   previousModel?: { provider: string; id: string };
 }
 
-import { registerCommands } from './host/commands.js';
+import {
+  registerCommands,
+  type ManualModelCompletionUpdater,
+} from './host/commands.js';
 import {
   registerAutoRouterProvider,
   buildSubagentProviderAuthFilter,
@@ -192,6 +195,7 @@ async function handleSessionStart(
   subagentCalls: Map<string, SubagentCallObservation>,
   routingState: SubagentRoutingState,
   refreshRoleModels: RoleModelRefresher,
+  updateManualModelCompletionContext: ManualModelCompletionUpdater,
 ): Promise<void> {
   // Establish the log target before reset diagnostics so an automatic
   // runtime replacement is visible in the session sidecar that triggered it.
@@ -207,6 +211,11 @@ async function handleSessionStart(
     model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
     ...getBlacklistDebugState(),
   });
+  try {
+    updateManualModelCompletionContext(ctx);
+  } catch {
+    // Autocomplete is advisory and must not block session initialization.
+  }
   try {
     session.reset();
     session.clearSessionBlacklist();
@@ -643,7 +652,7 @@ export default async function autoModelRouterExtension(
   session: RouterSession = defaultRouterSession,
   runtime: RuntimeBindings = defaultRuntimeBindings,
 ) {
-  registerCommands(pi, session);
+  const updateManualModelCompletionContext = registerCommands(pi, session);
 
   // Register `router/auto` synchronously at extension-init time (no session
   // ctx) so it lands in the runtime's pendingProviderRegistrations BEFORE Pi
@@ -668,6 +677,7 @@ export default async function autoModelRouterExtension(
       subagentCalls,
       routingState,
       refreshRoleModels,
+      updateManualModelCompletionContext,
     ),
   );
 

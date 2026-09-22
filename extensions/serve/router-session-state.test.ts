@@ -30,6 +30,72 @@ import {
 import { getBlacklistedModels, getBlacklistedProviders } from './blacklist.js';
 
 describe('router session state', () => {
+  it('clears a session-scoped manual model pin', () => {
+    const session = new RouterSession();
+    session.setManualModel('provider/model');
+    expect(session.getManualModel()).toBe('provider/model');
+
+    session.reset();
+
+    expect(session.getManualModel()).toBeUndefined();
+  });
+
+  it('drops pinned-model trajectory escalation when resuming to auto', () => {
+    const session = new RouterSession();
+    session.setManualModel('provider/model');
+    session.armTrajectoryEscalation(
+      { escalate: true, tfi: 1, signals: [] },
+      'provider/model',
+      'implement',
+      false,
+    );
+    expect(session.peekPendingTrajectoryEscalation()).toBeDefined();
+
+    expect(session.resumeManual()).toBe(true);
+
+    expect(session.peekPendingTrajectoryEscalation()).toBeUndefined();
+
+    // Without an active pin there is nothing to resume, so unrelated auto-mode
+    // trajectory evidence is preserved.
+    const automatic = new RouterSession();
+    automatic.armTrajectoryEscalation(
+      { escalate: true, tfi: 1, signals: [] },
+      'provider/model',
+      'implement',
+      false,
+    );
+    const pending = automatic.peekPendingTrajectoryEscalation();
+    expect(automatic.resumeManual()).toBe(false);
+    expect(automatic.peekPendingTrajectoryEscalation()).toBe(pending);
+  });
+
+  it('resumes the pre-pin route for one user entry, then expires', () => {
+    const session = new RouterSession();
+    const priorAuto = routingDecision(['beta/strong', 'gamma/mid']);
+    session.setLastDecision(priorAuto);
+
+    // Pinning snapshots the pre-pin auto decision; a manual turn overwrites the
+    // live decision but the snapshot is untouched.
+    session.setManualModel('alpha/pin');
+    session.setLastDecision(routingDecision(['alpha/pin']));
+
+    expect(session.resumeManual()).toBe(true);
+
+    // Same entry (including tool-loop continuations) reuses the snapshot.
+    expect(session.resolveResumeDecision('entry-1')).toBe(priorAuto);
+    expect(session.resolveResumeDecision('entry-1')).toBe(priorAuto);
+    // A new user entry expires the one-shot.
+    expect(session.resolveResumeDecision('entry-2')).toBeUndefined();
+    expect(session.resolveResumeDecision('entry-1')).toBeUndefined();
+  });
+
+  it('does not resume while a pin is still active', () => {
+    const session = new RouterSession();
+    session.setLastDecision(routingDecision(['beta/strong']));
+    session.setManualModel('alpha/pin');
+    expect(session.resolveResumeDecision('entry-1')).toBeUndefined();
+  });
+
   it('clears per-session routing state', () => {
     setLastDecision({
       dimension: 'implement',

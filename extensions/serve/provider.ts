@@ -20,7 +20,7 @@ import {
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
 
-import type { BenchModel, Candidate, Dimension, DecisionCause, AutoRouterConfig } from '../types.js';
+import type { BenchModel, Candidate, Dimension, DecisionCause, AutoRouterConfig, RoutingDecision } from '../types.js';
 import { ROUTER_PROVIDER_ID, AUTO_MODEL_ID } from '../types.js';
 import { loadStore, activeModels } from '../bench/store.js';
 import { classify, estimateTokenCount } from '../routing/classify/classifier.js';
@@ -1230,6 +1230,204 @@ async function delegateRouterTurn(args: {
 }
 
 /**
+ * Candidates for a manual pin. A pin is an explicit user override, so it must
+ * serve even a model the router's own allowlist / config-blacklist / scoped set
+ * would exclude — the picker offers the same models as Pi's `/model`. Prefer the
+ * already-expanded routable pool when the pin is in it; otherwise expand the pin
+ * directly from the live registry, bypassing the build-time routing filters.
+ * Live runtime exclusions (session blacklist / usage limits) still apply later
+ * in scoring, matching the pinned-only, surface-failure contract.
+ */
+function manualCandidates(prepared: PreparedTurn, manualModel: string): Candidate[] {
+  const inPool = prepared.candidates.filter((candidate) => candidate.registryId === manualModel);
+  if (inPool.length > 0) return inPool;
+
+  const regModels = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
+  const rm = regModels.find((m) => `${m.provider}/${m.id}` === manualModel);
+  if (!rm || rm.provider === ROUTER_PROVIDER_ID) return [];
+
+  const store = loadStore();
+  const benchModels = store ? activeModels(store) : [];
+  const rows = benchModels.filter((b) => b.registryId === manualModel);
+  return expandModelCandidates(rm, rows, effortDropsPerStep(benchModels));
+}
+
+/** Serve the session-scoped manual pin and nothing else. */
+async function runManualTurn(args: {
+  prepared: PreparedTurn;
+  manualModel: string;
+  context: Context;
+  options: SimpleStreamOptions | undefined;
+  pi: ExtensionAPI;
+  session: RouterSession;
+  turnTimer: () => number;
+  stream: AssistantMessageEventStream;
+}): Promise<RouterTurnOutcome> {
+  const { prepared, manualModel, context, options, pi, session, turnTimer, stream } = args;
+  if (!prepared.intent.cacheHit) {
+    const { turnInput } = prepared.measured;
+    session.setCachedIntent({
+      key: turnInput.key,
+      classifyResult: prepared.intent.classifyResult,
+      dimension: prepared.intent.baseDimension,
+      cause: prepared.intent.baseCause,
+      thin: turnInput.thin,
+      contextChars: turnInput.contextChars,
+      assessment: undefined,
+      fallbackReason: undefined,
+    });
+  }
+  const candidates = manualCandidates(prepared, manualModel);
+  if (candidates.length === 0) {
+    return {
+      kind: 'terminal',
+      reason: 'error',
+      message: `Manual model ${manualModel} is not available. Choose an available model or run /router-manual resume.`,
+    };
+  }
+
+  const manualPrepared: PreparedTurn = {
+    ...prepared,
+    candidates,
+    routableCandidates: candidates,
+    trajectoryEscalation: undefined,
+  };
+  const assessed: AssessedTurn = {
+    assessment: undefined,
+    fallbackReason: undefined,
+    baseDimension: prepared.intent.baseDimension,
+    baseCause: 'manual-override',
+    depthWouldEscalate: false,
+    vetoDepthEscalation: true,
+    assessmentStillCurrent: () => true,
+  };
+  const scoring = scoreRouterTurn({ prepared: manualPrepared, assessed, options, session });
+  if (scoring.kind !== 'ready') return scoring;
+
+  const { decision } = scoring.scored;
+  decision.cause = 'manual-override';
+  decision.reason = `Manual model pin: ${manualModel}`;
+  decision.routedUp = false;
+  decision.routedDown = false;
+  delete decision.routedPickChanged;
+  delete decision.trajectoryFriction;
+  // The scorer may rank several measured effort variants of the same model.
+  // Manual mode is pinned-only, so delegation receives exactly one chain entry.
+  decision.fallbackChain = [decision.chosen];
+  try {
+    decision.baseline = pickBaseline(
+      applyRuntimeExclusions(prepared.candidates, session),
+      decision.dimension,
+      prepared.config.baselineModel,
+    );
+  } catch {
+    // Best-effort report telemetry only.
+  }
+
+  return delegateRouterTurn({
+    prepared: manualPrepared,
+    assessed,
+    scored: scoring.scored,
+    context,
+    options,
+    pi,
+    session,
+    turnTimer,
+    stream,
+  });
+}
+
+/**
+ * Serve `/router-manual resume`: reuse the pre-pin auto decision's model and
+ * fallback chain for this user entry instead of recomputing. Returns
+ * `{ kind: 'recompute' }` when none of the snapshot's chain survives the live
+ * runtime exclusions, so the caller falls through to ordinary auto routing.
+ */
+async function runResumeTurn(args: {
+  prepared: PreparedTurn;
+  resume: RoutingDecision;
+  context: Context;
+  options: SimpleStreamOptions | undefined;
+  pi: ExtensionAPI;
+  session: RouterSession;
+  turnTimer: () => number;
+  stream: AssistantMessageEventStream;
+}): Promise<RouterTurnOutcome | { kind: 'recompute' }> {
+  const { prepared, resume, context, options, pi, session, turnTimer, stream } = args;
+  const routableCandidates = applyRuntimeExclusions(prepared.candidates, session);
+  const present = new Set(routableCandidates.map((c) => candidateKey(c)));
+  const chain = resume.fallbackChain.filter((key) => present.has(key));
+  if (chain.length === 0) {
+    // The remembered route no longer exists (blacklisted/usage-limited); expire
+    // the one-shot and recompute rather than serve an empty chain.
+    session.clearPendingResume();
+    return { kind: 'recompute' };
+  }
+
+  const { turnInput } = prepared.measured;
+  if (!prepared.intent.cacheHit) {
+    session.setCachedIntent({
+      key: turnInput.key,
+      classifyResult: prepared.intent.classifyResult,
+      dimension: prepared.intent.baseDimension,
+      cause: prepared.intent.baseCause,
+      thin: turnInput.thin,
+      contextChars: turnInput.contextChars,
+      assessment: undefined,
+      fallbackReason: undefined,
+    });
+  }
+
+  const decision: RoutingDecision = {
+    ...resume,
+    chosen: chain[0],
+    fallbackChain: chain,
+    cause: 'resume',
+    reason: `Resumed prior route: ${chain[0]}`,
+    routedUp: false,
+    routedDown: false,
+    intentKey: turnInput.key,
+    provenanceCounts: turnInput.provenanceCounts,
+  };
+  // Drop annotations that belonged to the snapshot's own turn: this turn did
+  // not re-derive friction or a pick change.
+  delete decision.trajectoryFriction;
+  delete decision.routedPickChanged;
+  try {
+    decision.baseline = pickBaseline(routableCandidates, decision.dimension, prepared.config.baselineModel);
+  } catch {
+    // Best-effort report telemetry only.
+  }
+  session.setLastDecision(decision);
+
+  const assessed: AssessedTurn = {
+    assessment: undefined,
+    fallbackReason: undefined,
+    baseDimension: decision.dimension,
+    baseCause: 'resume',
+    depthWouldEscalate: false,
+    vetoDepthEscalation: true,
+    assessmentStillCurrent: () => true,
+  };
+  const scored: ScoredTurn = {
+    decision,
+    routableCandidates,
+    requestedReasoning: typeof options?.reasoning === 'string' ? options.reasoning : undefined,
+  };
+  return delegateRouterTurn({
+    prepared,
+    assessed,
+    scored,
+    context,
+    options,
+    pi,
+    session,
+    turnTimer,
+    stream,
+  });
+}
+
+/**
  * Ordered phases for one router turn. The order is a real dependency chain:
  * an awaited assessment can exclude a provider, so scoring must re-filter
  * after it, and the trajectory handoff is acknowledged only once a stronger
@@ -1249,6 +1447,35 @@ async function runRouterTurn(args: {
   const preparation = await prepareRouterTurn({ context, session, runtime });
   if (preparation.kind !== 'ready') return preparation;
   const { prepared } = preparation;
+
+  const manualModel = session.getManualModel();
+  if (manualModel) {
+    return runManualTurn({
+      prepared,
+      manualModel,
+      context,
+      options,
+      pi,
+      session,
+      turnTimer,
+      stream,
+    });
+  }
+
+  const resume = session.resolveResumeDecision(prepared.measured.turnInput.key);
+  if (resume) {
+    const outcome = await runResumeTurn({
+      prepared,
+      resume,
+      context,
+      options,
+      pi,
+      session,
+      turnTimer,
+      stream,
+    });
+    if (outcome.kind !== 'recompute') return outcome;
+  }
 
   const assessment = await assessRouterTurn({ prepared, context, pi, session });
   if (assessment.kind !== 'ready') return assessment;

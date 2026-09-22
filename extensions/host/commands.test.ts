@@ -6,12 +6,13 @@
  * blacklist; `clear` takes no patterns and only wipes session state.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { initTheme } from '@earendil-works/pi-coding-agent';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { registerCommands } from './commands.js';
-import { loadConfig } from '../config.js';
+import { loadConfig, getConfigPath } from '../config.js';
 import { blacklistModel, blacklistProvider, clearBlacklistedModels, getProviderState } from '../serve/provider.js';
 import { clearSessionBlacklist, getSessionBlacklistPatterns } from '../serve/blacklist.js';
 import {
@@ -23,6 +24,7 @@ import {
 } from './decisionlog.js';
 import { saveStore, emptyStore } from '../bench/store.js';
 import type { BenchmarkStore, RoutingDecision } from '../types.js';
+import { RouterSession } from '../serve/router-session-state.js';
 
 let dir: string;
 let prevEnv: string | undefined;
@@ -45,35 +47,229 @@ afterEach(() => {
 
 /** Minimal fake ExtensionAPI: captures registered command handlers by name. */
 function fakePi() {
+  type CommandOptions = {
+    handler: (args: string, ctx: unknown) => Promise<void>;
+    getArgumentCompletions?: (prefix: string) => unknown;
+  };
   const handlers = new Map<string, (args: string, ctx: unknown) => Promise<void>>();
+  const commands = new Map<string, CommandOptions>();
   const sendMessage = vi.fn(async () => {});
   return {
     pi: {
-      registerCommand: (name: string, opts: { handler: (args: string, ctx: unknown) => Promise<void> }) => {
+      registerCommand: (name: string, opts: CommandOptions) => {
+        commands.set(name, opts);
         handlers.set(name, opts.handler);
       },
       sendMessage,
     } as unknown as Parameters<typeof registerCommands>[0],
+    commands,
     handlers,
     sendMessage,
   };
 }
 
 function fakeCtx(
-  registryModels: Array<{ provider: string; id: string }> = [],
-  overrides: { model?: { provider: string; id: string } | undefined } = {},
+  registryModels: Array<{ provider: string; id: string; name?: string }> = [],
+  overrides: {
+    model?: { provider: string; id: string } | undefined;
+    selected?: string | undefined;
+    pickerSelection?: string | undefined;
+    hasUI?: boolean;
+  } = {},
 ) {
   const messages: string[] = [];
+  const select = vi.fn(async () => overrides.selected);
+  const custom = vi.fn(async (factory: (...args: any[]) => any) => {
+    let result = overrides.selected;
+    const component = await factory(
+      { requestRender: vi.fn() },
+      {},
+      {},
+      (value: string | undefined) => { result = value; },
+    );
+    if (overrides.pickerSelection) {
+      const item = component.filteredModels.find(
+        ({ model }: { model: { provider: string; id: string } }) =>
+          `${model.provider}/${model.id}` === overrides.pickerSelection,
+      );
+      if (!item) throw new Error(`Picker model not found: ${overrides.pickerSelection}`);
+      component.onSelectCallback(item.model);
+    }
+    component.dispose?.();
+    return result;
+  });
   return {
     ctx: {
-      ui: { notify: (msg: string) => messages.push(msg) },
+      ui: { notify: (msg: string) => messages.push(msg), select, custom },
+      hasUI: overrides.hasUI ?? true,
+      scopedModels: [],
       modelRegistry: { getAvailable: () => registryModels },
       model: 'model' in overrides ? overrides.model : { provider: 'router', id: 'auto' },
       waitForIdle: async () => {},
     } as unknown,
     messages,
+    select,
+    custom,
   };
 }
+
+describe('/router-manual', () => {
+  const models = [
+    { provider: 'alpha', id: 'first' },
+    { provider: 'beta', id: 'second' },
+    { provider: 'router', id: 'auto' },
+  ];
+
+  it('pins a model, then resumes the prior route and drops pin-owned evidence', async () => {
+    const session = new RouterSession();
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, messages } = fakeCtx(models);
+
+    await handlers.get('router-manual')!('alpha/first', ctx);
+    expect(session.getManualModel()).toBe('alpha/first');
+    expect(messages.at(-1)).toContain('pinned-only');
+    session.armTrajectoryEscalation(
+      { escalate: true, tfi: 1, signals: [] },
+      'alpha/first',
+      'implement',
+      false,
+    );
+    expect(session.peekPendingTrajectoryEscalation()).toBeDefined();
+
+    await handlers.get('router-manual')!('resume', ctx);
+    expect(session.getManualModel()).toBeUndefined();
+    expect(session.peekPendingTrajectoryEscalation()).toBeUndefined();
+    expect(messages.at(-1)).toContain('reusing the prior route');
+  });
+
+  it('reports nothing to resume when no pin is active', async () => {
+    const session = new RouterSession();
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, messages } = fakeCtx(models);
+
+    await handlers.get('router-manual')!('resume', ctx);
+    expect(messages.at(-1)).toContain('No manual override active');
+  });
+
+  it('opens Pi\'s native /model picker component, then pins the selection', async () => {
+    initTheme('dark', false);
+    const session = new RouterSession();
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, custom, select, messages } = fakeCtx(models, { selected: 'beta/second' });
+
+    await handlers.get('router-manual')!('', ctx);
+
+    expect(messages.at(-1)).toContain('Manual override: beta/second');
+    expect(custom).toHaveBeenCalledOnce();
+    expect(select).not.toHaveBeenCalled();
+    expect(session.getManualModel()).toBe('beta/second');
+  });
+
+  it('does not confuse a real router-manual provider with the synthetic resume entry', async () => {
+    initTheme('dark', false);
+    const session = new RouterSession();
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx } = fakeCtx(
+      [{ provider: 'router-manual', id: 'real' }],
+      { pickerSelection: 'router-manual/real' },
+    );
+
+    await handlers.get('router-manual')!('', ctx);
+
+    expect(session.getManualModel()).toBe('router-manual/real');
+  });
+
+  it('lists every /model model, ignoring the router allowlist and blacklist', () => {
+    // A manual pin is an explicit override, so the list must not apply the
+    // router's own allowlist/blacklist even when they would exclude a model.
+    writeFileSync(
+      getConfigPath(),
+      JSON.stringify({ models: ['alpha/*'], blacklist: ['beta/*'] }),
+      'utf8',
+    );
+    const session = new RouterSession();
+    session.addSessionBlacklistPatterns(['alpha/first']);
+    const { pi, commands } = fakePi();
+    const updateCompletionContext = registerCommands(pi, session);
+    const { ctx } = fakeCtx([
+      { provider: 'alpha', id: 'first', name: 'Primary Model' },
+      { provider: 'beta', id: 'second', name: 'Backup Model' },
+      { provider: 'router', id: 'auto', name: 'Auto Router' },
+    ]);
+    updateCompletionContext(ctx as never);
+    const complete = commands.get('router-manual')!.getArgumentCompletions!;
+
+    // beta/* (config-blacklisted) and alpha/first (session-blacklisted, only
+    // alpha-allowlisted) both remain; only the synthetic router provider drops.
+    expect(complete('')).toEqual([
+      { value: 'resume', label: 'resume', description: 'reuse the prior route' },
+      { value: 'alpha/first', label: 'first', description: 'alpha' },
+      { value: 'beta/second', label: 'second', description: 'beta' },
+    ]);
+  });
+
+  it('lists and fuzzy-filters model arguments after the command space', () => {
+    const session = new RouterSession();
+    const { pi, commands } = fakePi();
+    const updateCompletionContext = registerCommands(pi, session);
+    const { ctx } = fakeCtx([
+      { provider: 'alpha', id: 'first', name: 'Primary Model' },
+      { provider: 'beta', id: 'second', name: 'Backup Model' },
+      { provider: 'router', id: 'auto', name: 'Auto Router' },
+    ]);
+    updateCompletionContext(ctx as never);
+    const complete = commands.get('router-manual')!.getArgumentCompletions!;
+
+    expect(complete('')).toEqual([
+      { value: 'resume', label: 'resume', description: 'reuse the prior route' },
+      { value: 'alpha/first', label: 'first', description: 'alpha' },
+      { value: 'beta/second', label: 'second', description: 'beta' },
+    ]);
+    expect(complete('bt sc')).toEqual([
+      { value: 'beta/second', label: 'second', description: 'beta' },
+    ]);
+    expect(complete('backup')).toEqual([
+      { value: 'beta/second', label: 'second', description: 'beta' },
+    ]);
+    expect(complete('missing')).toBeNull();
+
+    updateCompletionContext({
+      scopedModels: [],
+      modelRegistry: { getAvailable: () => { throw new Error('registry failed'); } },
+    } as never);
+    expect(complete('')).toBeNull();
+  });
+
+  it('shows the manual pin in status even without benchmark data', async () => {
+    const session = new RouterSession();
+    session.setManualModel('alpha/first');
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, messages } = fakeCtx(models);
+
+    await handlers.get('router-status')!('', ctx);
+
+    expect(messages.at(-1)).toContain('Manual override: alpha/first');
+    expect(messages.at(-1)).toContain('no benchmark data');
+  });
+
+  it('rejects a model outside the routable registry without changing the pin', async () => {
+    const session = new RouterSession();
+    session.setManualModel('alpha/first');
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, messages } = fakeCtx(models);
+
+    await handlers.get('router-manual')!('missing/model', ctx);
+
+    expect(session.getManualModel()).toBe('alpha/first');
+    expect(messages.at(-1)).toContain('Model is not routable');
+  });
+});
 
 describe('/router-blacklist add|remove — session by default', () => {
   it('add applies to the session and leaves the config file untouched', async () => {

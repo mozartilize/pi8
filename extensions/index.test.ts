@@ -7,6 +7,7 @@ import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 
 import autoModelRouterExtension from './index.js';
+import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
 import { computeRoleModels } from './agents/subagents.js';
 import { multiWorkRoutingMeta, routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
@@ -32,7 +33,7 @@ import {
 import type { WorkPhaseState } from './routing/policy/work-phase.js';
 import { evaluateMutationCall } from './routing/policy/mutation-gate.js';
 
-vi.mock('./host/commands.js', () => ({ registerCommands: vi.fn() }));
+vi.mock('./host/commands.js', () => ({ registerCommands: vi.fn(() => vi.fn()) }));
 vi.mock('./routing/policy/mutation-gate.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./routing/policy/mutation-gate.js')>();
   return { ...actual, evaluateMutationCall: vi.fn(actual.evaluateMutationCall) };
@@ -119,6 +120,8 @@ describe('registry-only role routing', () => {
     const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
     const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
     await sessionStart!({ reason: 'new' }, ctx);
+    const completionUpdater = vi.mocked(registerCommands).mock.results.at(-1)?.value;
+    expect(completionUpdater).toHaveBeenCalledWith(ctx);
 
     const input: { agent: string; task: string; model?: string } = {
       agent: 'worker',

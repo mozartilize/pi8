@@ -508,6 +508,88 @@ describe('provider orchestration', () => {
     expect(state.lastDecision?.fallbackChain[0]).toBe(state.lastDecision?.chosen);
   });
 
+  it('serves a manual pin without assessment or fallback candidates', async () => {
+    harness.session.setManualModel('alpha/first');
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context,
+    );
+
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.chosen).toBe('alpha/first');
+    expect(decision?.cause).toBe('manual-override');
+    expect(decision?.fallbackChain).toEqual(['alpha/first']);
+    expect(harness.session.getCachedIntent()).toBeDefined();
+    // One call proves the assessment dispatch was skipped; the only call served the pin.
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+  });
+
+  it('does not fall back to another model when a manual pin fails', async () => {
+    harness.session.setManualModel('alpha/first');
+    harness.scriptReply([{ type: 'error', error: { errorMessage: 'manual failure' } }]);
+
+    await harness.serve(context);
+
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.outStream.events.find((event) => event.type === 'error')).toBeDefined();
+  });
+
+  it('serves a manual pin that the router allowlist would exclude', async () => {
+    // Auto routing is restricted to beta/*, so alpha/first is absent from the
+    // router's candidate pool. A manual pin is an explicit override, so it must
+    // still expand and serve alpha/first — the picker offers it like /model.
+    writeFileSync(
+      join(temp.path, 'config.json'),
+      JSON.stringify({ models: ['beta/*'], consultRouter: false }),
+      'utf8',
+    );
+    harness.session.setManualModel('alpha/first');
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context,
+    );
+
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.chosen).toBe('alpha/first');
+    expect(decision?.cause).toBe('manual-override');
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+  });
+
+  it('resume reuses the pre-pin auto route for one entry, then recomputes', async () => {
+    // 1. An ordinary auto turn establishes the route resume will reuse.
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context,
+    );
+    const autoDecision = harness.getProviderState().lastDecision!;
+    expect(autoDecision.cause).not.toBe('resume');
+
+    // 2. Pin the other model (snapshots the pre-pin route), then resume.
+    harness.session.setManualModel('alpha/first');
+    expect(harness.session.resumeManual()).toBe(true);
+
+    // 3. A fresh user entry reuses the snapshot verbatim, cause `resume`.
+    harness.resetEventStream();
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok2' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'a completely different request now' }] } as unknown as Context,
+    );
+    const resumed = harness.getProviderState().lastDecision!;
+    expect(resumed.cause).toBe('resume');
+    expect(resumed.chosen).toBe(autoDecision.chosen);
+    expect(resumed.fallbackChain).toEqual(autoDecision.fallbackChain);
+
+    // 4. The one-shot is spent: the next entry classifies normally again.
+    harness.resetEventStream();
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok3' }, { type: 'done' }]);
+    await harness.serve(
+      { messages: [{ role: 'user', content: 'yet another distinct instruction' }] } as unknown as Context,
+    );
+    expect(harness.getProviderState().lastDecision!.cause).not.toBe('resume');
+  });
+
   it('surfaces no-data when no candidate has benchmark data and heuristic owns the decision', async () => {
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 

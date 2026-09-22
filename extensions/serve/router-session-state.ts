@@ -219,6 +219,23 @@ export class RouterSession {
   private chosenRegistryId: string | undefined;
   private served: ServedInfo | undefined;
   private notifiedModel: string | undefined;
+  /**
+   * Session-scoped manual model pin (`provider/id`) set via `/router-manual`.
+   * When present the turn skips assessment, restricts scoring to this model,
+   * and serves it with no fallback tail (pinned-only). Cleared on every
+   * `session_start` reset, so a new session always starts on the auto router.
+   */
+  private manualModel: string | undefined;
+  /**
+   * The auto decision in effect just before the pin was engaged. `/router-manual
+   * resume` reuses this (chosen model + fallback chain) for the next user entry
+   * instead of recomputing. Captured at pin time because a manual turn overwrites
+   * `decision`; held while pinned, then armed by `resumeManual()` and consumed by
+   * `resolveResumeDecision()`. `resumeIntentKey` scopes the one-shot to a single
+   * user entry so tool-loop continuations reuse it but the next entry recomputes.
+   */
+  private resumeSnapshot: RoutingDecision | undefined;
+  private resumeIntentKey: string | undefined;
   private accumCost = 0;
   private resolvedThinkingLevel: string | undefined;
   private activeSkills: readonly string[] = [];
@@ -276,6 +293,52 @@ export class RouterSession {
 
   setLastNotifiedModel(id: string | undefined): void {
     this.notifiedModel = id;
+  }
+
+  getManualModel(): string | undefined {
+    return this.manualModel;
+  }
+
+  setManualModel(registryId: string): void {
+    // Snapshot the pre-pin auto decision so `resume` can reuse it. Keep the
+    // existing snapshot when switching pins (A -> B): the intervening manual
+    // turns overwrote `decision`, so only the first pin captures the auto route.
+    if (this.manualModel === undefined) this.resumeSnapshot = this.decision;
+    this.manualModel = registryId;
+  }
+
+  /**
+   * Leave manual mode and arm a one-shot reuse of the pre-pin auto decision.
+   * Returns whether a pin (or an armed snapshot) was active. Clears the pin and,
+   * like leaving manual mode generally, discards pin-owned trajectory evidence so
+   * auto routing cannot act on it. `resumeSnapshot` is retained (now armed) and
+   * `resumeIntentKey` is reset so the next user entry captures the one-shot.
+   */
+  resumeManual(): boolean {
+    const active = this.manualModel !== undefined || this.resumeSnapshot !== undefined;
+    if (this.manualModel !== undefined) this.trajectory.consumePending();
+    this.manualModel = undefined;
+    this.resumeIntentKey = undefined;
+    return active;
+  }
+
+  /**
+   * The decision `resume` should serve this invocation, or undefined to recompute.
+   * Armed only while no pin is active. The first invocation binds the one-shot to
+   * the current user entry; same-entry tool-loop continuations reuse it; the first
+   * invocation of a new entry expires it and returns undefined.
+   */
+  resolveResumeDecision(intentKey: string): RoutingDecision | undefined {
+    if (this.manualModel !== undefined || this.resumeSnapshot === undefined) return undefined;
+    if (this.resumeIntentKey === undefined) this.resumeIntentKey = intentKey;
+    if (this.resumeIntentKey === intentKey) return this.resumeSnapshot;
+    this.clearPendingResume();
+    return undefined;
+  }
+
+  clearPendingResume(): void {
+    this.resumeSnapshot = undefined;
+    this.resumeIntentKey = undefined;
   }
 
   getAccumulatedCost(): number {
@@ -520,6 +583,9 @@ export class RouterSession {
     this.chosenRegistryId = undefined;
     this.served = undefined;
     this.notifiedModel = undefined;
+    this.manualModel = undefined;
+    this.resumeSnapshot = undefined;
+    this.resumeIntentKey = undefined;
     this.accumCost = 0;
     this.resolvedThinkingLevel = undefined;
     this.activeSkills = [];

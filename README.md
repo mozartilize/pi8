@@ -59,12 +59,15 @@ All `router/auto` intents run through this same pipeline. For an explicit compou
 |---|---|
 | `/router-sync [key]` | Fetch fresh benchmark data |
 | `/router-sync embedding [--force]` | Download the E5-small embedding model (~135 MB) for multilingual classification |
-| `/router-status` | Show freshness, coverage, last decision |
+| `/router-status` | Show freshness, coverage, manual-pin state, last decision |
+| `/router-manual [provider/model\|resume]` | Pin one model for this session; Space shows searchable model completions, Enter opens Pi's native `/model` picker, and `resume` reuses the pre-pin route for the next turn |
 | `/router-why` | Explain why the last model was chosen |
 | `/router-models` | Show allowlist and matching models |
 | `/router-agents` | Show which model each subagent role resolves to |
 | `/router-fix <slug> <id>` | Override a benchmark-to-registry mapping |
 | `/router-blacklist [add/remove/clear]` | Exclude models; `remove <provider>/*` also lifts a usage-limit provider exclusion |
+
+`/router-manual` keeps `router/auto` active and stores the pin only in the current `RouterSession`; it never writes `settings.json` or the pi8 config. Manual turns skip the assessment call and serve exactly the selected model. The fallback chain contains one model, so failure is surfaced instead of substituting another model. `/router-manual resume` leaves the pin and reuses the auto decision that was in effect just before it was set — the same chosen model and fallback chain, with no fresh classification or assessment — for the next user entry only; subsequent turns recompute normally. A new session clears the pin automatically.
 
 ## Configuration
 
