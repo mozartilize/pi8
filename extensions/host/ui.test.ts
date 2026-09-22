@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { clearRouterStatus, formatStatus, formatDecisionDetail, formatAssessmentSpend, formatEmbeddingStats } from './ui.js';
+import { clearRouterStatus, formatStatus, formatDecisionDetail, formatAssessmentSpend, formatEmbeddingStats, servedKey } from './ui.js';
+import { candidateKey } from '../routing/score/scorer.js';
 import { multiWorkRoutingMeta } from '../test-support/router-fixtures.js';
 import type { RoutingDecision } from '../types.js';
 
@@ -341,5 +342,17 @@ describe('assessment in /router-why', () => {
     expect(
       formatStatus(decisionWith({ routedUp: true, routedPickChanged: true }), served()),
     ).toContain('routed-up');
+  });
+});
+
+describe('servedKey', () => {
+  // The served identity is matched against the candidate pool (capability
+  // handoff), bound to the trajectory owner, and persisted to the decision log.
+  // All three compare it to `candidateKey` output, so the two encodings must
+  // stay equivalent for the same (model, effort) identity.
+  it('mirrors candidateKey for the same identity, with and without effort', () => {
+    expect(servedKey({ registryId: 'alpha/model', thinkingLevel: 'high' }))
+      .toBe(candidateKey({ registryId: 'alpha/model', effort: 'high' }));
+    expect(servedKey({ registryId: 'alpha/model' })).toBe(candidateKey({ registryId: 'alpha/model' }));
   });
 });

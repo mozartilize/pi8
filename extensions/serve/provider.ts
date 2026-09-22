@@ -1196,6 +1196,26 @@ async function delegateRouterTurn(args: {
     return { kind: 'terminal', reason: 'error', message: decision.reason };
   }
 
+  // Between-turn struggle wanted a stronger model but none is reachable. The
+  // router keeps the struggling model regardless; semi mode lets the user stop,
+  // otherwise a warning is surfaced.
+  const unavailableGate = await resolveTrajectoryUnavailableGate({
+    decision,
+    semi: config.semi,
+    extensionContext,
+    options,
+    pinned: pin != null,
+  });
+  if (unavailableGate.kind === 'terminal') {
+    renderRouterStatus(extensionContext, decision, undefined);
+    appendDecision(decision, {
+      registryId: '',
+      viaFallback: false,
+      accumulatedCost: session.getAccumulatedCost(),
+    });
+    return { kind: 'terminal', reason: unavailableGate.reason, message: unavailableGate.message };
+  }
+
   const pendingTrajectory = session.peekPendingTrajectoryEscalation();
   const delegationSessionGeneration = session.getSessionGeneration();
   const delegationOptions: DelegationOptions = {
@@ -1438,6 +1458,46 @@ async function resolveSemiGate(args: {
         }),
       };
     }
+  } catch {
+    return { kind: 'proceed' };
+  }
+}
+
+/**
+ * Between-turn escalation gate for the "struggle wanted a stronger model but
+ * none is reachable" outcome (`trajectoryFriction.unavailable`). The router
+ * keeps the struggling model either way; this only decides whether the user
+ * gets a say (semi) or a heads-up (warn). A user pin already fixed the model,
+ * so the gate is skipped..
+ */
+async function resolveTrajectoryUnavailableGate(args: {
+  decision: RoutingDecision;
+  semi: boolean;
+  extensionContext: ExtensionContext | undefined;
+  options: SimpleStreamOptions | undefined;
+  pinned: boolean;
+}): Promise<{ kind: 'proceed' } | { kind: 'terminal'; reason: 'aborted'; message: string }> {
+  const { decision, semi, extensionContext: ctx, options, pinned } = args;
+  try {
+    if (pinned) return { kind: 'proceed' };
+    if (decision.trajectoryFriction?.unavailable !== true) return { kind: 'proceed' };
+    const fromModel = decision.trajectoryFriction.fromModel;
+    const message = `${fromModel} is struggling and no stronger model is available for this turn.`;
+    if (semi && ctx?.hasUI) {
+      const cont = 'Yes \u2014 continue with the current model';
+      const stop = 'No \u2014 stop';
+      const choice = await ctx.ui.select(
+        `${message} Continue?`,
+        [cont, stop],
+        options?.signal ? { signal: options.signal } : undefined,
+      );
+      if (choice === undefined || choice === stop) {
+        return { kind: 'terminal', reason: 'aborted', message: 'Stopped: no stronger model available for a struggling turn.' };
+      }
+      return { kind: 'proceed' };
+    }
+    if (ctx?.hasUI) ctx.ui.notify(`${message} Continuing.`, 'warning');
+    return { kind: 'proceed' };
   } catch {
     return { kind: 'proceed' };
   }

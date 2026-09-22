@@ -26,7 +26,7 @@ import {
   RouterSession,
   defaultRouterSession,
 } from './router-session-state.js';
-import { renderRouterStatus, notifyRouting, type ServedInfo } from '../host/ui.js';
+import { renderRouterStatus, notifyRouting, servedKey, type ServedInfo } from '../host/ui.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { appendDecision } from '../host/decisionlog.js';
 import { makeTerminalErrorEvent } from './error-event.js';
@@ -582,6 +582,14 @@ class AttemptController {
   thinkingReceived = false;
   meaningfulOutputReceived = false;
   sawFirstEvent = false;
+  /**
+   * Latched once a severe pre-output reasoning loop is observed, independent of
+   * whether a stronger target exists. The share-based severe verdict can decay
+   * as windows age out, so it must be remembered: the answerless gate reads it
+   * to distinguish capability struggle (rule 8: no blacklist, no provider
+   * strike) from an anonymous empty completion.
+   */
+  severePreOutputSeen = false;
   observedUsage: Parameters<typeof accumulateAttemptUsage>[0];
   terminalAccounting = false;
   lastServed: ServedInfo | undefined;
@@ -624,12 +632,16 @@ class AttemptController {
             ? rec.content
             : '';
       this.reasoningLoop.update(delta);
-      if (
-        this.candidate.remainingHasStronger
-        && !this.meaningfulOutputReceived
+      const severePreOutput =
+        !this.meaningfulOutputReceived
         && !this.attemptBuffer.committedToStream
-        && this.reasoningLoop.severity() === 'severe'
-      ) {
+        && this.reasoningLoop.severity() === 'severe';
+      if (severePreOutput) this.severePreOutputSeen = true;
+      // Abort now only when a reachable stronger target exists. With none, the
+      // attempt runs to its natural finish; the answerless gate then promotes
+      // the latched observation rather than routing down on a probabilistic
+      // signal.
+      if (this.candidate.remainingHasStronger && severePreOutput) {
         return { kind: 'trajectory' };
       }
     }
@@ -778,7 +790,16 @@ async function runCandidateAttempt(
         break;
       }
       if (!failureError && !controller.meaningfulOutputReceived) {
-        failureError = new Error(`stream ended before meaningful output: ${candidate.candidateId}`);
+        if (controller.severePreOutputSeen) {
+          // Severe pre-output loop with no reachable stronger target, finished
+          // answerless. That is capability struggle for this intent, not a
+          // model defect: promote to the trajectory branch so the walk recovers
+          // without blacklisting the source or striking its provider (rule 8).
+          trajectoryEscalation = true;
+          failureError = new Error(`trajectory reasoning-loop (no stronger target): ${candidate.candidateId}`);
+        } else {
+          failureError = new Error(`stream ended before meaningful output: ${candidate.candidateId}`);
+        }
       }
     } catch (error) {
       failureError = error;
@@ -900,13 +921,15 @@ export async function runDelegationLoop(
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
   const ctx: DelegationContext = { opts, stream, decision, turnSpend, session, stillCurrent };
-  // The pre-output hop may only revisit the not-yet-attempted tail. Target
-  // selection itself is shared with the between-turn repick through
-  // `escalationChain`, so both surfaces choose the same strongest upgrade.
-  const remainingCandidates = (index: number): Candidate[] =>
+  // Not-yet-attempted, still-reachable candidates after `index` in the live
+  // chain. Anything at or before `index` was already tried, and a dead
+  // provider cannot serve a hop, so both the early-abort probe and the hop
+  // itself score against exactly this set.
+  const reachableRemaining = (index: number): Candidate[] =>
     decision.fallbackChain.slice(index + 1)
       .map((key) => opts.candidates?.find((c) => candidateKey(c) === key))
-      .filter((c): c is Candidate => c != null);
+      .filter((c): c is Candidate =>
+        c != null && !deadProviders.has(parseCandidateKey(candidateKey(c)).provider));
   /**
    * Set only for the single hop that immediately follows a pre-output
    * reasoning loop. It gates the *destination* of that hop and is cleared as
@@ -951,6 +974,11 @@ export async function runDelegationLoop(
     let candidateId = proposedId;
     let { provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId);
     if (excludeSource && !isValidEscalationCandidate(candidateId, excludeSource)) continue;
+    // Known-unusable candidates are skipped before the hop is consumed: a dead
+    // or router-synthetic head must not swallow the one-shot hop provenance and
+    // strand a healthy stronger sibling behind it un-marked.
+    if (provider === ROUTER_PROVIDER_ID) continue;
+    if (deadProviders.has(provider)) continue;
     let hopTargetThisCandidate = false;
     if (capabilityHop) {
       // Remaining chain is already stronger-then-recovery. This is one-shot:
@@ -970,8 +998,6 @@ export async function runDelegationLoop(
       }
       capabilityHop = undefined;
     }
-    if (provider === ROUTER_PROVIDER_ID) continue;
-    if (deadProviders.has(provider)) continue;
     attemptIndex++;
     let chosen = registry?.find(provider, modelId);
     if (!chosen) {
@@ -1024,11 +1050,14 @@ export async function runDelegationLoop(
     );
     const effectiveSource = `${provider}/${modelId}:${effectiveReasoning ?? 'off'}`;
     // Resolved once per candidate, not per retry: a retry changes only the
-    // attempt number. The early-abort probe and the hop itself ask the same
-    // shared selector over the same remaining target pool.
+    // attempt number. A trajectory hop rewrites the remaining chain, but it
+    // leaves this candidate immediately, so the next candidate recomputes this
+    // against the rewritten chain. The early-abort gate and the hop itself both
+    // ask `escalationChain` over the same reachable-remaining set, so they can
+    // never disagree on whether a reachable stronger target exists.
     const remainingHasStronger =
       escalationChain(
-        remainingCandidates(candidateIndex),
+        reachableRemaining(candidateIndex),
         decision.dimension,
         effectiveSource,
         escOpts,
@@ -1103,9 +1132,14 @@ export async function runDelegationLoop(
       if (attempt.kind === 'trajectory') {
         candidateTrajectoryEscalation = true;
         excludeSource = attempt.effectiveSource;
+        // Same target selection as the between-turn repick: strongest reachable
+        // stronger model by quality (`escalationChain`), never the highest-score
+        // marginal upgrade. No reachable target (the answerless-promotion path)
+        // leaves the chain untouched and hops nowhere — the source is already
+        // excluded, so the walk falls to ordinary recovery without a strike.
         const remaining = decision.fallbackChain.slice(candidateIndex + 1);
         const esc = escalationChain(
-          remainingCandidates(candidateIndex),
+          reachableRemaining(candidateIndex),
           decision.dimension,
           attempt.effectiveSource,
           escOpts,
@@ -1137,8 +1171,6 @@ export async function runDelegationLoop(
             ...strongerKeys,
             ...recovery,
           );
-        } else {
-          capabilityHop = undefined;
         }
         debugLog('attempt.trajectory', {
           candidate: candidateId,
@@ -1228,17 +1260,15 @@ export async function runDelegationLoop(
   const fromModel = finalDecision.trajectoryFriction?.fromModel ?? excludeSource;
   let capabilityHandoff: DelegationResult['capabilityHandoff'];
   if (success && lastServed && fromModel && opts.candidates) {
-    const servedKey = lastServed.thinkingLevel
-      ? `${lastServed.registryId}:${lastServed.thinkingLevel}`
-      : lastServed.registryId;
-    const dest = opts.candidates.find((candidate) => candidateKey(candidate) === servedKey)
-      ?? findSourceCandidate(opts.candidates, servedKey);
+    const key = servedKey(lastServed);
+    const dest = opts.candidates.find((candidate) => candidateKey(candidate) === key)
+      ?? findSourceCandidate(opts.candidates, key);
     const source = findSourceCandidate(opts.candidates, fromModel);
     if (
       dest
       && isStrictlyStrongerCandidate(dest, fromModel, decision.dimension, source, compareOpts)
     ) {
-      capabilityHandoff = { fromModel, served: servedKey };
+      capabilityHandoff = { fromModel, served: key };
     }
   }
   return { success: true, streamFinalized: false, lastServed, capabilityHandoff };

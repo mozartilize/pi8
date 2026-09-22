@@ -2214,6 +2214,102 @@ describe('trajectory capability escalation', () => {
   });
 });
 
+describe('no-stronger escalation gate', () => {
+  // A single benchmarked model: any escalation from it finds nothing stronger,
+  // so the between-turn repick marks `trajectoryFriction.unavailable` and the
+  // router keeps serving it. The gate only decides user involvement.
+  async function soloHarness(
+    cfg: Record<string, unknown>,
+    ui?: { select: ReturnType<typeof vi.fn>; input: ReturnType<typeof vi.fn>; notify: ReturnType<typeof vi.fn> },
+  ): Promise<Awaited<ReturnType<typeof setupProviderTest>>> {
+    return setupProviderTest({
+      dir: temp.path,
+      config: { consultRouter: false, ...cfg },
+      benchmarks: [{
+        registryId: 'alpha/solo',
+        benchSlug: 'solo',
+        active: true,
+        quality: { intelligence: 80, coding: 80, agenticCoding: 80 },
+        source: 'test',
+      }] as unknown as Parameters<typeof setupProviderTest>[0]['benchmarks'],
+      models: [registryModel('alpha/solo', {
+        contextWindow: 200000,
+        maxTokens: 8192,
+        cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
+      })],
+      ...(ui ? { ctx: { hasUI: true, ui: ui as unknown as ExtensionContext['ui'] } } : {}),
+    });
+  }
+  const context = {
+    messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }],
+  } as unknown as Context;
+  function makeUi(over: Partial<{ select: ReturnType<typeof vi.fn>; notify: ReturnType<typeof vi.fn> }> = {}) {
+    return { select: vi.fn(async () => undefined), input: vi.fn(async () => undefined), notify: vi.fn(), ...over };
+  }
+  function armStruggle(harness: Awaited<ReturnType<typeof setupProviderTest>>): void {
+    const served = harness.session.getLastServed();
+    const fromModel = served?.registryId
+      ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
+      : harness.session.getLastDecision()?.chosen;
+    harness.session.armTrajectoryEscalation(
+      { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
+      fromModel,
+      harness.session.getLastDecision()?.dimension,
+      false,
+    );
+    harness.outStream.events = [];
+    harness.outStream.ended = false;
+    vi.mocked(streamSimple).mockClear();
+  }
+
+  it('semi on: stops the turn when the user declines to continue', async () => {
+    const ui = makeUi({ select: vi.fn(async (_t: string, opts: string[]) => opts[1]) });
+    const harness = await soloHarness({ semi: true }, ui);
+    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+    await harness.serve(context);
+    armStruggle(harness);
+    harness.scriptReply([{ type: 'text_delta', delta: 'should not run' }, { type: 'done' }]);
+    await harness.serve(context);
+
+    expect(ui.select).toHaveBeenCalledTimes(1);
+    expect(harness.streamedModels()).toEqual([]);
+    const terminal = harness.outStream.events.find((e) => e.type === 'error');
+    expect(terminal).toBeDefined();
+    expect((terminal as { reason?: string }).reason).toBe('aborted');
+  });
+
+  it('semi on: continues with the current model when the user accepts', async () => {
+    const ui = makeUi({ select: vi.fn(async (_t: string, opts: string[]) => opts[0]) });
+    const harness = await soloHarness({ semi: true }, ui);
+    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+    await harness.serve(context);
+    armStruggle(harness);
+    harness.scriptReply([{ type: 'text_delta', delta: 'kept going' }, { type: 'done' }]);
+    await harness.serve(context);
+
+    expect(ui.select).toHaveBeenCalledTimes(1);
+    expect(harness.streamedModels()).toEqual(['alpha/solo']);
+  });
+
+  it('semi off: warns and continues without a blocking prompt', async () => {
+    const ui = makeUi();
+    const harness = await soloHarness({ semi: false }, ui);
+    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+    await harness.serve(context);
+    armStruggle(harness);
+    harness.scriptReply([{ type: 'text_delta', delta: 'kept going' }, { type: 'done' }]);
+    await harness.serve(context);
+
+    expect(ui.select).not.toHaveBeenCalled();
+    // The router also `notify`s routing status at 'info'; the struggle warning
+    // is the only 'warning'-level notification.
+    const warnings = ui.notify.mock.calls.filter((c) => c[1] === 'warning');
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0]?.[0])).toContain('no stronger model');
+    expect(harness.streamedModels()).toEqual(['alpha/solo']);
+  });
+});
+
 describe('session model blacklist', () => {
   it('adds failed models, removes one model, and clears all models', () => {
     blacklistModel('alpha/one');

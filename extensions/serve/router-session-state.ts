@@ -18,7 +18,7 @@ import type {
   RoutingAssessment,
   RoutingDecision,
 } from '../types.js';
-import type { ServedInfo } from '../host/ui.js';
+import { servedKey, type ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
@@ -542,9 +542,7 @@ export class RouterSession {
   private servedCapabilityKey(): string | undefined {
     const served = this.getLastServed();
     if (!served?.registryId) return undefined;
-    return served.thinkingLevel
-      ? `${served.registryId}:${served.thinkingLevel}`
-      : served.registryId;
+    return servedKey(served);
   }
 
   servedTrajectoryKey(): string | undefined {

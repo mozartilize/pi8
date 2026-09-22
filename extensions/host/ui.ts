@@ -25,7 +25,16 @@ export interface ServedInfo {
   capability?: ServedCapabilityMeta;
 }
 
-function formatServedModel(served: ServedInfo): string {
+/**
+ * Canonical key of the model that served a turn, mirroring `candidateKey`'s
+ * `registryId[:effort]` shape (thinkingLevel is the served analog of a
+ * candidate's effort). Any caller that matches a served turn against the
+ * candidate pool or persists its identity must go through this one encoding,
+ * so a change to the key format cannot leave a hand-rolled copy behind.
+ * Display code that hides a redundant `:off` is a separate concern and does
+ * not use this (see `notifyRouting`).
+ */
+export function servedKey(served: Pick<ServedInfo, 'registryId' | 'thinkingLevel'>): string {
   return served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId;
 }
 
@@ -40,7 +49,7 @@ export function formatStatus(
       ? `auto:${decision.dimension} → unavailable (${decision.reason})`
       : 'auto → waiting';
   }
-  const parts = [`auto:${decision.dimension}`, '→', formatServedModel(served)];
+  const parts = [`auto:${decision.dimension}`, '→', servedKey(served)];
   if (served.viaFallback) {
     const rank = served.fallbackRank && served.fallbackRank > 1 ? ` ${served.fallbackRank}` : '';
     parts.push(`(FALLBACK${rank}!)`);
@@ -59,7 +68,7 @@ export function formatDecisionDetail(
   if (!decision) {
     return ['Last routing decision: none yet (no turn has been routed in this session).'];
   }
-  const servedModel = served ? formatServedModel(served) : 'unknown';
+  const servedModel = served ? servedKey(served) : 'unknown';
   const lines = [
     `Last turn served by: ${servedModel}`,
     `  dimension:  ${decision.dimension} (confidence ${decision.confidence.toFixed(2)})`,

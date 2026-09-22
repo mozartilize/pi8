@@ -1244,6 +1244,44 @@ describe('pre-output reasoning-loop handoff', () => {
     expect(result.capabilityHandoff).toBeUndefined();
   });
 
+  it('does not blacklist or strike a struggling source when nothing stronger is reachable', async () => {
+    // Rule 8: a severe pre-output loop is capability struggle, not a model
+    // defect. With no reachable stronger target the source runs to its
+    // answerless finish and the walk recovers to a weaker model, but the source
+    // must not be blacklisted and its provider must not be struck.
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'gamma/cheap'],
+      candidates: [loopSource, loopCheap],
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents()],
+        'gamma/cheap': [[{ type: 'text_delta', delta: 'recovered' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'gamma/cheap']);
+    expect(h.blacklist).toEqual([]);
+    expect(h.blacklistedProviders).toEqual([]);
+    expect(result.capabilityHandoff).toBeUndefined();
+    expect(h.session.getLastDecision()?.cause).toBe('error-fallback');
+  });
+
+  it('does not blacklist a lone struggling source with no fallback', async () => {
+    // Rule 8 at the starkest: a single-candidate chain has nowhere to recover.
+    // The turn fails, but blacklisting the model for the whole session because
+    // one turn exceeded it is exactly the penalty rule 8 forbids.
+    const h = createDelegationHarness({
+      chain: ['alpha/loop'],
+      candidates: [loopSource],
+      scripts: { 'alpha/loop': [reasoningLoopEvents()] },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(false);
+    expect(h.attempts).toEqual(['alpha/loop']);
+    expect(h.blacklist).toEqual([]);
+    expect(h.blacklistedProviders).toEqual([]);
+  });
+
   it('keeps a dimension-owning cause on an immediate hop', async () => {
     const h = createDelegationHarness({
       chain: ['alpha/loop', 'beta/strong'],

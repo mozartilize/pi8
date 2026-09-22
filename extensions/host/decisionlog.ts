@@ -20,6 +20,7 @@ import type {
   RoutingDecision,
 } from '../types.js';
 import { resolveStoragePath } from '../bench/store.js';
+import { servedKey } from './ui.js';
 import { sessionSidecarPath } from '../sessionpaths.js';
 import { ASSESSMENT_PROMPT_VERSION } from '../routing/consult/assessment-prompt.js';
 import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
@@ -258,9 +259,7 @@ export function appendDecision(
     const path = decisionLogPath(storageBase);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const servedModel = served.thinkingLevel
-      ? `${served.registryId}:${served.thinkingLevel}`
-      : served.registryId;
+    const servedModel = servedKey(served);
     const entry: DecisionLogEntry = {
       ts: Date.now(),
       dimension: decision.dimension,
