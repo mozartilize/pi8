@@ -69,13 +69,28 @@ export function formatDecisionDetail(
     return ['Last routing decision: none yet (no turn has been routed in this session).'];
   }
   const servedModel = served ? servedKey(served) : 'unknown';
-  const lines = [
+  const chain = decision.fallbackChain.slice(0, 5).join(' → ');
+  return [
     `Last turn served by: ${servedModel}`,
     `  dimension:  ${decision.dimension} (confidence ${decision.confidence.toFixed(2)})`,
     `  top pick:   ${decision.chosen}`,
     `  thinking:   ${served?.thinkingLevel ?? 'off'}`,
     `  reason:     ${decision.reason}`,
+    ...routingNotes(decision, served),
+    ...assessmentLines(decision),
+    ...decision.candidateDiagnostics?.flatMap((diagnostic) =>
+      diagnostic.excludedReason ? [`  gate:       ${diagnostic.candidateKey} ${diagnostic.excludedReason}`] : [],
+    ) ?? [],
+    ...(decision.multiWork ? multiWorkLines(decision.multiWork) : []),
+    ...(decision.trajectoryFriction ? [trajectoryLine(decision.trajectoryFriction)] : []),
+    ...(decision.switched ? ['  note:       switched model from the previous turn'] : []),
+    ...(decision.contextPressure ? contextPressureLines(decision.contextPressure) : []),
+    ...(chain ? [`  chain:      ${chain}`] : []),
   ];
+}
+
+function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined): string[] {
+  const lines: string[] = [];
   if (served?.viaFallback) {
     const rank = served.fallbackRank && served.fallbackRank > 1
       ? ` (served by rank ${served.fallbackRank} in the fallback chain)`
@@ -96,13 +111,18 @@ export function formatDecisionDetail(
         : '  note:       dimension lowered (see assessment), but the served model was unchanged',
     );
   }
-  if (decision.assessment) {
-    const a = decision.assessment;
+  return lines;
+}
+
+function assessmentLines(decision: RoutingDecision): string[] {
+  const lines: string[] = [];
+  const a = decision.assessment;
+  if (a) {
     lines.push(
       `  assessment: ${a.kind}/${a.complexity}/${a.scope}, ` +
       `compound=${a.compound ? 'yes' : 'no'}, ${a.confidence} (${a.model}, ${a.ms}ms, $${a.costUsd.toFixed(5)})`,
+      `  rationale:  ${a.reasoning}`,
     );
-    lines.push(`  rationale:  ${a.reasoning}`);
     if (a.vetoedLatch) {
       lines.push('  note:       depth escalation vetoed by a bounded high-confidence assessment');
     }
@@ -113,49 +133,40 @@ export function formatDecisionDetail(
   if (decision.cause === 'no-data') {
     lines.push('  note:       no-data (no routable candidate had benchmark data)');
   }
-  for (const diagnostic of decision.candidateDiagnostics ?? []) {
-    if (diagnostic.excludedReason) {
-      lines.push(`  gate:       ${diagnostic.candidateKey} ${diagnostic.excludedReason}`);
-    }
-  }
-  if (decision.multiWork) {
-    const mw = decision.multiWork;
-    lines.push(
-      `  terminal:   ${mw.terminal.kind}/${mw.terminal.complexity}, ${mw.terminalBand} band, phase ${mw.phase} (invocation ${mw.providerInvocation})`,
-    );
-    if (mw.servedCapability) {
-      const ratio = mw.servedCapability.taskRatio != null ? mw.servedCapability.taskRatio.toFixed(2) : 'unknown';
-      lines.push(`  served-cap: ratio ${ratio}, clears floor: ${mw.servedCapability.clearsTerminalFloor}`);
-    }
-    if (mw.mutationGateEscaped) {
-      const degraded = mw.capabilityDegraded ? ' (capability degraded)' : '';
-      lines.push(`  gate:       blocked invocation ${mw.gateBlockedInvocation}, escaped${degraded}`);
-    } else if (mw.gateBlockedInvocation !== undefined) {
-      lines.push(`  gate:       mutation blocked at invocation ${mw.gateBlockedInvocation}, awaiting terminal capability`);
-    } else if (mw.capabilityDegraded) {
-      lines.push('  gate:       mutation allowed with degraded capability');
-    }
-  }
-  if (decision.trajectoryFriction) {
-    const tf = decision.trajectoryFriction;
-    const kinds = tf.signals.map((signal) => `${signal.kind}:${signal.severity}`).join(', ');
-    lines.push(
-      tf.unavailable
-        ? `  trajectory: tfi ${tf.tfi.toFixed(2)} from ${tf.fromModel}; no stronger candidate`
-        : `  trajectory: tfi ${tf.tfi.toFixed(2)} from ${tf.fromModel}${kinds ? ` (${kinds})` : ''}`,
-    );
-  }
-  if (decision.switched) {
-    lines.push('  note:       switched model from the previous turn');
-  }
-  if (decision.contextPressure) {
-    const pct = (decision.contextPressure.usageRatio * 100).toFixed(0);
-    lines.push(`  note:       context pressure ${pct}% >= ${(decision.contextPressure.threshold * 100).toFixed(0)}%`);
-    lines.push(`  advice:     ${decision.contextPressure.suggestion}`);
-  }
-  const chain = decision.fallbackChain.slice(0, 5).join(' → ');
-  if (chain) lines.push(`  chain:      ${chain}`);
   return lines;
+}
+
+function multiWorkLines(mw: NonNullable<RoutingDecision['multiWork']>): string[] {
+  const lines = [
+    `  terminal:   ${mw.terminal.kind}/${mw.terminal.complexity}, ${mw.terminalBand} band, phase ${mw.phase} (invocation ${mw.providerInvocation})`,
+  ];
+  if (mw.servedCapability) {
+    const ratio = mw.servedCapability.taskRatio != null ? mw.servedCapability.taskRatio.toFixed(2) : 'unknown';
+    lines.push(`  served-cap: ratio ${ratio}, clears floor: ${mw.servedCapability.clearsTerminalFloor}`);
+  }
+  if (mw.mutationGateEscaped) {
+    const degraded = mw.capabilityDegraded ? ' (capability degraded)' : '';
+    lines.push(`  gate:       blocked invocation ${mw.gateBlockedInvocation}, escaped${degraded}`);
+  } else if (mw.gateBlockedInvocation !== undefined) {
+    lines.push(`  gate:       mutation blocked at invocation ${mw.gateBlockedInvocation}, awaiting terminal capability`);
+  } else if (mw.capabilityDegraded) {
+    lines.push('  gate:       mutation allowed with degraded capability');
+  }
+  return lines;
+}
+
+function trajectoryLine(tf: NonNullable<RoutingDecision['trajectoryFriction']>): string {
+  if (tf.unavailable) return `  trajectory: tfi ${tf.tfi.toFixed(2)} from ${tf.fromModel}; no stronger candidate`;
+  const kinds = tf.signals.map((signal) => `${signal.kind}:${signal.severity}`).join(', ');
+  return `  trajectory: tfi ${tf.tfi.toFixed(2)} from ${tf.fromModel}${kinds ? ` (${kinds})` : ''}`;
+}
+
+function contextPressureLines(pressure: NonNullable<RoutingDecision['contextPressure']>): string[] {
+  const pct = (pressure.usageRatio * 100).toFixed(0);
+  return [
+    `  note:       context pressure ${pct}% >= ${(pressure.threshold * 100).toFixed(0)}%`,
+    `  advice:     ${pressure.suggestion}`,
+  ];
 }
 
 /**
