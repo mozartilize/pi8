@@ -413,7 +413,8 @@ afterEach(async () => {
   temp.cleanup();
 });
 
-vi.mock('@earendil-works/pi-ai', () => ({
+vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
+  contentText: (await importOriginal<typeof import('@earendil-works/pi-ai')>()).contentText,
   createAssistantMessageEventStream: vi.fn(),
   // Real transient-error classifier: retry only on overload/5xx/rate-limit/network.
   isRetryableAssistantError: (m: { stopReason?: string; errorMessage?: string }) =>
@@ -1801,24 +1802,26 @@ describe('assessment orchestration', () => {
         }
         const reply = opts.assessorReply
           ?? 'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: ok';
+        // The terminal message carries the full answer, as a Pi provider's does.
+        const answer = [
+          { type: 'text_delta', delta: reply },
+          {
+            type: 'done',
+            message: {
+              stopReason: 'stop',
+              content: [{ type: 'text', text: reply }],
+              usage: { input: 120, output: 30, cacheRead: 0 },
+            },
+          },
+        ];
         if (opts.assessorDelayMs != null || opts.assessorGate) {
           return (async function* () {
             if (opts.assessorGate) await opts.assessorGate;
             else await new Promise((resolve) => setTimeout(resolve, opts.assessorDelayMs));
-            yield { type: 'text_delta', delta: reply };
-            yield {
-              type: 'done',
-              message: { usage: { input: 120, output: 30, cacheRead: 0 } },
-            };
+            yield* answer;
           })() as never;
         }
-        return asStream([
-          { type: 'text_delta', delta: reply },
-          {
-            type: 'done',
-            message: { usage: { input: 120, output: 30, cacheRead: 0 } },
-          },
-        ]);
+        return asStream(answer);
       }
       return asStream([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
     });

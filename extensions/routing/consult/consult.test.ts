@@ -1,7 +1,14 @@
 /**
  * Unit tests for the always-on assessment layer.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  contentText,
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Usage,
+} from '@earendil-works/pi-ai';
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import {
   expectedAssessorCost,
   runAssessment,
@@ -11,13 +18,14 @@ import {
 } from './consult.js';
 import type { AssessmentEvidence } from './assessment-prompt.js';
 import type { Candidate } from '../../types.js';
-import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { Model, Api, Context } from '@earendil-works/pi-ai';
 import { resetRouterSession } from '../../serve/router-session-state.js';
-
-vi.mock('@earendil-works/pi-ai/compat', () => ({
-  streamSimple: vi.fn(),
-}));
+import {
+  assistantMessage,
+  runtimeProvider,
+  runtimeRegistry,
+  type AuthResolve,
+  type RuntimeStream,
+} from '../../test-support/runtime-registry.js';
 
 beforeEach(() => resetRouterSession());
 
@@ -284,202 +292,120 @@ describe('selectAssessor — competence floor', () => {
   });
 });
 
-function asStreamWithUsage(
-  text: string,
-  usage: { inputTokens: number; outputTokens: number; costTotal?: number },
-): AsyncIterable<{ type: string }> {
-  const events: Array<{
-    type: string;
-    delta?: string;
-    message?: {
-      usage: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cost?: { total: number };
-      };
-    };
-  }> = [
-    { type: 'text_delta', delta: text },
-    {
-      type: 'done',
-      message: {
-        usage: {
-          input: usage.inputTokens,
-          output: usage.outputTokens,
-          cacheRead: 0,
-          ...(usage.costTotal == null ? {} : { cost: { total: usage.costTotal } }),
-        },
-      },
-    },
-  ];
+const ASSESSOR = 'test/a';
+
+const verdict = (kind: string, complexity: string, reasoning = 'ok') => [
+  `Kind: ${kind}`,
+  `Complexity: ${complexity}`,
+  'Scope: bounded',
+  'Compound: no',
+  'Confidence: high',
+  `Reasoning: ${reasoning}`,
+].join('\n');
+
+/** Usage as a provider reports it; `costTotal` absent models a custom provider that prices nothing. */
+function usage(input: number, output: number, costTotal?: number): Usage {
   return {
-    [Symbol.asyncIterator]: () => {
-      let i = 0;
-      return {
-        next: async () => {
-          if (i < events.length) {
-            const value = events[i];
-            i += 1;
-            return { done: false, value };
-          }
-          return { done: true, value: undefined };
-        },
-      };
-    },
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: input + output,
+    ...(costTotal == null ? {} : { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costTotal } }),
+  } as Usage;
+}
+
+function terminal(message: AssistantMessage) {
+  return message.stopReason === 'error' || message.stopReason === 'aborted'
+    ? { type: 'error', reason: message.stopReason, error: message }
+    : { type: 'done', reason: message.stopReason, message };
+}
+
+/** A provider that answers `text` and ends with the given terminal message fields. */
+function reply(text: string, overrides: Partial<AssistantMessage> = {}): RuntimeStream {
+  return () => {
+    const stream = createAssistantMessageEventStream();
+    const content = text ? [{ type: 'text' as const, text }] : [];
+    stream.push(terminal(assistantMessage(ASSESSOR, { content, ...overrides })) as never);
+    stream.end();
+    return stream;
   };
 }
+
+/** A provider that neither answers nor honours cancellation. */
+const ignoresAbort: RuntimeStream = () => createAssistantMessageEventStream();
+
+/** A provider that settles a cancelled request with its partial output, as Pi providers do. */
+function honoursAbort(partialText: string, spent: Usage): RuntimeStream {
+  return (_model, _context, options) => {
+    const stream = createAssistantMessageEventStream();
+    options?.signal?.addEventListener('abort', () => {
+      const content = partialText ? [{ type: 'text' as const, text: partialText }] : [];
+      stream.push(terminal(assistantMessage(ASSESSOR, { stopReason: 'aborted', content, usage: spent })) as never);
+      stream.end();
+    }, { once: true });
+    return stream;
+  };
+}
+
+/** A provider whose transport fails after `events`; Pi keeps the first terminal event. */
+function failsAfter(events: unknown[], error: Error): RuntimeStream {
+  return () => (async function* () {
+    yield* events;
+    throw error;
+  })() as never;
+}
+
+const storedKey: AuthResolve = async ({ credential }) => ({ auth: { apiKey: credential?.key } });
 
 let lastSentPrompt = '';
+let dispatches = 0;
 
-function asTextStream(text: string): AsyncIterable<{ type: string }> {
-  return {
-    [Symbol.asyncIterator]: () => {
-      let sent = false;
-      return {
-        next: async () => {
-          if (sent) return { done: true, value: undefined };
-          sent = true;
-          return { done: false, value: { type: 'text_delta', delta: text } };
-        },
-      };
-    },
-  };
-}
+const assessorCandidate: Candidate = {
+  registryId: ASSESSOR,
+  provider: 'test',
+  id: 'a',
+  bench: {
+    registryId: ASSESSOR,
+    benchSlug: 'a',
+    active: true,
+    quality: { intelligence: 90 },
+    source: 'test',
+  },
+  cost: { input: 1, output: 3, cacheRead: 0, cacheWrite: 0 },
+  available: true,
+};
 
-async function runAssessmentWithStream(
-  stream: AsyncIterable<{ type: string }>,
+/** Run one assessment through Pi's real registry, auth and lazy stream. */
+async function assess(
+  provider: RuntimeStream,
   over: Partial<AssessmentConfig> = {},
-  sentEvidence: AssessmentEvidence = evidence,
-  candidateOverrides?: Candidate[],
+  options: { evidence?: AssessmentEvidence; candidates?: Candidate[]; resolve?: AuthResolve } = {},
 ): Promise<AssessmentAttempt> {
-  const { streamSimple } = await import('@earendil-works/pi-ai/compat');
-  vi.mocked(streamSimple).mockImplementation(((_model: Model<Api>, context: Context) => {
-    const content = context.messages[0]?.content;
-    lastSentPrompt = typeof content === 'string' ? content : '';
-    return stream as never;
-  }) as never);
-
-  const candidates: Candidate[] = candidateOverrides ?? [
-    {
-      registryId: 'test/a',
-      provider: 'test',
-      id: 'a',
-      bench: {
-        registryId: 'test/a',
-        benchSlug: 'a',
-        active: true,
-        quality: { intelligence: 90 },
-        source: 'test',
-      },
-      cost: { input: 1, output: 3, cacheRead: 0, cacheWrite: 0 },
-      available: true,
-    },
-  ];
-  const registry = {
-    find: () => ({ id: 'a', provider: 'test' } as unknown as Model<Api>),
-    getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'k', headers: {} }),
-  } as unknown as ExtensionContext['modelRegistry'];
-
-  return runAssessment(
-    {
-      enabled: true,
-      deadlineMs: 500,
-      maxInputChars: 4000,
-      assessorQualityRatio: 0.5,
-      ...over,
-    },
-    registry,
-    candidates,
-    sentEvidence,
-  );
-}
-
-const runAssessmentWithStreamText = (text: string): Promise<AssessmentAttempt> =>
-  runAssessmentWithStream(asTextStream(text));
-
-async function runAssessmentWithNeverEndingStream({
-  deadlineMs,
-  usageBefore,
-}: {
-  deadlineMs: number;
-  usageBefore?: boolean;
-}): Promise<AssessmentAttempt> {
-  const events: Array<{ type: string; usage?: { inputTokens?: number; outputTokens?: number } }> =
-    usageBefore ? [{ type: 'usage', usage: { inputTokens: 120 } }] : [];
-  const neverEnding: AsyncIterable<{ type: string }> = {
-    [Symbol.asyncIterator]: () => {
-      let i = 0;
-      return {
-        next: (): Promise<IteratorResult<{ type: string }>> => {
-          if (i < events.length) {
-            const value = events[i];
-            i += 1;
-            return Promise.resolve({ done: false, value });
-          }
-          return new Promise(() => {});
-        },
-      };
-    },
-  };
-  return runAssessmentWithStream(neverEnding, { deadlineMs });
-}
-
-/**
- * A stream that never resolves `next` but records `return()` calls, so the
- * expiry path's iterator release is observable.
- */
-function neverEndingWithReturnTracker(): {
-  stream: AsyncIterable<{ type: string }>;
-  wasReturned: () => boolean;
-} {
-  let returned = false;
-  const stream: AsyncIterable<{ type: string }> = {
-    [Symbol.asyncIterator]: () => ({
-      next: (): Promise<IteratorResult<{ type: string }>> => new Promise(() => {}),
-      return: async () => {
-        returned = true;
-        return { done: true, value: undefined };
-      },
-    }),
-  };
-  return { stream, wasReturned: () => returned };
-}
-
-async function capturePromptSentFor(customEvidence: AssessmentEvidence): Promise<string> {
   lastSentPrompt = '';
-  await runAssessmentWithStream(
-    asTextStream(
-      [
-        'Kind: lightweight',
-        'Complexity: trivial',
-        'Scope: bounded',
-        'Compound: no',
-        'Confidence: high',
-        'Reasoning: ok',
-      ].join('\n'),
-    ),
-    {},
-    customEvidence,
+  dispatches = 0;
+  const registry = await runtimeRegistry([
+    runtimeProvider('test', options.resolve ?? storedKey, (model, context, streamOptions) => {
+      dispatches++;
+      const [first] = context.messages;
+      lastSentPrompt = first && 'content' in first ? contentText(first.content as string) : '';
+      return provider(model, context, streamOptions);
+    }, 'a'),
+  ]);
+  return runAssessment(
+    { enabled: true, deadlineMs: 500, maxInputChars: 4000, assessorQualityRatio: 0.5, ...over },
+    registry as unknown as ExtensionContext['modelRegistry'],
+    options.candidates ?? [assessorCandidate],
+    options.evidence ?? evidence,
   );
-  return lastSentPrompt;
 }
+
+const usageLimitError = '429: {"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 5 days."}';
 
 describe('assessment contract', () => {
   it('uses the v2 assessment contract', async () => {
-    const { streamSimple } = await import('@earendil-works/pi-ai/compat');
-    vi.mocked(streamSimple).mockClear();
-    await runAssessmentWithStream(
-      asTextStream([
-        'Kind: implement',
-        'Complexity: hard',
-        'Scope: open-ended',
-        'Compound: yes',
-        'Confidence: high',
-        'Reasoning: ok',
-      ].join('\n')),
-    );
-    expect(vi.mocked(streamSimple).mock.calls.length).toBe(1);
+    await assess(reply(verdict('implement', 'hard')));
+    expect(dispatches).toBe(1);
     expect(lastSentPrompt).toContain('Kind: [lightweight|gather|plan|implement|review]');
     expect(lastSentPrompt).toContain('Complexity: [trivial|routine|moderate|hard|frontier]');
     expect(lastSentPrompt).not.toContain('Dimension:');
@@ -508,48 +434,19 @@ describe('runAssessment', () => {
     expect(result).toMatchObject({ ok: false, fallbackReason: 'disabled' });
   });
 
-  it('returns auth when credentials cannot be resolved', async () => {
-    const result = await runAssessment(
-      { enabled: true, deadlineMs: 500, maxInputChars: 4000, assessorQualityRatio: 0.5 },
-      {
-        find: () => ({ provider: 'test', id: 'a' }),
-        getApiKeyAndHeaders: async () => ({ ok: false }),
-      } as never,
-      [candidate('test/a', 90)],
-      evidence,
-    );
-    expect(result).toMatchObject({ ok: false, fallbackReason: 'auth' });
+  it('returns auth without dispatching when credentials cannot be resolved', async () => {
+    const result = await assess(reply(verdict('gather', 'routine')), {}, { resolve: async () => undefined });
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'auth', model: ASSESSOR });
+    expect(dispatches).toBe(0);
   });
 
   it('returns parse when the reply fails validation', async () => {
-    const result = await runAssessmentWithStreamText('Dimension: gather\nScope: nonsense');
+    const result = await assess(reply('Dimension: gather\nScope: nonsense'));
     expect(result).toMatchObject({ ok: false, fallbackReason: 'parse' });
   });
 
-  it('returns expiry when the deadline elapses before any output', async () => {
-    const result = await runAssessmentWithNeverEndingStream({ deadlineMs: 60 });
-    // Failure carries the chosen model and producedOutput:false so the caller
-    // can strike a model that emitted nothing before the deadline (the dud
-    // signal that dominated the corpus).
-    expect(result).toMatchObject({
-      ok: false,
-      fallbackReason: 'expiry',
-      model: 'test/a',
-      producedOutput: false,
-    });
-  });
-
   it('returns a fully populated assessment on a valid reply', async () => {
-    const result = await runAssessmentWithStreamText(
-      [
-        'Kind: lightweight',
-        'Complexity: trivial',
-        'Scope: bounded',
-        'Compound: no',
-        'Confidence: high',
-        'Reasoning: a bounded extraction from one named file',
-      ].join('\n'),
-    );
+    const result = await assess(reply(verdict('lightweight', 'trivial', 'a bounded extraction from one named file')));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.assessment.kind).toBe('lightweight');
@@ -557,125 +454,119 @@ describe('runAssessment', () => {
     expect(result.assessment.compound).toBe(false);
     expect(result.assessment.scope).toBe('bounded');
     expect(result.assessment.confidence).toBe('high');
-    expect(result.assessment.model).toBe('test/a');
+    expect(result.assessment.model).toBe(ASSESSOR);
     expect(result.assessment.ms).toBeGreaterThanOrEqual(0);
   });
 
+  // A failure with no output is the dud signal the caller strikes, so it must
+  // carry the chosen model and producedOutput:false.
+  it('returns expiry within the settle window when the provider ignores cancellation', async () => {
+    const started = Date.now();
+    const result = await assess(ignoresAbort, { deadlineMs: 60 });
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry', model: ASSESSOR, producedOutput: false });
+    expect(Date.now() - started).toBeLessThan(400);
+  });
+
+  // A cancelled attempt still cost money, and partial text means the model is
+  // slow rather than a dud, so it must not be struck.
+  it('reports spend and partial output from a cancelled request', async () => {
+    const result = await assess(honoursAbort('Kind: gath', usage(120, 4)), { deadlineMs: 60 });
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry', model: ASSESSOR, producedOutput: true });
+    if (!result.ok) expect(result.costUsd).toBeCloseTo((120 + 4 * 3) / 1e6, 10);
+  });
+
+  it('bounds auth and streaming under the single deadline', async () => {
+    const started = Date.now();
+    const result = await assess(ignoresAbort, { deadlineMs: 200 }, {
+      resolve: async (input) => {
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        return storedKey(input);
+      },
+    });
+    // Auth ate 120ms of the 200ms budget; the stream cannot get a fresh 200ms.
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry' });
+  });
+
+  it('does not dispatch a provider when auth resolves after the deadline', async () => {
+    const result = await assess(reply(verdict('gather', 'routine')), { deadlineMs: 30 }, {
+      resolve: async (input) => {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return storedKey(input);
+      },
+    });
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(dispatches).toBe(0);
+  });
+
+  // A provider failure is an 'error' fallback whether it arrives as an error
+  // event or as a transport failure.
   it('reports the assessor provider when the stream emits a usage-limit error event', async () => {
-    const stream: AsyncIterable<{ type: string }> = (async function* () {
-      yield {
-        type: 'error',
-        error: {
-          stopReason: 'error',
-          errorMessage:
-            '429: {"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 5 days."}',
-        },
-      };
-    })();
-
-    const result = await runAssessmentWithStream(stream);
-
+    const result = await assess(reply('', { stopReason: 'error', errorMessage: usageLimitError }));
     expect(result).toMatchObject({
       ok: false,
-      fallbackReason: 'parse',
-      model: 'test/a',
+      fallbackReason: 'error',
+      model: ASSESSOR,
       producedOutput: false,
       usageLimitProvider: 'test',
     });
   });
 
-  it('reports the assessor provider when the stream throws a usage-limit error', async () => {
-    const throwing: AsyncIterable<{ type: string }> = {
-      [Symbol.asyncIterator]: () => ({
-        next: (): Promise<IteratorResult<{ type: string }>> =>
-          Promise.reject(new Error('429: too many requests')),
-      }),
-    };
+  it('keeps the usage-limit signal from a custom error message without content', async () => {
+    const result = await assess(reply('', {
+      stopReason: 'error',
+      errorMessage: usageLimitError,
+      content: undefined as never,
+    }));
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'error', usageLimitProvider: 'test' });
+  });
 
-    const result = await runAssessmentWithStream(throwing);
-
+  it('reports the assessor provider when the transport throws a usage-limit error', async () => {
+    const result = await assess(failsAfter([], new Error('429: too many requests')));
     expect(result).toMatchObject({
       ok: false,
       fallbackReason: 'error',
-      model: 'test/a',
+      model: ASSESSOR,
       producedOutput: false,
       usageLimitProvider: 'test',
     });
   });
 
   it('does not attach usageLimitProvider for a non-usage assessor error', async () => {
-    const stream: AsyncIterable<{ type: string }> = (async function* () {
-      yield { type: 'error', error: { stopReason: 'error', errorMessage: '421 Misdirected Request' } };
-    })();
-
-    const result = await runAssessmentWithStream(stream);
-
-    expect(result).toMatchObject({ ok: false, fallbackReason: 'parse', model: 'test/a' });
+    const result = await assess(reply('', { stopReason: 'error', errorMessage: '421 Misdirected Request' }));
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'error', model: ASSESSOR });
     expect('usageLimitProvider' in result).toBe(false);
   });
 
-  it('attaches usageLimitProvider after partial text even when the provider drops the connection', async () => {
-    // Partial narration, then a usage-limit error event, then a thrown
-    // transport error on the next next(): the usage-limit signal must survive
-    // the overwrite-by-throw and still blacklist the provider.
-    const stream: AsyncIterable<{ type: string }> = (async function* () {
-      yield { type: 'text_delta', delta: 'Let me look at this...' };
-      yield {
-        type: 'error',
-        error: {
-          stopReason: 'error',
-          errorMessage: '429: {"type":"GoUsageLimitError","message":"Weekly usage limit reached."}',
-        },
-      };
-      throw new Error('read ECONNRESET');
-    })();
-
-    const result = await runAssessmentWithStream(stream);
-
+  it('keeps the usage-limit signal and partial text when the connection drops afterwards', async () => {
+    const partial = [{ type: 'text' as const, text: 'Let me look at this...' }];
+    const result = await assess(failsAfter(
+      [terminal(assistantMessage(ASSESSOR, { stopReason: 'error', errorMessage: usageLimitError, content: partial }))],
+      new Error('read ECONNRESET'),
+    ));
     expect(result).toMatchObject({
       ok: false,
       fallbackReason: 'error',
-      model: 'test/a',
+      model: ASSESSOR,
       producedOutput: true,
       usageLimitProvider: 'test',
     });
   });
 
-  it('does not treat an error event with stopReason length as a usage-limit signal', async () => {
-    const stream: AsyncIterable<{ type: string }> = (async function* () {
-      yield {
-        type: 'error',
-        error: {
-          stopReason: 'length',
-          errorMessage: 'max tokens reached for this request',
-          usage: { input: 120, output: 30, cacheRead: 0 },
-        },
-      };
-    })();
-
-    const result = await runAssessmentWithStream(stream);
-
-    expect(result).toMatchObject({ ok: false, fallbackReason: 'parse', model: 'test/a' });
+  it('does not treat output-limit exhaustion as a usage-limit signal', async () => {
+    const result = await assess(reply('', {
+      stopReason: 'length',
+      errorMessage: 'max tokens reached for this request',
+      usage: usage(120, 30),
+    }));
+    expect(result).toMatchObject({ ok: false, fallbackReason: 'parse', model: ASSESSOR });
     expect('usageLimitProvider' in result).toBe(false);
-    if (!result.ok) {
-      expect(result.costUsd).toBeCloseTo(120 / 1e6 + (30 * 3) / 1e6, 10);
-    }
+    if (!result.ok) expect(result.costUsd).toBeCloseTo(120 / 1e6 + (30 * 3) / 1e6, 10);
   });
 
-  it('extracts terminal protocol usage and computes exact candidate cost', async () => {
-    const result = await runAssessmentWithStream(
-      asStreamWithUsage(
-        [
-          'Kind: gather',
-          'Complexity: routine',
-          'Scope: bounded',
-          'Compound: no',
-          'Confidence: high',
-          'Reasoning: reading a few files',
-        ].join('\n'),
-        { inputTokens: 120, outputTokens: 30 },
-      ),
-    );
+  it('prices terminal usage at candidate rates when the provider reports no cost', async () => {
+    const result = await assess(reply(verdict('gather', 'routine'), { usage: usage(120, 30) }));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.assessment.usage).toEqual({ input: 120, output: 30 });
@@ -684,168 +575,37 @@ describe('runAssessment', () => {
   });
 
   it('uses the provider terminal cost total when registry pricing is authoritative', async () => {
-    const result = await runAssessmentWithStream(
-      asStreamWithUsage(
-        [
-          'Kind: gather',
-          'Complexity: routine',
-          'Scope: bounded',
-          'Compound: no',
-          'Confidence: high',
-          'Reasoning: reading a few files',
-        ].join('\n'),
-        { inputTokens: 120, outputTokens: 30, costTotal: 0.123 },
-      ),
-    );
+    const result = await assess(reply(verdict('gather', 'routine'), { usage: usage(120, 30, 0.123) }));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.assessment.costUsd).toBe(0.123);
   });
 
   it('uses benchmark pricing for actual spend when registry pricing is absent', async () => {
-    const benchmarkPriced = candidate('test/a', 90, {
-      priceInputPer1M: 2,
-      priceOutputPer1M: 10,
-    });
+    const benchmarkPriced = candidate(ASSESSOR, 90, { priceInputPer1M: 2, priceOutputPer1M: 10 });
     benchmarkPriced.cost = undefined;
-    const result = await runAssessmentWithStream(
-      asStreamWithUsage(
-        [
-          'Kind: gather',
-          'Complexity: routine',
-          'Scope: bounded',
-          'Compound: no',
-          'Confidence: high',
-          'Reasoning: reading a few files',
-        ].join('\n'),
-        { inputTokens: 120, outputTokens: 30 },
-      ),
+    const result = await assess(
+      reply(verdict('gather', 'routine'), { usage: usage(120, 30, 0.123) }),
       {},
-      evidence,
-      [benchmarkPriced],
+      { candidates: [benchmarkPriced] },
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.assessment.costUsd).toBeCloseTo((120 * 2 + 30 * 10) / 1e6, 10);
   });
 
-  it('calls iterator.return() when the deadline expires mid-stream', async () => {
-    const { stream, wasReturned } = neverEndingWithReturnTracker();
-    const result = await runAssessmentWithStream(stream, { deadlineMs: 50 });
-    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry' });
-    expect(wasReturned()).toBe(true);
-  });
-
-  it('bounds auth and streaming under the single deadline', async () => {
-    const started = Date.now();
-    const { streamSimple } = await import('@earendil-works/pi-ai/compat');
-    vi.mocked(streamSimple).mockImplementation((() =>
-      ({
-        [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
-      }) as never) as never);
-
-    const registry = {
-      find: () => ({ provider: 'test', id: 'a' }),
-      getApiKeyAndHeaders: async () => {
-        await new Promise((r) => setTimeout(r, 120));
-        return { ok: true, apiKey: 'k' };
-      },
-    };
-
-    const result = await runAssessment(
-      { enabled: true, deadlineMs: 200, maxInputChars: 4000, assessorQualityRatio: 0.5 },
-      registry as never,
-      [candidate('test/a', 90)],
-      evidence,
-    );
-
-    // Auth ate 120ms of the 200ms budget; the stream cannot get a fresh 200ms.
-    expect(Date.now() - started).toBeLessThan(400);
-    expect(result).toMatchObject({ ok: false, fallbackReason: 'expiry' });
-  });
-
-  it('returns expiry for a timed-out attempt', async () => {
-    const timedOut = await runAssessmentWithNeverEndingStream({ deadlineMs: 60, usageBefore: true });
-    // A cancelled attempt still cost money; the failure return carries costUsd
-    // and ms so the caller can account for the wasted spend.
-    expect(timedOut).toMatchObject({ ok: false, fallbackReason: 'expiry' });
-    if (!timedOut.ok) {
-      expect(timedOut.costUsd).toBeGreaterThan(0);
-      expect(timedOut.ms).toBeGreaterThan(0);
-    }
-  });
-
   it('never sends tool arguments, tool results or skill descriptions', async () => {
-    const sent = await capturePromptSentFor({
-      conversation: 'User: fix the bug',
-      toolNames: ['read'],
-      skillNames: ['systematic-debugging'],
-      toolActivity: [{ name: 'read', count: 2 }],
-    });
-    expect(sent).toContain('read');
-    expect(sent).toContain('systematic-debugging');
-    expect(sent).not.toContain('"path"');
-    expect(sent).not.toContain('Use read to examine files');
-  });
-});
-
-describe('runAssessment custom provider streamSimple dispatch', () => {
-  it('dispatches through a provider-registered streamSimple instead of the generic compat one', async () => {
-    const { streamSimple } = await import('@earendil-works/pi-ai/compat');
-    vi.mocked(streamSimple).mockClear();
-
-    const responseText = [
-      'Kind: gather',
-      'Complexity: routine',
-      'Scope: bounded',
-      'Compound: no',
-      'Confidence: high',
-      'Reasoning: reading a few files',
-    ].join('\n');
-    const customStreamSimple = vi.fn().mockReturnValue({
-      async *[Symbol.asyncIterator]() {
-        yield { type: 'text_delta', delta: responseText };
-        yield { type: 'done', message: { stopReason: 'stop' } };
+    await assess(reply(verdict('lightweight', 'trivial')), {}, {
+      evidence: {
+        conversation: 'User: fix the bug',
+        toolNames: ['read'],
+        skillNames: ['systematic-debugging'],
+        toolActivity: [{ name: 'read', count: 2 }],
       },
     });
-
-    const candidates: Candidate[] = [
-      {
-        registryId: 'bridge/model',
-        provider: 'bridge',
-        id: 'model',
-        bench: {
-          registryId: 'bridge/model',
-          benchSlug: 'model',
-          active: true,
-          quality: { intelligence: 90 },
-          source: 'test',
-        },
-        cost: { input: 1, output: 3, cacheRead: 0, cacheWrite: 0 },
-        available: true,
-      },
-    ];
-    const registry = {
-      find: () => ({ id: 'model', provider: 'bridge' } as unknown as Model<Api>),
-      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: 'k', headers: {} }),
-      getProvider: (provider: string) =>
-        (provider === 'bridge' ? ({ streamSimple: customStreamSimple } as never) : undefined),
-    } as unknown as ExtensionContext['modelRegistry'];
-
-    const result = await runAssessment(
-      {
-        enabled: true,
-          deadlineMs: 500,
-        maxInputChars: 4000,
-        assessorQualityRatio: 0.5,
-      },
-      registry,
-      candidates,
-      evidence,
-    );
-
-    expect(result.ok).toBe(true);
-    expect(customStreamSimple).toHaveBeenCalledTimes(1);
-    expect(streamSimple).not.toHaveBeenCalled();
+    expect(lastSentPrompt).toContain('read');
+    expect(lastSentPrompt).toContain('systematic-debugging');
+    expect(lastSentPrompt).not.toContain('"path"');
+    expect(lastSentPrompt).not.toContain('Use read to examine files');
   });
 });

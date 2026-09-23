@@ -11,8 +11,7 @@
  * The assessment answers *only* what kind of work this is. The deterministic
  * scorer still owns which models satisfy that need.
  */
-import { streamSimple } from '@earendil-works/pi-ai/compat';
-import { normalizeContext, type Model, type Api, type Context, type SimpleStreamOptions } from '@earendil-works/pi-ai';
+import { contentText, type AssistantMessage, type AssistantMessageEventStream, type Model, type Api, type Context, type Usage } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import type {
@@ -28,6 +27,9 @@ import { getAssessorTokenEstimate } from '../../serve/router-session-state.js';
 import { isUsageLimitErrorMessage } from '../../serve/usage-limit.js';
 
 export const DEFAULT_ASSESSOR_OUTPUT_TOKENS = 80;
+
+/** How long a cancelled request may take to deliver its terminal message. */
+const ABORT_SETTLE_MS = 100;
 
 export interface AssessmentConfig {
   /** Mirrors `config.consultRouter`; false means fully deterministic routing. */
@@ -64,29 +66,25 @@ function parseProviderId(modelRef: string): { provider: string; id: string } | u
   return { provider, id: idParts.join('/') };
 }
 
-async function resolveAuth(
-  registry: ExtensionContext['modelRegistry'] | undefined,
-  model: Model<Api>,
-  deadlineAt: number,
-): Promise<{ apiKey?: string; headers?: Record<string, string | null> } | undefined> {
-  if (!registry?.getApiKeyAndHeaders) return undefined;
-  const remaining = deadlineAt - Date.now();
-  if (remaining <= 0) return undefined;
-  try {
-    const auth = await Promise.race([
-      Promise.resolve(registry.getApiKeyAndHeaders(model)),
-      new Promise<undefined>((_, reject) =>
-        setTimeout(() => reject(new Error('consult auth timeout')), remaining),
-      ),
-    ]);
-    // Header-only auth (e.g. kimi-coding OAuth Bearer) is valid; apiKey may be absent.
-    if (auth && auth.ok && (auth.apiKey || (auth.headers && Object.keys(auth.headers).length > 0))) {
-      return { apiKey: auth.apiKey, headers: auth.headers };
-    }
-  } catch {
-    // fall through
-  }
-  return undefined;
+/**
+ * The terminal message, or undefined when the provider ignores cancellation.
+ * A cancelled Pi provider settles with `stopReason: 'aborted'` and its partial
+ * content and usage, which carry the spend and the partial-output signal; the
+ * short settle window after abort is what lets that message arrive.
+ */
+function settledResult(
+  stream: AssistantMessageEventStream,
+  signal: AbortSignal,
+): Promise<AssistantMessage | undefined> {
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => { timer = setTimeout(() => resolve(undefined), ABORT_SETTLE_MS); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    void stream.result().then(resolve).finally(() => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+    });
+  });
 }
 
 /**
@@ -202,36 +200,16 @@ interface ObservedAssessmentUsage {
   reportedCostUsd?: number;
 }
 
-function usageFromEvent(
-  event: unknown,
-): ObservedAssessmentUsage | undefined {
-  const record = event as {
-    usage?: Record<string, unknown>;
-    message?: { usage?: Record<string, unknown> };
-    error?: { usage?: Record<string, unknown> };
-  } | undefined;
-  // Pi's protocol reports terminal usage on done.message/error.error. Keep the
-  // top-level seam for compatibility with custom providers that emit it early.
-  const usage = record?.message?.usage ?? record?.error?.usage ?? record?.usage;
-  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return undefined;
-  const rawInput = usage.inputTokens ?? usage.input;
-  const rawOutput = usage.outputTokens ?? usage.output;
-  if (rawInput == null && rawOutput == null) return undefined;
-  const input = Number(rawInput ?? 0);
-  const output = Number(rawOutput ?? 0);
-  if (!Number.isFinite(input) && !Number.isFinite(output)) return undefined;
-  const cacheRead = Number(usage.cacheRead ?? usage.cacheReadTokens ?? 0);
-  const cacheWrite = Number(usage.cacheWrite ?? usage.cacheWriteTokens ?? 0);
-  const cost = usage.cost as { total?: unknown } | undefined;
-  const reportedCostUsd = Number(cost?.total);
+/** Custom providers build their own messages, so counts are checked, not trusted. */
+function observedUsage(usage: Usage | undefined): ObservedAssessmentUsage {
+  const count = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
   return {
-    input: Number.isFinite(input) ? input : 0,
-    output: Number.isFinite(output) ? output : 0,
-    cacheRead: Number.isFinite(cacheRead) && cacheRead > 0 ? cacheRead : undefined,
-    cacheWrite: Number.isFinite(cacheWrite) && cacheWrite > 0 ? cacheWrite : undefined,
-    reportedCostUsd: Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0
-      ? reportedCostUsd
-      : undefined,
+    input: count(usage?.input) ?? 0,
+    output: count(usage?.output) ?? 0,
+    cacheRead: count(usage?.cacheRead) || undefined,
+    cacheWrite: count(usage?.cacheWrite) || undefined,
+    reportedCostUsd: count(usage?.cost?.total),
   };
 }
 
@@ -289,13 +267,9 @@ export async function runAssessment(
   if (!config.enabled) return { ok: false, fallbackReason: 'disabled', costUsd: 0, ms: 0 };
 
   const start = Date.now();
-  const deadlineAt = start + config.deadlineMs;
   const controller = new AbortController();
-  const expiry = setTimeout(() => controller.abort(), config.deadlineMs);
-  let iterator: AsyncIterator<{ type: string }> | undefined;
-  let usage: ObservedAssessmentUsage = { input: 0, output: 0 };
+  const expiry = setTimeout(() => controller.abort(new Error('assessment deadline exceeded')), config.deadlineMs);
   let selectedRegistryId: string | undefined;
-  let errorMessage: string | undefined;
 
   try {
     const prompt = buildAssessmentPrompt(evidence, config.maxInputChars);
@@ -310,88 +284,32 @@ export async function runAssessment(
     }
     selectedRegistryId = selected.registryId;
 
-    const auth = await resolveAuth(registry, selected.model, deadlineAt);
-    if (!auth) {
-      debugLog('assessment.skip', { reason: 'auth', model: selected.registryId });
-      return { ok: false, fallbackReason: 'auth', costUsd: 0, ms: Date.now() - start };
-    }
-
     const assessmentContext: Context = {
       messages: [{ role: 'user', content: prompt, timestamp: Date.now() }],
     };
 
-    // A provider registered with its own `streamSimple` (e.g. an OAuth/SDK-backed
-    // virtual provider with a non-standard `api` value) must be dispatched through
-    // that registered implementation. The generic compat `streamSimple` only
-    // resolves built-in `api` types and throws "No API provider registered for
-    // api: <custom>" for anything else.
-    const providerStreamSimple = registry?.getProvider?.(selected.model.provider)?.streamSimple;
-    const streamOptions: SimpleStreamOptions = {
-      apiKey: auth.apiKey,
-      headers: auth.headers,
+    // Registry dispatch resolves request auth, races it against the deadline,
+    // and selects custom providers. The hook runs after auth and before the
+    // provider, so a setup failure keeps its own 'auth' fallback.
+    let requestReady = false;
+    const stream = registry!.streamSimple(selected.model, assessmentContext, {
       signal: controller.signal,
-    };
-    const stream = providerStreamSimple
-      ? providerStreamSimple(selected.model, normalizeContext(assessmentContext), streamOptions)
-      : streamSimple(selected.model, assessmentContext, streamOptions);
+      transformHeaders: (headers) => {
+        requestReady = true;
+        return headers;
+      },
+    });
 
-    let fullText = '';
-    let expired = false;
-    let streamError = false;
-    iterator = (stream as AsyncIterable<{ type: string }>)[Symbol.asyncIterator]();
-
-    while (true) {
-      const remaining = deadlineAt - Date.now();
-      if (remaining <= 0) {
-        expired = true;
-        break;
-      }
-      let step: IteratorResult<{ type: string }>;
-      try {
-        step = await Promise.race([
-          iterator.next(),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('assessment stream timeout')), remaining),
-          ),
-        ]);
-      } catch (err) {
-        // Distinguish a genuine stream error (network, server 5xx) from the
-        // deadline timeout above.
-        if (err instanceof Error && err.message === 'assessment stream timeout') {
-          expired = true;
-        } else {
-          streamError = true;
-          // Keep the first signal: a usage-limit error event that arrived
-          // before a dropped connection must not be overwritten by the
-          // transport error that followed it.
-          if (!errorMessage) errorMessage = err instanceof Error ? err.message : String(err);
-        }
-        break;
-      }
-      if (step.done) break;
-      const event = step.value;
-      const eventUsage = usageFromEvent(event);
-      if (eventUsage) usage = { ...usage, ...eventUsage };
-      if (event.type === 'error' && !errorMessage) {
-        // A provider error event carries the usage-limit signature (e.g. 429
-        // GoUsageLimitError) the caller needs to exclude the provider. Only a
-        // genuine `stopReason: 'error'` counts — same gate as the serving path
-        // (delegation.ts), so output-limit exhaustion (`stopReason: 'length'`)
-        // can never blacklist a provider. `errorMessage` is the structured
-        // field and is preferred over the loose `message`, mirroring
-        // delegation's `errorMessageObj?.errorMessage ?? message`.
-        const err = (event as unknown as {
-          error?: { stopReason?: string; errorMessage?: string; message?: string };
-        }).error;
-        if (err?.stopReason === 'error') errorMessage = err?.errorMessage ?? err?.message;
-      }
-      if (
-        event.type === 'text_delta' &&
-        typeof (event as unknown as { delta?: string }).delta === 'string'
-      ) {
-        fullText += (event as unknown as { delta: string }).delta;
-      }
-    }
+    // The first terminal event wins: a transport failure after a usage-limit
+    // error cannot replace it.
+    const message = await settledResult(stream, controller.signal);
+    // Custom providers may build an error message without content.
+    const fullText = message?.content ? contentText(message.content) : '';
+    const usage = observedUsage(message?.usage);
+    // Only `stopReason: 'error'` is provider failure, as on the serving path;
+    // output-limit exhaustion (`length`) can never blacklist a provider.
+    const providerFailed = message?.stopReason === 'error';
+    const errorMessage = providerFailed ? message.errorMessage : undefined;
 
     const candidate = candidates.find((c) => c.registryId === selected.registryId);
     const costUsd = costFor(candidate, usage);
@@ -407,7 +325,8 @@ export async function runAssessment(
     if (!parsed) {
       // A cancelled or unparseable attempt still cost money; report the spend
       // so the routing tax stays visible even when the verdict is unusable.
-      const reason: AssessmentFallbackReason = expired ? 'expiry' : streamError ? 'error' : 'parse';
+      const reason: AssessmentFallbackReason = controller.signal.aborted ? 'expiry'
+        : !requestReady ? 'auth' : providerFailed ? 'error' : 'parse';
       const usageLimitProvider = usageLimitProviderOf(errorMessage, selectedRegistryId);
       debugLog('assessment.skip', {
         reason,
@@ -459,10 +378,5 @@ export async function runAssessment(
   } finally {
     clearTimeout(expiry);
     controller.abort();
-    try {
-      await iterator?.return?.(undefined as never);
-    } catch {
-      // A provider that refuses cancellation must not fail the turn.
-    }
   }
 }
