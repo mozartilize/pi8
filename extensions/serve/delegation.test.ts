@@ -53,6 +53,22 @@ afterAll(() => {
 });
 
 describe('runDelegationLoop contracts', () => {
+  it('falls back when an iterator rejects with a falsey error before any output', async () => {
+    const rejectUndefined: AsyncIterable<unknown> = {
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(undefined) }),
+    };
+    const h = createDelegationHarness({
+      chain: ['alpha/broken', 'beta/fallback'],
+      scripts: {
+        'alpha/broken': [rejectUndefined],
+        'beta/fallback': [[{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    expect((await h.run()).lastServed?.registryId).toBe('beta/fallback');
+    expect(h.attempts).toEqual(['alpha/broken', 'beta/fallback']);
+    expect(h.output.filter((event) => (event as { type: string }).type === 'done')).toHaveLength(1);
+  });
+
   it('never forwards a failed candidate\'s answerless done into the consumer stream', async () => {
     // A provider that completes with a terminal `done` before any output (a
     // bridge returning an empty completion) must not finalize the caller's

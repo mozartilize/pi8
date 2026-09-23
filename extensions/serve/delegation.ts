@@ -762,6 +762,75 @@ class AttemptController {
   }
 }
 
+type AttemptFailure =
+  | { kind: 'caught'; error: unknown }
+  | { kind: 'trajectory' | 'output-limit'; message: string }
+  | { kind: 'provider-error'; message: string; error: { stopReason?: string; errorMessage?: string } | undefined };
+
+interface AttemptObservation {
+  requestReady: boolean;
+  userAborted: boolean;
+  visibleTextReceived: boolean;
+  toolCallReceived: boolean;
+  committedToStream: boolean;
+  usageObserved: boolean;
+  lastServed: ServedInfo | undefined;
+  finalDecision: RoutingDecision;
+  effectiveSource: string;
+}
+
+function failureMessage(failure: AttemptFailure): string {
+  return failure.kind === 'caught'
+    ? failure.error instanceof Error ? failure.error.message : String(failure.error)
+    : failure.message;
+}
+
+/** Classify a completed attempt without changing the ordered event transition. */
+function settleAttempt(
+  failure: AttemptFailure | undefined,
+  observation: AttemptObservation,
+  tries: number,
+): CandidateAttemptResult {
+  if (!failure) {
+    return {
+      kind: 'served',
+      lastServed: observation.lastServed,
+      finalDecision: observation.finalDecision,
+      effectiveSource: observation.effectiveSource,
+    };
+  }
+  const message = failureMessage(failure);
+  if (observation.userAborted) return { kind: 'aborted', message: 'aborted' };
+  // Setup failures spent no provider tokens and cannot be retried as stream errors.
+  if (!observation.requestReady) {
+    return { kind: 'next-candidate', message, transient: false, outputLimitExhausted: false };
+  }
+  if (failure.kind === 'trajectory') {
+    return {
+      kind: 'trajectory',
+      message,
+      effectiveSource: observation.effectiveSource,
+      usageObserved: observation.usageObserved,
+    };
+  }
+  const next = decideAfterFailure(
+    observation.visibleTextReceived,
+    observation.toolCallReceived,
+    observation.committedToStream,
+    failure.kind === 'provider-error' ? failure.error : undefined,
+    message,
+    tries,
+  );
+  if (next.action === 'finalize') return { kind: 'finalize', message };
+  if (next.action === 'provider-dead') return { kind: 'provider-dead', message };
+  return {
+    kind: next.action,
+    message,
+    transient: next.transient,
+    outputLimitExhausted: failure.kind === 'output-limit',
+  };
+}
+
 async function runCandidateAttempt(
   ctx: DelegationContext,
   candidate: PreparedCandidate,
@@ -774,21 +843,14 @@ async function runCandidateAttempt(
   if (callerSignal?.aborted) forwardAbort();
 
   let iterator: AsyncIterator<DelegatedEvent> | undefined;
-  let networkTimeout = false;
-  let failureError: unknown;
-  let failureMessageObj: { stopReason?: string; errorMessage?: string } | undefined;
-  let outputLimitExhausted = false;
-  let trajectoryEscalation = false;
+  let failure: AttemptFailure | undefined;
   const streamTimer = startTimer();
   const controller = new AttemptController(ctx, candidate);
   let requestReady = false;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   const armDeadline = (ms: number, message: string): void => {
     clearTimeout(deadline);
-    deadline = setTimeout(() => {
-      networkTimeout = true;
-      attemptAbort.abort(new Error(message));
-    }, ms);
+    deadline = setTimeout(() => attemptAbort.abort(new Error(message)), ms);
   };
   const armOutputDeadline = (): void => armDeadline(
     firstEventTimeoutMs,
@@ -842,85 +904,50 @@ async function runCandidateAttempt(
         if (controller.meaningfulOutputReceived) clearTimeout(deadline);
         else if (step.value.type === 'thinking_delta') armOutputDeadline();
         if (disposition.kind === 'continue') continue;
-        if (disposition.kind === 'trajectory') {
-          trajectoryEscalation = true;
-          failureError = new Error(`trajectory reasoning-loop: ${candidate.candidateId}`);
-        } else if (disposition.kind === 'output-limit') {
-          outputLimitExhausted = true;
-          failureError = new Error(disposition.message);
-        } else {
-          failureMessageObj = disposition.error;
-          failureError = new Error(disposition.message);
-        }
+        failure = disposition.kind === 'trajectory'
+          ? { kind: 'trajectory', message: `trajectory reasoning-loop: ${candidate.candidateId}` }
+          : disposition;
         break;
       }
-      if (!failureError && !controller.meaningfulOutputReceived) {
-        if (controller.severePreOutputSeen) {
-          // Severe pre-output loop with no reachable stronger target, finished
-          // answerless. That is capability struggle for this intent, not a
-          // model defect: promote to the trajectory branch so the walk recovers
-          // without blacklisting the source or striking its provider (rule 8).
-          trajectoryEscalation = true;
-          failureError = new Error(`trajectory reasoning-loop (no stronger target): ${candidate.candidateId}`);
-        } else {
-          failureError = new Error(`stream ended before meaningful output: ${candidate.candidateId}`);
-        }
+      if (!failure && !controller.meaningfulOutputReceived) {
+        // Severe pre-output loop with no reachable stronger target is a
+        // capability struggle, not a model defect (rule 8).
+        failure = controller.severePreOutputSeen
+          ? { kind: 'trajectory', message: `trajectory reasoning-loop (no stronger target): ${candidate.candidateId}` }
+          : { kind: 'caught', error: new Error(`stream ended before meaningful output: ${candidate.candidateId}`) };
       }
     } catch (error) {
-      failureError = error;
+      failure = { kind: 'caught', error };
     }
 
-    if (!failureError) {
+    if (!failure) {
       debugLog('attempt.served', {
         candidate: candidate.candidateId,
         attemptNumber: candidate.attemptIndex + 1,
         retries: tries,
         streamMs: streamTimer(),
       });
-      return {
-        kind: 'served',
-        lastServed: controller.lastServed,
-        finalDecision: controller.finalDecision,
-        effectiveSource: candidate.effectiveSource,
-      };
+    } else {
+      const message = failureMessage(failure);
+      const userAborted = callerSignal?.aborted === true;
+      debugLog(requestReady ? 'attempt.stream' : 'attempt.auth', {
+        candidate: candidate.candidateId,
+        streamMs: streamTimer(),
+        outcome: userAborted ? 'aborted' : attemptAbort.signal.aborted ? 'timeout' : 'error',
+        error: message.slice(0, 120),
+      });
     }
-
-    const message = failureError instanceof Error ? failureError.message : String(failureError);
-    const userAborted = callerSignal?.aborted === true;
-    debugLog(requestReady ? 'attempt.stream' : 'attempt.auth', {
-      candidate: candidate.candidateId,
-      streamMs: streamTimer(),
-      outcome: userAborted ? 'aborted' : networkTimeout ? 'timeout' : 'error',
-      error: message.slice(0, 120),
-    });
-    if (userAborted) return { kind: 'aborted', message: 'aborted' };
-    // Setup failures have not reached the provider. Do not spend stream retries
-    // on missing credentials or an auth resolver that cannot finish.
-    if (!requestReady) return { kind: 'next-candidate', message, transient: false, outputLimitExhausted: false };
-    if (trajectoryEscalation) {
-      return {
-        kind: 'trajectory',
-        message,
-        effectiveSource: candidate.effectiveSource,
-        usageObserved: controller.observedUsage != null,
-      };
-    }
-    const failure = decideAfterFailure(
-      controller.visibleTextReceived,
-      controller.toolCallReceived,
-      controller.committedToStream,
-      failureMessageObj,
-      message,
-      tries,
-    );
-    if (failure.action === 'finalize') return { kind: 'finalize', message };
-    if (failure.action === 'provider-dead') return { kind: 'provider-dead', message };
-    return {
-      kind: failure.action,
-      message,
-      transient: failure.transient,
-      outputLimitExhausted,
-    };
+    return settleAttempt(failure, {
+      requestReady,
+      userAborted: callerSignal?.aborted === true,
+      visibleTextReceived: controller.visibleTextReceived,
+      toolCallReceived: controller.toolCallReceived,
+      committedToStream: controller.committedToStream,
+      usageObserved: controller.observedUsage != null,
+      lastServed: controller.lastServed,
+      finalDecision: controller.finalDecision,
+      effectiveSource: candidate.effectiveSource,
+    }, tries);
   } finally {
     clearTimeout(deadline);
     controller.commitUsage(requestReady);
