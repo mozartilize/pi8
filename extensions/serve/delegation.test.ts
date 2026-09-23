@@ -1264,6 +1264,57 @@ describe('pre-output reasoning-loop handoff', () => {
     expect(result.capabilityHandoff).toBeUndefined();
   });
 
+  it('judges a semi pin after a hop at the effort it will actually serve', async () => {
+    const medium = candidate('beta/strong', {
+      effort: 'medium',
+      reasoning: true,
+      thinkingLevelMap: { medium: 'medium', high: 'high' },
+      bench: benchRow('beta/strong', { quality: { intelligence: 50, coding: 50, agenticCoding: 50 } }),
+    });
+    const high = candidate('beta/strong', {
+      ...medium,
+      effort: 'high',
+      bench: benchRow('beta/strong', { quality: { intelligence: 90, coding: 90, agenticCoding: 90 } }),
+    });
+    const decision = routingDecision(['alpha/loop', 'beta/strong:high']);
+    const h = createDelegationHarness({
+      chain: decision.fallbackChain,
+      decision,
+      candidates: [loopSource, medium, high],
+      reasoning: 'high',
+      userReasoningOverride: true,
+      registry: {
+        find: (provider: string, id: string) => registryModel(`${provider}/${id}`, {
+          reasoning: provider === 'beta',
+          thinkingLevelMap: { medium: 'medium', high: 'high' },
+        }) as unknown as Model<Api>,
+      },
+      beforeFallback: async (candidateId, _previousId, opts) => {
+        expect(candidateId).toBe('beta/strong:high');
+        // Mirrors the production semi callback: the user pins `:medium`, which
+        // replaces the turn's explicit `:high` request for later attempts.
+        opts.decision.fallbackChain.splice(1, 1, 'beta/strong:medium');
+        opts.decision.cause = 'manual-override';
+        opts.reasoning = 'medium';
+        opts.userReasoningOverride = true;
+        return 'beta/strong:medium';
+      },
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents()],
+        'beta/strong': [[{ type: 'text_delta', delta: 'pinned' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'beta/strong']);
+    expect(h.reasoningOptions.at(-1)).toBe('medium');
+    // The measured `:medium` row is weaker than the source, so serving it is a
+    // manual override, not a proven capability hop.
+    expect(h.session.getLastDecision()?.cause).toBe('manual-override');
+    expect(h.session.getLastDecision()?.trajectoryFriction).toBeUndefined();
+    expect(result.capabilityHandoff).toBeUndefined();
+  });
+
   it('allows an explicit semi selection of the excluded source without calling it a capability hop', async () => {
     const h = createDelegationHarness({
       chain: ['alpha/loop', 'beta/strong'],

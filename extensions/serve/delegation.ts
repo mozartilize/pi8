@@ -977,11 +977,13 @@ export async function runDelegationLoop(
   const stillCurrent = (): boolean =>
     session.getSessionGeneration() === startGeneration
     && (startIntent == null || session.getCachedIntent()?.key === startIntent);
-  const compareOpts: StrongerCompareOpts = {
+  // Read live: a semi substitution can replace the turn reasoning mid-walk, and
+  // a stronger-hop proof must use the effort the attempt will actually send.
+  const compareOpts = (): StrongerCompareOpts => ({
     userReasoning: typeof opts.reasoning === 'string' ? (opts.reasoning as ThinkingLevel) : undefined,
     userReasoningOverride: opts.userReasoningOverride,
     candidates: opts.candidates,
-  };
+  });
   // Escalation target selection reuses the scorer's guards + quality pick. The
   // remaining chain was already context/vision-guarded at routing time, so no
   // context estimate is needed here.
@@ -1114,7 +1116,7 @@ export async function runDelegationLoop(
           capabilityHop.fromModel,
           decision.dimension,
           hopSource,
-          compareOpts,
+          compareOpts(),
         )
       ) {
         servingHop = capabilityHop;
@@ -1152,7 +1154,7 @@ export async function runDelegationLoop(
         decision.dimension,
         effectiveSource,
         escOpts,
-        compareOpts,
+        compareOpts(),
       ) !== undefined;
     const prepared: PreparedCandidate = {
       candidateId,
@@ -1213,7 +1215,7 @@ export async function runDelegationLoop(
           decision.dimension,
           attempt.effectiveSource,
           escOpts,
-          compareOpts,
+          compareOpts(),
         );
         if (esc) {
           capabilityHop = {
@@ -1296,7 +1298,7 @@ export async function runDelegationLoop(
   }
   const fromModel = finalDecision.trajectoryFriction?.fromModel ?? excludeSource;
   const capabilityHandoff = resolveCapabilityHandoff(
-    lastServed, fromModel, decision.dimension, opts.candidates, compareOpts,
+    lastServed, fromModel, decision.dimension, opts.candidates, compareOpts(),
   );
   return { success: true, streamFinalized: false, lastServed, capabilityHandoff };
 }
