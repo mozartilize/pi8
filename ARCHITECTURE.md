@@ -41,7 +41,7 @@ Every turn:
 
 ### Keyword classifier (deterministic fallback)
 
-A fast local keyword/intent classifier ported from LiteLLM's `complexity_router.py` (Apache-2.0). Maps the request to a task dimension using five keyword lists (code, reasoning, technical, simple, gather) plus dimension-specific markers (review, plan, intent verbs). Weighted-sum scoring with LiteLLM's dimension weights produces a confidence score; ties are broken by dimension strength. The resolved intent is cached per user entry key and reused through that entry's Pi tool loop.
+A fast local keyword/intent classifier ported from LiteLLM's `complexity_router.py` (Apache-2.0). Maps the request to a task dimension using five keyword lists (code, reasoning, technical, simple, gather) plus dimension-specific markers (review, plan, intent verbs). Weighted-sum scoring with LiteLLM's dimension weights produces a confidence score; ties are broken by dimension strength. The resolved intent is cached per user entry key and reused through that entry's Pi tool loop, except for the assessed mutation-phase transition below.
 
 Thin approvals and transitions (e.g. `ok go for it` or `what's next?`) use at most 1,500 characters of role-labelled user/assistant context ending at that entry, keyed differently so a full-classification turn and its thin continuation share the same intent dimension.
 
@@ -56,7 +56,8 @@ One assessment per real user entry, bounded by one end-to-end deadline (`assessm
 Verdicts are adopted under strict caps:
 
 - Uncertainty always routes up: low-confidence assessments yield `max(heuristic, oneTierAbove(verdict))`, never anything below the heuristic.
-- Only a **high-confidence, `scope: bounded`** verdict may lower the dimension, by **at most one tier** (or release an unassisted keyword ambiguity bump to `rawHeuristic`), never from `implement` or `review`, and never while the depth latch is engaged.
+- At entry, only a **high-confidence, `scope: bounded`** verdict may lower the dimension, by **at most one tier** (or release an unassisted keyword ambiguity bump to `rawHeuristic`), never from `implement` or `review`, and never while the depth latch is engaged.
+- Mid-intent exception: a cached high-confidence assessment naming `implement` as the deliverable, followed by an identified mutation tool call (`edit`, `write`, or a high-confidence Bash write), changes `plan`/`review` to `implement` on the next provider invocation (`mutation-phase` cause). The call need not succeed; file extensions are not inspected. Scope need not be bounded. The cache latches the transition for this intent. No verdict, a pending trajectory handoff, or an engaged depth latch keeps the current task type. The incumbent capability and thinking minimums still apply. When a call is observed but the task type stays `plan`/`review`, the status shows `editing` separately from the routed task type.
 - Trajectory repick: a consult that raised the dimension owns that decision (`router-consult` cause remains active for trajectory repick purposes).
 
 Each attempt writes an `assessment-metric` decision-log record joined by `intentKey`, preserving the heuristic delta or fallback reason. A depth-latch transition writes a second metric from the same single assessment dispatch. Assessment spend is tracked separately from routed spend.
@@ -264,11 +265,11 @@ Pure, fail-open, invocation-bounded state transitions gating `edit`/`write` tool
 
 ### Assessor v2 contract (`assessment-prompt.ts`)
 
-`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. The assessor returns the `{ kind, complexity, scope, compound, confidence, reasoning }` shape as defined by the terminal classifier (`ParsedAssessment`/`RoutingAssessment`). Successful verdicts are adopted under the caps in §1 and recorded as `assessment-metric` entries. The assessor's `complexity`/`compound` fields inform terminal classification only — they never gate routing directly, and there is no automatic verify-phase down-routing.
+`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. The assessor returns the `{ kind, complexity, scope, compound, confidence, reasoning }` shape as defined by the terminal classifier (`ParsedAssessment`/`RoutingAssessment`). Successful verdicts are adopted under the entry caps in §1 and recorded as `assessment-metric` entries. The assessor's `kind` also gates the mutation-phase transition; `complexity`/`compound` do not gate it. The separate deterministic terminal classification supplies the multi-work band, and there is no automatic verify-phase down-routing.
 
 ### Decision surfacing
 
-`RoutingDecision.multiWork` (a `MultiWorkRoutingMeta`) is present only for engaged intents. `/router-status` and `/router-why` (`formatDecisionDetail` in `ui.ts`) print terminal kind/complexity/band and phase/invocation, the actual served capability ratio (or `unknown` without a measured ratio), and a gate line only when a block/escape actually occurred. Decisions without engaged multi-work metadata render exactly as before.
+`RoutingDecision.multiWork` (a `MultiWorkRoutingMeta`) is present only for engaged intents. `/router-status` and `/router-why` (`formatDecisionDetail` in `ui.ts`) print terminal kind/complexity/band and phase/invocation, the actual served capability ratio (or `unknown` without a measured ratio), and a gate line only when a block/escape actually occurred. Decisions without engaged multi-work metadata can still display `editing` after an identified mutation call; their task type changes only after the assessed mutation-phase transition.
 
 ---
 

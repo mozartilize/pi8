@@ -235,6 +235,7 @@ export type DecisionCause =
   | 'heuristic'
   | 'continuation-context'
   | 'router-consult'
+  | 'mutation-phase'
   | 'embedding-classify'
   | 'error-fallback'
   | 'no-data'
@@ -285,6 +286,8 @@ export interface RoutingDecision {
   fallbackReason?: AssessmentFallbackReason;
   /** Intent cache key joining assessment metrics to this routing decision. */
   intentKey?: string;
+  /** A mutation tool call was observed; the task type may still be plan/review. */
+  mutationObserved?: boolean;
   /** Message-origin census for this turn's context. */
   provenanceCounts?: Record<MessageProvenance, number>;
   cause: DecisionCause;

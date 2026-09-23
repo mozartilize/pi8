@@ -56,7 +56,9 @@ export function formatStatus(
       ? `auto:${decision.dimension} → unavailable (${decision.reason})`
       : 'auto → waiting';
   }
-  const parts = [`auto:${decision.dimension}`, '→', servedKey(served)];
+  const label = decision.mutationObserved && decision.dimension !== 'implement'
+    ? `auto:${decision.dimension} · editing` : `auto:${decision.dimension}`;
+  const parts = [label, '→', servedKey(served)];
   if (served.viaFallback) {
     const rank = served.fallbackRank && served.fallbackRank > 1 ? ` #${served.fallbackRank}` : '';
     parts.push(`(fallback${rank})`);
@@ -72,6 +74,7 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   heuristic: 'keyword classifier',
   'continuation-context': 'keyword classifier, using earlier messages for a short follow-up',
   'router-consult': 'LLM assessment',
+  'mutation-phase': 'implementation started after an assessed mutation call',
   'embedding-classify': 'multilingual embedding classifier',
   'error-fallback': 'a fallback model served after the top pick failed',
   'no-data': 'no benchmark data; ranked by price and context window',
@@ -125,6 +128,7 @@ export function formatDecisionDetail(
     `  thinking:   ${served?.thinkingLevel ?? 'off'}`,
     `  cause:      ${CAUSE_LABELS[decision.cause] ?? decision.cause}`,
     `  reason:     ${decision.reason}`,
+    ...(decision.mutationObserved && decision.dimension !== 'implement' ? ['  phase:      editing'] : []),
     ...routingNotes(decision, served),
     ...assessmentLines(decision),
     ...decision.candidateDiagnostics?.flatMap((diagnostic) => {

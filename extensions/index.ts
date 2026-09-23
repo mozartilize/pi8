@@ -65,7 +65,7 @@ import {
   appendSubagentGapSignal,
   appendSubagentSpend,
 } from './host/decisionlog.js';
-import { clearRouterStatus } from './host/ui.js';
+import { clearRouterStatus, renderRouterStatus } from './host/ui.js';
 import {
   RouterSession,
   RuntimeBindings,
@@ -432,6 +432,7 @@ function handleSubagentToolCall(
 
 function handleMutationToolCall(
   event: ToolCallEvent,
+  ctx: ExtensionContext,
   session: RouterSession,
 ): { block: true; reason: string } | undefined {
   // Bounded mutation handoff: an internal failure here must fail
@@ -491,6 +492,14 @@ function handleMutationToolCall(
         mutationSurface: decision.metadata.mutationSurface,
         mutationSignal: decision.metadata.mutationSignal,
       });
+    }
+    const last = session.getLastDecision();
+    const committed = decision.nextState;
+    if (last && committed && committed.intentKey === last.intentKey && !last.mutationObserved &&
+        (committed.observedMutationTools > 0 || committed.mutationGateTriggered)) {
+      const updated = { ...last, mutationObserved: true };
+      session.setLastDecision(updated);
+      renderRouterStatus(ctx, updated, served);
     }
     if (decision.block) return { block: true, reason: decision.reason ?? '' };
   } catch {
@@ -702,7 +711,7 @@ export default async function autoModelRouterExtension(
       return;
     }
     try {
-      const block = handleMutationToolCall(event, session);
+      const block = handleMutationToolCall(event, ctx, session);
       if (block?.block) return block;
       const flushed = session.noteTrajectoryToolCall(event.toolName, event.toolCallId, event.input);
       if (flushed) {

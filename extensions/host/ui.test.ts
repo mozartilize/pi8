@@ -57,6 +57,14 @@ describe('formatStatus', () => {
     expect(formatStatus(undefined, undefined)).toContain('waiting');
   });
 
+  it('distinguishes observed editing from the routed task type', () => {
+    const served = { registryId: 'alpha/model', viaFallback: false, accumulatedCost: 0 };
+    const plan = { ...decision, dimension: 'plan' as const, mutationObserved: true };
+    expect(formatStatus(plan, served)).toContain('auto:plan · editing');
+    expect(formatDecisionDetail(plan, served)).toContain('  phase:      editing');
+    expect(formatStatus({ ...plan, dimension: 'implement' }, served)).not.toContain('· editing');
+  });
+
   it('marks context-pressure decisions in the status line', () => {
     const s = formatStatus({ ...decision, contextPressure: { usageRatio: 0.6, threshold: 0.5, suggestion: 'offload' } }, {
       registryId: 'opencode-go/kimi-k2.7-code',

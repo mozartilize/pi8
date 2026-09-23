@@ -17,6 +17,8 @@ import type { Api, Context, Model } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
+import { evaluateMutationCall } from '../routing/policy/mutation-gate.js';
+import { classifyMutationCall } from '../routing/policy/mutation-detector.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
 import {
@@ -2085,6 +2087,76 @@ describe('assessment orchestration', () => {
     });
     expect(decision?.cause).toBe('heuristic');
     expect(decision?.fallbackReason).toBe('expiry');
+  });
+
+  it('switches plan to implement only after a mutation call with a high-confidence implement verdict', async () => {
+    const session = await newSession({ consultRouter: true });
+    const prompt = 'design the architecture and plan the migration roadmap for this system';
+    const first = await session.routeTurn(prompt, {
+      assessorReply: 'Kind: implement\nComplexity: moderate\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: implement deliverable',
+    });
+    expect(first?.dimension).toBe('plan');
+    const state = harness.session.getWorkPhaseState()!;
+    const mutation = evaluateMutationCall({ toolName: 'write', toolCallId: 'edit-1', state, served: harness.session.getLastServed() });
+    expect(mutation.block).toBe(false);
+    harness.session.commitWorkPhaseState(mutation.nextState);
+    // A call is enough; neither tool success nor a path-based guess is required.
+    const released = await session.routeTurnAgainWithSameUserEntry();
+    expect(released?.dimension).toBe('implement');
+    expect(released?.cause).toBe('mutation-phase');
+    expect(session.assessmentDispatchCount).toBe(1);
+    const repeated = await session.routeTurnAgainWithSameUserEntry();
+    expect(repeated?.dimension).toBe('implement');
+    expect(repeated?.cause).toBe('mutation-phase');
+  });
+
+  it('releases review on an identified Bash write without requiring a successful result', async () => {
+    const session = await newSession({ consultRouter: true });
+    const first = await session.routeTurn('review the authentication flow for mistakes', {
+      assessorReply: 'Kind: implement\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: fix requested',
+    });
+    expect(first?.dimension).toBe('review');
+    const detection = classifyMutationCall('bash', { command: 'printf x > notes.md' });
+    expect(detection.confidence).toBe('high');
+    const mutation = evaluateMutationCall({ toolName: 'bash', toolCallId: 'b1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed(), detection });
+    harness.session.commitWorkPhaseState(mutation.nextState);
+    expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('implement');
+  });
+
+  it('keeps a plan deliverable even if its mutation call writes a file', async () => {
+    const session = await newSession({ consultRouter: true });
+    const first = await session.routeTurn('design the architecture and plan the migration roadmap for this system', {
+      assessorReply: 'Kind: plan\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: plan deliverable',
+    });
+    expect(first?.dimension).toBe('plan');
+    const mutation = evaluateMutationCall({ toolName: 'write', toolCallId: 'plan-1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed() });
+    harness.session.commitWorkPhaseState(mutation.nextState);
+    const second = await session.routeTurnAgainWithSameUserEntry();
+    expect(second?.dimension).toBe('plan');
+    expect(second?.cause).not.toBe('mutation-phase');
+  });
+
+  it('does not lower the task type on a missing or low-confidence verdict', async () => {
+    const session = await newSession({ consultRouter: true });
+    const prompt = 'design the architecture and plan the migration roadmap for this system';
+    const first = await session.routeTurn(prompt, {
+      assessorReply: 'Kind: implement\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: low\nReasoning: uncertain',
+    });
+    expect(first?.dimension).toBe('plan');
+    const mutation = evaluateMutationCall({ toolName: 'edit', toolCallId: 'edit-1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed() });
+    harness.session.commitWorkPhaseState(mutation.nextState);
+    expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
+  });
+
+  it('keeps the plan task type when the assessment fails before a mutation', async () => {
+    const session = await newSession({ consultRouter: true });
+    const first = await session.routeTurn('design the architecture and plan the migration roadmap for this system', {
+      assessorUsageLimit: true,
+    });
+    expect(first?.dimension).toBe('plan');
+    const mutation = evaluateMutationCall({ toolName: 'write', toolCallId: 'plan-1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed() });
+    harness.session.commitWorkPhaseState(mutation.nextState);
+    expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
   });
 
   it('reuses the verdict on later tool-loop turns of the same entry', async () => {

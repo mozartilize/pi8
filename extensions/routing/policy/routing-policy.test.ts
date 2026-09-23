@@ -699,6 +699,18 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).toContain("[kept current model's thinking level]");
   });
 
+  it('keeps both incumbent protections when a mutation changes plan to implement', () => {
+    const result = resolveRoutingDecision(makePolicyInput({
+      candidates: benchmarkCandidates,
+      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'mutation-phase',
+      confidence: 0.1, incumbentRegistryId: 'bench/strong',
+      incumbentResolvedDimension: 'plan', sameIntentAsLast: true,
+    }));
+    expect(result.decision.dimension).toBe('implement');
+    expect(result.decision.effortFloorDimension).toBe('plan');
+    expect(result.decision.chosen).toBe('bench/strong');
+  });
+
   it('does not lower the effort floor when the carried dimension is weaker', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({

@@ -1083,13 +1083,24 @@ function scoreRouterTurn(args: {
   const routableCandidates = pinned ? candidates : applyRuntimeExclusions(candidates, session);
   if (routableCandidates.length === 0) return noRoutableCandidates(session);
 
+  const observed = session.getWorkPhaseState();
+  const mutationObserved = observed?.intentKey === turnInput.key &&
+    (observed.observedMutationTools > 0 || observed.mutationGateTriggered);
+  // The assessment names the requested deliverable; the tool call marks the
+  // point at which its implementation begins. No file-path or result heuristic.
+  const release = cacheHit && mutationObserved &&
+    (baseDimension === 'plan' || baseDimension === 'review') &&
+    assessed.assessment?.kind === 'implement' && assessed.assessment.confidence === 'high' &&
+    !trajectoryEscalation && session.getLatchGeneration() === 0;
+  const routedDimension = release ? 'implement' : baseDimension;
+  const routedCause = release ? 'mutation-phase' : baseCause;
   const { multiWorkPolicy } = advanceWorkPhase({
     cacheHit,
     turnInput,
     classifyResult,
     vetoDepthEscalation,
     depthWouldEscalate,
-    baseDimension,
+    baseDimension: routedDimension,
     session,
   });
 
@@ -1106,8 +1117,8 @@ function scoreRouterTurn(args: {
   const policy = resolveRoutingDecision({
     candidates: routableCandidates,
     classifyResult,
-    baseDimension,
-    baseCause,
+    baseDimension: routedDimension,
+    baseCause: routedCause,
     trajectoryEscalation,
     userReasoning: requestedReasoning as ThinkingLevel | undefined,
     userReasoningOverride,
@@ -1123,6 +1134,8 @@ function scoreRouterTurn(args: {
     config,
   });
   const decision = policy.decision;
+  if (release) session.setCachedIntent({ ...intent.cachedIntent!, dimension: routedDimension, cause: routedCause });
+  if (mutationObserved) decision.mutationObserved = true;
   if (assessed.assessment) decision.assessment = assessed.assessment;
   if (assessed.fallbackReason) decision.fallbackReason = assessed.fallbackReason;
   decision.intentKey = turnInput.key;

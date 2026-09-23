@@ -874,6 +874,23 @@ describe('mutation gate hooks', () => {
     expect(result).not.toHaveProperty('terminate');
   });
 
+  it('shows editing as a phase without changing an unconfirmed plan task type', async () => {
+    const handlers = await makeToolHandlers();
+    const status = vi.fn();
+    const ctx = { ...routerAutoCtx, ui: { setStatus: status } } as unknown as ExtensionContext;
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    const decision = { ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' };
+    defaultRouterSession.setLastDecision(decision);
+    defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
+
+    await handlers.get('tool_call')!({ toolName: 'write', toolCallId: 'w1', input: { path: 'docs/notes.md' } }, ctx);
+
+    expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(1);
+    expect(defaultRouterSession.getLastDecision()?.dimension).toBe('plan');
+    expect(defaultRouterSession.getLastDecision()?.mutationObserved).toBe(true);
+    expect(status).toHaveBeenCalledWith('router', expect.stringContaining('auto:plan · editing'));
+  });
+
   it('projects the block onto the live decision so the commands can show it', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
