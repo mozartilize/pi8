@@ -11,7 +11,7 @@ import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { Context, Model, Api } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
-import { runDelegationLoop, type DelegationOptions, type DelegationResult } from '../serve/delegation.js';
+import { runDelegationLoop, type DelegationOptions, type DelegationResult, type FallbackPlan } from '../serve/delegation.js';
 import { RouterSession, resetRouterSession } from '../serve/router-session-state.js';
 import { clearBlacklistedModels, clearBlacklistedProviders } from '../serve/blacklist.js';
 import { makeTerminalErrorEvent } from '../serve/error-event.js';
@@ -115,8 +115,8 @@ export interface DelegationHarnessOptions {
   getProviderAuth?: (provider: string) => Promise<{ auth?: { baseUrl?: string } } | undefined>;
   /** Live routable set, required for pre-output capability hops. */
   candidates?: Candidate[];
-  /** Confirm a fallback before any provider request; undefined cancels the turn. */
-  beforeFallback?: (candidateId: string, previousId: string, opts: DelegationOptions) => Promise<string | undefined>;
+  /** Confirm a fallback before any provider request. */
+  beforeFallback?: (candidateId: string, previousId: string) => Promise<FallbackPlan>;
 }
 
 export interface DelegationHarness {
@@ -263,9 +263,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
         notifyOnRoute: false,
         session,
         candidates,
-        beforeFallback: beforeFallback
-          ? (candidateId, previousId) => beforeFallback(candidateId, previousId, delegationOptions)
-          : undefined,
+        beforeFallback,
       };
       const result = await runDelegationLoop(
         delegationOptions,

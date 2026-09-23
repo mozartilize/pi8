@@ -1242,24 +1242,16 @@ async function delegateRouterTurn(args: {
         incumbent: `${previous.provider}/${previous.id}`,
         fallback: true,
       });
-      if (semi.kind === 'terminal') return undefined;
-      if (semi.kind === 'proceed') return candidateId;
-      const next = semi.scored.decision.chosen;
-      const chain = decision.fallbackChain;
-      const from = chain.indexOf(candidateId);
-      chain.splice(from >= 0 ? from : chain.length, chain.length, next);
-      Object.assign(decision, semi.scored.decision, { fallbackChain: chain });
-      delete decision.routedPickChanged;
-      delete decision.trajectoryFriction;
-      // Keep the live candidate-array identity used by capability comparisons.
-      routableCandidates.splice(0, routableCandidates.length, ...semi.scored.routableCandidates);
+      if (semi.kind === 'terminal') return { kind: 'cancel' };
+      if (semi.kind === 'proceed') return { kind: 'proceed' };
       const manual = session.getManualModel() ?? session.getSemiHold(prepared.measured.turnInput.key);
       const thinking = manual ? resolveManualModel(manual, registryModels)?.thinking : undefined;
-      if (thinking) {
-        delegationOptions.reasoning = thinking;
-        delegationOptions.userReasoningOverride = true;
-      }
-      return decision.chosen;
+      return {
+        kind: 'substitute',
+        decision: semi.scored.decision,
+        candidates: semi.scored.routableCandidates,
+        ...(thinking ? { reasoning: thinking } : {}),
+      };
     };
   }
   const result = await runDelegationLoop(delegationOptions, stream);

@@ -108,7 +108,7 @@ describe('runDelegationLoop contracts', () => {
       },
       beforeFallback: async (candidateId, previousId) => {
         asked.push([candidateId, previousId]);
-        return candidateId;
+        return { kind: 'proceed' };
       },
     });
 
@@ -117,6 +117,35 @@ describe('runDelegationLoop contracts', () => {
     // The hop from alpha/first → beta/second is.
     expect(asked).toEqual([['beta/second', 'alpha/first']]);
     expect(h.attempts).toEqual(['alpha/first', 'beta/second']);
+  });
+
+  it('applies a fallback substitution in place on the live chain and pool', async () => {
+    const decision = routingDecision(['alpha/first', 'beta/second', 'gamma/third']);
+    const chain = decision.fallbackChain;
+    const pool = [candidate('alpha/first'), candidate('beta/second'), candidate('gamma/third')];
+    const pick = candidate('delta/pick');
+    const h = createDelegationHarness({
+      chain,
+      decision,
+      candidates: pool,
+      beforeFallback: async () => ({
+        kind: 'substitute',
+        decision: { ...routingDecision(['delta/pick']), cause: 'manual-override' },
+        candidates: [pick],
+      }),
+      scripts: {
+        'alpha/first': [[{ type: 'error', error: { errorMessage: '421' } }]],
+        'delta/pick': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+
+    expect((await h.run()).success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/first', 'delta/pick']);
+    expect(decision.fallbackChain).toBe(chain);
+    expect(chain).toEqual(['alpha/first', 'delta/pick']);
+    expect(decision.cause).toBe('manual-override');
+    expect(pool).toEqual([pick]);
+    expect(h.session.getLastDecision()?.chosen).toBe('delta/pick');
   });
 
   it('falls back when a candidate spams events before meaningful output', async () => {
@@ -1239,16 +1268,15 @@ describe('pre-output reasoning-loop handoff', () => {
           thinkingLevelMap: { medium: 'medium', high: 'high' },
         }) as unknown as Model<Api>,
       },
-      beforeFallback: async (candidateId, _previousId, opts) => {
+      beforeFallback: async (candidateId) => {
         expect(candidateId).toBe('beta/strong:medium');
-        // The production semi callback mutates these exact live objects when
-        // the user pins a different model/effort during the fallback prompt.
-        opts.decision.fallbackChain.splice(1, 1, 'beta/strong:high');
-        opts.decision.cause = 'manual-override';
-        opts.candidates?.splice(0, opts.candidates.length, high);
-        opts.reasoning = 'high';
-        opts.userReasoningOverride = true;
-        return 'beta/strong:high';
+        // The user pins a different effort during the fallback prompt.
+        return {
+          kind: 'substitute',
+          decision: { ...decision, chosen: 'beta/strong:high', cause: 'manual-override' },
+          candidates: [high],
+          reasoning: 'high',
+        };
       },
       scripts: {
         'alpha/loop': [reasoningLoopEvents()],
@@ -1289,15 +1317,16 @@ describe('pre-output reasoning-loop handoff', () => {
           thinkingLevelMap: { medium: 'medium', high: 'high' },
         }) as unknown as Model<Api>,
       },
-      beforeFallback: async (candidateId, _previousId, opts) => {
+      beforeFallback: async (candidateId) => {
         expect(candidateId).toBe('beta/strong:high');
-        // Mirrors the production semi callback: the user pins `:medium`, which
-        // replaces the turn's explicit `:high` request for later attempts.
-        opts.decision.fallbackChain.splice(1, 1, 'beta/strong:medium');
-        opts.decision.cause = 'manual-override';
-        opts.reasoning = 'medium';
-        opts.userReasoningOverride = true;
-        return 'beta/strong:medium';
+        // The user pins `:medium`, which replaces the turn's explicit `:high`
+        // request for later attempts.
+        return {
+          kind: 'substitute',
+          decision: { ...decision, chosen: 'beta/strong:medium', cause: 'manual-override' },
+          candidates: [loopSource, medium, high],
+          reasoning: 'medium',
+        };
       },
       scripts: {
         'alpha/loop': [reasoningLoopEvents()],
@@ -1319,7 +1348,11 @@ describe('pre-output reasoning-loop handoff', () => {
     const h = createDelegationHarness({
       chain: ['alpha/loop', 'beta/strong'],
       candidates: [loopSource, loopStrong],
-      beforeFallback: async () => 'alpha/loop',
+      beforeFallback: async () => ({
+        kind: 'substitute',
+        decision: routingDecision(['alpha/loop']),
+        candidates: [loopSource, loopStrong],
+      }),
       scripts: {
         'alpha/loop': [reasoningLoopEvents(), [
           { type: 'text_delta', delta: 'chosen by user' },
@@ -1356,7 +1389,11 @@ describe('pre-output reasoning-loop handoff', () => {
     const h = createDelegationHarness({
       chain: ['alpha/loop', 'beta/strong', 'gamma/cheap'],
       candidates: [loopSource, loopStrong, loopCheap],
-      beforeFallback: async () => 'gamma/cheap',
+      beforeFallback: async () => ({
+        kind: 'substitute',
+        decision: routingDecision(['gamma/cheap']),
+        candidates: [loopSource, loopStrong, loopCheap],
+      }),
       scripts: {
         'alpha/loop': [reasoningLoopEvents()],
         'gamma/cheap': [[

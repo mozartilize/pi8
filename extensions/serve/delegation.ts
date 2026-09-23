@@ -117,6 +117,23 @@ function closeIterator(iterator: AsyncIterator<unknown>): void {
   }
 }
 
+/**
+ * Outcome of a fallback confirmation. The walk applies a substitution itself,
+ * so it stays the only writer of the live chain and candidate pool.
+ */
+export type FallbackPlan =
+  | { kind: 'cancel' }
+  | { kind: 'proceed' }
+  | {
+      kind: 'substitute';
+      /** Decision for the substitute; `chosen` names the candidate to attempt. */
+      decision: RoutingDecision;
+      /** Routable pool for the substitute. */
+      candidates: Candidate[];
+      /** Explicit thinking level selected with the substitute. */
+      reasoning?: string;
+    };
+
 export interface DelegationOptions {
   /** The routed decision with fallback chain. */
   decision: RoutingDecision;
@@ -140,8 +157,8 @@ export interface DelegationOptions {
   candidates?: Candidate[];
   /** When true, show a TUI notification on a model pick/switch (config.prompt). */
   notifyOnRoute?: boolean;
-  /** Confirm a fallback before any provider request; undefined cancels the turn. */
-  beforeFallback?: (candidateId: string, previousId: string) => Promise<string | undefined>;
+  /** Confirm a fallback before any provider request. */
+  beforeFallback?: (candidateId: string, previousId: string) => Promise<FallbackPlan>;
   /** Total-turn timer, used for final debug log timestamps. */
   turnTimer: () => number;
   /** Owning session state for this delegation loop. */
@@ -958,6 +975,33 @@ async function runCandidateAttempt(
 }
 
 /**
+ * Apply a user substitution at `index` and return the candidate to attempt.
+ * The walk iterates this chain and compares capability against this pool, so
+ * both are replaced in place rather than reassigned.
+ */
+function applySubstitution(
+  opts: DelegationOptions,
+  index: number,
+  plan: Extract<FallbackPlan, { kind: 'substitute' }>,
+): string {
+  const { decision } = opts;
+  const chain = decision.fallbackChain;
+  chain.splice(index, chain.length - index, plan.decision.chosen);
+  Object.assign(decision, plan.decision, { fallbackChain: chain });
+  // The substitute replaces the routed pick and any hop provenance; a hop that
+  // still proves stronger is re-attached when the substitute serves.
+  delete decision.routedPickChanged;
+  delete decision.trajectoryFriction;
+  if (opts.candidates) opts.candidates.splice(0, opts.candidates.length, ...plan.candidates);
+  else opts.candidates = [...plan.candidates];
+  if (plan.reasoning) {
+    opts.reasoning = plan.reasoning;
+    opts.userReasoningOverride = true;
+  }
+  return decision.chosen;
+}
+
+/**
  * Run the fallback delegation walk and pump stream events into `stream`.
  *
  * On success, returns with streamFinalized false and the caller should end
@@ -1069,8 +1113,8 @@ export async function runDelegationLoop(
     // strand a healthy stronger sibling behind it un-marked.
     if (provider === ROUTER_PROVIDER_ID) continue;
     if (deadProviders.has(provider)) continue;
-    // `beforeFallback` may replace the proposed candidate and mutate the live
-    // candidate pool. Preserve the source row now, but bind and consume the hop
+    // A `beforeFallback` substitution replaces the proposed candidate and the
+    // live candidate pool. Preserve the source row now, but bind and consume the hop
     // only after the actual candidate has passed registry validation.
     const hopSource = capabilityHop && opts.candidates
       ? findSourceCandidate(opts.candidates, capabilityHop.fromModel)
@@ -1089,8 +1133,11 @@ export async function runDelegationLoop(
       && previousAttempt
       && registryIdOf(candidateId) !== registryIdOf(previousAttempt)
     ) {
-      const confirmed = await opts.beforeFallback(candidateId, previousAttempt);
-      if (confirmed === undefined || !stillCurrent()) return finalize('aborted', 'Model switch cancelled.');
+      const plan = await opts.beforeFallback(candidateId, previousAttempt);
+      if (plan.kind === 'cancel' || !stillCurrent()) return finalize('aborted', 'Model switch cancelled.');
+      const confirmed = plan.kind === 'substitute'
+        ? applySubstitution(opts, candidateIndex, plan)
+        : candidateId;
       if (confirmed !== candidateId) {
         candidateId = confirmed;
         ({ provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId));
