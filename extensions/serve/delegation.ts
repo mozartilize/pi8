@@ -1140,23 +1140,10 @@ export async function runDelegationLoop(
       servingHop,
     };
 
-    // If the request was already aborted before this candidate began, surface
-    // the canonical aborted terminal event without blacklisting or retrying.
-    // Read into a local so control-flow narrowing does not freeze the live
-    // (async-mutable) `signal.aborted` value for the rest of the iteration.
-    const alreadyAborted = opts.options?.signal?.aborted === true;
-    if (alreadyAborted) {
-      return finalize('aborted', 'aborted');
-    }
-
+    // The attempt checks caller cancellation before provider dispatch; the
+    // retry delay checks it before another attempt starts.
     for (let tries = 0; ; tries++) {
       if (tries > 0) {
-        if (opts.options?.signal?.aborted === true) {
-          // Aborted during a previous retry's catch while still inside this
-          // candidate: finalize canonically now, without blacklisting or
-          // falling through to the next candidate.
-          return finalize('aborted', 'aborted');
-        }
         try {
           await waitForRetry(retryBackoffMs * tries, opts.options?.signal);
         } catch (_retryErr) {
