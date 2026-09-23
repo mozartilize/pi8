@@ -328,6 +328,7 @@ export class TrajectoryState {
       invocation: observed.invocation,
       action: observed.action,
       observationKey: observed.observationKey,
+      observationVerified: observed.observationVerified,
       progressKind,
       failureSignature: observed.progressHint.failureSignature,
       evidenceId: observed.evidenceId,
@@ -426,6 +427,7 @@ export class TrajectoryState {
 
   private classifyProgress(observed: ObservedCycle): ProgressKind {
     if (observed.action.family === 'mutation') return 'unknown';
+    if (!observed.observationVerified || observed.action.equivalenceVerified === false) return 'unknown';
     if (
       observed.action.family === 'read'
       || observed.action.family === 'search'

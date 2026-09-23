@@ -148,6 +148,34 @@ describe('runDelegationLoop contracts', () => {
     expect(h.session.getLastDecision()?.chosen).toBe('delta/pick');
   });
 
+  it.each(['thinking_delta', 'start'])('bounds a single oversized %s payload before buffering', async (type) => {
+    const h = createDelegationHarness({
+      chain: ['alpha/huge', 'beta/fallback'],
+      scripts: {
+        'alpha/huge': [[{ type, delta: 'x'.repeat(2_000_000) }]],
+        'beta/fallback': [[{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.output).toEqual([{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }]);
+  });
+
+  it('commits character overflow after buffered thinking without replay', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/huge', 'beta/fallback'],
+      scripts: {
+        'alpha/huge': [[
+          { type: 'thinking_delta', delta: 'trace' },
+          ...Array.from({ length: 3 }, () => ({ type: 'thinking_delta', delta: 'x'.repeat(400_000) })),
+          { type: 'error', error: { errorMessage: 'failed after thinking' } },
+        ]],
+      },
+    });
+    expect((await h.run()).streamFinalized).toBe(true);
+    expect(h.attempts).toEqual(['alpha/huge']);
+    expect(h.output.some((event) => (event as { type: string }).type === 'thinking_delta')).toBe(true);
+  });
+
   it('falls back when a candidate spams events before meaningful output', async () => {
     // The per-attempt buffer is capped so a provider that floods lifecycle
     // events until the meaningful-output deadline fails the candidate

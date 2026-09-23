@@ -33,6 +33,7 @@ export interface CycleRecord {
   invocation: number;
   action: ActionFingerprint;
   observationKey: string;
+  observationVerified?: boolean;
   progressKind: import('./types.js').ProgressKind;
   failureSignature?: string;
   evidenceId: string;
@@ -70,13 +71,15 @@ export function detectActionObservationRecurrence(snapshot: TrajectorySnapshot):
   if (!last) return signal('aor', 'none', []);
   // Path-only mutation fingerprints collide across distinct successful edits.
   // Unverified mutations stay unknown; they are not "no progress".
-  if (last.action.family === 'mutation' && last.action.mutationVerified !== true) {
+  if (last.observationVerified === false || last.action.equivalenceVerified === false
+    || (last.action.family === 'mutation' && last.action.mutationVerified !== true)) {
     return signal('aor', 'none', []);
   }
   let count = 0;
   for (let i = window.length - 1; i >= 0; i -= 1) {
     const cycle = window[i];
-    if (cycle.progressKind === 'progress') break;
+    if (cycle.progressKind === 'progress' || cycle.observationVerified === false
+      || cycle.action.equivalenceVerified === false) break;
     if (cycle.action.family === 'mutation' && cycle.action.mutationVerified !== true) continue;
     if (cycle.action.key === last.action.key && cycle.observationKey === last.observationKey) {
       count += 1;

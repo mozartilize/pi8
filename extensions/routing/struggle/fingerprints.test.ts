@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TrajectoryState } from './trajectory.js';
 import {
   cycleFromToolResult,
   lineDistance,
@@ -63,6 +64,36 @@ describe('lineDistance', () => {
     const huge = lines(MAX_DIFF_LINES, 1);
     const result = lineDistance(huge, `${huge}\nextra`);
     expect(result).toEqual({ available: false, reason: 'too-large' });
+  });
+});
+
+describe('equivalence safety', () => {
+  it.each(['lookup', 'read', 'grep'])('does not escalate distinct or unverified %s results', (toolName) => {
+    const state = new TrajectoryState();
+    for (let i = 0; i < 5; i++) {
+      const decision = state.observeToolResult({
+        toolName, toolCallId: String(i),
+        input: toolName === 'lookup' ? { query: String(i) } : toolName === 'read' ? { path: 'a' } : { path: 'a', pattern: 'x' },
+        content: toolName === 'lookup' ? 'no results' : `${'a'.repeat(5000)}${i}`,
+        details: toolName === 'grep' ? { matches: Array.from({ length: 65 }, (_, j) => ({ path: 'a', line: j, text: j === 64 ? String(i) : 'x' })) } : undefined,
+      }, i);
+      expect(decision?.escalate).toBe(false);
+    }
+  });
+
+  it('does not infer equivalence from oversized observations', () => {
+    const state = new TrajectoryState();
+    for (let i = 0; i < 5; i++) {
+      const decision = state.observeToolResult({ toolName: 'read', toolCallId: String(i), input: { path: 'a' }, content: 'x'.repeat(1_000_001) }, i);
+      expect(decision?.escalate).toBe(false);
+    }
+  });
+
+  it('preserves read case and search tails in observation identities', () => {
+    const read = (text: string) => cycleFromToolResult({ toolName: 'read', toolCallId: 'r', input: { path: 'a' }, content: text }, 1);
+    expect(read('Case').observationKey).not.toBe(read('case').observationKey);
+    const match = (tail: string) => cycleFromToolResult(search([{ path: 'a', text: 'x'.repeat(200) + tail }]), 1);
+    expect(match('a').observationKey).not.toBe(match('b').observationKey);
   });
 });
 

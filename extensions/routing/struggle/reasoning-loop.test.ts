@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ReasoningLoopDetector,
+  MAX_RL_OBSERVED_CHARS,
   RL_EXACT_BLOCK_CHARS,
   RL_MIN_TOKENS,
   RL_STRIDE,
@@ -12,6 +13,28 @@ function pad(token: string, count: number): string {
 }
 
 describe('ReasoningLoopDetector', () => {
+  it('fails open after the attempt character budget regardless of chunking', () => {
+    const text = 'word '.repeat(Math.ceil(MAX_RL_OBSERVED_CHARS / 5) + 1);
+    const once = new ReasoningLoopDetector();
+    const split = new ReasoningLoopDetector();
+    once.update(text);
+    for (let i = 0; i < text.length; i += 100) split.update(text.slice(i, i + 100));
+    expect(once.severity()).toBe('unavailable');
+    expect(split.severity()).toBe('unavailable');
+    split.update('wait '.repeat(1000));
+    expect(split.severity()).toBe('unavailable');
+    split.reset();
+    expect(split.severity()).toBe('none');
+  });
+
+  it('rejects one huge delta before hashing or retaining its text', () => {
+    const loop = new ReasoningLoopDetector();
+    loop.update('secret'.repeat(2_000_000));
+    expect(loop.snapshot().tokenCount).toBe(0);
+    expect(loop.severity()).toBe('unavailable');
+    expect(JSON.stringify(loop)).not.toContain('secret');
+  });
+
   it('does not fire on long reasoning without repetition', () => {
     const loop = new ReasoningLoopDetector();
     const tokens = Array.from({ length: RL_MIN_TOKENS + 50 }, (_, i) => `step${i}`);

@@ -18,6 +18,8 @@ export interface ActionFingerprint {
    * just tool name + path. Unverified mutations must not count as AOR evidence.
    */
   mutationVerified?: boolean;
+  /** False for unknown tools or arguments omitted from the action identity. */
+  equivalenceVerified?: boolean;
 }
 
 export interface ToolCycleInput {
@@ -33,12 +35,12 @@ export interface ObservedCycle {
   invocation: number;
   action: ActionFingerprint;
   observationKey: string;
+  /** False when the complete observation cannot be compared within bounds. */
+  observationVerified: boolean;
   progressHint: {
     isError: boolean;
     failureSignature?: string;
     isNewEvidence: boolean;
-    mutationAdded?: number;
-    mutationDeleted?: number;
     mutationPath?: string;
     /** Full file body after a write, or a read snapshot. */
     fileBody?: string;
@@ -91,14 +93,6 @@ export function classifyShell(command: string): CommandClass {
   return 'other';
 }
 
-function shellTargets(command: string): string {
-  return command
-    .split(/\s+/)
-    .filter((token) => token.length > 1 && !token.startsWith('-'))
-    .slice(0, 12)
-    .join(' ');
-}
-
 function asRecord(input: unknown): Record<string, unknown> {
   return input && typeof input === 'object' && !Array.isArray(input)
     ? (input as Record<string, unknown>)
@@ -137,12 +131,18 @@ export function actionFromTool(toolName: string, input: unknown): ActionFingerpr
   if (name === 'read') {
     const filePath = String(args.path ?? '');
     const range = `${args.offset ?? ''}:${args.limit ?? ''}`;
-    return { family: 'read', path: filePath, key: fingerprint(['read', filePath, range]) };
+    return {
+      family: 'read', path: filePath, key: fingerprint(['read', filePath, range]),
+      equivalenceVerified: Object.keys(args).every((key) => ['path', 'offset', 'limit'].includes(key)),
+    };
   }
   if (name === 'grep' || name === 'find') {
     const query = String(args.pattern ?? args.query ?? '');
     const scope = String(args.path ?? '');
-    return { family: 'search', key: fingerprint(['search', name, query, scope]) };
+    return {
+      family: 'search', key: fingerprint(['search', name, query, scope]),
+      equivalenceVerified: Object.keys(args).every((key) => ['pattern', 'query', 'path'].includes(key)),
+    };
   }
   if (name === 'edit' || name === 'write') {
     const filePath = String(args.path ?? '');
@@ -160,10 +160,11 @@ export function actionFromTool(toolName: string, input: unknown): ActionFingerpr
     return {
       family: 'shell',
       commandClass,
-      key: fingerprint(['shell', commandClass, normalizeText(shellTargets(command))]),
+      key: fingerprint(['shell', command]),
+      equivalenceVerified: Object.keys(args).every((key) => ['command', 'timeout'].includes(key)),
     };
   }
-  return { family: 'other', key: fingerprint(['other', name]) };
+  return { family: 'other', key: fingerprint(['other', name]), equivalenceVerified: false };
 }
 
 export function extractFailureSignature(
@@ -183,17 +184,6 @@ export function extractFailureSignature(
   );
   if (named) return fingerprint(['fail', commandClass, named[1].slice(0, 80)]);
   return fingerprint(['fail', commandClass, normalized.slice(0, 120)]);
-}
-
-export function diffLineDistance(diff: string): { added: number; deleted: number } {
-  let added = 0;
-  let deleted = 0;
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) continue;
-    if (line.startsWith('+')) added += 1;
-    else if (line.startsWith('-')) deleted += 1;
-  }
-  return { added, deleted };
 }
 
 /** Combined UTF-16 character count above which comparison is refused before scanning. */
@@ -225,11 +215,17 @@ export function lineDistance(
   to: string,
   deadline = Date.now() + MAX_DIFF_MS,
 ): LineDistanceResult {
-  if (from === to) return { available: true, added: 0, deleted: 0 };
+  if (Date.now() >= deadline) return { available: false, reason: 'budget-exhausted' };
   if (from.length + to.length > MAX_DIFF_CHARS) {
     return { available: false, reason: 'too-large' };
   }
-  if (countLines(from) + countLines(to) > MAX_DIFF_LINES) {
+  if (from === to) return { available: true, added: 0, deleted: 0 };
+  const fromLines = countLines(from, deadline);
+  const toLines = countLines(to, deadline);
+  if (fromLines === undefined || toLines === undefined) {
+    return { available: false, reason: 'budget-exhausted' };
+  }
+  if (fromLines + toLines > MAX_DIFF_LINES) {
     return { available: false, reason: 'too-large' };
   }
   const remaining = Math.min(MAX_DIFF_MS, deadline - Date.now());
@@ -250,10 +246,12 @@ export function lineDistance(
   return { available: true, added, deleted };
 }
 
-function countLines(text: string): number {
+function countLines(text: string, deadline: number): number | undefined {
   let lines = 1;
   for (let i = 0; i < text.length; i += 1) {
+    if (i % 4096 === 0 && Date.now() >= deadline) return undefined;
     if (text.charCodeAt(i) === 10) lines += 1;
+    if (lines > MAX_DIFF_LINES) return lines;
   }
   return lines;
 }
@@ -266,6 +264,7 @@ export function applyReplacement(content: string, oldText: string, newText: stri
 
 /** Match identities hashed into one search observation. */
 const MAX_MATCH_IDENTITIES = 64;
+const MAX_OBSERVATION_CHARS = 1_000_000;
 
 function matchIdentity(match: Record<string, unknown>): string {
   const path = String(match.path ?? '');
@@ -273,37 +272,49 @@ function matchIdentity(match: Record<string, unknown>): string {
   const line = String(match.line ?? match.startLine ?? '');
   const column = String(match.column ?? match.startColumn ?? '');
   const text = String(match.text ?? match.snippet ?? '');
-  return fingerprint([path, line, column, normalizeText(text).slice(0, 200)]);
+  return fingerprint([path, line, column, text]);
 }
 
-function observationKey(action: ActionFingerprint, event: ToolCycleInput): string {
+function observationKey(action: ActionFingerprint, event: ToolCycleInput): { key: string; verified: boolean } {
+  const content = event.content;
+  if (typeof content === 'string' && content.length > MAX_OBSERVATION_CHARS) {
+    return { key: '', verified: false };
+  }
+  if (Array.isArray(content)) {
+    if (content.length > 256) return { key: '', verified: false };
+    let size = 0;
+    for (const part of content) {
+      if (!part || typeof part !== 'object' || part.type !== 'text' || typeof part.text !== 'string') {
+        return { key: '', verified: false };
+      }
+      size += part.text.length + 1;
+      if (size > MAX_OBSERVATION_CHARS) return { key: '', verified: false };
+    }
+  }
   const details = asRecord(event.details);
   if (action.family === 'search' && Array.isArray(details.matches)) {
     // Paths alone make "same files, moved/changed hits" look like a repeated
     // observation, which is exactly what an agent chasing a moving target
     // through a file produces. Location and matched text carry the difference.
-    const ids = details.matches
-      .slice(0, MAX_MATCH_IDENTITIES)
-      .map((match) => (match && typeof match === 'object'
-        ? matchIdentity(match as Record<string, unknown>)
-        : ''))
-      .filter(Boolean)
-      .sort();
-    return fingerprint(['obs', action.key, String(details.matches.length), ids.join('|')]);
+    if (details.matches.length > MAX_MATCH_IDENTITIES) return { key: '', verified: false };
+    let size = 0;
+    for (const match of details.matches) {
+      if (!match || typeof match !== 'object' || typeof match.path !== 'string' || !match.path) {
+        return { key: '', verified: false };
+      }
+      size += match.path.length + String(match.line ?? match.startLine ?? '').length
+        + String(match.column ?? match.startColumn ?? '').length
+        + String(match.text ?? match.snippet ?? '').length;
+      if (size > MAX_OBSERVATION_CHARS) return { key: '', verified: false };
+    }
+    const ids = details.matches.map((match) => matchIdentity(match as Record<string, unknown>)).sort();
+    const text = contentText(event.content);
+    if (text.length > MAX_OBSERVATION_CHARS) return { key: '', verified: false };
+    return { key: fingerprint(['obs', action.key, text, ...ids]), verified: true };
   }
   const text = contentText(event.content);
-  return fingerprint(['obs', action.key, normalizeText(text).slice(0, 4000)]);
-}
-
-function mutationDistance(event: ToolCycleInput): { added?: number; deleted?: number } {
-  const details = asRecord(event.details);
-  const diff = typeof details.diff === 'string'
-    ? details.diff
-    : typeof details.patch === 'string'
-      ? details.patch
-      : '';
-  if (!diff) return {};
-  return diffLineDistance(diff);
+  if (text.length > MAX_OBSERVATION_CHARS) return { key: '', verified: false };
+  return { key: fingerprint(['obs', action.key, text]), verified: true };
 }
 
 export function cycleFromToolResult(event: ToolCycleInput, invocation: number): ObservedCycle {
@@ -319,23 +330,21 @@ export function cycleFromToolResult(event: ToolCycleInput, invocation: number): 
   const failureSignature = verifier && (isError || /\bfail(?:ed|ure)?\b/i.test(text))
     ? extractFailureSignature(text, action.commandClass ?? 'other')
     : undefined;
-  const mutation = action.family === 'mutation' ? mutationDistance(event) : {};
   const args = asRecord(event.input);
   const writeBody = action.family === 'mutation' && typeof args.content === 'string'
     ? args.content
     : undefined;
   const readBody = action.family === 'read' ? contentText(event.content) : undefined;
-  const evidenceId = `${action.key}:${observation}`;
+  const evidenceId = `${action.key}:${observation.key}`;
   return {
     invocation,
     action,
-    observationKey: observation,
+    observationKey: observation.key,
+    observationVerified: observation.verified,
     progressHint: {
       isError,
       failureSignature,
       isNewEvidence: false,
-      mutationAdded: mutation.added,
-      mutationDeleted: mutation.deleted,
       mutationPath: action.path,
       fileBody: writeBody ?? (readBody || undefined),
       mutationOldText: typeof args.oldText === 'string' ? args.oldText : undefined,

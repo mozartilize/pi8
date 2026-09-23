@@ -21,6 +21,8 @@ export const RL_EXACT_BLOCK_CHARS = 128;
 export const RL_EXACT_BLOCK_REPEAT = 3;
 const MAX_WINDOWS = 24;
 const MAX_EXACT_HASHES = 512;
+/** Bounds normalization, tokenization and hashes for the entire attempt. */
+export const MAX_RL_OBSERVED_CHARS = 32_768;
 
 const REFLECTION_MARKERS = [
   'wait',
@@ -120,15 +122,26 @@ export class ReasoningLoopDetector {
   private cursor = 0;
   private tokenCarry = '';
   private markerCarry = '';
+  private observedChars = 0;
+  private unavailable = false;
 
   update(delta: string): void {
-    if (!delta) return;
+    if (!delta || this.unavailable) return;
+    if (delta.length > MAX_RL_OBSERVED_CHARS - this.observedChars) {
+      this.disable();
+      return;
+    }
+    this.observedChars += delta.length;
     const markerMax = REFLECTION_MARKERS.reduce((max, marker) => Math.max(max, marker.length), 1);
     const markerWindow = this.markerCarry + delta;
     this.reflectionTransitions += countNewMarkers(markerWindow, this.markerCarry.length);
     this.markerCarry = markerWindow.slice(-(markerMax - 1));
 
     const { tokens: added, carry } = splitCompleteTokens(this.tokenCarry + delta);
+    if (carry.length > 2048 || added.some((token) => token.length > 2048)) {
+      this.disable();
+      return;
+    }
     this.tokenCarry = carry;
     this.tokens.push(...added);
     this.tokenCount += added.length;
@@ -185,7 +198,16 @@ export class ReasoningLoopDetector {
     }
   }
 
+  private disable(): void {
+    this.unavailable = true;
+    this.tokens = [];
+    this.tokenCarry = '';
+    this.markerCarry = '';
+    this.normTail = '';
+  }
+
   severity(): StruggleSeverity {
+    if (this.unavailable) return 'unavailable';
     // An in-progress token still counts toward volume: streaming splits leave
     // the last alphanumeric run in `tokenCarry`, and excluding it would miss
     // the floor by one after a delimiter-free filler.
@@ -225,5 +247,7 @@ export class ReasoningLoopDetector {
     this.cursor = 0;
     this.tokenCarry = '';
     this.markerCarry = '';
+    this.observedChars = 0;
+    this.unavailable = false;
   }
 }

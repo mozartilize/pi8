@@ -58,6 +58,29 @@ const MAX_GENERIC_RETRIES = 1;
  * already in the buffer commits to live streaming; overflow of pure lifecycle
  * spam fails the candidate. */
 const MAX_BUFFERED_EVENTS = 10_000;
+const MAX_PREOUTPUT_BUFFER_CHARS = 1_000_000;
+
+/** Conservative payload accounting without serializing provider-controlled data. */
+function bufferedEventSize(event: unknown, remaining: number): number {
+  let size = 0;
+  let nodes = 0;
+  const seen = new Set<object>();
+  const visit = (value: unknown, depth: number): void => {
+    if (++nodes > 10_000 || depth > 32) { size = remaining + 1; return; }
+    if (typeof value === 'string') { size += value.length; return; }
+    size += 8;
+    if (!value || typeof value !== 'object' || seen.has(value)) return;
+    seen.add(value);
+    for (const key in value) {
+      if (size > remaining) return;
+      if (!Object.hasOwn(value, key)) continue;
+      size += key.length;
+      visit((value as Record<string, unknown>)[key], depth + 1);
+    }
+  };
+  visit(event, 0);
+  return size;
+}
 
 let authResolveTimeoutMs = AUTH_RESOLVE_TIMEOUT_MS;
 let firstEventTimeoutMs = FIRST_EVENT_TIMEOUT_MS;
@@ -229,6 +252,7 @@ function createAttemptBuffer(
   candidateId: string,
 ) {
   const attemptBuffer: unknown[] = [];
+  let bufferedChars = 0;
   let passthrough = false;
   let bufferHasThinking = false;
   let committedToStream = false;
@@ -236,9 +260,11 @@ function createAttemptBuffer(
   const flush = (): void => {
     for (const buffered of attemptBuffer) stream.push(buffered as never);
     attemptBuffer.length = 0;
+    bufferedChars = 0;
   };
   const discard = (): void => {
     attemptBuffer.length = 0;
+    bufferedChars = 0;
   };
   const forward = (ev: unknown): void => {
     if (passthrough) {
@@ -251,7 +277,8 @@ function createAttemptBuffer(
       stream.push(ev as never);
       return;
     }
-    if (attemptBuffer.length >= MAX_BUFFERED_EVENTS) {
+    const size = bufferedEventSize(ev, MAX_PREOUTPUT_BUFFER_CHARS - bufferedChars);
+    if (attemptBuffer.length >= MAX_BUFFERED_EVENTS || size > MAX_PREOUTPUT_BUFFER_CHARS - bufferedChars) {
       if (bufferHasThinking) {
         passthrough = true;
         committedToStream = true;
@@ -260,10 +287,11 @@ function createAttemptBuffer(
         return;
       }
       throw new Error(
-        `candidate emitted more than ${MAX_BUFFERED_EVENTS} events before meaningful output: ${candidateId}`,
+        `candidate exceeded pre-output buffer limit (${MAX_BUFFERED_EVENTS} events / ${MAX_PREOUTPUT_BUFFER_CHARS} chars): ${candidateId}`,
       );
     }
     if ((ev as { type: string }).type === 'thinking_delta') bufferHasThinking = true;
+    bufferedChars += size;
     attemptBuffer.push(ev);
   };
 
