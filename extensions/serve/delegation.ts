@@ -514,6 +514,49 @@ interface TurnSpend {
   incomplete: boolean;
 }
 
+/** Price the served turn and every failed attempt on the same registry basis. */
+function stampTurnSpend(decision: RoutingDecision, spend: TurnSpend): RoutingDecision {
+  const usage = {
+    inputTokens: spend.inputTokens,
+    outputTokens: spend.outputTokens,
+    cacheRead: spend.cacheReadTokens,
+    cacheWrite: spend.cacheWriteTokens,
+  };
+  return {
+    ...decision,
+    usage,
+    spend: {
+      routedCost: spend.routedCost,
+      baselineCost: priceTokens(decision.baseline?.cost, usage),
+      ...(spend.incomplete ? { incomplete: true } : {}),
+    },
+  };
+}
+
+/** Only a proven strictly stronger serving pick consumes the handoff. */
+function resolveCapabilityHandoff(
+  served: ServedInfo | undefined,
+  fromModel: string | undefined,
+  dimension: Dimension,
+  candidates: Candidate[] | undefined,
+  compareOpts: StrongerCompareOpts,
+): DelegationResult['capabilityHandoff'] {
+  if (!served || !fromModel || !candidates) return undefined;
+  const key = servedKey(served);
+  const dest = candidates.find((candidate) => candidateKey(candidate) === key)
+    ?? findSourceCandidate(candidates, key);
+  const source = findSourceCandidate(candidates, fromModel);
+  return dest && isStrictlyStrongerCandidate(dest, fromModel, dimension, source, compareOpts)
+    ? { fromModel, served: key }
+    : undefined;
+}
+
+/** Keep weaker recovery entries behind the quality-selected hop, in order. */
+function planTrajectoryHop(remaining: string[], strongerKeys: string[]): string[] {
+  const strongerSet = new Set(strongerKeys);
+  return [...strongerKeys, ...remaining.filter((key) => !strongerSet.has(key))];
+}
+
 type DelegatedEvent = { type: string };
 
 type AttemptEventDisposition =
@@ -947,11 +990,9 @@ export async function runDelegationLoop(
    * (credential/auth/transport errors and provider `stopReason: 'error'`).
    * Model-specific failures — missing registry models and output-limit
    * exhaustion — must not condemn a provider whose other models may still
-   * serve, so they record under the 'model' scope and do not add strikes.
+   * serve, so they do not add strikes.
    */
-  type FailureScope = 'model' | 'provider';
-  const recordFailure = (provider: string, scope: FailureScope): void => {
-    if (scope !== 'provider') return;
+  const strike = (provider: string): void => {
     const n = (strikes.get(provider) ?? 0) + 1;
     strikes.set(provider, n);
     if (n >= MAX_FAILURES_PER_PROVIDER) deadProviders.add(provider);
@@ -961,10 +1002,10 @@ export async function runDelegationLoop(
     const parsed = parseCandidateKey(key);
     return `${parsed.provider}/${parsed.id}`;
   };
-  const cancelSwitch = () => {
-    stream.push(makeTerminalErrorEvent('aborted', 'Model switch cancelled.'));
+  const finalize = (reason: 'aborted' | 'error', message: string): DelegationResult => {
+    stream.push(makeTerminalErrorEvent(reason, message));
     stream.end();
-    return { success: false, streamFinalized: true, lastError: 'Model switch cancelled.', lastServed };
+    return { success: false, streamFinalized: true, lastError: message, lastServed };
   };
   // Last candidate that actually entered an attempt. Semi-mode asks only when
   // the next attempt would change model — skipped/missing entries are not a
@@ -991,7 +1032,6 @@ export async function runDelegationLoop(
     if (!chosen) {
       lastError = `not in registry: ${candidateId}`;
       session.blacklistModel(candidateId);
-      recordFailure(provider, 'model');
       continue;
     }
 
@@ -1002,7 +1042,7 @@ export async function runDelegationLoop(
       && registryIdOf(candidateId) !== registryIdOf(previousAttempt)
     ) {
       const confirmed = await opts.beforeFallback(candidateId, previousAttempt);
-      if (confirmed === undefined || !stillCurrent()) return cancelSwitch();
+      if (confirmed === undefined || !stillCurrent()) return finalize('aborted', 'Model switch cancelled.');
       if (confirmed !== candidateId) {
         candidateId = confirmed;
         ({ provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId));
@@ -1092,9 +1132,7 @@ export async function runDelegationLoop(
     // (async-mutable) `signal.aborted` value for the rest of the iteration.
     const alreadyAborted = opts.options?.signal?.aborted === true;
     if (alreadyAborted) {
-      stream.push(makeTerminalErrorEvent('aborted', 'aborted'));
-      stream.end();
-      return { success: false, streamFinalized: true, lastError: 'aborted', lastServed };
+      return finalize('aborted', 'aborted');
     }
 
     for (let tries = 0; ; tries++) {
@@ -1103,9 +1141,7 @@ export async function runDelegationLoop(
           // Aborted during a previous retry's catch while still inside this
           // candidate: finalize canonically now, without blacklisting or
           // falling through to the next candidate.
-          stream.push(makeTerminalErrorEvent('aborted', 'aborted'));
-          stream.end();
-          return { success: false, streamFinalized: true, lastError: 'aborted', lastServed };
+          return finalize('aborted', 'aborted');
         }
         try {
           await waitForRetry(retryBackoffMs * tries, opts.options?.signal);
@@ -1113,9 +1149,7 @@ export async function runDelegationLoop(
           // Abort during backoff: finalize canonically before a delegated
           // iterator is created or failure bookkeeping runs.
           const abortMessage = _retryErr instanceof Error ? _retryErr.message : String(_retryErr);
-          stream.push(makeTerminalErrorEvent('aborted', abortMessage));
-          stream.end();
-          return { success: false, streamFinalized: true, lastError: abortMessage, lastServed };
+          return finalize('aborted', abortMessage);
         }
         debugLog('attempt.retry', { candidate: candidateId, retry: tries });
       }
@@ -1167,9 +1201,7 @@ export async function runDelegationLoop(
             tfi: 1,
             preOutput: true,
           };
-          const strongerKeys = esc.fallbackChain;
-          const strongerSet = new Set(strongerKeys);
-          const recovery = remaining.filter((key) => !strongerSet.has(key));
+          const hopTail = planTrajectoryHop(remaining, esc.fallbackChain);
           // Mutate the live chain in place. The outer walk iterates
           // `fallbackChain.entries()`; replacing the array would leave that
           // iterator on the pre-hop order and skip recovery sitting before the
@@ -1177,8 +1209,7 @@ export async function runDelegationLoop(
           decision.fallbackChain.splice(
             candidateIndex + 1,
             remaining.length,
-            ...strongerKeys,
-            ...recovery,
+            ...hopTail,
           );
         }
         debugLog('attempt.trajectory', {
@@ -1190,17 +1221,7 @@ export async function runDelegationLoop(
         break;
       }
       if (attempt.kind === 'aborted' || attempt.kind === 'finalize') {
-        stream.push(makeTerminalErrorEvent(
-          attempt.kind === 'aborted' ? 'aborted' : 'error',
-          attempt.message,
-        ));
-        stream.end();
-        return {
-          success: false,
-          streamFinalized: true,
-          lastError: attempt.message,
-          lastServed,
-        };
+        return finalize(attempt.kind === 'aborted' ? 'aborted' : 'error', attempt.message);
       }
       if (attempt.kind === 'provider-dead') {
         session.blacklistProvider(provider);
@@ -1226,7 +1247,7 @@ export async function runDelegationLoop(
     // output-limit exhaustion does not.
     if (candidateTrajectoryEscalation) continue;
     if (!candidateTransient && !candidateOutputLimitExhausted) session.blacklistModel(candidateId);
-    recordFailure(provider, candidateOutputLimitExhausted ? 'model' : 'provider');
+    if (!candidateOutputLimitExhausted) strike(provider);
     continue;
   }
 
@@ -1246,40 +1267,16 @@ export async function runDelegationLoop(
     totalMs: turnTimer(),
   });
   if (lastServed) {
-    const turnUsage = {
-      inputTokens: turnSpend.inputTokens,
-      outputTokens: turnSpend.outputTokens,
-      cacheRead: turnSpend.cacheReadTokens,
-      cacheWrite: turnSpend.cacheWriteTokens,
-    };
-    finalDecision = {
-      ...finalDecision,
-      usage: turnUsage,
-      spend: {
-        routedCost: turnSpend.routedCost,
-        baselineCost: priceTokens(finalDecision.baseline?.cost, turnUsage),
-        ...(turnSpend.incomplete ? { incomplete: true } : {}),
-      },
-    };
+    finalDecision = stampTurnSpend(finalDecision, turnSpend);
     if (stillCurrent()) {
       session.setLastDecision(finalDecision);
       appendDecision(finalDecision, lastServed);
     }
   }
   const fromModel = finalDecision.trajectoryFriction?.fromModel ?? excludeSource;
-  let capabilityHandoff: DelegationResult['capabilityHandoff'];
-  if (success && lastServed && fromModel && opts.candidates) {
-    const key = servedKey(lastServed);
-    const dest = opts.candidates.find((candidate) => candidateKey(candidate) === key)
-      ?? findSourceCandidate(opts.candidates, key);
-    const source = findSourceCandidate(opts.candidates, fromModel);
-    if (
-      dest
-      && isStrictlyStrongerCandidate(dest, fromModel, decision.dimension, source, compareOpts)
-    ) {
-      capabilityHandoff = { fromModel, served: key };
-    }
-  }
+  const capabilityHandoff = resolveCapabilityHandoff(
+    lastServed, fromModel, decision.dimension, opts.candidates, compareOpts,
+  );
   return { success: true, streamFinalized: false, lastServed, capabilityHandoff };
 }
 
