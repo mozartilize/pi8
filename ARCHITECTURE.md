@@ -166,6 +166,7 @@ When `semi: true`, a scored pick that differs from the previously-served model w
 | First event timeout (30s) with no text/thinking/tool | Next candidate |
 | Provider `stopReason: error` | Retried same-candidate (up to 2 transient / 1 generic retry), then next candidate |
 | Clean `done` with no text/thinking/tool output | Next candidate |
+| Same, answering a tool result | Handed off: the same candidate is asked once more with a router-authored user turn appended ("Continue the task from the tool results above."), then next candidate. Providers that run their own agent loop (e.g. a Claude Code bridge) only accept tool results for calls they made, but start a fresh query from a user turn with the whole history, so they can pick up another model's tool loop. The turn exists only in the delegated request, never in Pi's transcript, and the decline itself is neither blacklisted nor a provider strike. |
 | Reasoning-only exhausted (`stopReason: length`, no visible text/tool) | Next candidate |
 | User abort | Terminal, no blacklist |
 

@@ -134,6 +134,10 @@ export interface DelegationHarness {
   abortSignals: (AbortSignal | undefined)[];
   /** System prompt passed to each delegated attempt. */
   systemPrompts: (string | undefined)[];
+  /** Context passed to each delegated attempt. */
+  contexts: Context[];
+  /** Context the loop was given; delegation must not mutate it. */
+  sourceContext: Context | undefined;
   blacklist: string[];
   /** Providers excluded for usage limits during this run. */
   blacklistedProviders: string[];
@@ -179,6 +183,8 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
   const output: unknown[] = [];
   const reasoningOptions: (string | undefined)[] = [];
   const systemPrompts: (string | undefined)[] = [];
+  const contexts: Context[] = [];
+  let sourceContext: Context | undefined;
   const streamedModels: { provider: string; id: string; baseUrl: string }[] = [];
   const abortSignals: (AbortSignal | undefined)[] = [];
   const recordingStream: RecordingStream = {
@@ -196,6 +202,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     attempts.push(id);
     reasoningOptions.push((options as { reasoning?: string } | undefined)?.reasoning);
     systemPrompts.push((delegatedContext as { systemPrompt?: string } | undefined)?.systemPrompt);
+    contexts.push(delegatedContext as Context);
     streamedModels.push({ provider: model.provider, id: model.id, baseUrl: model.baseUrl });
     abortSignals.push((options as { signal?: AbortSignal } | undefined)?.signal);
     const queue = queuesByModel.get(id);
@@ -217,6 +224,10 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     output,
     reasoningOptions,
     systemPrompts,
+    contexts,
+    get sourceContext(): Context | undefined {
+      return sourceContext;
+    },
     streamedModels,
     abortSignals,
     registry,
@@ -253,6 +264,8 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
       const context = contextOverride ?? {
         messages: [{ role: 'user', content: 'hi' }],
       } as unknown as Context;
+      sourceContext = context;
+      contexts.length = 0;
       const delegationOptions: DelegationOptions = {
         decision,
         registry,

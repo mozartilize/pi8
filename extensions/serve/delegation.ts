@@ -58,6 +58,12 @@ const MAX_GENERIC_RETRIES = 1;
  * already in the buffer commits to live streaming; overflow of pure lifecycle
  * spam fails the candidate. */
 const MAX_BUFFERED_EVENTS = 10_000;
+/**
+ * Router-authored user turn that hands a tool loop to a candidate that
+ * declined it. It exists only in the delegated request, never in Pi's
+ * transcript.
+ */
+const TOOL_LOOP_HANDOFF_PROMPT = 'Continue the task from the tool results above.';
 const MAX_PREOUTPUT_BUFFER_CHARS = 1_000_000;
 
 /** Conservative payload accounting without serializing provider-controlled data. */
@@ -892,6 +898,7 @@ async function runCandidateAttempt(
   ctx: DelegationContext,
   candidate: PreparedCandidate,
   tries: number,
+  context: Context,
 ): Promise<CandidateAttemptResult> {
   const attemptAbort = new AbortController();
   const callerSignal = ctx.opts.options?.signal;
@@ -923,7 +930,7 @@ async function runCandidateAttempt(
       armDeadline(authResolveTimeoutMs, `credential lookup timed out: ${candidate.candidateId}`);
       const delegatedStream = ctx.opts.registry.streamSimple(
         candidate.chosen,
-        ctx.opts.context,
+        context,
         {
           ...options,
           ...(candidate.effectiveReasoning && candidate.effectiveReasoning !== 'off'
@@ -975,10 +982,10 @@ async function runCandidateAttempt(
         // not a defect: the candidate must not be blacklisted for it.
         failure = controller.severePreOutputSeen
           ? { kind: 'trajectory', message: `trajectory reasoning-loop (no stronger target): ${candidate.candidateId}` }
-          : ctx.opts.context.messages.at(-1)?.role === 'toolResult'
+          : context.messages.at(-1)?.role === 'toolResult'
             ? {
               kind: 'declined',
-              message: `${candidate.candidateId} returned no answer to a tool result; it may only continue tool calls it made itself. Send a new message to continue with it.`,
+              message: `${candidate.candidateId} returned no answer to a tool result; it may only continue tool calls it made itself.`,
             }
             : { kind: 'caught', error: new Error(`stream ended before meaningful output: ${candidate.candidateId}`) };
       }
@@ -1036,6 +1043,7 @@ async function runWithRetries(
   candidate: PreparedCandidate,
 ): Promise<{ attempt: SettledAttempt; lastRetry: RetryAttempt | undefined }> {
   let lastRetry: RetryAttempt | undefined;
+  let context = ctx.opts.context;
   for (let tries = 0; ; tries++) {
     if (tries > 0) {
       try {
@@ -1047,7 +1055,23 @@ async function runWithRetries(
       }
       debugLog('attempt.retry', { candidate: candidate.candidateId, retry: tries });
     }
-    const attempt = await runCandidateAttempt(ctx, candidate, tries);
+    let attempt = await runCandidateAttempt(ctx, candidate, tries, context);
+    if (attempt.kind === 'next-candidate' && attempt.declined && context === ctx.opts.context) {
+      // A provider that runs its own agent loop starts a fresh query from a
+      // user turn, importing the full history — foreign tool calls and
+      // results included. Ending the context on a user turn hands it the
+      // task where the previous model left off. The declined attempt emitted
+      // no output, so nothing is replayed. Later retries keep this context.
+      context = {
+        ...context,
+        messages: [
+          ...context.messages,
+          { role: 'user', content: TOOL_LOOP_HANDOFF_PROMPT, timestamp: Date.now() },
+        ],
+      };
+      debugLog('attempt.handoff', { candidate: candidate.candidateId });
+      attempt = await runCandidateAttempt(ctx, candidate, tries, context);
+    }
     if (attempt.kind !== 'retry') return { attempt, lastRetry };
     lastRetry = attempt;
   }

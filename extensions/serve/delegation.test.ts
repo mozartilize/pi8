@@ -176,45 +176,72 @@ describe('runDelegationLoop contracts', () => {
     expect(h.output.some((event) => (event as { type: string }).type === 'thinking_delta')).toBe(true);
   });
 
-  it('falls back without blacklisting a candidate that declines a tool-loop continuation', async () => {
-    const h = createDelegationHarness({
-      chain: ['bridge/agent', 'beta/fallback'],
-      context: {
-        messages: [
-          { role: 'user', content: 'hi' },
-          { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: {} }] },
-          { role: 'toolResult', toolCallId: 't1', toolName: 'read', content: [{ type: 'text', text: 'x' }] },
-        ],
-      } as unknown as Context,
-      scripts: {
-        'bridge/agent': [[{ type: 'done', message: { stopReason: 'stop' } }]],
-        'beta/fallback': [[{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }]],
-      },
+  describe('tool loop handed to a candidate that declines it', () => {
+    const toolLoop = {
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: {} }] },
+        { role: 'toolResult', toolCallId: 't1', toolName: 'read', content: [{ type: 'text', text: 'x' }] },
+      ],
+    } as unknown as Context;
+    const answerless = [{ type: 'done', message: { stopReason: 'stop' } }];
+    const answer = [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }];
+    const lastMessage = (context: Context) => context.messages.at(-1) as { role: string; content: unknown };
+
+    it('continues the task on the same candidate from a router-authored user turn', async () => {
+      const h = createDelegationHarness({
+        chain: ['bridge/agent'],
+        context: toolLoop,
+        scripts: { 'bridge/agent': [answerless, answer] },
+      });
+
+      expect((await h.run()).lastServed?.registryId).toBe('bridge/agent');
+      expect(h.attempts).toEqual(['bridge/agent', 'bridge/agent']);
+      expect(h.contexts[0]).toBe(h.sourceContext);
+      expect(h.contexts[1]!.messages.slice(0, -1)).toEqual(toolLoop.messages);
+      expect(lastMessage(h.contexts[1]!)).toMatchObject({ role: 'user', content: expect.any(String) });
+      expect(h.sourceContext!.messages).toHaveLength(3);
+      // The declined attempt's answerless done never reaches Pi.
+      expect(h.output).toEqual(answer);
+      expect(h.blacklist).toEqual([]);
     });
 
-    expect((await h.run()).lastServed?.registryId).toBe('beta/fallback');
-    expect(h.attempts).toEqual(['bridge/agent', 'beta/fallback']);
-    expect(h.blacklist).toEqual([]);
-    expect(h.output.filter((event) => (event as { type: string }).type === 'done')).toHaveLength(1);
-  });
+    it('keeps the handoff turn on retries of the handed-off attempt', async () => {
+      const h = createDelegationHarness({
+        chain: ['bridge/agent'],
+        context: toolLoop,
+        scripts: {
+          'bridge/agent': [answerless, [{ type: 'error', error: { stopReason: 'error', errorMessage: 'overloaded' } }], answer],
+        },
+      });
 
-  it('names the tool-loop limit when the only candidate declines a continuation', async () => {
-    const h = createDelegationHarness({
-      chain: ['bridge/agent'],
-      context: {
-        messages: [
-          { role: 'user', content: 'hi' },
-          { role: 'toolResult', toolCallId: 't1', toolName: 'read', content: [] },
-        ],
-      } as unknown as Context,
-      scripts: { 'bridge/agent': [[{ type: 'done', message: { stopReason: 'stop' } }]] },
+      expect((await h.run()).success).toBe(true);
+      expect(h.contexts.map((context) => lastMessage(context).role)).toEqual(['toolResult', 'user', 'user']);
     });
 
-    const result = await h.run();
-    expect(result.success).toBe(false);
-    expect(result.lastError).toContain('only continue tool calls it made itself');
-    expect(h.attempts).toEqual(['bridge/agent']);
-    expect(h.blacklist).toEqual([]);
+    it('hands off once, then falls back when the handoff gets no answer either', async () => {
+      const h = createDelegationHarness({
+        chain: ['bridge/agent', 'beta/fallback'],
+        context: toolLoop,
+        scripts: { 'bridge/agent': [answerless, answerless], 'beta/fallback': [answer] },
+      });
+
+      expect((await h.run()).lastServed?.registryId).toBe('beta/fallback');
+      expect(h.attempts).toEqual(['bridge/agent', 'bridge/agent', 'beta/fallback']);
+      // The fallback continues the original tool loop, not the handoff turn.
+      expect(h.contexts[2]).toBe(h.sourceContext);
+      expect(h.output).toEqual(answer);
+    });
+
+    it('never hands off a continuation that already ends on a user turn', async () => {
+      const h = createDelegationHarness({
+        chain: ['bridge/agent', 'beta/fallback'],
+        scripts: { 'bridge/agent': [answerless], 'beta/fallback': [answer] },
+      });
+
+      expect((await h.run()).lastServed?.registryId).toBe('beta/fallback');
+      expect(h.attempts).toEqual(['bridge/agent', 'beta/fallback']);
+    });
   });
 
   it('falls back when a candidate spams events before meaningful output', async () => {
