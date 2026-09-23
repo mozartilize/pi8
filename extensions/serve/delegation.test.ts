@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vites
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { Model, Api } from '@earendil-works/pi-ai';
+import type { Model, Api, Context } from '@earendil-works/pi-ai';
 
 import { multiWorkRoutingMeta, routingDecision, registryModel, candidate, benchRow } from '../test-support/router-fixtures.js';
 import { createDelegationHarness, rejectingReturnStream, hangingReturnStream } from '../test-support/delegation-harness.js';
@@ -174,6 +174,47 @@ describe('runDelegationLoop contracts', () => {
     expect((await h.run()).streamFinalized).toBe(true);
     expect(h.attempts).toEqual(['alpha/huge']);
     expect(h.output.some((event) => (event as { type: string }).type === 'thinking_delta')).toBe(true);
+  });
+
+  it('falls back without blacklisting a candidate that declines a tool-loop continuation', async () => {
+    const h = createDelegationHarness({
+      chain: ['bridge/agent', 'beta/fallback'],
+      context: {
+        messages: [
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: [{ type: 'toolCall', id: 't1', name: 'read', arguments: {} }] },
+          { role: 'toolResult', toolCallId: 't1', toolName: 'read', content: [{ type: 'text', text: 'x' }] },
+        ],
+      } as unknown as Context,
+      scripts: {
+        'bridge/agent': [[{ type: 'done', message: { stopReason: 'stop' } }]],
+        'beta/fallback': [[{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+
+    expect((await h.run()).lastServed?.registryId).toBe('beta/fallback');
+    expect(h.attempts).toEqual(['bridge/agent', 'beta/fallback']);
+    expect(h.blacklist).toEqual([]);
+    expect(h.output.filter((event) => (event as { type: string }).type === 'done')).toHaveLength(1);
+  });
+
+  it('names the tool-loop limit when the only candidate declines a continuation', async () => {
+    const h = createDelegationHarness({
+      chain: ['bridge/agent'],
+      context: {
+        messages: [
+          { role: 'user', content: 'hi' },
+          { role: 'toolResult', toolCallId: 't1', toolName: 'read', content: [] },
+        ],
+      } as unknown as Context,
+      scripts: { 'bridge/agent': [[{ type: 'done', message: { stopReason: 'stop' } }]] },
+    });
+
+    const result = await h.run();
+    expect(result.success).toBe(false);
+    expect(result.lastError).toContain('only continue tool calls it made itself');
+    expect(h.attempts).toEqual(['bridge/agent']);
+    expect(h.blacklist).toEqual([]);
   });
 
   it('falls back when a candidate spams events before meaningful output', async () => {

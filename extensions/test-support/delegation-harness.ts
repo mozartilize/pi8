@@ -117,6 +117,8 @@ export interface DelegationHarnessOptions {
   candidates?: Candidate[];
   /** Confirm a fallback before any provider request. */
   beforeFallback?: (candidateId: string, previousId: string) => Promise<FallbackPlan>;
+  /** Delegated conversation; defaults to a single user message. */
+  context?: Context;
 }
 
 export interface DelegationHarness {
@@ -164,7 +166,7 @@ function buildRegistry(
 }
 
 export function createDelegationHarness(options: DelegationHarnessOptions): DelegationHarness {
-  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates, beforeFallback } = options;
+  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates, beforeFallback, context: contextOverride } = options;
 
   // Per-model ordered attempt queues; each entry is consumed on one streamSimple call.
   type ScriptEntry = readonly unknown[] | Error | AsyncIterable<unknown>;
@@ -248,7 +250,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
       // The provider publishes this same object before delegation. An exhausted
       // walk must leave its in-place chain mutations visible to /router-why.
       session.setLastDecision(decision);
-      const context = {
+      const context = contextOverride ?? {
         messages: [{ role: 'user', content: 'hi' }],
       } as unknown as Context;
       const delegationOptions: DelegationOptions = {

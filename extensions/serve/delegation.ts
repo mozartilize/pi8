@@ -626,7 +626,14 @@ type CandidateAttemptResult =
   | { kind: 'finalize'; message: string }
   | { kind: 'provider-dead'; message: string }
   | { kind: 'retry'; message: string; transient: boolean; outputLimitExhausted: boolean }
-  | { kind: 'next-candidate'; message: string; transient: boolean; outputLimitExhausted: boolean };
+  | {
+      kind: 'next-candidate';
+      message: string;
+      transient: boolean;
+      outputLimitExhausted: boolean;
+      /** The candidate declined to continue a tool loop; not evidence of a defect. */
+      declined?: boolean;
+    };
 
 type CandidateFailure = Extract<CandidateAttemptResult, { kind: 'trajectory' | 'provider-dead' | 'next-candidate' }>;
 type RetryAttempt = Extract<CandidateAttemptResult, { kind: 'retry' }>;
@@ -637,7 +644,7 @@ function failureConsequence(
   failure: CandidateFailure,
   lastRetry: RetryAttempt | undefined,
 ): { blacklistModel: boolean; strikeProvider: boolean; killProvider: boolean } {
-  if (failure.kind === 'trajectory') {
+  if (failure.kind === 'trajectory' || (failure.kind === 'next-candidate' && failure.declined)) {
     return { blacklistModel: false, strikeProvider: false, killProvider: false };
   }
   if (failure.kind === 'provider-dead') {
@@ -810,7 +817,7 @@ class AttemptController {
 
 type AttemptFailure =
   | { kind: 'caught'; error: unknown }
-  | { kind: 'trajectory' | 'output-limit'; message: string }
+  | { kind: 'trajectory' | 'output-limit' | 'declined'; message: string }
   | { kind: 'provider-error'; message: string; error: { stopReason?: string; errorMessage?: string } | undefined };
 
 interface AttemptObservation {
@@ -869,6 +876,10 @@ function settleAttempt(
   );
   if (next.action === 'finalize') return { kind: 'finalize', message };
   if (next.action === 'provider-dead') return { kind: 'provider-dead', message };
+  if (failure.kind === 'declined') {
+    // Declining is deterministic for this context, so it is never retried.
+    return { kind: 'next-candidate', message, transient: false, outputLimitExhausted: false, declined: true };
+  }
   return {
     kind: next.action,
     message,
@@ -958,9 +969,18 @@ async function runCandidateAttempt(
       if (!failure && !controller.meaningfulOutputReceived) {
         // Severe pre-output loop with no reachable stronger target is a
         // capability struggle, not a model defect.
+        // A provider that owns its own agent loop (e.g. a CLI bridge) may only
+        // accept tool results for calls it made itself, and ends a foreign
+        // tool-loop continuation without an answer. That is a protocol limit,
+        // not a defect: the candidate must not be blacklisted for it.
         failure = controller.severePreOutputSeen
           ? { kind: 'trajectory', message: `trajectory reasoning-loop (no stronger target): ${candidate.candidateId}` }
-          : { kind: 'caught', error: new Error(`stream ended before meaningful output: ${candidate.candidateId}`) };
+          : ctx.opts.context.messages.at(-1)?.role === 'toolResult'
+            ? {
+              kind: 'declined',
+              message: `${candidate.candidateId} returned no answer to a tool result; it may only continue tool calls it made itself. Send a new message to continue with it.`,
+            }
+            : { kind: 'caught', error: new Error(`stream ended before meaningful output: ${candidate.candidateId}`) };
       }
     } catch (error) {
       failure = { kind: 'caught', error };
