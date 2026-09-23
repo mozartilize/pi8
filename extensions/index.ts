@@ -35,11 +35,7 @@ import {
   registerCommands,
   type ManualModelCompletionUpdater,
 } from './host/commands.js';
-import {
-  registerAutoRouterProvider,
-  buildSubagentProviderAuthFilter,
-  getBlacklistDebugState,
-} from './serve/provider.js';
+import { registerAutoRouterProvider, buildSubagentProviderAuthFilter } from './serve/provider.js';
 
 import {
   computeRoleModels,
@@ -209,7 +205,7 @@ async function handleSessionStart(
     reason: event.reason,
     previousSessionFile: event.previousSessionFile,
     model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
-    ...getBlacklistDebugState(),
+    ...session.blacklist.getDebugState(),
   });
   try {
     updateManualModelCompletionContext(ctx);
@@ -291,7 +287,7 @@ async function handleSessionStart(
   debugLog('lifecycle.session_start.end', {
     reason: event.reason,
     model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
-    ...getBlacklistDebugState(),
+    ...session.blacklist.getDebugState(),
   });
 }
 
@@ -307,7 +303,7 @@ function handleModelSelect(
     previousModel: event.previousModel
       ? `${event.previousModel.provider}/${event.previousModel.id}`
       : undefined,
-    ...getBlacklistDebugState(),
+    ...session.blacklist.getDebugState(),
   });
   // A concrete model selection makes the previous router decision stale.
   if (event.model.provider !== ROUTER_PROVIDER_ID) {
@@ -374,7 +370,7 @@ function handleTurnStart(
   }
   debugLog('lifecycle.turn_start', {
     model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
-    ...getBlacklistDebugState(),
+    ...session.blacklist.getDebugState(),
   });
   // Hard rule 9: trajectory arming is routing side-effect. Provider
   // registration below stays ungated so a later switch to router/auto
@@ -690,7 +686,7 @@ export default async function autoModelRouterExtension(
   pi.on('session_shutdown', (event) => {
     debugLog('lifecycle.session_shutdown', {
       reason: event.reason,
-      ...getBlacklistDebugState(),
+      ...session.blacklist.getDebugState(),
     });
   });
 

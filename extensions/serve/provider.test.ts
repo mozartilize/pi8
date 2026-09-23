@@ -15,14 +15,7 @@ import { join } from 'node:path';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { Api, Context, Model } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import {
-  blacklistModel,
-  buildSubagentProviderAuthFilter,
-  clearBlacklistedModels,
-  expandModelCandidates,
-  getBlacklistedModels,
-  removeBlacklistedModel,
-} from './provider.js';
+import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel } from '../test-support/router-fixtures.js';
@@ -37,6 +30,7 @@ import {
 import type { BenchModel } from '../types.js';
 import type { Dimension } from '../types.js';
 import type { EmbeddingResult } from '../embed/embedding.js';
+import { defaultBlacklistState } from './blacklist.js';
 
 // Embedding engine mock: provider.ts pulls `embedAndClassify` from
 // ./embedding.js. Only the embedding-blend describe below drives it; the
@@ -407,7 +401,7 @@ afterEach(async () => {
   setDelegationTimeouts();
   const { setDecisionLogBase } = await import('../host/decisionlog.js');
   setDecisionLogBase(undefined);
-  clearBlacklistedModels();
+  defaultBlacklistState.clearBlacklistedModels();
   vi.useRealTimers();
   vi.restoreAllMocks();
   temp.cleanup();
@@ -1921,7 +1915,7 @@ describe('assessment orchestration', () => {
 
     await harness.serve(ctx);
     const state = harness.getProviderState();
-    session.latchGeneration = (await import('./router-session-state.js')).getLatchGeneration();
+    session.latchGeneration = (await import('./router-session-state.js')).defaultRouterSession.intent.getLatchGeneration();
     return state.lastDecision as unknown as RoutingDecision | undefined;
   }
 
@@ -1973,24 +1967,24 @@ describe('assessment orchestration', () => {
     while (session.assessmentDispatchCount === 0) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    const state = await import('./router-session-state.js');
-    state.resetRouterSession();
+    const { defaultRouterSession: state } = await import('./router-session-state.js');
+    state.reset();
     release();
     await pendingTurn;
 
-    expect(state.getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+    expect(state.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
       input: 1_000,
       output: 80,
     });
-    expect(state.getCachedRoutingIntent()).toBeUndefined();
+    expect(state.intent.getCachedIntent()).toBeUndefined();
   });
 
   it('blacklists the assessor provider before scoring the turn', async () => {
     const session = await newSession({ consultRouter: true });
     const decision = await session.routeTurn('investigate the flaky test', { assessorUsageLimit: true });
 
-    const { getBlacklistedProviders } = await import('./blacklist.js');
-    expect([...getBlacklistedProviders()]).toEqual(['alpha']);
+    const { defaultBlacklistState } = await import('./blacklist.js');
+    expect([...defaultBlacklistState.getBlacklistedProviders()]).toEqual(['alpha']);
     expect(decision?.fallbackChain.some((id) => id.startsWith('alpha/'))).toBe(false);
   });
 
@@ -2429,13 +2423,13 @@ describe('no-stronger escalation gate', () => {
 
 describe('session model blacklist', () => {
   it('adds failed models, removes one model, and clears all models', () => {
-    blacklistModel('alpha/one');
-    blacklistModel('beta/two');
-    expect([...getBlacklistedModels()]).toEqual(['alpha/one', 'beta/two']);
-    expect(removeBlacklistedModel('alpha/one')).toBe(true);
-    expect([...getBlacklistedModels()]).toEqual(['beta/two']);
-    clearBlacklistedModels();
-    expect([...getBlacklistedModels()]).toEqual([]);
+    defaultBlacklistState.blacklistModel('alpha/one');
+    defaultBlacklistState.blacklistModel('beta/two');
+    expect([...defaultBlacklistState.getBlacklistedModels()]).toEqual(['alpha/one', 'beta/two']);
+    expect(defaultBlacklistState.removeBlacklistedModel('alpha/one')).toBe(true);
+    expect([...defaultBlacklistState.getBlacklistedModels()]).toEqual(['beta/two']);
+    defaultBlacklistState.clearBlacklistedModels();
+    expect([...defaultBlacklistState.getBlacklistedModels()]).toEqual([]);
   });
 });
 
@@ -2458,8 +2452,8 @@ describe('config-file blacklist — excluded from routing entirely', () => {
     // index.ts does on session_start). Import after setupProviderTest's
     // resetModules so this is the same blacklist module instance the router
     // reads.
-    const { addSessionBlacklistPatterns } = await import('./blacklist.js');
-    addSessionBlacklistPatterns((config.blacklist as string[]) ?? []);
+    const { defaultBlacklistState } = await import('./blacklist.js');
+    defaultBlacklistState.addSessionBlacklistPatterns((config.blacklist as string[]) ?? []);
   }
 
   it('excludes every matching model across providers for a `*/gemini*` pattern', async () => {
@@ -2516,8 +2510,8 @@ describe('usage-limit provider blacklist — excluded from routing entirely', ()
     });
     // Seed the provider exclusion against the same blacklist module instance
     // the router reads (setupProviderTest resets modules).
-    const { blacklistProvider } = await import('./blacklist.js');
-    blacklistProvider('alpha');
+    const { defaultBlacklistState } = await import('./blacklist.js');
+    defaultBlacklistState.blacklistProvider('alpha');
   });
 
   it('excludes every model of the blacklisted provider from the fallback chain', async () => {
@@ -2538,8 +2532,8 @@ describe('usage-limit provider blacklist — excluded from routing entirely', ()
       dir: temp.path,
       models: [registryModel('alpha/only', { contextWindow: 200000, maxTokens: 8192, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 } })],
     });
-    const { blacklistProvider } = await import('./blacklist.js');
-    blacklistProvider('alpha');
+    const { defaultBlacklistState } = await import('./blacklist.js');
+    defaultBlacklistState.blacklistProvider('alpha');
 
     const ctx = { messages: [{ role: 'user', content: 'hello' }] } as unknown as Context;
 

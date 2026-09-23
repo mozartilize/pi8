@@ -23,7 +23,6 @@ import type {
 import { buildAssessmentPrompt, parseAssessment, type AssessmentEvidence } from './assessment-prompt.js';
 import { debugLog } from '../../host/debuglog.js';
 import { inputOutputPricePer1M } from '../score/scorer.js';
-import { getAssessorTokenEstimate } from '../../serve/router-session-state.js';
 import { isUsageLimitErrorMessage } from '../../serve/usage-limit.js';
 
 export const DEFAULT_ASSESSOR_OUTPUT_TOKENS = 80;
@@ -262,7 +261,7 @@ export async function runAssessment(
   candidates: Candidate[],
   evidence: AssessmentEvidence,
   strikes: ReadonlyMap<string, number> = new Map(),
-  tokenEstimator: (fallback: AssessorTokenEstimate) => AssessorTokenEstimate = getAssessorTokenEstimate,
+  tokenEstimator: (fallback: AssessorTokenEstimate) => AssessorTokenEstimate = (fallback) => fallback,
 ): Promise<AssessmentAttempt> {
   if (!config.enabled) return { ok: false, fallbackReason: 'disabled', costUsd: 0, ms: 0 };
 

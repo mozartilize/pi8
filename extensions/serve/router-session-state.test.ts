@@ -1,33 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { terminalAssessment, routingDecision } from '../test-support/router-fixtures.js';
-import {
-  addAccumulatedCost,
-  addAssessmentCost,
-  bumpLatchGeneration,
-  commitWorkPhaseState,
-  getAccumulatedCost,
-  getActiveSkillNames,
-  getAssessmentCost,
-  getAssessorTokenEstimate,
-  getCachedRoutingIntent,
-  getCandidateExpansion,
-  setCandidateExpansion,
-  getLastChosenRegistryId,
-  getLastResolvedThinkingLevel,
-  getLatchGeneration,
-  getSessionGeneration,
-  getWorkPhaseState,
-  recordSuccessfulAssessorUsage,
-  resetRouterSession,
-  setActiveSkillNames,
-  setCachedRoutingIntent,
-  setLastDecision,
-  setLastResolvedThinkingLevel,
-  getLatchVetoIntentKey,
-  setLatchVetoIntentKey,
-  RouterSession,
-} from './router-session-state.js';
-import { getBlacklistedModels, getBlacklistedProviders } from './blacklist.js';
+import { defaultRouterSession, RouterSession } from './router-session-state.js';
+import { defaultBlacklistState } from './blacklist.js';
 
 describe('router session state', () => {
   it('clears a session-scoped manual model pin', () => {
@@ -115,7 +89,7 @@ describe('router session state', () => {
   });
 
   it('clears per-session routing state', () => {
-    setLastDecision({
+    defaultRouterSession.setLastDecision({
       dimension: 'implement',
       chosen: 'provider/model',
       reason: 'test',
@@ -125,9 +99,9 @@ describe('router session state', () => {
       cause: 'heuristic',
       fallbackChain: ['provider/model'],
     });
-    addAccumulatedCost(1.23);
-    setLastResolvedThinkingLevel('high');
-    setCachedRoutingIntent({
+    defaultRouterSession.addAccumulatedCost(1.23);
+    defaultRouterSession.setLastResolvedThinkingLevel('high');
+    defaultRouterSession.intent.setCachedIntent({
       key: '2:3:abc',
       classifyResult: {
         dimension: 'plan',
@@ -141,72 +115,72 @@ describe('router session state', () => {
       thin: true,
       contextChars: 120,
     });
-    expect(getCachedRoutingIntent()?.dimension).toBe('plan');
+    expect(defaultRouterSession.intent.getCachedIntent()?.dimension).toBe('plan');
 
-    resetRouterSession();
+    defaultRouterSession.reset();
 
-    expect(getLastChosenRegistryId()).toBeUndefined();
-    expect(getAccumulatedCost()).toBe(0);
-    expect(getLastResolvedThinkingLevel()).toBeUndefined();
-    expect(getCachedRoutingIntent()).toBeUndefined();
+    expect(defaultRouterSession.getLastChosenRegistryId()).toBeUndefined();
+    expect(defaultRouterSession.getAccumulatedCost()).toBe(0);
+    expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBeUndefined();
+    expect(defaultRouterSession.intent.getCachedIntent()).toBeUndefined();
   });
 });
 
 describe('candidate expansion memo', () => {
-  beforeEach(() => resetRouterSession());
+  beforeEach(() => defaultRouterSession.reset());
 
   it('round-trips the cached expansion by reference', () => {
     const candidates = [{ registryId: 'p/m' }] as never;
-    setCandidateExpansion({ key: 'sig-1', candidates });
-    const hit = getCandidateExpansion();
+    defaultRouterSession.setCandidateExpansion({ key: 'sig-1', candidates });
+    const hit = defaultRouterSession.getCandidateExpansion();
     expect(hit?.key).toBe('sig-1');
     // Same array reference: the memo hands back the built list without copying.
     expect(hit?.candidates).toBe(candidates);
   });
 
   it('does not survive a session reset', () => {
-    setCandidateExpansion({ key: 'sig-1', candidates: [] });
-    resetRouterSession();
-    expect(getCandidateExpansion()).toBeUndefined();
+    defaultRouterSession.setCandidateExpansion({ key: 'sig-1', candidates: [] });
+    defaultRouterSession.reset();
+    expect(defaultRouterSession.getCandidateExpansion()).toBeUndefined();
   });
 });
 
 describe('assessment session state', () => {
-  beforeEach(() => resetRouterSession());
+  beforeEach(() => defaultRouterSession.reset());
 
   it('starts at latch generation 0', () => {
-    expect(getLatchGeneration()).toBe(0);
+    expect(defaultRouterSession.intent.getLatchGeneration()).toBe(0);
   });
 
   it('advances the session generation on every reset', () => {
-    const before = getSessionGeneration();
-    resetRouterSession();
-    expect(getSessionGeneration()).toBe(before + 1);
+    const before = defaultRouterSession.getSessionGeneration();
+    defaultRouterSession.reset();
+    expect(defaultRouterSession.getSessionGeneration()).toBe(before + 1);
   });
 
   it('bumps the latch generation exactly once per call', () => {
-    bumpLatchGeneration();
-    expect(getLatchGeneration()).toBe(1);
-    bumpLatchGeneration();
-    expect(getLatchGeneration()).toBe(2);
+    defaultRouterSession.intent.bumpLatchGeneration();
+    expect(defaultRouterSession.intent.getLatchGeneration()).toBe(1);
+    defaultRouterSession.intent.bumpLatchGeneration();
+    expect(defaultRouterSession.intent.getLatchGeneration()).toBe(2);
   });
 
   it('accumulates assessment cost separately from routed cost', () => {
-    addAssessmentCost(0.0004);
-    addAssessmentCost(0.0006);
-    expect(getAssessmentCost()).toBeCloseTo(0.001, 6);
-    expect(getAccumulatedCost()).toBe(0);
+    defaultRouterSession.assessment.addCost(0.0004);
+    defaultRouterSession.assessment.addCost(0.0006);
+    expect(defaultRouterSession.assessment.getCost()).toBeCloseTo(0.001, 6);
+    expect(defaultRouterSession.getAccumulatedCost()).toBe(0);
   });
 
   it('updates the assessor usage estimate and ignores missing usage', () => {
     // With no recorded usage the caller's own estimate passes through.
-    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+    expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
       input: 1_000,
       output: 80,
     });
     // The first recorded usage replaces the estimate outright.
-    recordSuccessfulAssessorUsage({ input: 500, output: 100 });
-    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+    defaultRouterSession.assessment.recordSuccessfulUsage({ input: 500, output: 100 });
+    expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
       input: 500,
       output: 100,
     });
@@ -214,34 +188,34 @@ describe('assessment session state', () => {
     // exact blend weight is internal economics, so pin the property: the
     // smoothed value stays strictly between the previous estimate and the
     // new usage on both axes.
-    recordSuccessfulAssessorUsage({ input: 1_000, output: 50 });
-    const blended = getAssessorTokenEstimate({ input: 1_000, output: 80 });
+    defaultRouterSession.assessment.recordSuccessfulUsage({ input: 1_000, output: 50 });
+    const blended = defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 });
     expect(blended!.input).toBeGreaterThan(500);
     expect(blended!.input).toBeLessThan(1_000);
     expect(blended!.output).toBeGreaterThan(50);
     expect(blended!.output).toBeLessThan(100);
     // A zero/missing record is ignored: the estimate does not collapse.
-    recordSuccessfulAssessorUsage({ input: 0, output: 0 });
-    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual(blended);
+    defaultRouterSession.assessment.recordSuccessfulUsage({ input: 0, output: 0 });
+    expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual(blended);
   });
 
   it('clears latch generation, assessment cost, and assessor EMA on session reset', () => {
-    bumpLatchGeneration();
-    addAssessmentCost(0.01);
-    recordSuccessfulAssessorUsage({ input: 500, output: 100 });
-    setActiveSkillNames(['systematic-debugging', 'writing-plans']);
-    resetRouterSession();
-    expect(getLatchGeneration()).toBe(0);
-    expect(getAssessmentCost()).toBe(0);
-    expect(getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
+    defaultRouterSession.intent.bumpLatchGeneration();
+    defaultRouterSession.assessment.addCost(0.01);
+    defaultRouterSession.assessment.recordSuccessfulUsage({ input: 500, output: 100 });
+    defaultRouterSession.setActiveSkillNames(['systematic-debugging', 'writing-plans']);
+    defaultRouterSession.reset();
+    expect(defaultRouterSession.intent.getLatchGeneration()).toBe(0);
+    expect(defaultRouterSession.assessment.getCost()).toBe(0);
+    expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
       input: 1_000,
       output: 80,
     });
-    expect(getActiveSkillNames()).toEqual([]);
+    expect(defaultRouterSession.getActiveSkillNames()).toEqual([]);
   });
 
   it('clears phase, invocation, and pending mutation state on reset', () => {
-    commitWorkPhaseState({
+    defaultRouterSession.intent.commitWorkPhaseState({
       intentKey: 'intent-a',
       terminal: terminalAssessment(),
       terminalRequirement: 0.775,
@@ -258,20 +232,20 @@ describe('assessment session state', () => {
       observedReadTools: 1,
       observedMutationTools: 1,
     });
-    expect(getWorkPhaseState()?.phase).toBe('inspect');
+    expect(defaultRouterSession.intent.getWorkPhaseState()?.phase).toBe('inspect');
 
-    resetRouterSession();
+    defaultRouterSession.reset();
 
-    expect(getWorkPhaseState()).toBeUndefined();
+    expect(defaultRouterSession.intent.getWorkPhaseState()).toBeUndefined();
   });
 
   it('folds latchVetoIntentKey into session state and clears it on reset (regression fix)', () => {
-    setLatchVetoIntentKey('vetoed-intent-123');
-    expect(getLatchVetoIntentKey()).toBe('vetoed-intent-123');
+    defaultRouterSession.intent.setLatchVetoIntentKey('vetoed-intent-123');
+    expect(defaultRouterSession.intent.getLatchVetoIntentKey()).toBe('vetoed-intent-123');
 
-    resetRouterSession();
+    defaultRouterSession.reset();
 
-    expect(getLatchVetoIntentKey()).toBeUndefined();
+    expect(defaultRouterSession.intent.getLatchVetoIntentKey()).toBeUndefined();
   });
 });
 
@@ -298,7 +272,7 @@ describe('RouterSession independent instances', () => {
   // would let a second session inherit the first's exclusions and incumbent,
   // and would survive a reset of the instance that owns them.
   it('keeps an injected session out of the default session', () => {
-    resetRouterSession();
+    defaultRouterSession.reset();
     const isolated = new RouterSession();
 
     isolated.blacklistModel('alpha/failed');
@@ -314,9 +288,9 @@ describe('RouterSession independent instances', () => {
       fallbackChain: ['beta/strong'],
     });
 
-    expect(getBlacklistedModels().has('alpha/failed')).toBe(false);
-    expect(getBlacklistedProviders().has('alpha')).toBe(false);
-    expect(getLastChosenRegistryId()).toBeUndefined();
+    expect(defaultBlacklistState.getBlacklistedModels().has('alpha/failed')).toBe(false);
+    expect(defaultBlacklistState.getBlacklistedProviders().has('alpha')).toBe(false);
+    expect(defaultRouterSession.getLastChosenRegistryId()).toBeUndefined();
   });
 });
 

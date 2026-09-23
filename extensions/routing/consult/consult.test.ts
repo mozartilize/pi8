@@ -18,7 +18,7 @@ import {
 } from './consult.js';
 import type { AssessmentEvidence } from './assessment-prompt.js';
 import type { Candidate } from '../../types.js';
-import { resetRouterSession } from '../../serve/router-session-state.js';
+import { defaultRouterSession } from '../../serve/router-session-state.js';
 import {
   assistantMessage,
   runtimeProvider,
@@ -27,7 +27,7 @@ import {
   type RuntimeStream,
 } from '../../test-support/runtime-registry.js';
 
-beforeEach(() => resetRouterSession());
+beforeEach(() => defaultRouterSession.reset());
 
 const evidence: AssessmentEvidence = {
   conversation: 'User: list the main features of docs/plan.md',

@@ -12,8 +12,8 @@ import type { Context, Model, Api } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { runDelegationLoop, type DelegationOptions, type DelegationResult, type FallbackPlan } from '../serve/delegation.js';
-import { RouterSession, resetRouterSession } from '../serve/router-session-state.js';
-import { clearBlacklistedModels, clearBlacklistedProviders } from '../serve/blacklist.js';
+import { defaultRouterSession, RouterSession } from '../serve/router-session-state.js';
+import { defaultBlacklistState } from '../serve/blacklist.js';
 import { makeTerminalErrorEvent } from '../serve/error-event.js';
 import { routingDecision, registryModel } from './router-fixtures.js';
 import { scriptedRegistryStream } from './registry-stream.js';
@@ -236,9 +236,9 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
     async run(): Promise<DelegationResult> {
       session.reset();
       session.clearSessionBlacklist();
-      resetRouterSession();
-      clearBlacklistedModels();
-      clearBlacklistedProviders();
+      defaultRouterSession.reset();
+      defaultBlacklistState.clearBlacklistedModels();
+      defaultBlacklistState.clearBlacklistedProviders();
       attempts.length = 0;
       output.length = 0;
       abortSignals.length = 0;

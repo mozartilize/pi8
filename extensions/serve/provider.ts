@@ -59,8 +59,6 @@ import {
   RuntimeBindings,
   defaultRouterSession,
   defaultRuntimeBindings,
-  getCachedRoutingIntent,
-  getCurrentModelRegistry,
 } from './router-session-state.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop, type DelegationOptions } from './delegation.js';
@@ -76,21 +74,8 @@ import {
   terminalRequirement,
 } from '../routing/policy/work-phase.js';
 
-export {
-  addSessionBlacklistPatterns,
-  blacklistModel,
-  blacklistProvider,
-  clearBlacklistedModels,
-  clearBlacklistedProviders,
-  clearSessionBlacklist,
-  getBlacklistDebugState,
-  getBlacklistedModels,
-  getBlacklistedProviders,
-  getSessionBlacklistPatterns,
-  removeBlacklistedModel,
-  removeBlacklistedProvider,
-  removeSessionBlacklistPatterns,
-} from './blacklist.js';
+/** Pi's model registry once the session binds it; undefined before `session_start`. */
+type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
 
 // ─── Registry-wait (mandatory for subagents) ────────────────────────
 
@@ -132,9 +117,9 @@ const REGISTRY_WAIT_MAX_DELAY_MS = 500;
 
 /** Poll the LIVE module variable via a getter until the registry arrives. */
 async function waitForRegistry(
-  getRegistry: () => ReturnType<typeof getCurrentModelRegistry>,
+  getRegistry: () => ModelRegistry,
   timeoutMs = REGISTRY_WAIT_TIMEOUT_MS,
-): Promise<ReturnType<typeof getCurrentModelRegistry>> {
+): Promise<ModelRegistry> {
   const r = getRegistry();
   if (r?.getAvailable) return r;
   const start = Date.now();
@@ -424,10 +409,10 @@ async function resolveBaseIntent(
     systemPrompt: string | undefined;
     config: AutoRouterConfig;
   },
-  session?: RouterSession,
+  session: RouterSession,
 ) {
   const { turnInput, systemPrompt, config } = args;
-  const cachedIntent = session ? session.getCachedIntent() : getCachedRoutingIntent();
+  const cachedIntent = session.getCachedIntent();
   const cacheHit = cachedIntent?.key === turnInput.key;
   const classifyResult = cacheHit
     ? cachedIntent.classifyResult
@@ -453,8 +438,7 @@ async function resolveBaseIntent(
         deadlineMs: config.embeddingDeadlineMs,
       });
       if (embeddingResult) {
-        const targetSession = session ?? defaultRouterSession;
-        targetSession.recordEmbedding('fired');
+        session.recordEmbedding('fired');
         const minConfidence =
           config.embeddingMinConfidence ?? DEFAULT_EMBEDDING_MIN_CONFIDENCE;
         if (embeddingResult.confidence >= minConfidence) {
@@ -463,16 +447,16 @@ async function resolveBaseIntent(
           if (embeddingStrength > keywordStrength) {
             baseDimension = embeddingResult.dimension;
             baseCause = 'embedding-classify';
-            targetSession.recordEmbedding('promoted');
+            session.recordEmbedding('promoted');
           }
         } else {
-          targetSession.recordEmbedding('abstainedLowConf');
+          session.recordEmbedding('abstainedLowConf');
         }
       } else {
-        (session ?? defaultRouterSession).recordEmbedding('degraded');
+        session.recordEmbedding('degraded');
       }
     } catch {
-      (session ?? defaultRouterSession).recordEmbedding('degraded');
+      session.recordEmbedding('degraded');
     }
   }
 
@@ -577,7 +561,7 @@ interface AssessmentEnv {
   context: Context;
   config: AutoRouterConfig;
   pi: ExtensionAPI;
-  registry: ReturnType<typeof getCurrentModelRegistry>;
+  registry: ModelRegistry;
   routableCandidates: Candidate[];
   session: RouterSession;
 }
@@ -884,7 +868,7 @@ function noRoutableCandidates(session: RouterSession): RouterTurnOutcome {
 }
 
 interface PreparedTurn {
-  registry: ReturnType<typeof getCurrentModelRegistry>;
+  registry: ModelRegistry;
   extensionContext: ExtensionContext | undefined;
   config: AutoRouterConfig;
   measured: ReturnType<typeof measureTurnInput>;

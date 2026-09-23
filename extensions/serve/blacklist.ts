@@ -123,44 +123,5 @@ export class BlacklistState {
   }
 }
 
-/** Shared default instance used by top-level CLI commands and procedural adapters. */
+/** Default instance, owned by the default `RouterSession`. */
 export const defaultBlacklistState = new BlacklistState();
-
-export const getBlacklistDebugState = (): Record<string, unknown> =>
-  defaultBlacklistState.getDebugState();
-
-export const blacklistModel = (registryId: string): void =>
-  defaultBlacklistState.blacklistModel(registryId);
-
-export const removeBlacklistedModel = (registryId: string): boolean =>
-  defaultBlacklistState.removeBlacklistedModel(registryId);
-
-export const clearBlacklistedModels = (): void =>
-  defaultBlacklistState.clearBlacklistedModels();
-
-export const getBlacklistedModels = (): ReadonlySet<string> =>
-  defaultBlacklistState.getBlacklistedModels();
-
-export const blacklistProvider = (provider: string): void =>
-  defaultBlacklistState.blacklistProvider(provider);
-
-export const removeBlacklistedProvider = (provider: string): boolean =>
-  defaultBlacklistState.removeBlacklistedProvider(provider);
-
-export const clearBlacklistedProviders = (): void =>
-  defaultBlacklistState.clearBlacklistedProviders();
-
-export const getBlacklistedProviders = (): ReadonlySet<string> =>
-  defaultBlacklistState.getBlacklistedProviders();
-
-export const addSessionBlacklistPatterns = (patterns: readonly string[]): string[] =>
-  defaultBlacklistState.addSessionBlacklistPatterns(patterns);
-
-export const removeSessionBlacklistPatterns = (patterns: readonly string[]): string[] =>
-  defaultBlacklistState.removeSessionBlacklistPatterns(patterns);
-
-export const getSessionBlacklistPatterns = (): readonly string[] =>
-  defaultBlacklistState.getSessionBlacklistPatterns();
-
-export const clearSessionBlacklist = (): void =>
-  defaultBlacklistState.clearSessionBlacklist();

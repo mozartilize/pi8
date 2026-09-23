@@ -23,9 +23,7 @@ import { asStream, setupProviderTest } from '../test-support/provider-harness.js
 import { createDelegationHarness } from '../test-support/delegation-harness.js';
 import { multiWorkRoutingMeta, routingDecision } from '../test-support/router-fixtures.js';
 import { evaluateMutationCall } from '../routing/policy/mutation-gate.js';
-import {
-  commitWorkPhaseState,
-} from './router-session-state.js';
+import { defaultRouterSession } from './router-session-state.js';
 import type { BenchModel } from '../types.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 
@@ -94,8 +92,11 @@ interface MutationBlock {
 
 /** Binds session accessors to the module instance the given harness actually mutates. */
 async function bindSession() {
-  const { getWorkPhaseState, commitWorkPhaseState: commit, getLastServed: served, getLastDecision: decision } =
-    await import('./router-session-state.js');
+  const { defaultRouterSession: session } = await import('./router-session-state.js');
+  const getWorkPhaseState = () => session.intent.getWorkPhaseState();
+  const commit: typeof session.intent.commitWorkPhaseState = (next) => session.intent.commitWorkPhaseState(next);
+  const served = () => session.getLastServed();
+  const decision = () => session.getLastDecision();
   const { evaluateMutationCall: evaluate } = await import('../routing/policy/mutation-gate.js');
   const { classifyMutationCall: classify } = await import('../routing/policy/mutation-detector.js');
   /** Mirrors index.ts's `tool_call` mutation-gate hook exactly. */
@@ -253,7 +254,7 @@ describe('multi-work routing acceptance', () => {
       observedReadTools: 0,
       observedMutationTools: 0,
     };
-    commitWorkPhaseState(inspectState);
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState);
 
     const decisionResult = evaluateMutationCall({
       toolName: 'edit',

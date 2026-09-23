@@ -13,8 +13,8 @@ import { join } from 'node:path';
 
 import { registerCommands } from './commands.js';
 import { loadConfig, getConfigPath } from '../config.js';
-import { blacklistModel, blacklistProvider, clearBlacklistedModels, getProviderState } from '../serve/provider.js';
-import { clearSessionBlacklist, getSessionBlacklistPatterns } from '../serve/blacklist.js';
+import { getProviderState } from '../serve/provider.js';
+import { defaultBlacklistState } from '../serve/blacklist.js';
 import {
   appendDecision,
   appendMutationGateSignal,
@@ -33,16 +33,16 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'pi8-blacklist-cmd-test-'));
   prevEnv = process.env.PI8_DIR;
   process.env.PI8_DIR = dir;
-  clearBlacklistedModels();
-  clearSessionBlacklist();
+  defaultBlacklistState.clearBlacklistedModels();
+  defaultBlacklistState.clearSessionBlacklist();
 });
 
 afterEach(() => {
   if (prevEnv === undefined) delete process.env.PI8_DIR;
   else process.env.PI8_DIR = prevEnv;
   rmSync(dir, { recursive: true, force: true });
-  clearBlacklistedModels();
-  clearSessionBlacklist();
+  defaultBlacklistState.clearBlacklistedModels();
+  defaultBlacklistState.clearSessionBlacklist();
 });
 
 /** Minimal fake ExtensionAPI: captures registered command handlers by name. */
@@ -342,7 +342,7 @@ describe('/router-blacklist add|remove — session by default', () => {
 
     await handlers.get('router-blacklist')!('add github-copilot/*', ctx);
 
-    expect(getSessionBlacklistPatterns()).toEqual(['github-copilot/*']);
+    expect(defaultBlacklistState.getSessionBlacklistPatterns()).toEqual(['github-copilot/*']);
     expect(loadConfig().blacklist ?? []).toEqual([]);
   });
 
@@ -353,7 +353,7 @@ describe('/router-blacklist add|remove — session by default', () => {
 
     await handlers.get('router-blacklist')!('add github-copilot/* */gemini* opencode-go/hy3', ctx);
 
-    expect(getSessionBlacklistPatterns()).toEqual([
+    expect(defaultBlacklistState.getSessionBlacklistPatterns()).toEqual([
       'github-copilot/*',
       '*/gemini*',
       'opencode-go/hy3',
@@ -368,7 +368,7 @@ describe('/router-blacklist add|remove — session by default', () => {
     await handlers.get('router-blacklist')!('add github-copilot/*', ctx);
     await handlers.get('router-blacklist')!('add github-copilot/*', ctx);
 
-    expect(getSessionBlacklistPatterns()).toEqual(['github-copilot/*']);
+    expect(defaultBlacklistState.getSessionBlacklistPatterns()).toEqual(['github-copilot/*']);
   });
 
   it('remove drops a session pattern and any runtime failure it matches', async () => {
@@ -376,13 +376,13 @@ describe('/router-blacklist add|remove — session by default', () => {
     registerCommands(pi);
     const { ctx } = fakeCtx();
 
-    blacklistModel('github-copilot/gpt-5.4');
-    blacklistModel('opencode-go/deepseek-v4-pro');
+    defaultBlacklistState.blacklistModel('github-copilot/gpt-5.4');
+    defaultBlacklistState.blacklistModel('opencode-go/deepseek-v4-pro');
     await handlers.get('router-blacklist')!('add github-copilot/* opencode-go/hy3', ctx);
 
     await handlers.get('router-blacklist')!('remove github-copilot/*', ctx);
 
-    expect(getSessionBlacklistPatterns()).toEqual(['opencode-go/hy3']);
+    expect(defaultBlacklistState.getSessionBlacklistPatterns()).toEqual(['opencode-go/hy3']);
     expect(getProviderState().blacklistedModels).toEqual(['opencode-go/deepseek-v4-pro']);
     expect(loadConfig().blacklist ?? []).toEqual([]);
   });
@@ -392,7 +392,7 @@ describe('/router-blacklist add|remove — session by default', () => {
     registerCommands(pi);
     const { ctx } = fakeCtx();
 
-    blacklistProvider('opencode-go');
+    defaultBlacklistState.blacklistProvider('opencode-go');
     await handlers.get('router-blacklist')!('add opencode-go/*', ctx);
 
     await handlers.get('router-blacklist')!('remove opencode-go/*', ctx);
@@ -405,7 +405,7 @@ describe('/router-blacklist add|remove — session by default', () => {
     registerCommands(pi);
     const { ctx } = fakeCtx();
 
-    blacklistProvider('opencode-go');
+    defaultBlacklistState.blacklistProvider('opencode-go');
     await handlers.get('router-blacklist')!('add opencode-go/deepseek-v4-pro', ctx);
 
     await handlers.get('router-blacklist')!('remove opencode-go/deepseek-v4-pro', ctx);
@@ -423,7 +423,7 @@ describe('/router-blacklist --save — persisted config blacklist', () => {
     await handlers.get('router-blacklist')!('add github-copilot/* */gemini* --save', ctx);
 
     expect(loadConfig().blacklist).toEqual(['github-copilot/*', '*/gemini*']);
-    expect(getSessionBlacklistPatterns()).toEqual(['github-copilot/*', '*/gemini*']);
+    expect(defaultBlacklistState.getSessionBlacklistPatterns()).toEqual(['github-copilot/*', '*/gemini*']);
   });
 
   it('accepts --save before the patterns', async () => {
@@ -477,11 +477,11 @@ describe('/router-blacklist clear — session-only, no patterns', () => {
 
     await handlers.get('router-blacklist')!('add opencode-go/hy3 --save', ctx);
     await handlers.get('router-blacklist')!('add github-copilot/*', ctx);
-    blacklistModel('github-copilot/gpt-5.4');
+    defaultBlacklistState.blacklistModel('github-copilot/gpt-5.4');
 
     await handlers.get('router-blacklist')!('clear', ctx);
 
-    expect(getSessionBlacklistPatterns()).toEqual([]);
+    expect(defaultBlacklistState.getSessionBlacklistPatterns()).toEqual([]);
     expect(getProviderState().blacklistedModels).toEqual([]);
     expect(loadConfig().blacklist).toEqual(['opencode-go/hy3']);
   });
@@ -494,7 +494,7 @@ describe('/router-blacklist clear — session-only, no patterns', () => {
     await handlers.get('router-blacklist')!('add github-copilot/*', ctx);
     await handlers.get('router-blacklist')!('clear github-copilot/*', ctx);
 
-    expect(getSessionBlacklistPatterns()).toEqual(['github-copilot/*']);
+    expect(defaultBlacklistState.getSessionBlacklistPatterns()).toEqual(['github-copilot/*']);
     expect(messages.at(-1)).toContain('Usage:');
   });
 
@@ -529,7 +529,7 @@ describe('/router-blacklist — no args shows every list', () => {
     const { ctx, messages } = fakeCtx();
 
     await handlers.get('router-blacklist')!('add */gemini*', ctx);
-    blacklistModel('github-copilot/gpt-5.4');
+    defaultBlacklistState.blacklistModel('github-copilot/gpt-5.4');
 
     await handlers.get('router-blacklist')!('', ctx);
 

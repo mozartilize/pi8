@@ -16,8 +16,8 @@ import { multiWorkRoutingMeta, routingDecision, registryModel, candidate, benchR
 import { createDelegationHarness, rejectingReturnStream, hangingReturnStream } from '../test-support/delegation-harness.js';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { setDecisionLogBase } from '../host/decisionlog.js';
-import { resetRouterSession } from './router-session-state.js';
-import { clearBlacklistedModels } from './blacklist.js';
+import { defaultRouterSession } from './router-session-state.js';
+import { defaultBlacklistState } from './blacklist.js';
 import { setDelegationTimeouts } from './delegation.js';
 
 vi.mock('@earendil-works/pi-ai', () => ({
@@ -39,8 +39,8 @@ const decisionLogTestDir = mkdtempSync(join(tmpdir(), 'ar-delegation-log-'));
 beforeEach(() => {
   vi.clearAllMocks();
   setDecisionLogBase(decisionLogTestDir);
-  resetRouterSession();
-  clearBlacklistedModels();
+  defaultRouterSession.reset();
+  defaultBlacklistState.clearBlacklistedModels();
 });
 
 afterEach(() => {
