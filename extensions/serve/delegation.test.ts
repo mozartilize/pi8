@@ -1181,6 +1181,92 @@ describe('pre-output reasoning-loop handoff', () => {
     expect(result.capabilityHandoff?.fromModel).toMatch(/^alpha\/loop/);
   });
 
+  it('respects a semi pin with thinking after a hop without claiming a weaker effort is stronger', async () => {
+    const medium = candidate('beta/strong', {
+      effort: 'medium',
+      reasoning: true,
+      thinkingLevelMap: { medium: 'medium', high: 'high' },
+      bench: benchRow('beta/strong', { quality: { intelligence: 90, coding: 90, agenticCoding: 90 } }),
+    });
+    const high = candidate('beta/strong', {
+      ...medium,
+      effort: 'high',
+      bench: benchRow('beta/strong', { quality: { intelligence: 50, coding: 50, agenticCoding: 50 } }),
+    });
+    const pool = [loopSource, medium, high];
+    const decision = routingDecision(['alpha/loop', 'beta/strong:medium']);
+    const h = createDelegationHarness({
+      chain: decision.fallbackChain,
+      decision,
+      candidates: pool,
+      registry: {
+        find: (provider: string, id: string) => registryModel(`${provider}/${id}`, {
+          reasoning: provider === 'beta',
+          thinkingLevelMap: { medium: 'medium', high: 'high' },
+        }) as unknown as Model<Api>,
+      },
+      beforeFallback: async (candidateId, _previousId, opts) => {
+        expect(candidateId).toBe('beta/strong:medium');
+        // The production semi callback mutates these exact live objects when
+        // the user pins a different model/effort during the fallback prompt.
+        opts.decision.fallbackChain.splice(1, 1, 'beta/strong:high');
+        opts.decision.cause = 'manual-override';
+        opts.candidates?.splice(0, opts.candidates.length, high);
+        opts.reasoning = 'high';
+        opts.userReasoningOverride = true;
+        return 'beta/strong:high';
+      },
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents()],
+        'beta/strong': [[{ type: 'text_delta', delta: 'pinned' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'beta/strong']);
+    expect(h.reasoningOptions).toEqual([undefined, 'high']);
+    expect(h.session.getLastDecision()?.cause).toBe('manual-override');
+    expect(h.session.getLastDecision()?.trajectoryFriction).toBeUndefined();
+    expect(result.capabilityHandoff).toBeUndefined();
+  });
+
+  it('allows an explicit semi selection of the excluded source without calling it a capability hop', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/loop', 'beta/strong'],
+      candidates: [loopSource, loopStrong],
+      beforeFallback: async () => 'alpha/loop',
+      scripts: {
+        'alpha/loop': [reasoningLoopEvents(), [
+          { type: 'text_delta', delta: 'chosen by user' },
+          { type: 'done', message: { stopReason: 'stop' } },
+        ]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/loop', 'alpha/loop']);
+    expect(h.blacklist).toEqual([]);
+    expect(h.session.getLastDecision()?.trajectoryFriction).toBeUndefined();
+    expect(result.capabilityHandoff).toBeUndefined();
+  });
+
+  it('keeps the live reordered chain on the last decision when a hop exhausts', async () => {
+    const decision = routingDecision(['alpha/loop', 'gamma/cheap', 'beta/strong']);
+    const chain = decision.fallbackChain;
+    const h = createDelegationHarness({
+      chain,
+      decision,
+      candidates: [loopSource, loopStrong, loopCheap],
+      credentials: { 'beta/strong': { ok: false }, 'gamma/cheap': { ok: false } },
+      scripts: { 'alpha/loop': [reasoningLoopEvents()] },
+    });
+    const result = await h.run();
+    expect(result).toMatchObject({ success: false, streamFinalized: false });
+    expect(h.session.getLastDecision()).toBe(decision);
+    expect(decision.fallbackChain).toBe(chain);
+    expect(chain).toEqual(['alpha/loop', 'beta/strong', 'gamma/cheap']);
+  });
+
   it('drops hop metadata when beforeFallback substitutes a weaker model', async () => {
     const h = createDelegationHarness({
       chain: ['alpha/loop', 'beta/strong', 'gamma/cheap'],

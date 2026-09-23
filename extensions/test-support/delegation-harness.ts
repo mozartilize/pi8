@@ -11,7 +11,7 @@ import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { Context, Model, Api } from '@earendil-works/pi-ai';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
-import { runDelegationLoop, type DelegationResult } from '../serve/delegation.js';
+import { runDelegationLoop, type DelegationOptions, type DelegationResult } from '../serve/delegation.js';
 import { RouterSession, resetRouterSession } from '../serve/router-session-state.js';
 import { clearBlacklistedModels, clearBlacklistedProviders } from '../serve/blacklist.js';
 import { makeTerminalErrorEvent } from '../serve/error-event.js';
@@ -116,7 +116,7 @@ export interface DelegationHarnessOptions {
   /** Live routable set, required for pre-output capability hops. */
   candidates?: Candidate[];
   /** Confirm a fallback before any provider request; undefined cancels the turn. */
-  beforeFallback?: (candidateId: string, previousId: string) => Promise<string | undefined>;
+  beforeFallback?: (candidateId: string, previousId: string, opts: DelegationOptions) => Promise<string | undefined>;
 }
 
 export interface DelegationHarness {
@@ -245,24 +245,30 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
       recordingStream.ended = false;
 
       const decision = decisionOverride ?? routingDecision(chain);
+      // The provider publishes this same object before delegation. An exhausted
+      // walk must leave its in-place chain mutations visible to /router-why.
+      session.setLastDecision(decision);
       const context = {
         messages: [{ role: 'user', content: 'hi' }],
       } as unknown as Context;
+      const delegationOptions: DelegationOptions = {
+        decision,
+        registry,
+        context,
+        options: signal ? { signal } : undefined,
+        reasoning,
+        userReasoningOverride,
+        turnTimer: () => 0,
+        extensionContext: undefined,
+        notifyOnRoute: false,
+        session,
+        candidates,
+        beforeFallback: beforeFallback
+          ? (candidateId, previousId) => beforeFallback(candidateId, previousId, delegationOptions)
+          : undefined,
+      };
       const result = await runDelegationLoop(
-        {
-          decision,
-          registry,
-          context,
-          options: signal ? { signal } : undefined,
-          reasoning,
-          userReasoningOverride,
-          turnTimer: () => 0,
-          extensionContext: undefined,
-          notifyOnRoute: false,
-          session,
-          candidates,
-          beforeFallback,
-        },
+        delegationOptions,
         recordingStream as unknown as Parameters<typeof runDelegationLoop>[1],
       );
 
