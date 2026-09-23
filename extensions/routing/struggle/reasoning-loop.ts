@@ -116,6 +116,7 @@ export class ReasoningLoopDetector {
   private exactCounts = new Map<string, number>();
   private exactRepeat = 0;
   private normTail = '';
+  private normEndedWithSpace = false;
   private cursor = 0;
   private tokenCarry = '';
   private markerCarry = '';
@@ -132,7 +133,12 @@ export class ReasoningLoopDetector {
     this.tokens.push(...added);
     this.tokenCount += added.length;
 
-    this.normTail += delta.toLowerCase().replace(/\s+/g, ' ');
+    let normalized = delta.toLowerCase().replace(/\s+/g, ' ');
+    // A whitespace run can span transport deltas. Collapsing each delta
+    // independently must not insert an extra space into exact-block hashes.
+    if (this.normEndedWithSpace && normalized.startsWith(' ')) normalized = normalized.slice(1);
+    if (normalized) this.normEndedWithSpace = normalized.endsWith(' ');
+    this.normTail += normalized;
     // Slide one character at a time so identical 128-char blocks still match
     // when a leftover shifts the non-overlapping cut, or when the same text
     // arrives as many tiny deltas. Refresh hashes on access and retain only the
@@ -215,6 +221,7 @@ export class ReasoningLoopDetector {
     this.exactCounts.clear();
     this.exactRepeat = 0;
     this.normTail = '';
+    this.normEndedWithSpace = false;
     this.cursor = 0;
     this.tokenCarry = '';
     this.markerCarry = '';

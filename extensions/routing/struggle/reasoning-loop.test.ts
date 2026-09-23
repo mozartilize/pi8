@@ -56,6 +56,24 @@ describe('ReasoningLoopDetector', () => {
     expect(split.snapshot().tokenCount).toBe(once.snapshot().tokenCount);
   });
 
+  it.each(['  ', '\n\n', ' \n '])(
+    'detects exact repetition regardless of a split within %j',
+    (whitespace) => {
+      const block = `${'x'.repeat(61)}${whitespace}${'y'.repeat(66)}`;
+      const filler = `${Array.from({ length: RL_MIN_TOKENS }, (_, i) => `t${i}`).join(' ')} `;
+      const text = `${filler}${block}${'Q1'.repeat(65)}${block}${'Q2'.repeat(65)}${block}`;
+      const splitAt = filler.length + 61 + 1;
+      const once = new ReasoningLoopDetector();
+      const split = new ReasoningLoopDetector();
+      once.update(text);
+      split.update(text.slice(0, splitAt));
+      split.update(text.slice(splitAt));
+      expect(once.severity()).toBe('severe');
+      expect(split.snapshot().tokenCount).toBe(once.snapshot().tokenCount);
+      expect(split.severity()).toBe(once.severity());
+    },
+  );
+
   it('does not let character-chunked text below the floor become severe', () => {
     const text = `${pad('alpha', 200)} `;
     const once = new ReasoningLoopDetector();

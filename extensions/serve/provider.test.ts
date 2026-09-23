@@ -1041,6 +1041,27 @@ describe('semi-automatic confirmation gate', () => {
     expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
   });
 
+  it('keeps manual-override cause when a specific fallback model serves', async () => {
+    const ui = makeUi({
+      select: vi.fn(async (_t: string, opts: string[]) => opts[2]),
+      input: vi.fn(async () => 'beta/second'),
+    });
+    const harness = await semiHarness(ui);
+    harness.scriptReply((model) => {
+      if (`${model.provider}/${model.id}` === 'alpha/first') {
+        return asStream([{ type: 'error', error: { errorMessage: '421' } }]);
+      }
+      return asStream([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    });
+
+    await harness.serve(implementTurn);
+
+    expect(ui.input).toHaveBeenCalledTimes(1);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
+    expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second');
+    expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
+  });
+
   it('cancels a fallback switch when the user declines', async () => {
     const ui = makeUi({ select: vi.fn(async (_t: string, opts: string[]) => opts[1]) });
     const harness = await semiHarness(ui);

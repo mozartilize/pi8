@@ -202,7 +202,7 @@ export const MAX_DIFF_CHARS = 2_000_000;
 export const MAX_DIFF_LINES = 50_000;
 /** Largest edit script the router will pay for before giving up. */
 export const MAX_DIFF_EDIT_LENGTH = 2_000;
-/** Wall-clock ceiling per comparison; the real bound on adversarial input. */
+/** Wall-clock ceiling per comparison; observations share this deadline. */
 export const MAX_DIFF_MS = 100;
 
 export type LineDistanceResult =
@@ -217,10 +217,14 @@ export type LineDistanceResult =
  * ceilings reject oversized inputs before diffing; jsdiff returns `undefined`
  * once the edit script passes `maxEditLength` or the deadline expires. An
  * exhausted budget must surface as unavailable — never as an approximation,
- * which could manufacture
- * backtracking evidence out of work the router declined to do.
+ * which could manufacture backtracking evidence out of declined work.
+ * A caller may pass an absolute deadline to share the budget across comparisons.
  */
-export function lineDistance(from: string, to: string): LineDistanceResult {
+export function lineDistance(
+  from: string,
+  to: string,
+  deadline = Date.now() + MAX_DIFF_MS,
+): LineDistanceResult {
   if (from === to) return { available: true, added: 0, deleted: 0 };
   if (from.length + to.length > MAX_DIFF_CHARS) {
     return { available: false, reason: 'too-large' };
@@ -228,11 +232,13 @@ export function lineDistance(from: string, to: string): LineDistanceResult {
   if (countLines(from) + countLines(to) > MAX_DIFF_LINES) {
     return { available: false, reason: 'too-large' };
   }
+  const remaining = Math.min(MAX_DIFF_MS, deadline - Date.now());
+  if (remaining <= 0) return { available: false, reason: 'budget-exhausted' };
   const changes = diffLines(from, to, {
     // A file that gained a trailing newline did not rewrite its last line.
     ignoreNewlineAtEof: true,
     maxEditLength: MAX_DIFF_EDIT_LENGTH,
-    timeout: MAX_DIFF_MS,
+    timeout: remaining,
   });
   if (!changes) return { available: false, reason: 'budget-exhausted' };
   let added = 0;

@@ -428,7 +428,7 @@ function recordServedAttempt(
   const hop = candidate.hopTargetThisCandidate ? candidate.servingHop : undefined;
   const hopCause: DecisionCause = hop
     ? (POLICY_PASSIVE_CAUSES.has(decision.cause) ? 'trajectory-escalation' : decision.cause)
-    : 'error-fallback';
+    : decision.cause === 'manual-override' ? 'manual-override' : 'error-fallback';
   const baseDecision = viaFallback
     ? {
         ...decision,

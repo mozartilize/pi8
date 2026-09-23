@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TrajectoryState } from './trajectory.js';
+import * as fingerprints from './fingerprints.js';
 import type { ToolCycleInput } from './fingerprints.js';
 
 let seq = 0;
@@ -211,6 +212,28 @@ describe('TrajectoryState', () => {
       return decision?.escalate === true;
     };
     expect(run(['fail', 'progress'])).toBe(run(['progress', 'fail']));
+  });
+
+  it('shares one diff deadline across all mutations in a batch', () => {
+    const state = new TrajectoryState();
+    state.observeToolResult(read('a.ts', 'baseline'), 1);
+    let clock = Date.now();
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const distance = vi.spyOn(fingerprints, 'lineDistance').mockImplementation(() => {
+      clock += 101;
+      return { available: true, added: 1, deleted: 1 };
+    });
+    try {
+      state.noteToolCall('write', 'w1', { path: 'a.ts', content: 'first' });
+      state.noteToolCall('write', 'w2', { path: 'a.ts', content: 'second' });
+      expect(state.observeToolResult({ ...write('a.ts', 'first'), toolCallId: 'w1' }, 2)).toBeUndefined();
+      const decision = state.observeToolResult({ ...write('a.ts', 'second'), toolCallId: 'w2' }, 2);
+      expect(distance).toHaveBeenCalledTimes(1);
+      expect(decision?.signals.find((s) => s.kind === 'backtracking')?.severity).toBe('unavailable');
+    } finally {
+      distance.mockRestore();
+      now.mockRestore();
+    }
   });
 
   it('clears pending escalation when a later batch shows progress', () => {

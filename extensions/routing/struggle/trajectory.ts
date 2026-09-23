@@ -27,6 +27,7 @@ import {
   cycleFromToolResult,
   isVerifier,
   lineDistance,
+  MAX_DIFF_MS,
   applyReplacement,
   type ObservedCycle,
   type ToolCycleInput,
@@ -115,12 +116,12 @@ export class TrajectoryState {
     if (hadOwner) this.resetStruggle();
   }
 
-  snapshot(): TrajectorySnapshot {
+  snapshot(deadline = Date.now() + MAX_DIFF_MS): TrajectorySnapshot {
     return {
       cycles: this.cycles,
       mutationCount: this.mutationCount,
       grossDistance: this.grossDistance,
-      ...this.netDisplacement(),
+      ...this.netDisplacement(deadline),
       stagnationRun: this.stagnationRun,
       failureCorrections: this.correctionsBySignature(),
     };
@@ -140,10 +141,11 @@ export class TrajectoryState {
       }
       return this.flushBatch(invocation);
     }
+    const deadline = Date.now() + MAX_DIFF_MS;
     this.rememberCompleted(event.toolCallId);
     const observed = cycleFromToolResult(event, invocation);
-    this.applyCycle(observed);
-    return classifyTrajectoryStruggle(this.snapshot());
+    this.applyCycle(observed, deadline);
+    return classifyTrajectoryStruggle(this.snapshot(deadline));
   }
 
   noteToolCall(toolName: string, toolCallId: string, input?: unknown): StruggleDecision | undefined {
@@ -238,7 +240,7 @@ export class TrajectoryState {
    * An unavailable comparison makes the whole signal untrusted rather than
    * contributing a zero that would read as "everything was reverted".
    */
-  private netDisplacement(): { netDistance: number; mbTrusted: boolean } {
+  private netDisplacement(deadline: number): { netDistance: number; mbTrusted: boolean } {
     if (!this.mbTrusted) return { netDistance: 0, mbTrusted: false };
     if (this.mutationCount < MB_MIN_MUTATIONS || this.grossDistance <= 0) {
       return { netDistance: 0, mbTrusted: true };
@@ -247,7 +249,11 @@ export class TrajectoryState {
     for (const entry of this.files.values()) {
       if (!entry.mutated) continue;
       if (entry.net === undefined) {
-        const distance = lineDistance(entry.baseline, entry.current);
+        if (Date.now() >= deadline) {
+          this.mbTrusted = false;
+          return { netDistance: 0, mbTrusted: false };
+        }
+        const distance = lineDistance(entry.baseline, entry.current, deadline);
         entry.net = distance.available ? distance.added + distance.deleted : null;
       }
       if (entry.net === null) return { netDistance: 0, mbTrusted: false };
@@ -275,6 +281,7 @@ export class TrajectoryState {
   }
 
   private flushBatch(invocation: number): StruggleDecision {
+    const deadline = Date.now() + MAX_DIFF_MS;
     for (const call of this.pendingCalls) {
       const event = this.pendingResults.get(call.toolCallId);
       if (!event) continue;
@@ -284,20 +291,20 @@ export class TrajectoryState {
         toolName: call.toolName,
         toolCallId: call.toolCallId,
         input: event.input ?? call.input,
-      }, invocation));
+      }, invocation), deadline);
     }
     this.pendingCalls = [];
     this.pendingResults.clear();
-    return classifyTrajectoryStruggle(this.snapshot());
+    return classifyTrajectoryStruggle(this.snapshot(deadline));
   }
 
-  private applyCycle(observed: ObservedCycle): void {
+  private applyCycle(observed: ObservedCycle, deadline: number): void {
     this.trackFileSnapshot(observed);
     const progressKind = this.classifyProgress(observed);
     if (observed.action.family === 'mutation' && observed.progressHint.isError !== true) {
       this.mutationCount += 1;
       this.lastMutationInvocation = observed.invocation;
-      this.applyMutationDisplacement(observed);
+      this.applyMutationDisplacement(observed, deadline);
     }
 
     if (isVerifier(observed.action)) {
@@ -370,7 +377,11 @@ export class TrajectoryState {
     }
   }
 
-  private applyMutationDisplacement(observed: ObservedCycle): void {
+  private applyMutationDisplacement(observed: ObservedCycle, deadline: number): void {
+    if (!this.mbTrusted || Date.now() >= deadline) {
+      this.mbTrusted = false;
+      return;
+    }
     const path = observed.progressHint.mutationPath ?? observed.action.path;
     if (!path) {
       this.mbTrusted = false;
@@ -391,7 +402,7 @@ export class TrajectoryState {
       this.evictSnapshots();
       return;
     }
-    const step = lineDistance(entry.current, next);
+    const step = lineDistance(entry.current, next, deadline);
     if (!step.available) {
       this.mbTrusted = false;
       return;

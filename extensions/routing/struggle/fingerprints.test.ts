@@ -49,6 +49,11 @@ describe('lineDistance', () => {
     expect(result.available).toBe(false);
   });
 
+  it('refuses a comparison after the shared deadline expires', () => {
+    expect(lineDistance('a', 'b', Date.now() - 1))
+      .toEqual({ available: false, reason: 'budget-exhausted' });
+  });
+
   it('refuses a huge one-line input before diffing', () => {
     const huge = 'x'.repeat(MAX_DIFF_CHARS);
     expect(lineDistance(huge, 'y')).toEqual({ available: false, reason: 'too-large' });
