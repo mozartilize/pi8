@@ -1,4 +1,5 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type { ScoredReason } from './routing/score/decision-reason.js';
 import type { ModelThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
 export type { ExtensionContext };
@@ -259,6 +260,8 @@ export interface RoutingDecision {
   effortFloorDimension?: Dimension;
   chosen: string;
   reason: string;
+  /** Typed source for scorer and policy wording; reason remains the rendered log/UI value. */
+  scoredReason?: ScoredReason;
   confidence: number;
   routedUp: boolean;
   /**

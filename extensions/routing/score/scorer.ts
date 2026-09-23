@@ -16,6 +16,7 @@ import type {
   ScoreWeights,
 } from '../../types.js';
 import { DEFAULT_DIMENSION_WEIGHTS, DEFAULT_SWITCH_MARGIN } from '../../constants.js';
+import { renderScoredReason, type ScoredReason } from './decision-reason.js';
 import type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
 // ─── Candidate identity ─────────────────────────────────────────────
@@ -1096,10 +1097,20 @@ function assembleDecision(
       }
     : undefined;
 
+  const scoredReason: ScoredReason = {
+    score: top.score,
+    quality: top.qualityComponent,
+    cost: top.costComponent,
+    speed: top.speedComponent,
+    costBasis,
+    upgraded: routedUp,
+    details: [],
+  };
   return {
     dimension,
     chosen: candidateKey(top),
-    reason: `score ${top.score.toFixed(3)} (quality ${top.qualityComponent.toFixed(2)}, cost ${top.costComponent.toFixed(2)}, speed ${top.speedComponent.toFixed(2)}) [cost ${costBasis === 'task' ? 'per task' : 'per 1M tokens'}]${routedUp ? ' [upgraded]' : ''}`,
+    reason: renderScoredReason(scoredReason),
+    scoredReason,
     ...(candidateDiagnostics.length > 0 ? { candidateDiagnostics } : {}),
     confidence: 0.8, // placeholder — overwritten by classifier
     routedUp,

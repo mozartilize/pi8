@@ -8,6 +8,7 @@ import {
 import type { Candidate, Dimension } from '../../types.js';
 import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../../constants.js';
+import { renderScoredReason } from '../score/decision-reason.js';
 import { candidate, terminalAssessment, benchRow } from '../../test-support/router-fixtures.js';
 
 // ─── Fixtures ───────────────────────────────────────────────────────
@@ -134,6 +135,20 @@ function makePolicyInput(overrides: PolicyInputOverrides = {}): RoutingPolicyInp
 // ─── Cause precedence table ──────────────────────────────────────────
 
 describe('resolveRoutingDecision', () => {
+  it('renders typed policy details without changing the logged reason format', () => {
+    const { decision } = resolveRoutingDecision(makePolicyInput({
+      estimatedContextTokens: 150_000,
+      confidence: 0.05,
+      config: makePolicyConfig({ depthEscalation: false }),
+    }));
+    expect(decision.contextPressure).toBeDefined();
+    expect(decision.scoredReason?.details.map((detail) => detail.kind)).toEqual([
+      'context-pressure', 'no-data',
+    ]);
+    expect(decision.reason).toBe(renderScoredReason(decision.scoredReason!));
+    expect(decision.reason).toContain('[context nearly full: prefer a fresh planner subagent] [no benchmark quality data]');
+  });
+
   describe('cause precedence', () => {
     it.each([
       {

@@ -11,6 +11,7 @@
  * and delegation.
  */
 import type { Candidate, DecisionCause, Dimension, MultiWorkScoringPolicy, RoutingDecision } from '../../types.js';
+import { addReasonDetail } from '../score/decision-reason.js';
 import type { ClassifyResult } from '../classify/classifier.js';
 import type { AutoRouterConfig } from '../../types.js';
 import { DIMENSION_STRENGTH } from '../classify/classifier-keywords.js';
@@ -247,7 +248,7 @@ function applyIncumbentModelFloor(
         decision.fallbackChain = chain;
       }
       decision.chosen = incumbentRegistryId;
-      decision.reason += ' [kept current model: stronger for this task]';
+      addReasonDetail(decision, { kind: 'incumbent-model' });
     }
   }
 }
@@ -276,7 +277,7 @@ function applyIncumbentEffortFloor(
     return;
   }
   decision.effortFloorDimension = incumbentResolvedDimension;
-  decision.reason += " [kept current model's thinking level]";
+  addReasonDetail(decision, { kind: 'incumbent-effort' });
 }
 
 /**
@@ -339,21 +340,24 @@ function annotateDecision(
         'Parent context is dense: offload planning to a fresh-context planner subagent, then run execution in the parent with a cheaper model.',
     };
     // Advisory only: do NOT change decision.cause here
-    decision.reason += ' [context nearly full: prefer a fresh planner subagent]';
+    addReasonDetail(decision, { kind: 'context-pressure' });
   }
 
   if (cause === 'context-depth') {
-    decision.reason += ` [long conversation: ${estimatedContextTokens} tokens ≥ ${config.depthEscalationTokens}]`;
+    addReasonDetail(decision, { kind: 'context-depth', tokens: estimatedContextTokens, threshold: config.depthEscalationTokens });
   }
   if (cause === 'no-data') {
-    decision.reason += ' [no benchmark quality data]';
+    addReasonDetail(decision, { kind: 'no-data' });
   }
   if (cause === 'trajectory-escalation') {
-    decision.reason += ` [${decision.trajectoryFriction?.fromModel ?? 'previous model'} struggled: stronger model]`;
+    addReasonDetail(decision, { kind: 'trajectory', fromModel: decision.trajectoryFriction?.fromModel ?? 'previous model' });
   } else if (cause === 'router-consult' && decision.assessment) {
-    decision.reason +=
-      ` [assessment: ${decision.assessment.kind}, ` +
-      `${decision.assessment.scope === 'bounded' ? 'limited' : 'open-ended'} scope, ${decision.assessment.confidence} confidence]`;
+    addReasonDetail(decision, {
+      kind: 'assessment',
+      task: decision.assessment.kind,
+      scope: decision.assessment.scope,
+      confidence: decision.assessment.confidence,
+    });
   }
 
   decision.switched = incumbentRegistryId != null && incumbentRegistryId !== decision.chosen;

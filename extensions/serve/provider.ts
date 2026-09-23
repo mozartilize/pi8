@@ -1366,6 +1366,7 @@ function pinnedScored(args: {
     routedDown: false,
   };
   // These annotations belonged to the auto pick this override replaces.
+  delete decision.scoredReason;
   delete decision.routedPickChanged;
   delete decision.trajectoryFriction;
   try {
@@ -1617,6 +1618,7 @@ async function runManualTurn(args: {
   const { decision } = scoring.scored;
   decision.cause = cause;
   decision.reason = cause === 'semi-hold' ? `Semi mode: kept ${manualModel} for this turn` : `Manual model pin: ${manualModel}`;
+  delete decision.scoredReason;
   decision.routedUp = false;
   decision.routedDown = false;
   delete decision.routedPickChanged;
