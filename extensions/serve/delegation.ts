@@ -425,7 +425,7 @@ function recordServedAttempt(
   const viaFallback = candidateIndex > 0;
   // A capability hop and a failure fallback reach the same later candidate by
   // different mechanisms, and `/router-why` distinguishes them by cause.
-  const hop = candidate.hopTargetThisCandidate ? candidate.servingHop : undefined;
+  const hop = candidate.servingHop;
   const hopCause: DecisionCause = hop
     ? (POLICY_PASSIVE_CAUSES.has(decision.cause) ? 'trajectory-escalation' : decision.cause)
     : decision.cause === 'manual-override' ? 'manual-override' : 'error-fallback';
@@ -583,6 +583,29 @@ type CandidateAttemptResult =
   | { kind: 'retry'; message: string; transient: boolean; outputLimitExhausted: boolean }
   | { kind: 'next-candidate'; message: string; transient: boolean; outputLimitExhausted: boolean };
 
+type CandidateFailure = Extract<CandidateAttemptResult, { kind: 'trajectory' | 'provider-dead' | 'next-candidate' }>;
+type RetryAttempt = Extract<CandidateAttemptResult, { kind: 'retry' }>;
+
+/** Provider-wide caps bypass the circuit; strikes still record one failed candidate. */
+function failureConsequence(
+  failure: CandidateFailure,
+  lastRetry: RetryAttempt | undefined,
+): { blacklistModel: boolean; strikeProvider: boolean; killProvider: boolean } {
+  if (failure.kind === 'trajectory') {
+    return { blacklistModel: false, strikeProvider: false, killProvider: false };
+  }
+  if (failure.kind === 'provider-dead') {
+    // A transient retry already proved that the model itself need not be
+    // excluded; the provider-wide usage cap still excludes every sibling.
+    return { blacklistModel: !lastRetry?.transient, strikeProvider: true, killProvider: true };
+  }
+  return {
+    blacklistModel: !failure.transient && !failure.outputLimitExhausted,
+    strikeProvider: !failure.outputLimitExhausted,
+    killProvider: false,
+  };
+}
+
 /** Turn-level inputs, constant for the whole delegation walk. */
 interface DelegationContext {
   opts: DelegationOptions;
@@ -609,7 +632,6 @@ interface PreparedCandidate {
   effectiveReasoning: ModelThinkingLevel | undefined;
   effectiveSource: string;
   remainingHasStronger: boolean;
-  hopTargetThisCandidate: boolean;
   servingHop: PendingTrajectoryEscalation | undefined;
 }
 
@@ -981,8 +1003,6 @@ export async function runDelegationLoop(
    * strand the turn behind a stronger-only chain.
    */
   let capabilityHop: PendingTrajectoryEscalation | undefined;
-  /** Evidence carried onto the decision of whichever candidate serves the hop. */
-  let servingHop: PendingTrajectoryEscalation | undefined;
   /** Exact (model, effort) that a pre-output hop abandoned; never retried. */
   let excludeSource: string | undefined;
   /**
@@ -1020,7 +1040,6 @@ export async function runDelegationLoop(
     // strand a healthy stronger sibling behind it un-marked.
     if (provider === ROUTER_PROVIDER_ID) continue;
     if (deadProviders.has(provider)) continue;
-    let hopTargetThisCandidate = false;
     // `beforeFallback` may replace the proposed candidate and mutate the live
     // candidate pool. Preserve the source row now, but bind and consume the hop
     // only after the actual candidate has passed registry validation.
@@ -1055,12 +1074,12 @@ export async function runDelegationLoop(
         }
       }
     }
+    let servingHop: PendingTrajectoryEscalation | undefined;
     if (capabilityHop) {
       // Remaining chain is stronger-then-recovery, but semi mode can substitute
       // another model. The one-shot provenance belongs only to the actual model
       // that will be attempted, and only when it is still a proven upgrade.
       const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === candidateId);
-      servingHop = undefined;
       if (
         dest
         && isStrictlyStrongerCandidate(
@@ -1072,19 +1091,15 @@ export async function runDelegationLoop(
         )
       ) {
         servingHop = capabilityHop;
-        hopTargetThisCandidate = true;
       }
       capabilityHop = undefined;
     }
     lastAttemptedId = candidateId;
 
-    // A candidate may be retried in place on a transient/generic provider
-    // error before we fall over to the next model. `served` breaks the outer
-    // walk; the failure classification decides whether the model is blacklisted.
-    let served = false;
-    let candidateTransient = false;
-    let candidateOutputLimitExhausted = false;
-    let candidateTrajectoryEscalation = false;
+    // A retry can affect the later usage-limit model blacklist, even though
+    // all other consequences follow only the final attempt's result.
+    let lastRetry: RetryAttempt | undefined;
+    let failure: CandidateFailure | undefined;
 
     // A sticky incumbent held on a cheap-classified follow-up carries the
     // incumbent's resolved dimension as an up-only effort floor, so the
@@ -1122,7 +1137,6 @@ export async function runDelegationLoop(
       effectiveReasoning,
       effectiveSource,
       remainingHasStronger,
-      hopTargetThisCandidate,
       servingHop,
     };
 
@@ -1158,7 +1172,6 @@ export async function runDelegationLoop(
 
       if (attempt.kind === 'served') {
         success = true;
-        served = true;
         lastServed = attempt.lastServed;
         finalDecision = attempt.finalDecision;
         if (lastServed && stillCurrent()) {
@@ -1173,7 +1186,7 @@ export async function runDelegationLoop(
 
       lastError = attempt.message;
       if (attempt.kind === 'trajectory') {
-        candidateTrajectoryEscalation = true;
+        failure = attempt;
         excludeSource = attempt.effectiveSource;
         // Same target selection as the between-turn repick: strongest reachable
         // stronger model by quality (`escalationChain`), never the highest-score
@@ -1223,31 +1236,25 @@ export async function runDelegationLoop(
       if (attempt.kind === 'aborted' || attempt.kind === 'finalize') {
         return finalize(attempt.kind === 'aborted' ? 'aborted' : 'error', attempt.message);
       }
-      if (attempt.kind === 'provider-dead') {
-        session.blacklistProvider(provider);
-        deadProviders.add(provider);
-        debugLog('attempt.usage-limit', { provider, candidate: candidateId });
-        break;
+      if (attempt.kind === 'retry') {
+        lastRetry = attempt;
+        continue;
       }
-
-      candidateTransient = attempt.transient;
-      candidateOutputLimitExhausted ||= attempt.outputLimitExhausted;
-      if (attempt.kind === 'retry') continue;
+      failure = attempt;
       break;
     }
 
-    if (served) break; // a candidate served the turn — done
+    if (success) break; // a candidate served the turn — done
+    if (!failure) continue;
 
-    if (hopTargetThisCandidate) servingHop = undefined;
-
-    // Candidate failed after any same-model retries. Transient provider errors
-    // and output-limit exhaustion do not prove the model itself is unusable for
-    // later turns, so neither failure mode blacklists it for this session.
-    // Only provider-health failures count toward circuit strikes; model-level
-    // output-limit exhaustion does not.
-    if (candidateTrajectoryEscalation) continue;
-    if (!candidateTransient && !candidateOutputLimitExhausted) session.blacklistModel(candidateId);
-    if (!candidateOutputLimitExhausted) strike(provider);
+    const consequence = failureConsequence(failure, lastRetry);
+    if (consequence.killProvider) {
+      session.blacklistProvider(provider);
+      deadProviders.add(provider);
+      debugLog('attempt.usage-limit', { provider, candidate: candidateId });
+    }
+    if (consequence.blacklistModel) session.blacklistModel(candidateId);
+    if (consequence.strikeProvider) strike(provider);
     continue;
   }
 

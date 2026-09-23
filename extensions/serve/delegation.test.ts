@@ -985,6 +985,24 @@ describe('runDelegationLoop usage-limit provider blacklist', () => {
     expect(h.blacklist).toContain('alpha/one');
   });
 
+  it('keeps a transient model eligible when a later retry hits the shared provider cap', async () => {
+    setDelegationTimeouts({ retryBackoffMs: 0 });
+    const h = createDelegationHarness({
+      chain: ['alpha/one', 'beta/answer'],
+      scripts: {
+        'alpha/one': [
+          [{ type: 'error', error: { stopReason: 'error', errorMessage: '503 service unavailable' } }],
+          [{ type: 'error', error: { stopReason: 'error', errorMessage: '429: too many requests' } }],
+        ],
+        'beta/answer': [[{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.attempts).toEqual(['alpha/one', 'alpha/one', 'beta/answer']);
+    expect(h.blacklistedProviders).toEqual(['alpha']);
+    expect(h.blacklist).not.toContain('alpha/one');
+  });
+
   it('blacklists the provider on a plain 429 rate-limit error', async () => {
     const h = createDelegationHarness({
       chain: ['alpha/one', 'beta/answer'],
