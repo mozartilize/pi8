@@ -653,6 +653,34 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).toContain('[kept current model: stronger for this task]');
   });
 
+  it('promotes the first scored candidate meeting the incumbent capability, not the incumbent itself', () => {
+    const candidates = [
+      makeCandidate({
+        registryId: 'bench/weak', provider: 'bench', id: 'weak',
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        bench: benchRow('bench/weak', { quality: { agenticCoding: 38.7, coding: 68 } }),
+      }),
+      makeCandidate({
+        registryId: 'bench/better', provider: 'bench', id: 'better',
+        cost: { input: 0.2, output: 1.2, cacheRead: 0, cacheWrite: 0 },
+        bench: benchRow('bench/better', { quality: { agenticCoding: 42.1, coding: 72 } }),
+      }),
+      makeCandidate({
+        registryId: 'bench/incumbent', provider: 'bench', id: 'incumbent',
+        cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0 },
+        bench: benchRow('bench/incumbent', { quality: { agenticCoding: 38.8, coding: 75 } }),
+      }),
+    ];
+    const result = resolveRoutingDecision(makePolicyInput({
+      candidates, classifyDimension: 'implement', baseDimension: 'implement',
+      confidence: 0.1, incumbentRegistryId: 'bench/incumbent',
+      sameIntentAsLast: true,
+    }));
+    expect(result.decision.chosen).toBe('bench/better');
+    expect(result.decision.fallbackChain[0]).toBe(result.decision.chosen);
+    expect(result.decision.reason).toContain('kept current capability with another model');
+  });
+
   it('carries the incumbent resolved dimension as an up-only effort floor', () => {
     // A cheap-phrased same-task follow-up classifies gather but keeps the
     // strong incumbent; its served effort floor must not drop to gather's.

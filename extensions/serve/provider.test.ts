@@ -18,7 +18,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
-import { registryModel } from '../test-support/router-fixtures.js';
+import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
 import {
   asStream,
   expectDecisionContract,
@@ -696,6 +696,24 @@ describe('provider orchestration', () => {
   });
 
   // ─── concrete subagent model delegation ─────────────────────────────
+
+  it('uses the served effort, not the scored key, for the incumbent capability floor', async () => {
+    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ consultRouter: false }));
+    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+      version: 2, syncedAt: Date.now(), aliases: {}, models: [
+        { registryId: 'alpha/first', benchSlug: 'first-low', effort: 'low', active: true, source: 'test', quality: { intelligence: 75, coding: 75, agenticCoding: 38.8 } },
+        { registryId: 'alpha/first', benchSlug: 'first-medium', effort: 'medium', active: true, source: 'test', quality: { intelligence: 80, coding: 76, agenticCoding: 46 } },
+        { registryId: 'beta/second', benchSlug: 'second-high', effort: 'high', active: true, source: 'test', quality: { intelligence: 78, coding: 74, agenticCoding: 42.1 } },
+      ],
+    }));
+    harness.session.setLastDecision(routingDecision(['alpha/first:low']));
+    harness.session.setLastServed({ registryId: 'alpha/first', thinkingLevel: 'medium', viaFallback: false, accumulatedCost: 0 });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve({ messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context);
+    expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first:medium');
+    expect(harness.getProviderState().lastDecision?.fallbackChain[0]).toBe('alpha/first:medium');
+    expect(harness.getProviderState().lastDecision?.reason).toContain('kept current model');
+  });
 
   it('serves the winning candidate at its measured effort', async () => {
     // This test counts streamSimple calls for the delegation walk; disable the

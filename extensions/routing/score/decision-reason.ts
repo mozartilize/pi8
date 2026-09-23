@@ -12,6 +12,7 @@ export interface ScoredReason {
 
 export type ReasonDetail =
   | { kind: 'incumbent-model' }
+  | { kind: 'incumbent-capability' }
   | { kind: 'incumbent-effort' }
   | { kind: 'context-pressure' }
   | { kind: 'context-depth'; tokens: number; threshold: number }
@@ -22,6 +23,7 @@ export type ReasonDetail =
 function renderDetail(detail: ReasonDetail): string {
   switch (detail.kind) {
     case 'incumbent-model': return 'kept current model: stronger for this task';
+    case 'incumbent-capability': return 'kept current capability with another model';
     case 'incumbent-effort': return "kept current model's thinking level";
     case 'context-pressure': return 'context nearly full: prefer a fresh planner subagent';
     case 'context-depth': return `long conversation: ${detail.tokens} tokens ≥ ${detail.threshold}`;

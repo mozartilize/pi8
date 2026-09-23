@@ -35,7 +35,7 @@ import { adoptAssessment, shouldVetoLatch } from '../routing/consult/assessment-
 import { latestSummaryText, countToolActivity } from '../routing/consult/message-provenance.js';
 
 import { appendDecision, appendAssessmentMetric } from '../host/decisionlog.js';
-import { renderRouterStatus } from '../host/ui.js';
+import { renderRouterStatus, servedKey } from '../host/ui.js';
 import {
   buildCandidate,
   buildRouterThinkingLevelMap,
@@ -1093,6 +1093,13 @@ function scoreRouterTurn(args: {
     session,
   });
 
+  // Pi clears lastServed at stream start; the rotated value is the model and
+  // effort that actually served, including an effort-floor bump or fallback.
+  const previous = session.getPreviousServed();
+  const servedCandidateKey = previous && servedKey(previous);
+  const incumbentRegistryId = servedCandidateKey && routableCandidates.some((c) => candidateKey(c) === servedCandidateKey)
+    ? servedCandidateKey
+    : session.getLastChosenRegistryId();
   const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
   const userReasoningOverride =
     requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
@@ -1107,7 +1114,7 @@ function scoreRouterTurn(args: {
     estimatedContextTokens: estContextTokens,
     staticPrefixTokens,
     needsVision,
-    incumbentRegistryId: session.getLastChosenRegistryId(),
+    incumbentRegistryId,
     incumbentResolvedDimension:
       session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,

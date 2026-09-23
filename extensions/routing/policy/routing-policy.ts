@@ -217,12 +217,11 @@ function applyTrajectoryRepick(
 
 /**
  * Incumbent capability floor. The served model is sticky within one task: a
- * per-invocation rescore must not fall below the incumbent's measured
- * capability at the routed dimension. Only measured evidence promotes the
- * incumbent, and only by reordering the already-scored fallback chain — an
- * incumbent that the scorer filtered out (context/vision) or that never
- * entered the chain is never reintroduced, so the floor cannot bypass a
- * safety filter or capability tier.
+ * per-invocation rescore must not fall below the incumbent's known
+ * capability at the routed dimension. Select the first already-scored chain
+ * candidate that meets that minimum, which may be a cheaper model. An
+ * incumbent filtered out for context or vision never enters the chain, so
+ * this cannot bypass a safety filter or capability tier.
  */
 function applyIncumbentModelFloor(
   decision: RoutingDecision,
@@ -241,14 +240,18 @@ function applyIncumbentModelFloor(
     const incumbentQuality = capabilityForDimension(incumbentCandidate, dimension);
     const chosenQuality = capabilityForDimension(chosenCandidate, dimension);
     if (incumbentQuality != null && chosenQuality != null && incumbentQuality > chosenQuality) {
-      if (incumbentInChain > 0) {
-        const chain = decision.fallbackChain.slice();
-        chain.splice(incumbentInChain, 1);
-        chain.unshift(incumbentRegistryId);
-        decision.fallbackChain = chain;
-      }
-      decision.chosen = incumbentRegistryId;
-      addReasonDetail(decision, { kind: 'incumbent-model' });
+      const target = decision.fallbackChain.find((key) => {
+        const candidate = candidates.find((c) => candidateKey(c) === key);
+        const quality = candidate && capabilityForDimension(candidate, dimension);
+        return quality != null && quality >= incumbentQuality;
+      });
+      if (!target) return;
+      const chain = decision.fallbackChain.slice();
+      chain.splice(chain.indexOf(target), 1);
+      chain.unshift(target);
+      decision.fallbackChain = chain;
+      decision.chosen = target;
+      addReasonDetail(decision, { kind: target === incumbentRegistryId ? 'incumbent-model' : 'incumbent-capability' });
     }
   }
 }
