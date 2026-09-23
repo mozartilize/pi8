@@ -857,13 +857,16 @@ const ASSESSMENT_ABORTED: RouterTurnOutcome = {
 
 function noRoutableCandidates(session: RouterSession): RouterTurnOutcome {
   const excludedProviders = session.getBlacklistedProviders();
+  const excludedModels = session.getBlacklistedModels();
   return {
     kind: 'terminal',
     reason: 'error',
     message:
       excludedProviders.size > 0
         ? `No routable models: providers excluded for usage limits this session (${[...excludedProviders].sort().join(', ')}).`
-        : 'No routable models: the `models` allowlist in `~/.pi/agent/pi8/config.json` matched none of the available models.',
+        : excludedModels.size > 0
+          ? `No routable models: the remaining models failed earlier this session and are excluded (${[...excludedModels].sort().join(', ')}). Run /router-blacklist clear to retry them.`
+          : 'No routable models: the `models` allowlist in `~/.pi/agent/pi8/config.json` matched none of the available models.',
   };
 }
 
@@ -1063,8 +1066,10 @@ function scoreRouterTurn(args: {
   assessed: AssessedTurn;
   options: SimpleStreamOptions | undefined;
   session: RouterSession;
+  /** An explicit user pin is served even if it failed earlier this session. */
+  pinned?: boolean;
 }): { kind: 'ready'; scored: ScoredTurn } | RouterTurnOutcome {
-  const { prepared, assessed, options, session } = args;
+  const { prepared, assessed, options, session, pinned } = args;
   const { config, measured, intent, candidates, trajectoryEscalation } = prepared;
   const { turnInput, needsVision, estContextTokens, staticPrefixTokens } = measured;
   const { classifyResult, cacheHit, confidence } = intent;
@@ -1075,7 +1080,7 @@ function scoreRouterTurn(args: {
   // live runtime exclusions again before scoring/delegation so the
   // assessor failure cannot immediately re-hit the same provider as
   // the serving model in this turn.
-  const routableCandidates = applyRuntimeExclusions(candidates, session);
+  const routableCandidates = pinned ? candidates : applyRuntimeExclusions(candidates, session);
   if (routableCandidates.length === 0) return noRoutableCandidates(session);
 
   const { multiWorkPolicy } = advanceWorkPhase({
@@ -1612,7 +1617,13 @@ async function runManualTurn(args: {
     vetoDepthEscalation: true,
     assessmentStillCurrent: () => true,
   };
-  const scoring = scoreRouterTurn({ prepared: manualPrepared, assessed, options, session });
+  const scoring = scoreRouterTurn({
+    prepared: manualPrepared,
+    assessed,
+    options,
+    session,
+    pinned: cause === 'manual-override',
+  });
   if (scoring.kind !== 'ready') return scoring;
 
   const { decision } = scoring.scored;

@@ -552,6 +552,32 @@ describe('provider orchestration', () => {
     expect(harness.streamedModels()).toEqual(['alpha/first']);
   });
 
+  it('names failed models, not the allowlist, when every candidate is excluded', async () => {
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(context);
+    for (const key of harness.getProviderState().lastDecision!.fallbackChain) harness.session.blacklistModel(key);
+    harness.resetEventStream();
+
+    await harness.serve(context);
+
+    const error = harness.outStream.events.find((e) => e.type === 'error');
+    const message = error?.error?.errorMessage ?? error?.error?.message;
+    expect(message).toContain('failed earlier this session');
+    expect(message).not.toContain('allowlist');
+  });
+
+  it('serves a manual pin that failed earlier this session', async () => {
+    harness.session.blacklistModel('alpha/first');
+    harness.session.blacklistModel('alpha/first:high');
+    harness.session.setManualModel('alpha/first:high');
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+
+    await harness.serve(context);
+
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.outStream.events.some((e) => e.type === 'error')).toBe(false);
+  });
+
   it('does not fall back to another model when a manual pin fails', async () => {
     harness.session.setManualModel('alpha/first');
     harness.scriptReply([{ type: 'error', error: { errorMessage: 'manual failure' } }]);
