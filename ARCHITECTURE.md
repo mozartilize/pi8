@@ -325,7 +325,7 @@ Options in `~/.pi/agent/pi8/config.json`:
 | `prompt` | `true` | TUI notification on model switch |
 | `semi` | `false` | Ask before switching away from the last served model |
 | `switchMargin` | `0.15` | Incumbent cache-preservation cap; `0` disables the bonus |
-| `routerContextWindow` | largest routable window | Context window advertised for `router/auto`. Pi tunes compaction to it, so the default delays compaction and biases long sessions toward large-window models. A lower value keeps smaller-window models eligible longer. Values above the default are clamped to it. |
+| `routerContextWindow` | served model's window | Context window advertised for `router/auto`. Pi tunes compaction to it, so `router/auto` advertises the window and output limit of the model that last served, and the largest routable window before any model has served. A lower value makes Pi compact earlier and keeps smaller-window models eligible longer. Values above the default are clamped to it. |
 | `debug` | `false` | Timing log path or `true` |
 | `syntheticPrefixes` | `[]` | Literal prefixes marking synthetic messages |
 | `dimensionWeights` | per-dimension defaults | Override `{quality, cost, speed}` per dimension |

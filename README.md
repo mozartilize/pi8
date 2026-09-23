@@ -100,7 +100,7 @@ Some requests have an investigation step and a fix step, for example "investigat
   "prompt": true,                        // notify when model switches
   "semi": false,                         // ask before switching away from the last served model
   "switchMargin": 0.15,                 // prefer the current model to keep the prompt cache
-  "routerContextWindow": 200000,         // window advertised for router/auto (default: largest routable)
+  "routerContextWindow": 200000,         // cap on router/auto's window (default: served model's window)
   "debug": false,                        // enable timing log
   "embeddingClassifier": false,          // enable multilingual E5-small classifier
   "embeddingDeadlineMs": 5000,           // max ms for model load + inference

@@ -1830,7 +1830,8 @@ export function registerAutoRouterProvider(
     runtime.setLastExtensionContext(ctx);
   }
 
-  const regModels = ctx?.modelRegistry?.getAvailable() ?? [];
+  const registry = ctx?.modelRegistry ?? runtime.getCurrentModelRegistry();
+  const regModels = registry?.getAvailable() ?? [];
   const registryModels = regModels as unknown as RegistryModelInfo[];
 
   // "Largest routable window" means largest among models the user's
@@ -1864,14 +1865,23 @@ export function registerAutoRouterProvider(
   }
   if (maxCw <= 0) maxCw = DEFAULT_CONTEXT_WINDOW;
   if (maxMT <= 0) maxMT = DEFAULT_MAX_TOKENS;
-  // Pi tunes compaction to the session model's window. Advertising the largest
-  // routable window (the default) delays compaction and biases long sessions
-  // toward large-window models; a configured `routerContextWindow` lets the
-  // user advertise a smaller effective window so Pi compacts earlier and keeps
-  // cheaper models eligible longer. An override above the largest routable
-  // window (or above the synthetic fallback, when no routable model exists)
-  // would advertise capacity nothing actually has, so it is clamped down to
-  // `maxCw`, never up.
+  // Pi compacts against the session model's window, and the session model is
+  // `router/auto`. Once a model has served, the conversation lives in that
+  // model's window, so advertise its limits; the routable maximum only covers
+  // a session that has not served yet.
+  const served = session.getLastServed() ?? session.getPreviousServed();
+  const slash = served?.registryId.indexOf('/') ?? -1;
+  const servedModel = served && slash > 0
+    ? registryModels.find((m) =>
+      m.provider === served.registryId.slice(0, slash) && m.id === served.registryId.slice(slash + 1))
+    : undefined;
+  if (servedModel?.contextWindow && servedModel.contextWindow > 0) maxCw = servedModel.contextWindow;
+  if (servedModel?.maxTokens && servedModel.maxTokens > 0) maxMT = servedModel.maxTokens;
+  // A configured `routerContextWindow` lets the user advertise a smaller
+  // effective window so Pi compacts earlier and keeps cheaper models eligible
+  // longer. An override above the served model's window (or the largest
+  // routable window before anything has served) would advertise capacity the
+  // conversation does not have, so it is clamped down to `maxCw`, never up.
   let configuredCw: number | undefined;
   try {
     configuredCw = loadConfig().routerContextWindow;
@@ -1910,6 +1920,16 @@ export function registerAutoRouterProvider(
         options?: SimpleStreamOptions,
       ): AssistantMessageEventStream {
         const stream = createAssistantMessageEventStream();
+        // Re-advertise before the stream ends, so Pi's next compaction check
+        // already sees the window of the model that just served.
+        const end = (): void => {
+          try {
+            registerAutoRouterProvider(pi, undefined, session, runtime);
+          } catch {
+            // Advertised limits are advisory; the turn result stands.
+          }
+          stream.end();
+        };
 
         (async () => {
           // Preserve the prior served model for the semi-mode switch gate before
@@ -1929,12 +1949,12 @@ export function registerAutoRouterProvider(
             if (outcome.kind === 'terminal') {
               stream.push(makeTerminalErrorEvent(outcome.reason, outcome.message));
             }
-            stream.end();
+            end();
           } catch (err) {
             if (options?.signal?.aborted) {
               const msg = err instanceof Error ? err.message : String(err);
               stream.push(makeTerminalErrorEvent('aborted', msg));
-              stream.end();
+              end();
               return;
             }
             const msg = err instanceof Error ? err.message : String(err);
@@ -1944,7 +1964,7 @@ export function registerAutoRouterProvider(
               totalMs: turnTimer(),
             });
             stream.push(makeTerminalErrorEvent('error', `Router error: ${msg}`));
-            stream.end();
+            end();
           }
         })();
 

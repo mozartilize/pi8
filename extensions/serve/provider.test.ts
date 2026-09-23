@@ -476,6 +476,38 @@ describe('provider auth filtering', () => {
   });
 });
 
+describe('advertised router limits', () => {
+  it('advertises the served model window and output limit before the turn ends', async () => {
+    const registered = vi.fn();
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      models: [
+        ...REGISTRY_MODELS,
+        registryModel('gamma/wide', { contextWindow: 1_000_000, maxTokens: 64_000 }),
+      ],
+      pi: { registerProvider: registered } as unknown as ExtensionAPI,
+    });
+    const limits = () => {
+      const config = registered.mock.calls.at(-1)?.[1] as { models: Array<{ contextWindow: number; maxTokens: number }> };
+      return { contextWindow: config.models[0]!.contextWindow, maxTokens: config.models[0]!.maxTokens };
+    };
+    harness.providerOptions = registered.mock.calls[0]![1];
+    expect(limits().contextWindow).toBe(1_000_000);
+
+    harness.session.setManualModel('alpha/first');
+    let limitsAtEnd: ReturnType<typeof limits> | undefined;
+    const end = harness.outStream.end.bind(harness.outStream);
+    harness.outStream.end = () => {
+      limitsAtEnd = limits();
+      end();
+    };
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve({ messages: [{ role: 'user', content: 'hi' }] } as unknown as Context);
+
+    expect(limitsAtEnd).toEqual({ contextWindow: 200_000, maxTokens: 8192 });
+  });
+});
+
 describe('provider orchestration', () => {
   let harness: ProviderTestHarness;
   let setThinkingLevelSpy: ReturnType<typeof vi.fn>;
