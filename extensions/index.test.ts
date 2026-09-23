@@ -328,6 +328,25 @@ describe('registry-only role routing', () => {
 
       expect(calls()).toBe(before);
     });
+
+    it('forgets the synced thinking level only when switching TO router/auto', async () => {
+      const handlers = new Map<string, (...args: any[]) => unknown>();
+      const pi = {
+        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+        registerTool: vi.fn(),
+      } as unknown as ExtensionAPI;
+      await autoModelRouterExtension(pi);
+      const modelSelect = handlers.get('model_select')!;
+      const ctx = contextWithRegistry([registryModel('alpha/cheap')]);
+      defaultRouterSession.setSyncedThinkingLevel('high');
+
+      modelSelect({ model: { provider: 'github-copilot', id: 'gpt-5.4' } }, ctx);
+      expect(defaultRouterSession.getSyncedThinkingLevel()).toBe('high');
+
+      // The level Pi applies during the switch is not a user choice.
+      modelSelect({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctx);
+      expect(defaultRouterSession.getSyncedThinkingLevel()).toBeUndefined();
+    });
   });
 
   it('preserves an explicit concrete child model under a router/auto parent', async () => {

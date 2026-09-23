@@ -826,6 +826,9 @@ function resolveTurnEffort(args: {
   } catch {
     // Footer sync is cosmetic; never let it break a turn.
   }
+  // Read back what Pi actually holds: Pi clamps the level, and a failed sync
+  // leaves the old one in place. Either way, this is what Pi sends next.
+  args.session.setSyncedThinkingLevel(readPiThinkingLevel(args.pi));
   const resolvedReasoning = reasoning && reasoning !== 'off' ? reasoning : undefined;
   const delegatedOptions: SimpleStreamOptions = resolvedReasoning
     ? { ...(args.options ?? {}), reasoning: resolvedReasoning }
@@ -1277,6 +1280,58 @@ async function delegateRouterTurn(args: {
   return { kind: 'done' };
 }
 
+function readPiThinkingLevel(pi: ExtensionAPI): string | undefined {
+  try {
+    const level: unknown = pi.getThinkingLevel?.();
+    return typeof level === 'string' ? level : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A thinking-level change the router did not write (Shift+Tab, settings, or
+ * another extension) is an explicit user choice: pin the model that served the
+ * previous turn at that level. Pi reports no source for the change, so the
+ * router compares the requested level with the level Pi held after the
+ * router's own last sync. Before any model has served, the change stays a
+ * one-turn effort override.
+ */
+function pinOnThinkingChange(
+  prepared: PreparedTurn,
+  options: SimpleStreamOptions | undefined,
+  session: RouterSession,
+): void {
+  try {
+    const synced = session.getSyncedThinkingLevel();
+    if (synced === undefined) return;
+    // Pi omits `reasoning` for `off`.
+    const requested = typeof options?.reasoning === 'string' ? options.reasoning : 'off';
+    if (requested === synced) return;
+    session.setSyncedThinkingLevel(requested);
+    const models = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
+    const manual = session.getManualModel();
+    const registryId = manual
+      ? resolveManualModel(manual, models)?.registryId
+      : session.getPreviousServed()?.registryId;
+    const model = registryId ? models.find((m) => `${m.provider}/${m.id}` === registryId) : undefined;
+    if (!registryId || !model) return;
+    const level = resolveThinkingLevel(model, requested as ThinkingLevel, prepared.intent.baseDimension);
+    const pin = level ? `${registryId}:${level}` : registryId;
+    if (!resolveManualModel(pin, models)) return;
+    session.setManualModel(pin);
+    const ctx = prepared.extensionContext;
+    if (ctx?.hasUI) {
+      ctx.ui.notify(
+        `Manual override: ${pin} (thinking level changed). Run /router-manual resume to return to automatic routing.`,
+        'info',
+      );
+    }
+  } catch {
+    // A failed pin leaves ordinary routing in place (rule 2).
+  }
+}
+
 /**
  * Candidates for a manual pin. A pin is an explicit user override, so it must
  * serve even a model the router's own allowlist / config-blacklist / scoped set
@@ -1719,6 +1774,7 @@ async function runRouterTurn(args: {
   if (preparation.kind !== 'ready') return preparation;
   const { prepared } = preparation;
 
+  pinOnThinkingChange(prepared, options, session);
   const manualModel = session.getManualModel();
   if (manualModel) {
     return runManualTurn({

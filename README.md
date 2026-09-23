@@ -85,6 +85,7 @@ Some requests have an inspect phase and a fix phase, for example "investigate X,
 - The pin exists only in the current `RouterSession`. The command never writes `settings.json` or the pi8 config.
 - A pinned turn skips the assessment and serves only the pinned model. If that model fails, the router shows the failure and does not substitute another model.
 - `/router-manual resume` leaves the pin. The next user entry reuses the auto decision from just before the pin, with no new classification or assessment. Later turns route normally.
+- A change to Pi's thinking level, for example with Shift+Tab, also sets a pin. The pin uses the model that served the last turn, at the new level. Before the first served turn, the change affects only the next turn.
 - A new session clears the pin.
 
 ## Configuration

@@ -299,6 +299,7 @@ function handleModelSelect(
   event: ModelSelectEventLike,
   ctx: ExtensionContext,
   refreshRoleModels: RoleModelRefresher,
+  session: RouterSession,
 ): void {
   debugLog('lifecycle.model_select', {
     source: event.source,
@@ -317,6 +318,11 @@ function handleModelSelect(
   // the session_start gate skipped in a concrete-model session. Detached and
   // generation-guarded: a slow probe sweep must never block the switch, and
   // a stale refresh cannot overwrite a newer one.
+  if (event.model.id === AUTO_MODEL_ID) {
+    // Pi applies the new model's thinking level during the switch; that is
+    // not a user choice, so the next turn must not read it as one.
+    session.setSyncedThinkingLevel(undefined);
+  }
   if (event.model.id === AUTO_MODEL_ID && !isOfflineMode()) {
     void refreshRoleModels(ctx.modelRegistry, ctx).catch(() => {
       // Advisory only.
@@ -688,7 +694,7 @@ export default async function autoModelRouterExtension(
     });
   });
 
-  pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels));
+  pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels, session));
 
   pi.on('before_agent_start', (event, ctx) => handleBeforeAgentStart(event, ctx, session));
 

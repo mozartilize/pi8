@@ -241,6 +241,7 @@ export class RouterSession {
   private resumeIntentKey: string | undefined;
   private accumCost = 0;
   private resolvedThinkingLevel: string | undefined;
+  private syncedThinkingLevel: string | undefined;
   private activeSkills: readonly string[] = [];
   private readonly embedStats: EmbeddingStats = {
     fired: 0,
@@ -376,6 +377,19 @@ export class RouterSession {
 
   setLastResolvedThinkingLevel(level: string | undefined): void {
     this.resolvedThinkingLevel = level;
+  }
+
+  /**
+   * Pi's thinking level right after the router last synced it, or undefined
+   * when unknown. A later request at another level is a change the router did
+   * not write.
+   */
+  getSyncedThinkingLevel(): string | undefined {
+    return this.syncedThinkingLevel;
+  }
+
+  setSyncedThinkingLevel(level: string | undefined): void {
+    this.syncedThinkingLevel = level;
   }
 
   getActiveSkillNames(): readonly string[] {
@@ -609,6 +623,7 @@ export class RouterSession {
     this.resumeIntentKey = undefined;
     this.accumCost = 0;
     this.resolvedThinkingLevel = undefined;
+    this.syncedThinkingLevel = undefined;
     this.activeSkills = [];
     this.embedStats.fired = 0;
     this.embedStats.promoted = 0;

@@ -1102,6 +1102,78 @@ describe('semi-automatic confirmation gate', () => {
   });
 });
 
+describe('a thinking-level change the router did not write pins the served model', () => {
+  // Stateful stand-in for Pi's session thinking level: the router's footer
+  // sync writes it, and Pi sends it back as `options.reasoning` (omitted for `off`).
+  let level: string;
+  let harness: ProviderTestHarness;
+  const implement = { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context;
+  const piReasoning = (): Parameters<ProviderTestHarness['serve']>[1] =>
+    (level === 'off' ? {} : { reasoning: level } as Parameters<ProviderTestHarness['serve']>[1]);
+
+  beforeEach(async () => {
+    level = 'off';
+    harness = await setupProviderTest({
+      dir: temp.path,
+      config: { consultRouter: false },
+      pi: {
+        setThinkingLevel: (next: string) => { level = next; },
+        getThinkingLevel: () => level,
+      } as unknown as ExtensionAPI,
+    });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+  });
+
+  const nextTurn = (): void => {
+    harness.resetEventStream();
+    vi.mocked(streamSimple).mockClear();
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+  };
+
+  it('pins the previously served model at the newly selected level', async () => {
+    await harness.serve(implement, piReasoning());
+    const served = harness.getProviderState().lastServed!.registryId;
+    const target = level === 'high' ? 'low' : 'high';
+
+    nextTurn();
+    level = target;
+    await harness.serve(implement, piReasoning());
+
+    expect(harness.session.getManualModel()).toBe(`${served}:${target}`);
+    expect(harness.streamedModels()).toEqual([served]);
+    expect(harness.delegatedCall().options?.reasoning).toBe(target);
+    expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
+  });
+
+  it('does not pin when Pi echoes the level the router synced', async () => {
+    await harness.serve(implement, piReasoning());
+
+    nextTurn();
+    await harness.serve(implement, piReasoning());
+
+    expect(harness.session.getManualModel()).toBeUndefined();
+  });
+
+  it('does not pin before any model has served', async () => {
+    level = 'high';
+    await harness.serve(implement, piReasoning());
+
+    expect(harness.session.getManualModel()).toBeUndefined();
+  });
+
+  it('moves an existing pin to the new level, clamped to what the model supports', async () => {
+    harness.session.setManualModel('alpha/first:low');
+    await harness.serve(implement, piReasoning());
+
+    nextTurn();
+    level = 'xhigh';
+    await harness.serve(implement, piReasoning());
+
+    expect(harness.session.getManualModel()).toBe('alpha/first:high');
+    expect(harness.delegatedCall().options?.reasoning).toBe('high');
+  });
+});
+
 describe('incumbent effort floor carries across invocations', () => {
   // The effort floor is a secondary field on a decision (it does not change
   // `dimension`), so a naive carry that reads only `getLastDecision()?.dimension`
