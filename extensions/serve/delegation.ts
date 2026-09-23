@@ -974,6 +974,36 @@ async function runCandidateAttempt(
   }
 }
 
+type SettledAttempt = Exclude<CandidateAttemptResult, RetryAttempt>;
+
+/**
+ * Attempt one candidate, retrying in place while the failure policy asks for
+ * it. The last retry is returned too: it still affects the usage-limit model
+ * blacklist. The attempt checks caller cancellation before provider dispatch;
+ * the retry delay checks it before another attempt starts.
+ */
+async function runWithRetries(
+  ctx: DelegationContext,
+  candidate: PreparedCandidate,
+): Promise<{ attempt: SettledAttempt; lastRetry: RetryAttempt | undefined }> {
+  let lastRetry: RetryAttempt | undefined;
+  for (let tries = 0; ; tries++) {
+    if (tries > 0) {
+      try {
+        await waitForRetry(retryBackoffMs * tries, ctx.opts.options?.signal);
+      } catch (error) {
+        // Abort during backoff settles before another iterator is created.
+        const message = error instanceof Error ? error.message : String(error);
+        return { attempt: { kind: 'aborted', message }, lastRetry };
+      }
+      debugLog('attempt.retry', { candidate: candidate.candidateId, retry: tries });
+    }
+    const attempt = await runCandidateAttempt(ctx, candidate, tries);
+    if (attempt.kind !== 'retry') return { attempt, lastRetry };
+    lastRetry = attempt;
+  }
+}
+
 /**
  * Apply a user substitution at `index` and return the candidate to attempt.
  * The walk iterates this chain and compares capability against this pool, so
@@ -1100,6 +1130,64 @@ export async function runDelegationLoop(
     stream.end();
     return { success: false, streamFinalized: true, lastError: message, lastServed };
   };
+  // A missing registry model is model-specific: blacklist it without a strike.
+  const findModel = (key: string, provider: string, modelId: string): Model<Api> | undefined => {
+    const model = registry?.find(provider, modelId);
+    if (!model) {
+      lastError = `not in registry: ${key}`;
+      session.blacklistModel(key);
+    }
+    return model as Model<Api> | undefined;
+  };
+  // Same target selection as the between-turn repick: strongest reachable
+  // stronger model by quality (`escalationChain`), never the highest-score
+  // marginal upgrade. No reachable target (the answerless-promotion path)
+  // leaves the chain untouched and hops nowhere — the source is already
+  // excluded, so the walk falls to ordinary recovery without a strike.
+  const planCapabilityHop = (
+    candidateIndex: number,
+    candidateId: string,
+    attempt: Extract<CandidateAttemptResult, { kind: 'trajectory' }>,
+  ): void => {
+    excludeSource = attempt.effectiveSource;
+    const remaining = decision.fallbackChain.slice(candidateIndex + 1);
+    const esc = escalationChain(
+      reachableRemaining(candidateIndex),
+      decision.dimension,
+      attempt.effectiveSource,
+      escOpts,
+      compareOpts(),
+    );
+    if (esc) {
+      capabilityHop = {
+        fromModel: attempt.effectiveSource,
+        dimension: decision.dimension,
+        signals: [{
+          kind: 'reasoning-loop',
+          severity: 'severe',
+          evidenceIds: [`rl:${candidateId}`],
+          evidenceCount: 1,
+        }],
+        tfi: 1,
+        preOutput: true,
+      };
+      // Mutate the live chain in place. The outer walk iterates
+      // `fallbackChain.entries()`; replacing the array would leave that
+      // iterator on the pre-hop order and skip recovery sitting before the
+      // stronger head.
+      decision.fallbackChain.splice(
+        candidateIndex + 1,
+        remaining.length,
+        ...planTrajectoryHop(remaining, esc.fallbackChain),
+      );
+    }
+    debugLog('attempt.trajectory', {
+      candidate: candidateId,
+      reason: 'reasoning-loop',
+      target: esc?.chosen ?? 'none',
+      usage: attempt.usageObserved ? 'partial' : 'missing',
+    });
+  };
   // Last candidate that actually entered an attempt. Semi-mode asks only when
   // the next attempt would change model — skipped/missing entries are not a
   // switch, and same-model retries stay inside the inner loop.
@@ -1120,12 +1208,8 @@ export async function runDelegationLoop(
       ? findSourceCandidate(opts.candidates, capabilityHop.fromModel)
       : undefined;
     attemptIndex++;
-    let chosen = registry?.find(provider, modelId);
-    if (!chosen) {
-      lastError = `not in registry: ${candidateId}`;
-      session.blacklistModel(candidateId);
-      continue;
-    }
+    let chosen = findModel(candidateId, provider, modelId);
+    if (!chosen) continue;
 
     const previousAttempt = lastAttemptedId;
     if (
@@ -1142,12 +1226,8 @@ export async function runDelegationLoop(
         candidateId = confirmed;
         ({ provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId));
         if (provider === ROUTER_PROVIDER_ID || deadProviders.has(provider)) continue;
-        chosen = registry?.find(provider, modelId);
-        if (!chosen) {
-          lastError = `not in registry: ${candidateId}`;
-          session.blacklistModel(candidateId);
-          continue;
-        }
+        chosen = findModel(candidateId, provider, modelId);
+        if (!chosen) continue;
       }
     }
     let servingHop: PendingTrajectoryEscalation | undefined;
@@ -1171,11 +1251,6 @@ export async function runDelegationLoop(
       capabilityHop = undefined;
     }
     lastAttemptedId = candidateId;
-
-    // A retry can affect the later usage-limit model blacklist, even though
-    // all other consequences follow only the final attempt's result.
-    let lastRetry: RetryAttempt | undefined;
-    let failure: CandidateFailure | undefined;
 
     // A sticky incumbent held on a cheap-classified follow-up carries the
     // incumbent's resolved dimension as an up-only effort floor, so the
@@ -1209,108 +1284,35 @@ export async function runDelegationLoop(
       attemptIndex,
       provider,
       modelId,
-      chosen: chosen as Model<Api>,
+      chosen,
       effectiveReasoning,
       effectiveSource,
       remainingHasStronger,
       servingHop,
     };
 
-    // The attempt checks caller cancellation before provider dispatch; the
-    // retry delay checks it before another attempt starts.
-    for (let tries = 0; ; tries++) {
-      if (tries > 0) {
-        try {
-          await waitForRetry(retryBackoffMs * tries, opts.options?.signal);
-        } catch (_retryErr) {
-          // Abort during backoff: finalize canonically before a delegated
-          // iterator is created or failure bookkeeping runs.
-          const abortMessage = _retryErr instanceof Error ? _retryErr.message : String(_retryErr);
-          return finalize('aborted', abortMessage);
-        }
-        debugLog('attempt.retry', { candidate: candidateId, retry: tries });
-      }
-
-      const attempt = await runCandidateAttempt(ctx, prepared, tries);
-
-      if (attempt.kind === 'served') {
-        success = true;
-        lastServed = attempt.lastServed;
-        finalDecision = attempt.finalDecision;
-        if (lastServed && stillCurrent()) {
-          session.updateLastServed({ accumulatedCost: session.getAccumulatedCost() });
-          renderRouterStatus(extensionContext, finalDecision, {
-            ...lastServed,
-            accumulatedCost: session.getAccumulatedCost(),
-          });
-        }
-        break;
-      }
-
-      lastError = attempt.message;
-      if (attempt.kind === 'trajectory') {
-        failure = attempt;
-        excludeSource = attempt.effectiveSource;
-        // Same target selection as the between-turn repick: strongest reachable
-        // stronger model by quality (`escalationChain`), never the highest-score
-        // marginal upgrade. No reachable target (the answerless-promotion path)
-        // leaves the chain untouched and hops nowhere — the source is already
-        // excluded, so the walk falls to ordinary recovery without a strike.
-        const remaining = decision.fallbackChain.slice(candidateIndex + 1);
-        const esc = escalationChain(
-          reachableRemaining(candidateIndex),
-          decision.dimension,
-          attempt.effectiveSource,
-          escOpts,
-          compareOpts(),
-        );
-        if (esc) {
-          capabilityHop = {
-            fromModel: attempt.effectiveSource,
-            dimension: decision.dimension,
-            signals: [{
-              kind: 'reasoning-loop',
-              severity: 'severe',
-              evidenceIds: [`rl:${candidateId}`],
-              evidenceCount: 1,
-            }],
-            tfi: 1,
-            preOutput: true,
-          };
-          const hopTail = planTrajectoryHop(remaining, esc.fallbackChain);
-          // Mutate the live chain in place. The outer walk iterates
-          // `fallbackChain.entries()`; replacing the array would leave that
-          // iterator on the pre-hop order and skip recovery sitting before the
-          // stronger head.
-          decision.fallbackChain.splice(
-            candidateIndex + 1,
-            remaining.length,
-            ...hopTail,
-          );
-        }
-        debugLog('attempt.trajectory', {
-          candidate: candidateId,
-          reason: 'reasoning-loop',
-          target: esc?.chosen ?? 'none',
-          usage: attempt.usageObserved ? 'partial' : 'missing',
+    const { attempt, lastRetry } = await runWithRetries(ctx, prepared);
+    if (attempt.kind === 'served') {
+      success = true;
+      lastServed = attempt.lastServed;
+      finalDecision = attempt.finalDecision;
+      if (lastServed && stillCurrent()) {
+        session.updateLastServed({ accumulatedCost: session.getAccumulatedCost() });
+        renderRouterStatus(extensionContext, finalDecision, {
+          ...lastServed,
+          accumulatedCost: session.getAccumulatedCost(),
         });
-        break;
       }
-      if (attempt.kind === 'aborted' || attempt.kind === 'finalize') {
-        return finalize(attempt.kind === 'aborted' ? 'aborted' : 'error', attempt.message);
-      }
-      if (attempt.kind === 'retry') {
-        lastRetry = attempt;
-        continue;
-      }
-      failure = attempt;
       break;
     }
 
-    if (success) break; // a candidate served the turn — done
-    if (!failure) continue;
+    lastError = attempt.message;
+    if (attempt.kind === 'aborted' || attempt.kind === 'finalize') {
+      return finalize(attempt.kind === 'aborted' ? 'aborted' : 'error', attempt.message);
+    }
+    if (attempt.kind === 'trajectory') planCapabilityHop(candidateIndex, candidateId, attempt);
 
-    const consequence = failureConsequence(failure, lastRetry);
+    const consequence = failureConsequence(attempt, lastRetry);
     if (consequence.killProvider) {
       session.blacklistProvider(provider);
       deadProviders.add(provider);
@@ -1318,7 +1320,6 @@ export async function runDelegationLoop(
     }
     if (consequence.blacklistModel) session.blacklistModel(candidateId);
     if (consequence.strikeProvider) strike(provider);
-    continue;
   }
 
   if (!success) {
