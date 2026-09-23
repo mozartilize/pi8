@@ -1401,57 +1401,84 @@ async function resolveSemiGate(args: {
       // refuse-the-switch, not retry-the-dead-model.
       if (args.fallback) return aborted;
       const level = previous?.registryId === incumbent ? previous.thinkingLevel : undefined;
-      const preferred = level ? `${incumbent}:${level}` : incumbent;
-      const heldCandidates = applyRuntimeExclusions(manualCandidates(prepared, preferred), session);
-      const candidates = heldCandidates.length > 0
-        ? heldCandidates
-        : applyRuntimeExclusions(manualCandidates(prepared, incumbent), session);
-      const held = candidates[0];
-      if (!held) return { kind: 'terminal', reason: 'error', message: `Cannot keep ${incumbent}: model is unavailable.` };
-      session.setSemiHold(
-        prepared.measured.turnInput.key,
-        heldCandidates.length > 0 ? preferred : incumbent,
-      );
-      return {
-        kind: 'override',
-        scored: pinnedScored({
-          base: scored,
-          chosen: held,
-          routableCandidates: candidates,
-          cause: 'semi-hold',
-          reason: `Semi mode: kept ${incumbent} for this turn`,
-          prepared,
-          session,
-        }),
-      };
+      return holdIncumbent(prepared, scored, session, incumbent, level);
     }
-
     if (choice !== pickOther) return aborted;
-    for (;;) {
-      const raw = await ui.input('Model to pin: provider/model-id[:thinking]', incumbent, dialogOpts);
-      if (cancelled() || raw === undefined) return aborted;
-      const model = raw.trim();
-      const candidates = applyRuntimeExclusions(manualCandidates(prepared, model), session);
-      if (candidates.length === 0) {
-        ui.notify('Model or thinking level is unavailable. Choose another model.', 'warning');
-        continue;
-      }
-      session.setManualModel(model);
-      return {
-        kind: 'override',
-        scored: pinnedScored({
-          base: scored,
-          chosen: candidates[0]!,
-          routableCandidates: candidates,
-          cause: 'manual-override',
-          reason: `Manual model pin: ${model}`,
-          prepared,
-          session,
-        }),
-      };
-    }
+    const pinned = await promptPin(prepared, scored, session, ui, incumbent, dialogOpts, cancelled);
+    return pinned ?? aborted;
   } catch {
     return { kind: 'proceed' };
+  }
+}
+
+/** Keep the incumbent for this turn, at its served thinking level when it is still available. */
+function holdIncumbent(
+  prepared: PreparedTurn,
+  scored: ScoredTurn,
+  session: RouterSession,
+  incumbent: string,
+  level: string | undefined,
+): SemiOutcome {
+  const preferred = level ? `${incumbent}:${level}` : incumbent;
+  const heldCandidates = applyRuntimeExclusions(manualCandidates(prepared, preferred), session);
+  const candidates = heldCandidates.length > 0
+    ? heldCandidates
+    : applyRuntimeExclusions(manualCandidates(prepared, incumbent), session);
+  const held = candidates[0];
+  if (!held) return { kind: 'terminal', reason: 'error', message: `Cannot keep ${incumbent}: model is unavailable.` };
+  session.setSemiHold(
+    prepared.measured.turnInput.key,
+    heldCandidates.length > 0 ? preferred : incumbent,
+  );
+  return {
+    kind: 'override',
+    scored: pinnedScored({
+      base: scored,
+      chosen: held,
+      routableCandidates: candidates,
+      cause: 'semi-hold',
+      reason: `Semi mode: kept ${incumbent} for this turn`,
+      prepared,
+      session,
+    }),
+  };
+}
+
+/**
+ * Ask for a model to pin until the user names an available one. Returns
+ * undefined when the dialog is dismissed or the gate is cancelled.
+ */
+async function promptPin(
+  prepared: PreparedTurn,
+  scored: ScoredTurn,
+  session: RouterSession,
+  ui: ExtensionContext['ui'],
+  incumbent: string,
+  dialogOpts: { signal: AbortSignal } | undefined,
+  cancelled: () => boolean,
+): Promise<SemiOutcome | undefined> {
+  for (;;) {
+    const raw = await ui.input('Model to pin: provider/model-id[:thinking]', incumbent, dialogOpts);
+    if (cancelled() || raw === undefined) return undefined;
+    const model = raw.trim();
+    const candidates = applyRuntimeExclusions(manualCandidates(prepared, model), session);
+    if (candidates.length === 0) {
+      ui.notify('Model or thinking level is unavailable. Choose another model.', 'warning');
+      continue;
+    }
+    session.setManualModel(model);
+    return {
+      kind: 'override',
+      scored: pinnedScored({
+        base: scored,
+        chosen: candidates[0]!,
+        routableCandidates: candidates,
+        cause: 'manual-override',
+        reason: `Manual model pin: ${model}`,
+        prepared,
+        session,
+      }),
+    };
   }
 }
 
