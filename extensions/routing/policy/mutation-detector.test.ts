@@ -44,6 +44,7 @@ describe('bash file redirection', () => {
     expect(bash('echo hi >&1')).toEqual({ confidence: 'none' });
     expect(bash('cmd 3>&1')).toEqual({ confidence: 'none' });
     expect(bash('cmd 2>&1 && echo done')).toEqual({ confidence: 'none' });
+    expect(bash('cmd >&-')).toEqual({ confidence: 'none' });
   });
 
   it('never treats benign sinks as file writes', () => {
@@ -89,6 +90,11 @@ describe('bash heredocs', () => {
     expect(bash('cat <<"EOF"\ntouch f\necho x > y\nEOF')).toEqual({ confidence: 'none' });
     expect(bash("cat <<'PY'\npython -c 'import os; os.remove(\"x\")'\nPY")).toEqual({ confidence: 'none' });
     expect(bash('cat <<EOF\necho hi > out.txt\nEOF')).toEqual({ confidence: 'none' });
+    expect(bash("cat <<'EOF'\n$(rm x)\nEOF")).toEqual({ confidence: 'none' });
+  });
+
+  it('sees a substitution that an unquoted heredoc body runs', () => {
+    expect(bash('cat <<EOF\n$(rm x)\nEOF')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
   });
 
   it('keeps a python heredoc body visible for python classification', () => {
@@ -98,6 +104,12 @@ describe('bash heredocs', () => {
       signal: 'python-write-api',
     });
     expect(bash('python <<PY\nprint(1)\nPY')).toEqual({ confidence: 'none' });
+    // Bash runs an unterminated heredoc body up to end of input.
+    expect(bash('python <<PY\nprint(1)')).toEqual({ confidence: 'none' });
+    expect(bash('python - <<PY\nimport os\nos.remove("x")\nPY')).toMatchObject({
+      confidence: 'high',
+      signal: 'python-write-api',
+    });
   });
 });
 
@@ -165,6 +177,27 @@ describe('bash shell writers', () => {
     expect(bash('if x; then python -c \'open("f","w")\'; fi')).toMatchObject({ confidence: 'high', signal: 'python-write-api' });
   });
 
+  it('sees mutations in every command position the shell can run', () => {
+    expect(bash('echo `mv a b`')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+    expect(bash('echo "$(rm x)"')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+    expect(bash('(( n = $(rm x) ))')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+    expect(bash('for ((i = $(touch x); i < 1; i++)); do :; done')).toMatchObject({
+      confidence: 'high',
+      signal: 'shell-writer',
+    });
+    expect(bash('[[ -n $(rm x) ]]')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+    expect(bash('if rm x; then :; fi')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+    expect(bash('case $x in a) rm f;; esac')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+    expect(bash('time rm x')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+    expect(bash('coproc cp a b')).toMatchObject({ confidence: 'high', signal: 'shell-filesystem' });
+  });
+
+  it('reads writer flags and targets anywhere in the argument list', () => {
+    expect(bash('sed -e s/a/b/ -i f')).toMatchObject({ confidence: 'high', signal: 'shell-inplace' });
+    expect(bash('dd if=a of="out.bin"')).toMatchObject({ confidence: 'high', signal: 'shell-dd' });
+    expect(bash('perl -Ilib script.pl')).toEqual({ confidence: 'none' });
+  });
+
   it('leaves unrecognized commands and lookalikes alone', () => {
     expect(bash('ls -la')).toEqual({ confidence: 'none' });
     expect(bash('grep -i pattern f')).toEqual({ confidence: 'none' });
@@ -210,6 +243,10 @@ describe('bash inline python', () => {
       confidence: 'high',
       signal: 'python-write-api',
     });
+    expect(bash("FOO=1 python -c 'open(\"f\", \"w\")'")).toMatchObject({
+      confidence: 'high',
+      signal: 'python-write-api',
+    });
     expect(bash("python -c 'import os; os.remove(\"x\")' > /dev/null 2>&1")).toMatchObject({
       confidence: 'high',
       signal: 'python-write-api',
@@ -234,6 +271,11 @@ describe('bash inline python', () => {
       signal: 'python-opaque',
     });
     expect(bash('pytest -q')).toEqual({
+      confidence: 'possible',
+      surface: 'bash-python-opaque',
+      signal: 'python-opaque',
+    });
+    expect(bash('uv run pytest')).toEqual({
       confidence: 'possible',
       surface: 'bash-python-opaque',
       signal: 'python-opaque',
