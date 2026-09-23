@@ -1,14 +1,14 @@
-# pi8 - pi coding agent extension auto model router
+# pi8: automatic model router for Pi
 
-Benchmark-aware auto model router for [Pi](https://github.com/earendil-works/pi-coding-agent). Routes each turn — and each [pi-subagents](https://www.npmjs.com/package/pi-subagents) role — to the best available model based on live intelligence/coding benchmarks, Pi's registry metadata, and automatic classification. No manual per-session model picking.
+pi8 is an extension for [Pi](https://github.com/earendil-works/pi-coding-agent). It routes each turn and each [pi-subagents](https://www.npmjs.com/package/pi-subagents) role to a model from your authenticated providers.
 
 ## Why
 
-If you have multiple authenticated providers, you're normally choosing a model by hand — per session, per subagent role — with no data. Model benchmarks (intelligence, coding, price, speed) are public. This extension fetches them, matches them against Pi's model registry, and routes every turn to the best cost/quality match automatically.
+With several authenticated providers, you usually select a model by hand for each session and each subagent role. You make that choice without data. Public benchmarks measure intelligence, coding, price, and speed. pi8 fetches these benchmarks and matches them to Pi's model registry. Then it routes every turn to the model with the best cost/quality match.
 
 ## Disclaimer
 
-**Heavy AI assistance** — this extension is developed with heavy AI assistance; use at your own risk.
+**Heavy AI assistance** went into this extension. Use it at your own risk.
 
 ## Install
 
@@ -19,15 +19,15 @@ If you have multiple authenticated providers, you're normally choosing a model b
 }
 ```
 
-For local development, point Pi at a checkout via `.pi/extensions/` or `pi -e /path/to/index.ts`.
+For local development, load a checkout through `.pi/extensions/` or with `pi -e /path/to/index.ts`.
 
 ## Quick start
 
-1. Get a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/).
+1. Create a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/).
 2. Run `/router-sync <your-key>` once.
-3. Set your session's model to `router/auto`. Done.
+3. Set the session model to `router/auto`.
 
-Without step 1–2, the router still works using Pi's registry metadata (price, context window) — no quality signal, but better than nothing.
+Without steps 1 and 2, the router still works. It uses Pi's registry metadata (price and context window), but it has no quality signal.
 
 ## How it works
 
@@ -41,38 +41,55 @@ Without step 1–2, the router still works using Pi's registry metadata (price, 
              delegate with automatic retry
 ```
 
-Every turn the router automatically:
+For each turn, the router does these steps:
 
-1. **Classifies** your request into one of five dimensions (lightweight, gather, plan, implement, review) — a fast English keyword classifier runs first. When it has no categorical evidence (non-English prompts, ambiguous input), an optional **local multilingual embedding classifier** (E5-small) fills the gap.
-2. **Assesses** the task semantically with an optional LLM consultation for additional confidence.
-3. **Scores** every available model against live benchmarks and registry metadata (quality, cost, speed, context window). Models that aren't capable enough stay in the fallback chain but never win the top spot.
-4. **Streams** the best match. If it fails before producing output — missing credentials, timeout, provider error — the router moves to the next best model automatically. Once an answer or tool call starts streaming, it never replays.
-5. **Routes subagents too** — visible structured role children are re-scored at spawn from the role floor plus their task, configured dimension weights, and current context pressure; task assessment only raises the role requirement. Explicit child models and user/project pins still win, and reviewer children are kept independent from selected worker families. Children inside a `workflowScript` string are opaque, so the router fills only the tool's top-level model slot with its worker-first default (worker → planner → researcher → advisor → reviewer); per-child script models still win and scripted failures remain ordinary tool errors.
+1. **Classify.** A fast English keyword classifier puts the request into one of five dimensions: lightweight, gather, plan, implement, or review. When the keywords give no evidence, an optional local multilingual embedding classifier (E5-small) fills the gap. Examples are non-English prompts and ambiguous input.
+2. **Assess.** An optional LLM assessment reads the meaning of the task to add confidence.
+3. **Score.** The router scores every available model against live benchmarks and registry metadata: quality, cost, speed, and context window. A model that is not capable enough stays in the fallback chain, but it never becomes the top pick.
+4. **Stream.** The router streams the reply from the top pick. If that model fails before any output, the router moves to the next model in the chain. Failures include missing credentials, a timeout, and a provider error. After an answer or a tool call starts to stream, the router never replays the turn.
+5. **Route subagents.** At spawn time, the router scores each visible structured child. It uses the role floor, the task, the dimension weights, and the context pressure. The task assessment can only raise the role requirement. Explicit child models and user or project pins always win. For children inside a `workflowScript` string, the router sets only the tool-level model. See [`ARCHITECTURE.md`](ARCHITECTURE.md#4-subagent-routing) for the details.
 
-Uncertainty always routes up: missing data, ambiguous prompts, and low confidence never make routing cheaper. Overserving is cheap; underserving costs a bad answer.
+Uncertainty always routes up. Missing data, an ambiguous prompt, or low confidence never makes routing cheaper.
 
-All `router/auto` intents run through this same pipeline. For an explicit compound implementation request ("investigate X, then fix it"), the router automatically recognizes that its terminal deliverable — the fix — is harder than its own inspect phase, and lets one frontier-band intent open at a cheaper, standard/strong-band model for inspection before handing off to a model that clears the terminal requirement once mutation (`edit`/`write`) starts. This activates automatically whenever it applies — there's no configuration key or hidden switch for it. The handoff is bounded to one attempt per mutation call; if no stronger model is available, the router degrades to letting the mutation through rather than stalling the turn. `edit`/`write` calls are always governed by the gate; `bash` is classified best-effort, and high-confidence write shapes feed the same bounded handoff — file redirection (`>`, `>>`, `>|`, `&>`, excluding fd duplication and `/dev/null`-style sinks), `sed`/`perl` in-place edits, `tee`/`patch`/`git apply`/`truncate`/`touch`, `cp`/`mv`/`rm`/`install`/`mkdir`/`ln`, `dd of=`, and inline Python write APIs (`open` write modes, `Path`/`os`/`shutil` mutations). Opaque Python (`python script.py`, `python -m`, eval/subprocess indirection) is allowed and recorded in the decision log as enum signals only — never as command text; other unrecognized forms are allowed without a mutation signal. Static detection is best effort, not a guarantee: hooks run in load order and Bash applies its own spawn hook later, so a command can be rewritten after this extension observes it, and writes hidden behind aliases, `bash -c` strings, wrapper commands such as `env`/`xargs`, imports, or obfuscation can slip through. Concrete-model sessions (a specific model, not `router/auto`) are completely unaffected.
+pi8 has no effect on a session that uses a concrete model instead of `router/auto`.
+
+### Compound tasks
+
+Some requests have an inspect phase and a fix phase, for example "investigate X, then fix it". When the fix needs a frontier-band model, the router uses two phases:
+
+- The inspect phase can start on a cheaper standard-band or strong-band model.
+- When the first mutation (`edit` or `write`) starts, the router hands the turn to a model that meets the requirement of the fix.
+- The router makes one handoff attempt for each mutation call. If no stronger model is available, the router lets the mutation continue. It does not stall the turn.
+- The router also detects `bash` commands that write files, best effort, and gates them the same way.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `/router-sync [key]` | Fetch fresh benchmark data |
-| `/router-sync embedding [--force]` | Download the E5-small embedding model (~135 MB) for multilingual classification |
-| `/router-status` | Show freshness, coverage, manual-pin state, last decision |
-| `/router-manual [provider/model[:thinking]\|resume]` | Pin one model for this session; Space shows searchable model completions, Enter opens Pi's native `/model` picker, and `resume` reuses the pre-pin route for the next turn |
-| `/router-semi [on\|off]` | Ask before switching away from the last served model (persists `semi` in config) |
-| `/router-why` | Explain why the last model was chosen |
-| `/router-models` | Show allowlist and matching models |
-| `/router-agents` | Show which model each subagent role resolves to |
+| `/router-sync [key]` | Fetch new benchmark data |
+| `/router-sync embedding [--force]` | Download the E5-small model (~135 MB) and check it against `embedding-manifest.json` (sha256). Report whether the runtime can be imported. |
+| `/router-status` | Show data freshness, coverage, pin state, assessment spend, and the last decision |
+| `/router-report` | Show routed spend against baseline spend, the percent saved, and the dimension distribution for this session |
+| `/router-manual [provider/model[:thinking]\|resume]` | Pin one model for this session. Space shows searchable model completions. Enter opens Pi's `/model` picker. |
+| `/router-semi [on\|off]` | Ask before the router switches away from the last served model. Saves `semi` in the config. |
+| `/router-why` | Explain why the router chose the last model |
+| `/router-models` | Show the allowlist and the models that match it |
+| `/router-agents` | Show the model that each subagent role resolves to |
 | `/router-fix <slug> <id>` | Override a benchmark-to-registry mapping |
-| `/router-blacklist [add/remove/clear]` | Exclude models; `remove <provider>/*` also lifts a usage-limit provider exclusion |
+| `/router-blacklist [add/remove/clear]` | Exclude models. `remove <provider>/*` also clears a usage-limit exclusion of that provider. |
 
-`/router-manual` keeps `router/auto` active and stores the pin only in the current `RouterSession`; it never writes `settings.json` or the pi8 config. Manual turns skip the assessment call and serve exactly the selected model. The fallback chain contains one model, so failure is surfaced instead of substituting another model. `/router-manual resume` leaves the pin and reuses the auto decision that was in effect just before it was set — the same chosen model and fallback chain, with no fresh classification or assessment — for the next user entry only; subsequent turns recompute normally. A new session clears the pin automatically.
+### Manual pin
+
+`/router-manual` keeps `router/auto` as the active model.
+
+- The pin exists only in the current `RouterSession`. The command never writes `settings.json` or the pi8 config.
+- A pinned turn skips the assessment and serves only the pinned model. If that model fails, the router shows the failure and does not substitute another model.
+- `/router-manual resume` leaves the pin. The next user entry reuses the auto decision from just before the pin, with no new classification or assessment. Later turns route normally.
+- A new session clears the pin.
 
 ## Configuration
 
-`~/.pi/agent/pi8/config.json` (optional; created on first use):
+`~/.pi/agent/pi8/config.json` (optional, created on first use):
 
 ```jsonc
 {
@@ -90,24 +107,16 @@ All `router/auto` intents run through this same pipeline. For an explicit compou
 }
 ```
 
-- `models` / `blacklist`: `*` wildcards, case-insensitive. Bare provider name = `provider/*`.
-- `consultRouter`: when `true`, awaits one bounded assessment per real user entry and applies its verdict under strict safety caps. Set `false` for fully local routing with no assessment egress.
-- `semi`: when `true`, the router asks before switching away from the model that served the previous turn (Yes / keep this turn / pin `provider/model-id[:thinking]`, which acts as `/router-manual`). No prompt on the first pick of a session, and a no-op without an interactive UI.
-- `switchMargin`: how strongly the router prefers keeping the current model to preserve prompt cache. Set to `0` to disable.
-- `routerContextWindow`: the context window advertised for the synthetic `router/auto` model. Pi tunes compaction to the session model's window, so the default (the largest window among models your `models`/`blacklist` config actually lets the router pick) delays compaction on long sessions and biases them toward large-window models as context grows past each smaller model's window. Set this to the effective window you want to route within to make Pi compact earlier and keep cheaper, smaller-window models eligible longer. An override above the largest routable window is clamped down to it — you cannot advertise capacity no routable model actually has.
-- `debug`: `true` or a file path enables per-turn millisecond timing logs.
-- `embeddingClassifier`: when `true`, a local E5-small embedding model classifies prompts where the keyword classifier has no evidence — non-English languages, ambiguous English. Blends up only; never overrides keyword downward. Requires the **optional** `onnxruntime-node` and `@xenova/transformers` packages to be installed (they are not hard dependencies — without them the layer stays disabled). `/router-sync embedding` reports whether the runtime is importable alongside the model download.
-- `embeddingDeadlineMs`: maximum milliseconds the embedding model load + inference may take (default 5000). On expiry the keyword result is used unchanged.
-- `embeddingMinConfidence`: minimum confidence (the margin between the top two prototype scores) for the embedding verdict to influence routing (default 0.15). Below it the embedding abstains and the keyword result stands — a low-confidence embedding never moves routing. Download integrity: provisioned files are verified against `embedding-manifest.json` (sha256) on every `/router-sync embedding`, so a corrupt model file is re-downloaded rather than silently used.
+Set `consultRouter` to `false` for fully local routing. The router then sends no assessment requests. `embeddingClassifier` needs the **optional** packages `onnxruntime-node` and `@xenova/transformers`. Without them, the layer stays disabled.
 
-Full configuration reference in [`ARCHITECTURE.md`](ARCHITECTURE.md#8-configuration-reference).
+The full configuration reference is in [`ARCHITECTURE.md`](ARCHITECTURE.md#9-configuration-reference).
 
 ## Observability
 
-- **Decision log** — one append-only JSONL sidecar per session, next to Pi's transcript: `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`. Every routing decision records dimension, chosen model, cause, and fallback chain; separate `assessment-metric` records preserve heuristic deltas and latch-veto evidence. Ephemeral sessions (no persisted session file) fall back to a shared `~/.pi/agent/pi8/decisions.jsonl`.
-- **Debug timing log** (opt-in via the `debug` config) — per-step millisecond timing, written as a per-session `*.router-debug.log` sidecar (`/tmp/pi8-debug.log` when ephemeral).
+- **Decision log**: one append-only JSONL file for each session, next to Pi's transcript: `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`. Each routing decision records the dimension, the chosen model, the cause, and the fallback chain. Separate `assessment-metric` records keep the heuristic deltas and the latch-veto evidence. A session without a saved session file writes to the shared `~/.pi/agent/pi8/decisions.jsonl`.
+- **Debug timing log** (turn it on with `debug`): per-step timing in milliseconds, in a per-session `*.router-debug.log` file. A session without a saved session file writes to `/tmp/pi8-debug.log`.
 
 ## Further reading
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — full implementation details: scoring tiers, delegation loop, assessment privacy, escalation protocols, subagent injection.
-- [`AGENTS.md`](AGENTS.md) — contributor conventions and module responsibilities.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md): implementation details, including scoring tiers, the delegation loop, assessment privacy, escalation, and subagent injection.
+- [`AGENTS.md`](AGENTS.md): contributor rules and known traps.

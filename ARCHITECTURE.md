@@ -176,7 +176,7 @@ Once visible text or a tool call has streamed, the router never replays on anoth
 
 ### Role injection
 
-pi-subagents roles (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) each provide a minimum dimension via `ROLE_DIMENSIONS`. The router builds and auth-filters the candidate snapshot during session refresh, then re-scores each visible structured child at spawn time from its role and task. `assessTerminal(task)` may raise the role floor, never lower it; configured dimension weights and the live context guard apply to that pick before the concrete `provider/model` is injected through the `tool_call` hook. Workflow-script children are opaque to the structured walker, so those calls retain the worker-first tool-level default rather than task-aware per-child routing.
+pi-subagents roles (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) each provide a minimum dimension via `ROLE_DIMENSIONS`. The router builds and auth-filters the candidate snapshot during session refresh, then re-scores each visible structured child at spawn time from its role and task. `assessTerminal(task)` may raise the role floor, never lower it; configured dimension weights and the live context guard apply to that pick before the concrete `provider/model` is injected through the `tool_call` hook. Workflow-script children are opaque to the structured walker, so those calls retain the worker-first tool-level default (worker → planner → researcher → advisor → reviewer) rather than task-aware per-child routing. A per-child `model` inside the script still wins, and scripted failures remain ordinary tool errors. Reviewer children are kept independent from the selected worker's model family.
 
 Nothing is written to `settings.json` — injection is per-spawn only. Explicit model choices and user/project pins (`source` ≠ `pi8`) always win. A concrete child cannot switch models mid-process.
 
@@ -300,9 +300,9 @@ Options in `~/.pi/agent/pi8/config.json`:
 | Key | Default | Description |
 |---|---|---|
 | `artificialAnalysisApiKey` | — | Saved by `/router-sync` |
-| `models` | `[]` (all) | Allowlist: provider/id glob patterns |
-| `blacklist` | `[]` | Persisted exclude patterns |
-| `consultRouter` | `true` | Master switch for semantic assessment |
+| `models` | `[]` (all) | Allowlist: provider/id glob patterns (`*` wildcards, case-insensitive; a bare provider name means `provider/*`) |
+| `blacklist` | `[]` | Persisted exclude patterns, same syntax as `models` |
+| `consultRouter` | `true` | Master switch for semantic assessment; `false` dispatches no assessment request |
 | `consultModel` | — | Optional assessor model override |
 | `assessmentDeadlineMs` | `1500` | End-to-end assessor budget |
 | `assessmentMaxInputChars` | `6000` | Assessor input cap |
@@ -311,13 +311,17 @@ Options in `~/.pi/agent/pi8/config.json`:
 | `depthEscalationTokens` | `32768` | Context-token threshold |
 | `prompt` | `true` | TUI notification on model switch |
 | `semi` | `false` | Ask before switching away from the last served model |
-| `switchMargin` | `0.15` | Incumbent cache-preservation cap |
+| `switchMargin` | `0.15` | Incumbent cache-preservation cap; `0` disables the bonus |
+| `routerContextWindow` | largest routable window | Context window advertised for `router/auto`. Pi tunes compaction to it, so the default delays compaction and biases long sessions toward large-window models. A lower value keeps smaller-window models eligible longer. Values above the default are clamped to it. |
 | `debug` | `false` | Timing log path or `true` |
 | `syntheticPrefixes` | `[]` | Literal prefixes marking synthetic messages |
 | `dimensionWeights` | per-dimension defaults | Override `{quality, cost, speed}` per dimension |
 | `lowConfidenceThreshold` | `0.15` | Classifier confidence below which uncertainty handling applies |
 | `sources` | — | Benchmark source selection |
 | `consultRouterAgent` | — | Legacy input alias; use `consultRouter` (canonical) for new configs |
+| `embeddingClassifier` | `false` | Local E5-small classifier for prompts without keyword evidence; up-only; needs optional `onnxruntime-node` and `@xenova/transformers` |
+| `embeddingDeadlineMs` | `5000` | Model load + inference budget; on expiry the keyword result stands |
+| `embeddingMinConfidence` | `0.15` | Minimum top-two prototype margin before the embedding verdict applies |
 
 ---
 

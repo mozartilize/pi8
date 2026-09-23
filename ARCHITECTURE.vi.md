@@ -168,7 +168,7 @@ Khi text hiển thị hoặc tool call đã được stream, router không bao g
 
 ### Chèn role
 
-Các role của pi-subagents (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) cung cấp dimension tối thiểu qua `ROLE_DIMENSIONS`. Router xây và lọc auth snapshot candidate khi refresh session, sau đó chấm điểm lại từng structured child nhìn thấy lúc spawn theo role và task. `assessTerminal(task)` chỉ được nâng floor của role, không được hạ; dimension weights đã cấu hình và context guard đang hoạt động được áp dụng trước khi chèn `provider/model` qua hook `tool_call`. Child bên trong workflow script là opaque với structured walker, nên call đó vẫn dùng default cấp tool theo thứ tự worker-first thay vì định tuyến task-aware từng child.
+Các role của pi-subagents (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) cung cấp dimension tối thiểu qua `ROLE_DIMENSIONS`. Router xây và lọc auth snapshot candidate khi refresh session, sau đó chấm điểm lại từng structured child nhìn thấy lúc spawn theo role và task. `assessTerminal(task)` chỉ được nâng floor của role, không được hạ; dimension weights đã cấu hình và context guard đang hoạt động được áp dụng trước khi chèn `provider/model` qua hook `tool_call`. Child bên trong workflow script là opaque với structured walker, nên call đó vẫn dùng default cấp tool theo thứ tự worker-first (worker → planner → researcher → advisor → reviewer) thay vì định tuyến task-aware từng child. `model` riêng của từng child trong script vẫn được ưu tiên, và lỗi của child trong script vẫn là tool error thông thường. Child reviewer luôn được giữ khác model family với worker đã chọn.
 
 Không ghi gì vào `settings.json` — việc chèn chỉ áp dụng cho từng spawn. Lựa chọn model tường minh và các pin của người dùng/project (`source` ≠ `pi8`) luôn được ưu tiên. Một child cụ thể không thể đổi model giữa chừng.
 
@@ -294,9 +294,9 @@ Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 | Key | Mặc định | Mô tả |
 |---|---|---|
 | `artificialAnalysisApiKey` | — | Được lưu bởi `/router-sync` |
-| `models` | `[]` (tất cả) | Allowlist: glob pattern `provider/id` |
-| `blacklist` | `[]` | Các exclude pattern được lưu bền vững |
-| `consultRouter` | `true` | Công tắc tổng cho semantic assessment |
+| `models` | `[]` (tất cả) | Allowlist: glob pattern `provider/id` (wildcard `*`, không phân biệt hoa thường; tên provider trần nghĩa là `provider/*`) |
+| `blacklist` | `[]` | Các exclude pattern được lưu bền vững, cú pháp giống `models` |
+| `consultRouter` | `true` | Công tắc tổng cho semantic assessment; `false` thì không gửi assessment request nào |
 | `consultModel` | — | Model assessor override, tùy chọn |
 | `assessmentDeadlineMs` | `1500` | Ngân sách end-to-end cho assessor |
 | `assessmentMaxInputChars` | `6000` | Giới hạn input của assessor |
@@ -305,13 +305,17 @@ Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
 | `depthEscalationTokens` | `32768` | Ngưỡng context token |
 | `prompt` | `true` | Thông báo TUI khi đổi model |
 | `semi` | `false` | Hỏi trước khi chuyển khỏi model vừa serve |
-| `switchMargin` | `0.15` | Giới hạn cache-preservation cho incumbent |
+| `switchMargin` | `0.15` | Giới hạn cache-preservation cho incumbent; `0` tắt bonus |
+| `routerContextWindow` | window lớn nhất trong các model routable | Context window mà `router/auto` quảng bá. Pi chỉnh compaction theo giá trị này, nên mặc định làm compaction chậm lại và kéo session dài về các model window lớn. Giá trị nhỏ hơn giữ các model window nhỏ đủ điều kiện lâu hơn. Giá trị lớn hơn mặc định bị clamp về mặc định. |
 | `debug` | `false` | Đường dẫn timing log hoặc `true` |
 | `syntheticPrefixes` | `[]` | Các literal prefix đánh dấu synthetic message |
 | `dimensionWeights` | mặc định theo từng dimension | Override `{quality, cost, speed}` cho từng dimension |
 | `lowConfidenceThreshold` | `0.15` | Ngưỡng classifier confidence mà dưới đó áp dụng uncertainty handling |
 | `sources` | — | Lựa chọn nguồn benchmark |
 | `consultRouterAgent` | — | Alias đầu vào cũ; dùng `consultRouter` (chính tắc) cho config mới |
+| `embeddingClassifier` | `false` | Classifier E5-small local cho prompt không có bằng chứng keyword; chỉ nâng lên; cần các package tùy chọn `onnxruntime-node` và `@xenova/transformers` |
+| `embeddingDeadlineMs` | `5000` | Ngân sách cho load model + inference; hết hạn thì giữ kết quả keyword |
+| `embeddingMinConfidence` | `0.15` | Margin tối thiểu giữa hai prototype score cao nhất để verdict embedding được áp dụng |
 
 ---
 
