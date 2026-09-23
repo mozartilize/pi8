@@ -144,7 +144,7 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
       cost: { input: 10, output: 40 },
     });
     const decision = pickBest([withTask, withoutTask], 'gather');
-    expect(decision.reason).toContain('[cost-basis: per-1m]');
+    expect(decision.reason).toContain('[cost per 1M tokens]');
     // Per-1M basis: A is ~20x cheaper, so A wins despite A being 50x more
     // expensive per task.
     expect(decision.chosen).toBe('test/a');
@@ -172,14 +172,14 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
       cost: { input: 10, output: 40 },
     });
     const decision = pickBest([a, b], 'gather');
-    expect(decision.reason).toContain('[cost-basis: task]');
+    expect(decision.reason).toContain('[cost per task]');
     expect(decision.chosen).toBe('test/b');
 
     // Same set with one costPerTask removed: mixed coverage degrades to
     // per-1M and the winner flips back to A.
     const bMixed = { ...b, bench: { ...b.bench!, costPerTask: undefined } };
     const mixed = pickBest([a, bMixed], 'gather');
-    expect(mixed.reason).toContain('[cost-basis: per-1m]');
+    expect(mixed.reason).toContain('[cost per 1M tokens]');
     expect(mixed.chosen).toBe('test/a');
   });
 
@@ -199,7 +199,7 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
       cost: { input: 1, output: 1 },
     });
     const taskDecision = pickBest([negativeTask, valid], 'gather');
-    expect(taskDecision.reason).toContain('[cost-basis: per-1m]');
+    expect(taskDecision.reason).toContain('[cost per 1M tokens]');
     expect(taskDecision.chosen).toBe(valid.registryId);
 
     const negativePartial = candidate('test/negative-partial', {
@@ -231,7 +231,7 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
       cost: { input: 100, output: 100 },
     });
     const decision = pickBest([a, b, c], 'gather');
-    expect(decision.reason).toContain('[cost-basis: per-1m]');
+    expect(decision.reason).toContain('[cost per 1M tokens]');
     // Under per-1M, a and b tie on cost (same blended price) and quality; the
     // canonical-key tie-break decides. Both a and b must beat c.
     expect(decision.chosen).toBe('test/a');
@@ -271,7 +271,7 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
       cost: { input: 0.1, output: 0.1 },
     });
     const decision = pickBest([medium, max, weak], 'gather');
-    expect(decision.reason).toContain('[cost-basis: task]');
+    expect(decision.reason).toContain('[cost per task]');
     expect(decision.chosen).toBe('test/a:medium');
   });
 });
@@ -753,7 +753,7 @@ describe('scorer', () => {
       expect(resolveThinkingLevel(model, 'max', 'plan')).toBe('high');
     });
 
-    // ── Effort floor (rule 3): a scored effort may raise the floor, never lower it ──
+    // ── Minimum effort: a scored effort may raise it, never lower it ──
 
     it('serves a measured effort at or above the dimension floor', () => {
       const model = candidate('test/model-1', {
@@ -767,7 +767,7 @@ describe('scorer', () => {
       expect(chooseThinkingLevel(model, 'gather')).toBe('high');
     });
 
-    it('raises a measured effort below the dimension floor to the floor (rule 3 pin)', () => {
+    it('raises a measured effort below the dimension minimum to that minimum', () => {
       const model = candidate('test/model-1', {
         reasoning: true,
         effort: 'low',

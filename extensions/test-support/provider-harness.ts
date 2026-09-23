@@ -333,7 +333,7 @@ export function expectDecisionContract(opts: {
 
   const text = opts.ui.join('\n');
   if (typeof opts.match.dimension === 'string') {
-    expect(text).toContain(`dimension:  ${opts.match.dimension}`);
+    expect(text).toContain(`task type:  ${opts.match.dimension}`);
   }
   if (typeof opts.match.chosen === 'string') {
     expect(text).toContain(`top pick:   ${opts.match.chosen}`);

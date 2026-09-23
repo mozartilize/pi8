@@ -657,7 +657,7 @@ async function runEntryAssessment(
 
   // On cache hit, dimension and cause were already adopted on the first invocation.
   // Re-running adoptAssessment on later tool-loop turns would allow downward adoption
-  // to cascade across multiple turns, violating Rule 12.
+  // to cascade across multiple turns for the same user entry.
   if (!entry.cacheHit && state.assessment) {
     const adoption = adoptAssessment({
       heuristic: dimension,
@@ -1117,7 +1117,7 @@ function scoreRouterTurn(args: {
   decision.provenanceCounts = turnInput.provenanceCounts;
   try {
     // Counterfactual baseline for /router-report. Never blocks
-    // routing (rule 2): a failure here only omits baseline
+    // routing: a failure here only omits baseline
     // telemetry for the turn.
     decision.baseline = pickBaseline(routableCandidates, decision.dimension, config.baselineModel);
   } catch {
@@ -1312,7 +1312,7 @@ function pinOnThinkingChange(
       );
     }
   } catch {
-    // A failed pin leaves ordinary routing in place (rule 2).
+    // A failed pin leaves ordinary routing in place.
   }
 }
 
@@ -1375,7 +1375,7 @@ function pinnedScored(args: {
       prepared.config.baselineModel,
     );
   } catch {
-    // Best-effort report telemetry only (rule 2).
+    // Best-effort report telemetry only; failure must not stop routing.
   }
   session.setLastDecision(decision);
   return { decision, routableCandidates, requestedReasoning: base.requestedReasoning };
@@ -1389,7 +1389,7 @@ type SemiOutcome = { kind: 'proceed' } | { kind: 'override'; scored: ScoredTurn 
  * delegating. Runs once per turn, after scoring, transforming the already-
  * scored decision in place (never a second `scoreRouterTurn`, which would
  * double-advance the work phase). Unexpected failures degrade to the router's
- * pick (rule 2); dismissing the dialog cancels the turn instead of switching.
+ * pick; dismissing the dialog cancels the turn instead of switching.
  */
 async function resolveSemiGate(args: {
   prepared: PreparedTurn;
@@ -1408,7 +1408,7 @@ async function resolveSemiGate(args: {
   const aborted = { kind: 'terminal', reason: 'aborted', message: 'Model switch cancelled.' } as const;
   try {
     if (!prepared.config.semi) return { kind: 'proceed' };
-    // Same-entry tool-loop continuations are not a new switch (rule 12). A
+    // Same-entry tool-loop continuations are not a new switch. A
     // declined switch is reused via `getSemiHold` before scoring; an accepted
     // one sticks through ordinary incumbent scoring.
     if (prepared.intent.cacheHit && !args.fallback) return { kind: 'proceed' };

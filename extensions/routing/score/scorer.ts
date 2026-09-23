@@ -704,7 +704,7 @@ export function pickEscalation(
   return {
     ...decision,
     cause: 'capability-escalation',
-    reason: `${decision.reason} [escalation from ${fromModel}]`,
+    reason: `${decision.reason} [stronger than ${fromModel}]`,
   };
 }
 
@@ -979,7 +979,7 @@ function applySwitchBonus(scored: ScoredCandidate[], opts: ScoreOpts): void {
 
   const incumbentCost = incumbentScored?.cost;
   // A non-finite or negative cost field is garbage the registry never emits,
-  // but if one slips through it must not poison the score (rule 2): NaN
+  // but if one slips through it must not poison the score: NaN
   // propagates through Math.max/Math.min and would surface as a `scored NaN`
   // decision. Fall back to `input` only when `cacheWrite` is unusable, and
   // drop retention credit entirely unless both endpoints are real prices.
@@ -1099,7 +1099,7 @@ function assembleDecision(
   return {
     dimension,
     chosen: candidateKey(top),
-    reason: `scored ${top.score.toFixed(3)} (q:${top.qualityComponent.toFixed(2)} c:${top.costComponent.toFixed(2)} s:${top.speedComponent.toFixed(2)}) [cost-basis: ${costBasis}]${routedUp ? ' [routed-up]' : ''}`,
+    reason: `score ${top.score.toFixed(3)} (quality ${top.qualityComponent.toFixed(2)}, cost ${top.costComponent.toFixed(2)}, speed ${top.speedComponent.toFixed(2)}) [cost ${costBasis === 'task' ? 'per task' : 'per 1M tokens'}]${routedUp ? ' [upgraded]' : ''}`,
     ...(candidateDiagnostics.length > 0 ? { candidateDiagnostics } : {}),
     confidence: 0.8, // placeholder — overwritten by classifier
     routedUp,
@@ -1183,7 +1183,7 @@ const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium'
 
 /**
  * Minimum reasoning effort per dimension — a FLOOR, not an assignment. The
- * scorer may serve any measured effort at or above it (rule 3: a scored
+ * scorer may serve any measured effort at or above it (a scored
  * effort may raise the floor, never lower it). A model with no measurement
  * at or above the floor keeps today's behavior: send the floor level,
  * clamped by thinkingLevelMap.
@@ -1236,7 +1236,7 @@ export function levelFrom(
 
 /**
  * Raise a measured effort to the dimension floor when it sits below it. The
- * floor is the only downward protection on the effort axis (rule 3); scoring
+ * floor is the only downward protection on the effort axis; scoring
  * already guarantees chain entries respect it, so this is defense in depth
  * for the delegation loop.
  */
@@ -1257,7 +1257,7 @@ export function chooseThinkingLevel(
   if (!c?.reasoning) return undefined;
   const floor = MIN_THINKING_BY_DIMENSION[dimension];
   // A measured effort at or above the dimension floor is the router's choice;
-  // below the floor it is raised to the floor (rule 3), never sent as-is.
+  // below the floor it is raised to the floor, never sent as-is.
   if (c.effort != null) {
     return levelFrom(clampEffortToFloor(c.effort, dimension), c);
   }

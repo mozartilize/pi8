@@ -246,7 +246,7 @@ describe('registry-only role routing', () => {
       });
       await sessionStart!({ reason: 'new' }, ctx);
 
-      // A concrete-model session must be a complete no-op (hard rule 9): the
+      // A concrete-model session must not probe credentials: the
       // sweep can trigger an OAuth token refresh under Pi's credential-store
       // lock (pi#7508) even when the router is inert.
       expect(calls()).toBe(before);
@@ -545,7 +545,7 @@ describe('region-restricted parallel reviewers', () => {
       { ...ctx, modelRegistry: { getAvailable: () => models as unknown as unknown[] } },
     );
 
-    // Provider-wide (AGENTS rule 8): the whole provider is excluded, not just the model.
+    // A shared usage limit excludes the whole provider, not just one model.
     expect(defaultRouterSession.getBlacklistedProviders().has('gamma')).toBe(true);
 
     // The next spawn skips the capped provider and routes to the sibling.
@@ -752,7 +752,7 @@ describe('assessment lifecycle resets', () => {
     const beforeAgentStart = handlers.get('before_agent_start');
     expect(beforeAgentStart).toBeDefined();
 
-    // Concrete session model: complete no-op (hard rule 9).
+    // A concrete model must not update router skill state.
     defaultRouterSession.reset();
     beforeAgentStart?.(
       { systemPromptOptions: { skills: ['writing-plans', { name: 'context-mode' }] } },
@@ -901,7 +901,7 @@ describe('mutation gate hooks', () => {
       gateBlockedInvocation: 1,
     });
     expect(formatDecisionDetail(defaultRouterSession.getLastDecision(), undefined).join('\n')).toContain(
-      'mutation blocked at invocation 1',
+      'held at provider call 1 until a model strong enough for the final step serves',
     );
   });
 
@@ -962,7 +962,7 @@ describe('mutation gate hooks', () => {
       mutationGateEscaped: true,
       capabilityDegraded: true,
     });
-    expect(formatDecisionDetail(defaultRouterSession.getLastDecision(), undefined).join('\n')).toContain('escaped');
+    expect(formatDecisionDetail(defaultRouterSession.getLastDecision(), undefined).join('\n')).toContain('then allowed without a strong enough model');
   });
 
   it('fails open without changing state when the gate throws', async () => {

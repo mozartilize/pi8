@@ -6,7 +6,14 @@
  * /router status and the per-session widget.
  */
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { RoutingDecision, ServedCapabilityMeta } from '../types.js';
+import type {
+  AssessmentFallbackReason,
+  DecisionCause,
+  QualityExclusionReason,
+  RoutingDecision,
+  ServedCapabilityMeta,
+  WorkPhase,
+} from '../types.js';
 import type { EmbeddingStats } from '../serve/router-session-state.js';
 
 export interface ServedInfo {
@@ -51,14 +58,55 @@ export function formatStatus(
   }
   const parts = [`auto:${decision.dimension}`, '→', servedKey(served)];
   if (served.viaFallback) {
-    const rank = served.fallbackRank && served.fallbackRank > 1 ? ` ${served.fallbackRank}` : '';
-    parts.push(`(FALLBACK${rank}!)`);
+    const rank = served.fallbackRank && served.fallbackRank > 1 ? ` #${served.fallbackRank}` : '';
+    parts.push(`(fallback${rank})`);
   }
-  if (decision.routedUp && decision.routedPickChanged) parts.push('(routed-up)');
-  if (decision.routedDown && decision.routedPickChanged) parts.push('(routed-down)');
-  if (decision.contextPressure) parts.push('(context-pressure)');
+  if (decision.routedUp && decision.routedPickChanged) parts.push('(upgraded)');
+  if (decision.routedDown && decision.routedPickChanged) parts.push('(downgraded)');
+  if (decision.contextPressure) parts.push('(context nearly full)');
   return parts.join(' ');
 }
+
+/** Plain-language label for each decision cause; the log keeps the raw value. */
+const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
+  heuristic: 'keyword classifier',
+  'continuation-context': 'keyword classifier, using earlier messages for a short follow-up',
+  'router-consult': 'LLM assessment',
+  'embedding-classify': 'multilingual embedding classifier',
+  'error-fallback': 'a fallback model served after the top pick failed',
+  'no-data': 'no benchmark data; ranked by price and context window',
+  'capability-escalation': 'stronger model, picked by quality alone',
+  'trajectory-escalation': 'stronger model, because the previous one struggled',
+  'context-depth': 'long conversation raised the task type',
+  'self-healing-gap': 'subagent tool gap',
+  'manual-override': 'manual pin',
+  resume: 'reused the route from before the pin',
+  'semi-hold': 'kept the current model (semi mode)',
+};
+
+const EXCLUSION_LABELS: Readonly<Record<QualityExclusionReason, [label: string, text: string]>> = {
+  'below-task-floor': ['demoted', 'too weak for this task type'],
+  'below-sanity-floor': ['demoted', 'weak general ability'],
+  'below-knowledge-floor': ['demoted', 'general-knowledge score below the minimum'],
+  'unknown-quality': ['demoted', 'no benchmark data for this task'],
+  promoted: ['promoted', 'much cheaper and strong enough'],
+};
+
+const ASSESSMENT_FALLBACK_LABELS: Readonly<Record<AssessmentFallbackReason, string>> = {
+  expiry: 'timed out',
+  auth: 'no credentials',
+  parse: 'unreadable reply',
+  error: 'provider error',
+  'no-assessor': 'no model available to assess',
+  disabled: 'turned off',
+};
+
+const PHASE_LABELS: Readonly<Record<WorkPhase, string>> = {
+  answer: 'answering',
+  inspect: 'investigating',
+  reason: 'reasoning',
+  mutate: 'editing',
+};
 
 /** Multi-line detail for `/router-status`. */
 export function formatDecisionDetail(
@@ -72,18 +120,21 @@ export function formatDecisionDetail(
   const chain = decision.fallbackChain.slice(0, 5).join(' → ');
   return [
     `Last turn served by: ${servedModel}`,
-    `  dimension:  ${decision.dimension} (confidence ${decision.confidence.toFixed(2)})`,
+    `  task type:  ${decision.dimension} (confidence ${decision.confidence.toFixed(2)})`,
     `  top pick:   ${decision.chosen}`,
     `  thinking:   ${served?.thinkingLevel ?? 'off'}`,
+    `  cause:      ${CAUSE_LABELS[decision.cause] ?? decision.cause}`,
     `  reason:     ${decision.reason}`,
     ...routingNotes(decision, served),
     ...assessmentLines(decision),
-    ...decision.candidateDiagnostics?.flatMap((diagnostic) =>
-      diagnostic.excludedReason ? [`  gate:       ${diagnostic.candidateKey} ${diagnostic.excludedReason}`] : [],
-    ) ?? [],
+    ...decision.candidateDiagnostics?.flatMap((diagnostic) => {
+      if (!diagnostic.excludedReason) return [];
+      const [label, text] = EXCLUSION_LABELS[diagnostic.excludedReason];
+      return [`  ${`${label}:`.padEnd(11)} ${diagnostic.candidateKey} (${text})`];
+    }) ?? [],
     ...(decision.multiWork ? multiWorkLines(decision.multiWork) : []),
     ...(decision.trajectoryFriction ? [trajectoryLine(decision.trajectoryFriction)] : []),
-    ...(decision.switched ? ['  note:       switched model from the previous turn'] : []),
+    ...(decision.switched ? ['  note:       switched models from the previous turn'] : []),
     ...(decision.contextPressure ? contextPressureLines(decision.contextPressure) : []),
     ...(chain ? [`  chain:      ${chain}`] : []),
   ];
@@ -93,22 +144,22 @@ function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined)
   const lines: string[] = [];
   if (served?.viaFallback) {
     const rank = served.fallbackRank && served.fallbackRank > 1
-      ? ` (served by rank ${served.fallbackRank} in the fallback chain)`
+      ? ` (#${served.fallbackRank} in the fallback chain)`
       : '';
-    lines.push(`  note:       top pick failed; served by a fallback candidate${rank}`);
+    lines.push(`  note:       top pick failed; a fallback model served${rank}`);
   }
   if (decision.routedUp) {
     lines.push(
       decision.routedPickChanged
-        ? '  note:       routed up (dimension raised and a stronger model was served; see cause)'
-        : '  note:       dimension raised (see cause), but the served model was already the top pick — no stronger model available',
+        ? '  note:       task type raised, so a stronger model served (see cause)'
+        : '  note:       task type raised (see cause), but no stronger model was available',
     );
   }
   if (decision.routedDown) {
     lines.push(
       decision.routedPickChanged
-        ? '  note:       routed down (dimension lowered and a cheaper model was served; see assessment)'
-        : '  note:       dimension lowered (see assessment), but the served model was unchanged',
+        ? '  note:       task type lowered by the assessment, so a cheaper model served'
+        : '  note:       task type lowered by the assessment; the served model did not change',
     );
   }
   return lines;
@@ -118,53 +169,57 @@ function assessmentLines(decision: RoutingDecision): string[] {
   const lines: string[] = [];
   const a = decision.assessment;
   if (a) {
+    const scope = a.scope === 'bounded' ? 'limited scope' : 'open-ended scope';
     lines.push(
-      `  assessment: ${a.kind}/${a.complexity}/${a.scope}, ` +
-      `compound=${a.compound ? 'yes' : 'no'}, ${a.confidence} (${a.model}, ${a.ms}ms, $${a.costUsd.toFixed(5)})`,
+      `  assessment: ${a.kind}, ${a.complexity} complexity, ${scope}, ${a.compound ? 'multi-step' : 'single step'}, ` +
+      `${a.confidence} confidence (${a.model}, ${a.ms} ms, $${a.costUsd.toFixed(5)})`,
       `  rationale:  ${a.reasoning}`,
     );
     if (a.vetoedLatch) {
-      lines.push('  note:       depth escalation vetoed by a bounded high-confidence assessment');
+      lines.push('  note:       long-conversation upgrade skipped: a confident assessment judged the task limited in scope');
     }
   }
   if (decision.fallbackReason) {
-    lines.push(`  note:       assessment unavailable (${decision.fallbackReason}); heuristic retained`);
-  }
-  if (decision.cause === 'no-data') {
-    lines.push('  note:       no-data (no routable candidate had benchmark data)');
+    const why = ASSESSMENT_FALLBACK_LABELS[decision.fallbackReason] ?? decision.fallbackReason;
+    lines.push(`  note:       assessment unavailable (${why}); kept the keyword result`);
   }
   return lines;
 }
 
 function multiWorkLines(mw: NonNullable<RoutingDecision['multiWork']>): string[] {
   const lines = [
-    `  terminal:   ${mw.terminal.kind}/${mw.terminal.complexity}, ${mw.terminalBand} band, phase ${mw.phase} (invocation ${mw.providerInvocation})`,
+    `  final step: ${mw.terminal.kind}, ${mw.terminal.complexity} complexity, needs a ${mw.terminalBand}-level model; ` +
+    `now ${PHASE_LABELS[mw.phase]} (provider call ${mw.providerInvocation})`,
   ];
   if (mw.servedCapability) {
-    const ratio = mw.servedCapability.taskRatio != null ? mw.servedCapability.taskRatio.toFixed(2) : 'unknown';
-    lines.push(`  served-cap: ratio ${ratio}, clears floor: ${mw.servedCapability.clearsTerminalFloor}`);
+    const { taskRatio, clearsTerminalFloor } = mw.servedCapability;
+    const strength = taskRatio != null ? `${(taskRatio * 100).toFixed(0)}% of the strongest model` : 'strength unknown';
+    const verdict = clearsTerminalFloor === 'unknown'
+      ? 'unknown whether strong enough'
+      : clearsTerminalFloor ? 'strong enough' : 'not strong enough';
+    lines.push(`  served:     ${strength}; ${verdict} for the final step`);
   }
   if (mw.mutationGateEscaped) {
-    const degraded = mw.capabilityDegraded ? ' (capability degraded)' : '';
-    lines.push(`  gate:       blocked invocation ${mw.gateBlockedInvocation}, escaped${degraded}`);
+    const weaker = mw.capabilityDegraded ? ' without a strong enough model' : '';
+    lines.push(`  edits:      held at provider call ${mw.gateBlockedInvocation}, then allowed${weaker}`);
   } else if (mw.gateBlockedInvocation !== undefined) {
-    lines.push(`  gate:       mutation blocked at invocation ${mw.gateBlockedInvocation}, awaiting terminal capability`);
+    lines.push(`  edits:      held at provider call ${mw.gateBlockedInvocation} until a model strong enough for the final step serves`);
   } else if (mw.capabilityDegraded) {
-    lines.push('  gate:       mutation allowed with degraded capability');
+    lines.push('  edits:      allowed without a model strong enough for the final step');
   }
   return lines;
 }
 
 function trajectoryLine(tf: NonNullable<RoutingDecision['trajectoryFriction']>): string {
-  if (tf.unavailable) return `  trajectory: tfi ${tf.tfi.toFixed(2)} from ${tf.fromModel}; no stronger candidate`;
-  const kinds = tf.signals.map((signal) => `${signal.kind}:${signal.severity}`).join(', ');
-  return `  trajectory: tfi ${tf.tfi.toFixed(2)} from ${tf.fromModel}${kinds ? ` (${kinds})` : ''}`;
+  if (tf.unavailable) return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}; no stronger model available`;
+  const kinds = tf.signals.map((signal) => `${signal.severity} ${signal.kind.replaceAll('-', ' ')}`).join(', ');
+  return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}${kinds ? ` (${kinds})` : ''}`;
 }
 
 function contextPressureLines(pressure: NonNullable<RoutingDecision['contextPressure']>): string[] {
   const pct = (pressure.usageRatio * 100).toFixed(0);
   return [
-    `  note:       context pressure ${pct}% >= ${(pressure.threshold * 100).toFixed(0)}%`,
+    `  note:       context ${pct}% full (advice starts at ${(pressure.threshold * 100).toFixed(0)}%)`,
     `  advice:     ${pressure.suggestion}`,
   ];
 }
@@ -179,7 +234,7 @@ export function formatAssessmentSpend(costUsd: number): string {
 /** One-line embedding-classifier tally for `/router-status`. */
 export function formatEmbeddingStats(s: EmbeddingStats): string {
   const kept = s.fired - s.promoted - s.abstainedLowConf;
-  return `embedding: fired ${s.fired} (promoted ${s.promoted}, kept ${kept}, abstained-lowconf ${s.abstainedLowConf}), degraded ${s.degraded}`;
+  return `embedding classifier: ran ${s.fired} (raised ${s.promoted}, unchanged ${kept}, too unsure ${s.abstainedLowConf}), failed ${s.degraded}`;
 }
 
 /**
@@ -224,7 +279,7 @@ export function notifyRouting(
     const parts = [`🚥 pi8 → ${served.registryId}${level}`];
     if (decision) parts.push(`(${decision.dimension})`);
     if (served.viaFallback) parts.push('· fallback');
-    if (decision?.routedUp && decision.routedPickChanged) parts.push('· routed-up');
+    if (decision?.routedUp && decision.routedPickChanged) parts.push('· upgraded');
     ctx?.ui?.notify?.(parts.join(' '), 'info');
   } catch {
     // Notifications are cosmetic; never break a turn.

@@ -1475,7 +1475,7 @@ describe('pre-output reasoning-loop handoff', () => {
   });
 
   it('does not blacklist or strike a struggling source when nothing stronger is reachable', async () => {
-    // Rule 8: a severe pre-output loop is capability struggle, not a model
+    // A severe pre-output loop is capability struggle, not a model
     // defect. With no reachable stronger target the source runs to its
     // answerless finish and the walk recovers to a weaker model, but the source
     // must not be blacklisted and its provider must not be struck.
@@ -1497,9 +1497,8 @@ describe('pre-output reasoning-loop handoff', () => {
   });
 
   it('does not blacklist a lone struggling source with no fallback', async () => {
-    // Rule 8 at the starkest: a single-candidate chain has nowhere to recover.
-    // The turn fails, but blacklisting the model for the whole session because
-    // one turn exceeded it is exactly the penalty rule 8 forbids.
+    // A single-candidate chain has nowhere to recover. Failure on one turn
+    // must not blacklist a model for the rest of the session.
     const h = createDelegationHarness({
       chain: ['alpha/loop'],
       candidates: [loopSource],

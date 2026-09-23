@@ -145,7 +145,7 @@ export function evaluateMutationCall(input: MutationCallInput): MutationCallDeci
 
   // Terminal-clearing or genuinely unknown quality both proceed without a
   // gate: unknown capability is allowed to mutate but earns no promotion
-  // credit (rule 3), and cleared capability has nothing left to wait for.
+  // credit, and cleared capability has nothing left to wait for.
   if (clearance === true || clearance === 'unknown') {
     return {
       block: false,

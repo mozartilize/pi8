@@ -150,7 +150,8 @@ const EFFORT_LABELS: ReadonlySet<string> = new Set([
  * AA formats it as free text: `GPT-5.6 Luna (low)`, `Claude Opus 5 (Adaptive
  * Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)`. The parse
  * fails closed: an unrecognized label yields undefined (unknown effort, never
- * promoted) rather than a guess.
+ * promoted) rather than a guess. Check incoming labels after each benchmark
+ * re-sync so supported effort levels do not silently become unknown.
  */
 export function parseEffort(name: string | undefined): ModelThinkingLevel | undefined {
   if (!name) return undefined;

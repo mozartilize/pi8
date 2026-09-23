@@ -2,6 +2,17 @@
 
 Kiến trúc ở cấp độ triển khai của router. Để xem hướng dẫn thiết lập và lệnh dành cho người dùng, hãy xem [`README.md`](README.md). Để xem quy ước dành cho người đóng góp, hãy xem [`AGENTS.md`](AGENTS.md).
 
+## Thuật ngữ và các mức tối thiểu
+
+- **Loại công việc (`Dimension`)**: `lightweight`, `gather`, `plan`, `implement` hoặc `review`. **Bậc năng lực (`tier`)**: 0 (đủ điều kiện theo chất lượng đã đo), 1 (chưa biết chất lượng), 2 (đã đo nhưng chưa đạt yêu cầu). **Nhóm năng lực (`band`)**: `economy`, `standard`, `strong`, `frontier`, dùng cho bước cuối của công việc nhiều bước. Đây là ba thang khác nhau; nâng loại công việc không đồng nghĩa nâng tier.
+- **Bước cuối (`terminal` trong code)**: kết quả cần có sau khi điều tra, thường là sửa file. `terminal` của stream lại là sự kiện kết thúc một lần thử model. **Giai đoạn điều tra (`inspect`)** diễn ra trước khi sửa. Mức ưu đãi có giới hạn cho phép dùng model thấp hơn yêu cầu của bước cuối một band cho đến khi bắt đầu sửa.
+- **Economic promotion**: cho phép model tier-2 rẻ hơn tham gia khi chất lượng *đã đo* đạt tối thiểu 70% cho loại công việc và thỏa các điều kiện khác ở §2. Chất lượng ước lượng không đủ điều kiện.
+- **Trajectory friction (TFI)**: dấu hiệu khách quan cho thấy lần thử bị kẹt, như lặp lại thao tác hoặc kiểm tra liên tục thất bại; không đánh giá ý nghĩa câu trả lời. **Provider circuit/strike**: bộ đếm lỗi của provider; ba strike tạm loại provider. Giới hạn sử dụng chung sẽ loại provider ngay.
+- **Session generation/currentness**: generation đổi khi reset session; kết quả bất đồng bộ phải kiểm tra generation trước khi ghi trạng thái. **Assessment egress**: phần ngữ cảnh công việc giới hạn gửi đến provider đánh giá riêng. **Provenance** cho biết văn bản đến từ người dùng, trợ lý hay bản tóm tắt; **output ontology** là tập giá trị được phép trong kết quả đánh giá có cấu trúc.
+- **Sidecar**: file nhật ký quyết định cạnh transcript của Pi. **Seam**: điểm thay thế path, timeout hoặc runtime dependency dành cho test.
+
+Mỗi *mức tối thiểu* giới hạn một thứ khác nhau: **loại công việc tối thiểu theo heuristic** ngăn assessment thiếu chắc chắn hạ kết quả phân loại keyword; **loại công việc tối thiểu theo role** giới hạn lựa chọn subagent; **loại công việc tối thiểu của model hiện tại** giữ loại công việc, còn **thinking tối thiểu của model hiện tại** giữ mức suy luận riêng. **Thinking tối thiểu theo loại công việc** đặt mức suy luận cho mỗi loại. **Năng lực tối thiểu của assessor** giới hạn model được dùng để đánh giá. Với chất lượng model, **mức task cho tier 0** mặc định là 85% so với peer mạnh nhất, **mức economic promotion** là 70%, và **mức broad-capability** là 45% cho implement/review. Công việc nhiều bước dùng **mức năng lực của bước cuối** theo band; **mức năng lực của giai đoạn điều tra** thấp hơn một band khi được ưu đãi. Hãy nói rõ thứ bị giới hạn thay vì chỉ viết “floor”.
+
 ## Tổng quan pipeline
 
 ```
@@ -100,7 +111,7 @@ Promotion chỉ được đánh giá cho `gather`, `implement` và `review`. `pl
 
 Cơ sở chi phí theo mỗi call: dùng `costPerTask` khi mọi candidate đều có; nếu không thì dùng giá pha trộn `$/1M` token (input×0,25 + output×0,75). Giá trong registry là nguồn có thẩm quyền khi tồn tại; giá benchmark là fallback. Model miễn phí có benchmark data được xem là dữ liệu thực (zero-cost là chủ ý); model miễn phí không có benchmark data được xem là chưa biết (không được hưởng cost credit).
 
-### Switch penalty
+### Ưu tiên giữ cache của model hiện tại
 
 Model đang phục vụ nhận cache-preservation bonus được định giá từ kinh tế học registry của chính incumbent, không phải một mức flat unitless: `perTokenLoss = cacheWrite (hoặc input, nếu không có cacheWrite) − cacheRead`, giá trị đô-la của một token cache còn ấm. Khớp đúng incumbent được credit `min(estContextTokens × perTokenLoss, switchMargin)` — toàn bộ cuộc hội thoại. Đổi effort trên cùng model chỉ được credit `min(staticPrefixTokens × perTokenLoss, switchMargin)`, vì đổi effort làm invalidate message blocks nhưng cache của system/tool prefix vẫn ấm; candidate cùng model không có effort đo được (call shape mặc định của model) nhận full credit như khớp đúng incumbent. Đổi sang model khác nhận credit 0 — đổi model không có cache entry nào để giữ. Khi registry entry của incumbent không công bố đủ giá để tính `perTokenLoss` (thiếu `cacheRead`, và thiếu cả `cacheWrite`/`input`), không có retention credit nào được cấp. Bonus bị giới hạn bởi `switchMargin` (mặc định 0,15). Chỉ áp dụng khi caller cung cấp incumbent và không đặt `isSubagentSpawn`; role injection không cung cấp cả hai, vì vậy subagent spawn không bao giờ nhận bonus này (không có cache để mất).
 
@@ -189,9 +200,9 @@ Trước khi gán role cho subagent, một credential probe theo provider (timeo
 Cơ chế này bao phủ một chuyển tiếp mà classifier không nhìn thấy: một gather session liên tục tích lũy context đã trở thành quá trình tổng hợp trên material đã thu thập, loại công việc mà các tier rẻ xử lý kém.
 
 - **Trigger**: live context vượt `depthEscalationTokens` (mặc định 32768), pre-depth dimension là `lightweight`/`gather`, và cause thuộc nhóm depth-passive (`heuristic`, `continuation-context`, `no-data`, hoặc `router-consult`)
-- **Effect**: nâng một tier cho invocation đó (cause: `context-depth`)
+- **Effect**: nâng loại công việc một bước cho invocation đó (cause: `context-depth`)
 - **Thuộc tính**: chỉ nâng lên, không bao giờ cache, đánh giá theo từng invocation
-- **Latch veto**: lần chuyển depth-latch đầu tiên trong mỗi session có thể bị veto bởi assessment confidence cao, `scope: bounded`. Veto nghĩa là từ chối escalation — dimension và cause giữ nguyên — và tái sử dụng assessment verdict hiện có của entry thay vì dispatch assessment thứ hai. Mọi failure path (timeout, không có assessor, reply không parse được, assessment bị tắt) đều escalation mà không có veto.
+- **Ngoại lệ một lần**: chỉ lần nâng này đầu tiên trong mỗi session mới có thể bị hủy khi assessment có confidence cao và `scope: bounded`. Loại công việc và cause giữ nguyên; router dùng lại kết quả đánh giá của entry này, không gửi yêu cầu thứ hai. Nếu assessment timeout, không có hoặc bị tắt, hay trả về kết quả không hợp lệ, việc nâng vẫn diễn ra.
 
 ---
 

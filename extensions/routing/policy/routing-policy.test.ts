@@ -252,7 +252,7 @@ describe('resolveRoutingDecision', () => {
       // context pressure is advisory: metadata is attached but cause must stay no-data
       expect(result.decision.cause).toBe('no-data');
       expect(result.decision.contextPressure).toBeDefined();
-      expect(result.decision.reason).toContain('context-pressure');
+      expect(result.decision.reason).toContain('[context nearly full: prefer a fresh planner subagent]');
     });
 
     it('does not change context-depth cause when pressure also fires', () => {
@@ -518,7 +518,7 @@ describe('resolveRoutingDecision', () => {
           candidates: registryOnlyCandidates,
         }),
       );
-      expect(result.decision.reason).toContain('context-depth: 100000 tokens');
+      expect(result.decision.reason).toContain('long conversation: 100000 tokens');
     });
   });
 
@@ -635,7 +635,7 @@ describe('incumbent capability floor', () => {
     );
     expect(result.decision.chosen).toBe('bench/strong');
     expect(result.decision.fallbackChain[0]).toBe('bench/strong');
-    expect(result.decision.reason).toContain('incumbent-floor');
+    expect(result.decision.reason).toContain('[kept current model: stronger for this task]');
   });
 
   it('carries the incumbent resolved dimension as an up-only effort floor', () => {
@@ -653,7 +653,7 @@ describe('incumbent capability floor', () => {
       }),
     );
     expect(result.decision.effortFloorDimension).toBe('implement');
-    expect(result.decision.reason).toContain('incumbent-effort-floor');
+    expect(result.decision.reason).toContain("[kept current model's thinking level]");
   });
 
   it('does not lower the effort floor when the carried dimension is weaker', () => {
@@ -733,7 +733,7 @@ describe('incumbent capability floor', () => {
       }),
     );
     expect(result.decision.chosen).toBe('bench/strong');
-    expect(result.decision.reason).toContain('incumbent-floor');
+    expect(result.decision.reason).toContain('[kept current model: stronger for this task]');
   });
 
   it('stands down for an applied trajectory handoff and never restores the excluded source', () => {
@@ -794,7 +794,7 @@ describe('incumbent capability floor', () => {
     );
     expect(result.decision.dimension).toBe('implement');
     expect(result.decision.chosen).toBe('bench/top');
-    expect(result.decision.reason).toContain('incumbent-floor');
+    expect(result.decision.reason).toContain('[kept current model: stronger for this task]');
   });
 
   it('stands down when a consult actually lowered the dimension', () => {

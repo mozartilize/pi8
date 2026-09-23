@@ -5,10 +5,8 @@ import type { Dimension } from '../../types.js';
 /**
  * Labeled corpus of realistic coding-agent prompts.
  *
- * This exists because keyword tuning is whack-a-mole without a fixed target:
- * the original lists had no entry for "plan", "migration" or "review", so
- * "plan a migration from REST to GraphQL across our three services" scored 0
- * on every signal and fell through to `lightweight`.
+ * Tune keywords against movement across the corpus, not one anecdotal prompt.
+ * Assert output categories, not exact weights or intermediate scores.
  */
 const CORPUS: Array<{ prompt: string; expected: Dimension | Dimension[] }> = [
   // ─── lightweight ───────────────────────────────────────────

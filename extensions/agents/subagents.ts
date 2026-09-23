@@ -271,7 +271,7 @@ export function computeRoleAssignments(
             isSubagentSpawn: true,
           }) ?? decision;
       } else {
-        decision = { ...decision, reason: `${decision.reason}; review fallback: no independent model` };
+        decision = { ...decision, reason: `${decision.reason}; no reviewer from another model family` };
       }
     }
 

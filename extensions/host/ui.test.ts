@@ -7,7 +7,7 @@ import type { RoutingDecision } from '../types.js';
 const decision: RoutingDecision = {
   dimension: 'implement',
   chosen: 'opencode-go/kimi-k2.7-code',
-  reason: 'scored 0.812 (q:0.55 c:0.21 s:0.05)',
+  reason: 'score 0.812 (quality 0.55, cost 0.21, speed 0.05)',
   confidence: 0.72,
   routedUp: false,
   routedDown: false,
@@ -50,7 +50,7 @@ describe('formatStatus', () => {
     expect(s).toContain('github-copilot/gpt-5.4');
     expect(s).toContain(':xmax');
     expect(s).not.toContain('kimi');
-    expect(s).toMatch(/\(FALLBACK 2!\)/);
+    expect(s).toContain('(fallback #2)');
   });
 
   it('shows a waiting state before any turn is routed', () => {
@@ -64,18 +64,18 @@ describe('formatStatus', () => {
       viaFallback: false,
       accumulatedCost: 0,
     });
-    expect(s).toContain('context-pressure');
+    expect(s).toContain('(context nearly full)');
   });
 });
 
 describe('formatEmbeddingStats', () => {
   it('derives kept = fired - promoted - abstainedLowConf', () => {
     const line = formatEmbeddingStats({ fired: 10, promoted: 4, abstainedLowConf: 3, degraded: 2 });
-    expect(line).toContain('fired 10');
-    expect(line).toContain('promoted 4');
-    expect(line).toContain('kept 3');
-    expect(line).toContain('abstained-lowconf 3');
-    expect(line).toContain('degraded 2');
+    expect(line).toContain('ran 10');
+    expect(line).toContain('raised 4');
+    expect(line).toContain('unchanged 3');
+    expect(line).toContain('too unsure 3');
+    expect(line).toContain('failed 2');
   });
 });
 
@@ -120,16 +120,30 @@ describe('formatDecisionDetail', () => {
     expect(lines).toContain('thinking:   off');
   });
 
+  it('explains the decision cause without changing its stored value', () => {
+    const causes = [
+      ['context-depth', 'long conversation raised the task type'],
+      ['router-consult', 'LLM assessment'],
+      ['manual-override', 'manual pin'],
+      ['trajectory-escalation', 'stronger model, because the previous one struggled'],
+    ] as const;
+    for (const [cause, label] of causes) {
+      const routed = { ...decision, cause };
+      expect(formatDecisionDetail(routed, undefined).join('\n')).toContain(`cause:      ${label}`);
+      expect(routed.cause).toBe(cause);
+    }
+  });
+
   it('adds explicit detail for no-data decisions', () => {
     const lines = formatDecisionDetail(
       { ...decision, cause: 'no-data', reason: 'scored 0.123 [no benchmark quality data]' },
       { registryId: 'opencode-go/kimi-k2.7-code', viaFallback: false, accumulatedCost: 0 },
     ).join('\n');
-    expect(lines).toMatch(/no-data/i);
+    expect(lines).toContain('cause:      no benchmark data; ranked by price and context window');
     expect(lines).toMatch(/no benchmark quality data/i);
   });
 
-  it('renders candidate gate diagnostics', () => {
+  it('renders demoted and promoted candidates with their reasons', () => {
     const lines = formatDecisionDetail(
       {
         ...decision,
@@ -141,16 +155,18 @@ describe('formatDecisionDetail', () => {
       { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
     ).join('\n');
 
-    expect(lines).toContain('gate:       cheap/model promoted');
-    expect(lines).toContain('gate:       weak/model below-task-floor');
+    expect(lines).toContain('promoted:   cheap/model (much cheaper and strong enough)');
+    expect(lines).toContain('demoted:    weak/model (too weak for this task type)');
   });
 
-  it('shows terminal kind/band and phase for engaged multi-work decisions', () => {
+  it('shows the final step, its required model level, and the current phase for engaged multi-work decisions', () => {
     const lines = formatDecisionDetail(
       { ...decision, multiWork: multiWorkRoutingMeta({ phase: 'inspect', providerInvocation: 2 }) },
       { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
     ).join('\n');
-    expect(lines).toContain('terminal:   implement/hard, frontier band, phase inspect (invocation 2)');
+    expect(lines).toContain(
+      'final step: implement, hard complexity, needs a frontier-level model; now investigating (provider call 2)',
+    );
   });
 
   it('reports the actual served capability ratio, or unknown without a task ratio', () => {
@@ -164,7 +180,7 @@ describe('formatDecisionDetail', () => {
       },
       { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
     ).join('\n');
-    expect(withRatio).toContain('served-cap: ratio 0.72, clears floor: true');
+    expect(withRatio).toContain('served:     72% of the strongest model; strong enough for the final step');
 
     const withoutRatio = formatDecisionDetail(
       {
@@ -176,7 +192,7 @@ describe('formatDecisionDetail', () => {
       },
       { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
     ).join('\n');
-    expect(withoutRatio).toContain('served-cap: ratio unknown, clears floor: unknown');
+    expect(withoutRatio).toContain('served:     strength unknown; unknown whether strong enough for the final step');
   });
 
   it('reports a mutation-gate escape and capability degradation only when present', () => {
@@ -191,14 +207,13 @@ describe('formatDecisionDetail', () => {
       },
       { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
     ).join('\n');
-    expect(escaped).toContain('gate:       blocked invocation 2, escaped (capability degraded)');
+    expect(escaped).toContain('edits:      held at provider call 2, then allowed without a strong enough model');
 
     const clean = formatDecisionDetail(
       { ...decision, multiWork: multiWorkRoutingMeta() },
       { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
     ).join('\n');
-    expect(clean).not.toContain('escaped');
-    expect(clean).not.toContain('capability degraded');
+    expect(clean).not.toContain('edits:');
   });
 
   it('adds advisory detail for context pressure', () => {
@@ -217,7 +232,7 @@ describe('formatDecisionDetail', () => {
         accumulatedCost: 0,
       },
     ).join('\n');
-    expect(lines).toContain('context pressure 68% >= 60%');
+    expect(lines).toContain('context 68% full (advice starts at 60%)');
     expect(lines).toContain('handoff planning to a fresh planner');
   });
 
@@ -296,22 +311,24 @@ describe('assessment in /router-why', () => {
       served(),
     );
 
-    expect(lines.join('\n')).toContain('assessment: lightweight/trivial/bounded, compound=no, high');
+    expect(lines.join('\n')).toContain(
+      'assessment: lightweight, trivial complexity, limited scope, single step, high confidence',
+    );
     expect(lines.join('\n')).toContain('a bounded extraction from one named file');
-    expect(lines.join('\n')).toContain('routed down');
+    expect(lines.join('\n')).toContain('task type lowered by the assessment, so a cheaper model served');
   });
 
-  it('reports the latch veto when one occurred', () => {
+  it('reports a skipped long-conversation upgrade', () => {
     const lines = formatDecisionDetail(
       decisionWith({ assessment: { ...validAssessment(), vetoedLatch: true } }),
       served(),
     );
-    expect(lines.join('\n')).toContain('depth escalation vetoed');
+    expect(lines.join('\n')).toContain('long-conversation upgrade skipped');
   });
 
   it('reports why the assessment was unavailable', () => {
     const lines = formatDecisionDetail(decisionWith({ fallbackReason: 'no-assessor' }), served());
-    expect(lines.join('\n')).toContain('assessment unavailable (no-assessor)');
+    expect(lines.join('\n')).toContain('assessment unavailable (no model available to assess)');
   });
 
   it('shows assessment spend beside routed spend', () => {
@@ -319,29 +336,29 @@ describe('assessment in /router-why', () => {
   });
 
   it('marks a downward route in the status widget', () => {
-    expect(formatStatus(decisionWith({ routedDown: true, routedPickChanged: true }), served())).toContain('routed-down');
+    expect(formatStatus(decisionWith({ routedDown: true, routedPickChanged: true }), served())).toContain('(downgraded)');
   });
 
-  it('suppresses the routed-up label when the raise did not change the served model', () => {
+  it('suppresses the upgraded label when the raise did not change the served model', () => {
     // Dimension was raised (routedUp) but the heuristic dimension would have
     // picked the same model, so nothing stronger was served: no label.
     const status = formatStatus(
       decisionWith({ routedUp: true, routedPickChanged: false }),
       served(),
     );
-    expect(status).not.toContain('routed-up');
+    expect(status).not.toContain('(upgraded)');
     const detail = formatDecisionDetail(
       decisionWith({ routedUp: true, routedPickChanged: false, cause: 'context-depth' }),
       served(),
     ).join('\n');
-    expect(detail).not.toContain('routed up');
-    expect(detail).toContain('served model was already the top pick');
+    expect(detail).not.toContain('so a stronger model served');
+    expect(detail).toContain('no stronger model was available');
   });
 
-  it('shows the routed-up label when the raise changed the served model', () => {
+  it('shows the upgraded label when the raise changed the served model', () => {
     expect(
       formatStatus(decisionWith({ routedUp: true, routedPickChanged: true }), served()),
-    ).toContain('routed-up');
+    ).toContain('(upgraded)');
   });
 });
 

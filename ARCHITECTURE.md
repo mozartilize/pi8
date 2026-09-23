@@ -2,6 +2,17 @@
 
 Implementation-level architecture for the router. For user-facing setup and commands, see [`README.md`](README.md). For contributor conventions, see [`AGENTS.md`](AGENTS.md).
 
+## Terms and minimums
+
+- **Task type (`Dimension`)**: one of `lightweight`, `gather`, `plan`, `implement`, or `review`. **Capability tier**: 0 (eligible on measured quality), 1 (quality unknown), or 2 (measured but below the task's requirement). **Capability band**: `economy`, `standard`, `strong`, or `frontier`, used for the final step of a compound task. These are three different scales; raising the task type does not mean raising a capability tier.
+- **Final step (`terminal` in code)**: the requested outcome after investigation, often a file change. A stream's terminal event instead ends one model attempt. **Inspect phase**: the investigation before that change. Its bounded discount permits a model one capability band below the final step's requirement until the change begins.
+- **Economic promotion**: measured evidence can admit a cheaper tier-2 model when it meets the 70% task-quality minimum and the other conditions in §2. Estimated quality cannot qualify.
+- **Trajectory friction (TFI)**: objective signs of a stalled attempt, such as repeated actions or verifier failures; not a judgment of the answer's meaning. **Provider circuit/strike**: a provider-level failure counter; three strikes temporarily exclude that provider. A shared usage limit excludes it immediately.
+- **Session generation/currentness**: a generation changes on session reset; asynchronous results check that they still belong to the active generation before writing state. **Assessment egress**: the limited task context sent to a separate assessor provider. **Provenance** labels whether text came from a user, assistant, or summary; the assessor's **output ontology** is its allowed structured verdict vocabulary.
+- **Sidecar**: the per-session decision-log file beside Pi's transcript. **Seam**: a deliberate test hook for replacing a path, timeout, or runtime dependency.
+
+Each *minimum* has a different subject: the **heuristic minimum task type** prevents uncertain assessments from lowering the keyword classification; the **role minimum task type** constrains subagent picks; the **incumbent minimum task type** keeps a current model's task type from falling, while its **minimum thinking level** constrains effort separately. The **dimension effort minimum** sets reasoning per task type. The **assessor competence minimum** gates which model may assess a request. For measured model quality, the **tier-0 task minimum** defaults to 85% of the strongest peer, the **economic-promotion minimum** is 70%, and the **broad-capability sanity minimum** is 45% for implementation/review. A compound task's **final-step capability minimum** comes from its band; its **investigation capability minimum** is one band lower while the discount applies. Name the subject rather than saying only “floor.”
+
 ## Pipeline overview
 
 ```
@@ -108,7 +119,7 @@ Promotion is evaluated for `gather`, `implement`, and `review` only. `plan` is n
 
 Per-call cost basis: `costPerTask` when every candidate in the pre-promotion tier-0 pool carries it (the full filtered set when no candidate reaches tier 0); otherwise blended `$/1M` tokens (input×0.25 + output×0.75). Scoping to the pool that can actually win keeps a low-quality candidate missing task cost from forcing an otherwise covered set onto the coarser basis — which matters because effort variants of one model share a `$/1M` rate and are only distinguishable by task cost. Registry pricing is authoritative when present; benchmark pricing is a fallback. Free models with benchmark data are real (zero-cost is deliberate); free models without benchmark data are treated as unknown (no cost credit).
 
-### Switch penalty
+### Current-model cache preference
 
 Incumbent models receive a cache-preservation bonus priced from the incumbent's own registry economics, not a flat unitless rate: `perTokenLoss = cacheWrite (or input, if no cacheWrite) − cacheRead`, the dollar value of one warm cache token. An exact incumbent match credits `min(estContextTokens × perTokenLoss, switchMargin)` — the full conversation. A same-model effort change credits only `min(staticPrefixTokens × perTokenLoss, switchMargin)`, since an effort change invalidates message blocks but the system/tool prefix cache stays warm; a same-model candidate with no measured effort (the model's default call shape) gets the full credit like an exact match. A different model gets zero credit — a model change has no cache entries to begin with. When the incumbent's registry entry doesn't publish enough pricing to compute `perTokenLoss` (no `cacheRead`, and no `cacheWrite`/`input`), no retention credit is granted at all. Capped by `switchMargin` (default 0.15). Applies only when the caller supplies an incumbent and does not set `isSubagentSpawn`; role injection supplies neither, so a subagent spawn never receives the bonus (no cache to lose).
 
@@ -197,9 +208,9 @@ Before subagent role assignment, a per-provider credential probe (timeout 3s) fi
 Covers the transition the classifier cannot see: a gather session that keeps accumulating context has become synthesis over gathered material, which cheap tiers serve badly.
 
 - **Trigger**: live context exceeds `depthEscalationTokens` (default 32768), the pre-depth dimension is lightweight/gather, and the cause is depth-passive (`heuristic`, `continuation-context`, `no-data`, or `router-consult`)
-- **Effect**: raise one tier for that invocation (cause: `context-depth`)
+- **Effect**: raise the task type by one step for that invocation (cause: `context-depth`)
 - **Properties**: up-only, never cached, per-invocation evaluation
-- **Latch veto**: the first depth-latch transition per session may be vetoed by a high-confidence, `scope: bounded` assessment. A veto is a refusal to escalate — dimension and cause stay unchanged — and it reuses the entry's existing assessment verdict rather than dispatching a second one. Every failure path (timeout, no assessor, unparseable reply, disabled assessment) escalates without a veto.
+- **One-time exception**: only the first such upgrade per session may be cancelled by a high-confidence assessment with `scope: bounded`. The task type and cause then stay unchanged; the router reuses the assessment for this entry instead of making another request. If assessment times out, is unavailable or disabled, or returns an invalid reply, the upgrade proceeds.
 
 ---
 

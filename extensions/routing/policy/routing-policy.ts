@@ -247,7 +247,7 @@ function applyIncumbentModelFloor(
         decision.fallbackChain = chain;
       }
       decision.chosen = incumbentRegistryId;
-      decision.reason += ' [incumbent-floor]';
+      decision.reason += ' [kept current model: stronger for this task]';
     }
   }
 }
@@ -276,7 +276,7 @@ function applyIncumbentEffortFloor(
     return;
   }
   decision.effortFloorDimension = incumbentResolvedDimension;
-  decision.reason += ' [incumbent-effort-floor]';
+  decision.reason += " [kept current model's thinking level]";
 }
 
 /**
@@ -298,6 +298,8 @@ function annotateDecision(
 ): void {
   decision.dimension = dimension;
   decision.confidence = classifyResult.confidence;
+  // Cause names the mechanism that changed the task type; model preferences
+  // and context-pressure advice belong in metadata, not a replacement cause.
   decision.cause = cause;
   // "Changed" is not "stronger". Direction has to come from the strength
   // ordering, because the downstream consumers — context-pressure advice, the
@@ -337,21 +339,21 @@ function annotateDecision(
         'Parent context is dense: offload planning to a fresh-context planner subagent, then run execution in the parent with a cheaper model.',
     };
     // Advisory only: do NOT change decision.cause here
-    decision.reason += ' [context-pressure: prefer fresh planner handoff]';
+    decision.reason += ' [context nearly full: prefer a fresh planner subagent]';
   }
 
   if (cause === 'context-depth') {
-    decision.reason += ` [context-depth: ${estimatedContextTokens} tokens ≥ ${config.depthEscalationTokens}]`;
+    decision.reason += ` [long conversation: ${estimatedContextTokens} tokens ≥ ${config.depthEscalationTokens}]`;
   }
   if (cause === 'no-data') {
     decision.reason += ' [no benchmark quality data]';
   }
   if (cause === 'trajectory-escalation') {
-    decision.reason += ` [trajectory-escalation from ${decision.trajectoryFriction?.fromModel ?? 'source'}]`;
+    decision.reason += ` [${decision.trajectoryFriction?.fromModel ?? 'previous model'} struggled: stronger model]`;
   } else if (cause === 'router-consult' && decision.assessment) {
     decision.reason +=
-      ` [assessment ${decision.assessment.kind} ` +
-      `${decision.assessment.scope}/${decision.assessment.confidence}]`;
+      ` [assessment: ${decision.assessment.kind}, ` +
+      `${decision.assessment.scope === 'bounded' ? 'limited' : 'open-ended'} scope, ${decision.assessment.confidence} confidence]`;
   }
 
   decision.switched = incumbentRegistryId != null && incumbentRegistryId !== decision.chosen;

@@ -66,7 +66,9 @@ export function pickBaseline(
  * the input rate when the provider publishes no separate cache price, so a
  * model with unpublished cache rates is never counted as serving cache for
  * free. Undefined when the model publishes no price at all — an unpriced
- * model is excluded from the report rather than counted as $0.
+ * model is excluded from the report rather than counted as $0. Provider-reported
+ * billing may use a different scale or omit subscription charges, so it must
+ * not be mixed with registry-priced routed or baseline spend.
  */
 const TOKENS_PER_PRICE_UNIT = 1_000_000;
 

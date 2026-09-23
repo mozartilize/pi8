@@ -183,13 +183,13 @@ export interface DelegationResult {
 /**
  * The chain entry's own measured effort wins over the turn-level reasoning
  * (a fallback to a different effort of the same model is a legitimate chain
- * step); it is still clamped to the dimension floor (rule 3) and to the
+ * step); it is still clamped to the dimension effort minimum and to the
  * entry model's support. Entries without an effort inherit the turn-level
  * reasoning. An explicit user/session reasoning always wins — the router
  * fills a gap, it does not override an instruction.
  *
  * Router-chosen efforts use an up-only walk (levelFrom) so a gap in the
- * model's thinkingLevelMap never resolves below the floor (rule 3). An
+ * model's thinkingLevelMap never resolves below that minimum. An
  * explicit user request uses the nearest-first walk so the user's choice is
  * honoured as closely as the model supports.
  */
@@ -603,7 +603,8 @@ type CandidateAttemptResult =
 type CandidateFailure = Extract<CandidateAttemptResult, { kind: 'trajectory' | 'provider-dead' | 'next-candidate' }>;
 type RetryAttempt = Extract<CandidateAttemptResult, { kind: 'retry' }>;
 
-/** Provider-wide caps bypass the circuit; strikes still record one failed candidate. */
+/** Shared usage limits exclude a provider immediately; model output limits and
+ * trajectory struggle are not provider-health strikes. */
 function failureConsequence(
   failure: CandidateFailure,
   lastRetry: RetryAttempt | undefined,
@@ -668,8 +669,8 @@ class AttemptController {
    * Latched once a severe pre-output reasoning loop is observed, independent of
    * whether a stronger target exists. The share-based severe verdict can decay
    * as windows age out, so it must be remembered: the answerless gate reads it
-   * to distinguish capability struggle (rule 8: no blacklist, no provider
-   * strike) from an anonymous empty completion.
+   * to distinguish capability struggle (no blacklist or provider strike)
+   * from an anonymous empty completion.
    */
   severePreOutputSeen = false;
   observedUsage: Parameters<typeof accumulateAttemptUsage>[0];
@@ -928,7 +929,7 @@ async function runCandidateAttempt(
       }
       if (!failure && !controller.meaningfulOutputReceived) {
         // Severe pre-output loop with no reachable stronger target is a
-        // capability struggle, not a model defect (rule 8).
+        // capability struggle, not a model defect.
         failure = controller.severePreOutputSeen
           ? { kind: 'trajectory', message: `trajectory reasoning-loop (no stronger target): ${candidate.candidateId}` }
           : { kind: 'caught', error: new Error(`stream ended before meaningful output: ${candidate.candidateId}`) };

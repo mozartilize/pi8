@@ -128,7 +128,7 @@ describe('/router-manual', () => {
 
     await handlers.get('router-manual')!('alpha/first', ctx);
     expect(session.getManualModel()).toBe('alpha/first');
-    expect(messages.at(-1)).toContain('pinned-only');
+    expect(messages.at(-1)).toContain('No fallback to other models.');
     session.armTrajectoryEscalation(
       { escalate: true, tfi: 1, signals: [] },
       'alpha/first',
@@ -580,7 +580,7 @@ describe('/router-status history filtering', () => {
     expect(msg).toContain('Recent routing history:');
     expect(msg).toContain('implement');
     expect(msg).toContain('→ beta/second');
-    expect(msg).toContain('Observed subagent tool gaps');
+    expect(msg).toContain('Subagent roles that tried to use a tool they do not have');
     expect(msg).not.toContain('→ unknown/unknown');
   });
 

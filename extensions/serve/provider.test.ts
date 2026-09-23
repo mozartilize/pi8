@@ -666,7 +666,7 @@ describe('provider orchestration', () => {
     expect(harness.getProviderState().lastDecision?.fallbackChain[0]).toBe('alpha/first:high');
   });
 
-  it('raises a measured low effort to the dimension floor before serving (rule 3)', async () => {
+  it('raises a measured low effort to the dimension minimum before serving', async () => {
     writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ consultRouter: false }), 'utf8');
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
       version: 2,
@@ -845,7 +845,7 @@ describe('provider orchestration', () => {
     // escalation cause of its own.
     expect(lastDecision?.contextPressure).toBeDefined();
     expect(lastDecision?.reason).not.toContain('[manual:');
-    expect(lastDecision?.reason).toContain('[context-pressure: prefer fresh planner handoff]');
+    expect(lastDecision?.reason).toContain('[context nearly full: prefer a fresh planner subagent]');
   });
 });
 
@@ -1506,7 +1506,7 @@ describe('provider status reporting', () => {
     await harness.serve(context);
 
     const final = statuses[statuses.length - 1][1] ?? '';
-    expect(final).toMatch(/\(FALLBACK 2!\)/);
+    expect(final).toContain('(fallback #2)');
 
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.chosen).toBe(attempted[1]);

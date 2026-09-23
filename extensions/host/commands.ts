@@ -220,7 +220,7 @@ function handleBlacklistClear(
 ): void {
   if (extraArgs.length > 0) {
     ctx.ui.notify(
-      'Usage: /router-blacklist clear (no patterns — wipes everything session-scoped)',
+      'Usage: /router-blacklist clear (no patterns; clears every session blacklist entry)',
       'error',
     );
     return;
@@ -300,8 +300,8 @@ async function handleStatusCommand(
     `Synced: ${new Date(store.syncedAt).toISOString()}${stale ? ' (stale)' : ''}`,
     `Active models in store: ${active.length}`,
     `Registry coverage: ${covered}/${registryIds.size} models have benchmark data`,
-    `Unresolved models: ${store.models.filter((m) => !m.active).length}`,
-    `Aliases: ${Object.keys(store.aliases).length}`,
+    `Benchmark rows without a registry match: ${store.models.filter((m) => !m.active).length}`,
+    `Manual mappings (/router-fix): ${Object.keys(store.aliases).length}`,
   ];
   if (covered === 0) {
     lines.push('', 'No registry model matched a benchmark row — routing is price-only.');
@@ -337,10 +337,10 @@ async function handleStatusCommand(
 
   const gaps = detectToolGaps(history).slice(0, 3);
   if (gaps.length > 0) {
-    lines.push('', 'Observed subagent tool gaps (read-only detector):');
+    lines.push('', 'Subagent roles that tried to use a tool they do not have:');
     for (const gap of gaps) {
       lines.push(
-        `  ${gap.role.padEnd(11)} missing ${gap.tool}  obs=${gap.observations} confidence=${gap.strength.toFixed(2)}`,
+        `  ${gap.role.padEnd(11)} ${gap.tool} (seen ${gap.observations} times, confidence ${gap.strength.toFixed(2)})`,
       );
     }
   }
@@ -417,14 +417,14 @@ async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> 
       ? [`${incompleteTurns} turn(s) have incomplete usage — routed spend is a lower bound, not complete savings.`]
       : []),
     '',
-    'Dimension distribution:',
+    'Turns by task type:',
     ...[...byDimension.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([dim, n]) => `  ${dim.padEnd(11)} ${n}`),
     '',
-    "Counterfactual reprices observed token counts at the baseline model's registry " +
-      'rate — not a real historical bill. Async subagent spawns report no terminal ' +
-      'usage to the parent, so their spend is not included.',
+    "Baseline spend prices the observed tokens at the baseline model's registry rate. " +
+      'It is an estimate, not a real bill. Async subagents report no final usage to the ' +
+      'parent, so their spend is not included.',
   ];
   ctx.ui.notify(lines.join('\n'), 'info');
 }
@@ -588,7 +588,7 @@ async function handleManualCommand(
   }
 
   session.setManualModel(selection);
-  ctx.ui.notify(`Manual override: ${selection} (this session, pinned-only).`, 'info');
+  ctx.ui.notify(`Manual override: ${selection} for this session. No fallback to other models.`, 'info');
 }
 
 async function handleSemiCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -711,7 +711,8 @@ async function handleAgentsCommand(ctx: ExtensionCommandContext): Promise<void> 
   lines.push(
     '',
     '[auto] roles receive a concrete provider/model selected at spawn time.',
-    'The model shown is the baseline; structured child tasks may raise and re-score it.',
+    'The model shown is the default. A subagent whose role and task the router can read',
+    'is scored again at spawn, and its task can only raise the model.',
     'Nothing is written to settings.',
     'An explicit model on the call (e.g. reviewer[model=...]) always wins.',
   );
@@ -804,7 +805,7 @@ export function registerCommands(
   });
 
   pi.registerCommand('router-report', {
-    description: 'Show routed vs baseline spend, percent saved, and dimension distribution for this session',
+    description: 'Show routed vs baseline spend, percent saved, and turns by task type for this session',
     handler: safeCommand('/router-report', (_args, ctx) => handleReportCommand(ctx)),
   });
 

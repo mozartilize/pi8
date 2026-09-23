@@ -104,8 +104,8 @@ function isOfflineMode(): boolean {
  * The session_start auth sweep probes provider credential resolution, which
  * can trigger a network token refresh for OAuth providers (pi#7508). It must
  * only run when the router actually owns the session AND the user did not
- * request offline mode. Concrete-model sessions stay a complete no-op (hard
- * rule 9); a switch to router/auto re-arms the sweep via model_select.
+ * request offline mode. Concrete-model sessions skip this sweep; switching
+ * to router/auto re-arms it via model_select.
  */
 function shouldRunAuthSweep(model: { provider?: string; id?: string } | undefined): boolean {
   if (isOfflineMode()) return false;
@@ -331,8 +331,7 @@ function handleBeforeAgentStart(
   ctx: ExtensionContext,
   session: RouterSession,
 ): void {
-  // Hard rule 9: this extension is a complete no-op when the session's
-  // active model is a concrete pick.
+  // Skill tracking belongs only to sessions actively using router/auto.
   if (!isRouterAutoActive(ctx?.model)) return;
   try {
     const skills = (event as { systemPromptOptions?: { skills?: unknown } }).systemPromptOptions
@@ -372,7 +371,7 @@ function handleTurnStart(
     model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
     ...session.blacklist.getDebugState(),
   });
-  // Hard rule 9: trajectory arming is routing side-effect. Provider
+  // Trajectory arming belongs only to router/auto sessions. Provider
   // registration below stays ungated so a later switch to router/auto
   // can still find the synthetic model.
   if (isRouterAutoActive(ctx?.model)) {
@@ -435,7 +434,7 @@ function handleMutationToolCall(
   event: ToolCallEvent,
   session: RouterSession,
 ): { block: true; reason: string } | undefined {
-  // Bounded mutation handoff (rule 2: an internal failure here must fail
+  // Bounded mutation handoff: an internal failure here must fail
   // open, not fail the tool call). Returning `undefined` allows execution;
   // only an intentional `{ block: true, reason }` stops it. Bash is
   // classified best-effort: high-confidence write shapes feed the same
@@ -511,7 +510,7 @@ function providerOf(model: string | undefined): string | undefined {
 /**
  * Providers a failed child proved are usage-capped. A quota/billing/subscription
  * limit is the one non-retryable failure worth persisting from a child result:
- * the cap is shared by every model on the provider (AGENTS rule 8), so a later
+ * the cap is shared by every model on the provider, so a later
  * spawn or main turn on any sibling model would fail the same way. Transient
  * errors are retried by pi-subagents/the model, and request-specific failures
  * (invalid request, refusal) say nothing about provider health, so neither is

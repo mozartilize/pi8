@@ -25,7 +25,7 @@
  * policy: a 429 is treated as a provider-wide usage-limit signal, not a
  * retryable blip. Model-specific output-limit exhaustion ("output limit
  * reached") is deliberately NOT matched — it proves only that one model ran
- * out of room, not that its provider is unhealthy (AGENTS.md rule 8).
+ * out of room, not that its provider is unhealthy.
  */
 const USAGE_LIMIT_ERROR_PATTERN =
   /GoUsageLimitError|FreeUsageLimitError|CreditsError|usage limit reached|usage cap|available balance|insufficient_quota|quota|out of budget|billing|insufficient balance|insufficient credits|no payment method|hit your limit|usage credits are required|plan limit|RESOURCE_EXHAUSTED|\b402\b|\b429\b|rate.?limit|too many requests/i;

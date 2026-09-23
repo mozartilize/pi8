@@ -6,6 +6,9 @@
  * - `IntentState`: Cached routing intent, latch generation, and veto intent key.
  * - `RuntimeBindings`: Pi extension runtime context & model registry (survives session reset).
  * - `RouterSession`: Unified session aggregate owning the lifecycle and domain objects.
+ * Paths given an injected session must read and write that same owner, not a
+ * default instance; otherwise state crosses sessions. Async writes must check
+ * the session generation before publishing results from an earlier session.
  */
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ClassifyResult } from '../routing/classify/classifier.js';
