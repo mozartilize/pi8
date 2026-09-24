@@ -18,7 +18,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
 import { evaluateMutationCall } from '../routing/policy/mutation-gate.js';
-import { handleContractToolCall, submitExecutionContract } from './execution-contract-tool.js';
+import { handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
 import {
@@ -1832,6 +1832,7 @@ describe('assessment orchestration', () => {
     lastMetricRecord: Record<string, unknown> | undefined;
     metricRecordCount: number;
     readAssessmentMetrics(): Promise<void>;
+    readDecisionRecords(): Promise<Array<Record<string, unknown>>>;
   }
 
   interface RoutingDecision {
@@ -1908,6 +1909,12 @@ describe('assessment orchestration', () => {
       },
       async routeTurnAgainWithSameUserEntry() {
         return invokeTurn(session, lastCtx!, {});
+      },
+      async readDecisionRecords() {
+        const { readFileSync } = await import('node:fs');
+        const { DECISION_LOG_FILE } = await import('../host/decisionlog.js');
+        return readFileSync(join(temp.path, DECISION_LOG_FILE), 'utf8').trim().split('\n')
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
       },
       async readAssessmentMetrics() {
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -2094,10 +2101,14 @@ describe('assessment orchestration', () => {
     const IMPLEMENT_VERDICT =
       'Kind: implement\nComplexity: moderate\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: implement deliverable';
     const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
-    const smallPlan = [
-      { kind: 'edit', path: 'src/a.ts', change: 'reject expired tokens' },
-      { kind: 'verify', verifier: 'test' },
-    ];
+    const EASY = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
+    const smallPlan = {
+      steps: [
+        { kind: 'edit', path: 'src/a.ts', change: 'reject expired tokens' },
+        { kind: 'verify', verifier: 'test' },
+      ],
+      remainingWork: EASY,
+    };
 
     async function planned(): Promise<Session> {
       const session = await newSession({ consultRouter: true });
@@ -2203,11 +2214,120 @@ describe('assessment orchestration', () => {
 
     it('keeps the submitter executing a plan too large to hand off', async () => {
       const session = await planned();
-      const large = ['a', 'b', 'c', 'd', 'e', 'f'].map((f) => ({ kind: 'edit', path: `${f}.ts`, change: 'rename' }));
+      const large = {
+        steps: ['a', 'b', 'c', 'd', 'e', 'f'].map((f) => ({ kind: 'edit', path: `${f}.ts`, change: 'rename' })),
+        remainingWork: EASY,
+      };
       expect(submitExecutionContract(large, routerCtx, harness.session).accepted).toBe(true);
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
       expect(next?.chosen).toBe('beta/strong');
+    });
+
+    function editResult(path: string, isError = false): void {
+      trackContractToolResult({ toolName: 'edit', toolCallId: `e-${path}`, input: { path }, isError }, { cwd: '/repo' }, harness.session);
+    }
+
+    it('keeps the submitter when the rubric says design choices remain', async () => {
+      const session = await planned();
+      const open = { ...smallPlan, remainingWork: { ...EASY, openDecisions: 5 } };
+      expect(submitExecutionContract(open, routerCtx, harness.session).text).toContain('keeps executing it');
+      const next = await session.routeTurnAgainWithSameUserEntry();
+      expect(next?.dimension).toBe('implement');
+      expect(next?.chosen).toBe('beta/strong');
+      expect(harness.getProviderState().lastDecision?.executionContract)
+        .toMatchObject({ release: false, keepReason: 'difficulty' });
+    });
+
+    it('returns an executed plan to the submitter for review until the entry ends', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+      editResult('src/a.ts', true);
+      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
+      editResult('src/a.ts');
+      expect(harness.session.getWorkPhaseState()?.contract)
+        .toMatchObject({ status: 'executed', executedReason: 'complete', executor: 'alpha/cheap' });
+
+      const review = await session.routeTurnAgainWithSameUserEntry();
+      expect(review?.dimension).toBe('review');
+      expect(review?.cause).toBe('execution-contract');
+      expect(review?.chosen).toBe('beta/strong');
+      expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'executed' });
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+    });
+
+    it('records the review verifier result and logs the outcome when the entry ends', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry();
+      editResult('src/a.ts');
+      await session.routeTurnAgainWithSameUserEntry();
+      const test = (toolCallId: string, text: string) => trackContractToolResult(
+        { toolName: 'bash', toolCallId, input: { command: 'npx vitest run' }, content: [{ type: 'text', text }] },
+        { cwd: '/repo' },
+        harness.session,
+      );
+      test('t1', '1 failed');
+      test('t2', 'all passed');
+      expect(harness.session.getWorkPhaseState()?.contract?.reviewVerifier).toBe('fail');
+      editResult('src/a.ts');
+
+      await session.routeTurn('thanks, now summarize what changed');
+      const outcomes = (await session.readDecisionRecords())
+        .filter((record) => (record.executionContract as { action?: string } | undefined)?.action === 'outcome');
+      expect(outcomes.map((record) => record.executionContract)).toEqual([
+        expect.objectContaining({
+          outcome: 'fixed',
+          meta: expect.objectContaining({ executor: 'alpha/cheap', reviewVerifier: 'fail', rubric: EASY }),
+        }),
+      ]);
+    });
+
+    it('counts a new plan during review as rework against the executor', async () => {
+      const session = await planned();
+      const executeOnce = async () => {
+        submitExecutionContract(smallPlan, routerCtx, harness.session);
+        expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+        editResult('src/a.ts');
+        expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('review');
+      };
+      await executeOnce();
+      await executeOnce();
+      expect(harness.session.getWorkPhaseState()?.contractStrikes).toEqual({ cheap: 1 });
+      // The revised plan was submitted during review but belongs to the planning task.
+      expect(harness.session.getWorkPhaseState()?.contract?.submitterDimension).toBe('plan');
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
+      const escalated = await session.routeTurnAgainWithSameUserEntry();
+      expect(escalated?.chosen).toBe('beta/strong');
+      expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
+    });
+
+    it('executes a plan whose executor used up its invocation budget', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      let decision = await session.routeTurnAgainWithSameUserEntry();
+      for (let i = 0; i < 12 && decision?.dimension === 'implement'; i += 1) {
+        decision = await session.routeTurnAgainWithSameUserEntry();
+      }
+      expect(decision?.dimension).toBe('review');
+      // No edit named the executor; the model that served its invocations did.
+      expect(harness.session.getWorkPhaseState()?.contract)
+        .toMatchObject({ status: 'executed', executedReason: 'budget', executor: 'alpha/cheap' });
+    });
+
+    it('continues as implementation when only the submitter served a released plan', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      harness.session.blacklist.blacklistModel('alpha/cheap');
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+      editResult('src/a.ts');
+      expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ status: 'executed', release: true });
+      expect(harness.session.getWorkPhaseState()?.contract?.executor).toBeUndefined();
+      const next = await session.routeTurnAgainWithSameUserEntry();
+      expect(next?.dimension).toBe('implement');
+      expect(next?.cause).toBe('execution-contract');
     });
 
     it('rejects a plan for a plan or review deliverable', async () => {

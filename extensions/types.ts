@@ -172,14 +172,58 @@ export interface CandidateCapabilityMeta {
   viaInspectPromotion: boolean;
 }
 
+export type RubricCriterion = 'openDecisions' | 'spread' | 'verification' | 'knowledge' | 'coupling';
+/** Submitter's description of the remaining work: one level per criterion, 1 (easiest) to 5 (hardest). */
+export type ExecutionRubric = Record<RubricCriterion, number>;
+
+/** Plan facts the router measures; an undefined field means the measurement failed. */
+export interface MeasuredFeatures {
+  /** Distinct declared file targets. */
+  files: number;
+  /** Distinct parent directories of those targets. */
+  directories: number;
+  steps: number;
+  /** Targets that look like test files. Logged for fitting; not weighted. */
+  testTargets: number;
+  /** Lines in the edit/delete targets that already exist. */
+  existingLines?: number;
+  /** Edit/delete targets that do not exist on disk. */
+  missingTargets?: number;
+  /** Commits touching the targets in the history window. Logged; not weighted. */
+  commits?: number;
+  /** Of those commits, the ones whose subject reads as a fix. */
+  fixCommits?: number;
+}
+
+/** Why an accepted plan stays with its submitter. */
+export type ContractKeepReason = 'size' | 'difficulty' | 'excluded' | 'unknown-target';
+
+/** How a contract ended; the label its logged features are fitted against. */
+export type ContractOutcome = 'clean' | 'fixed' | 'rework' | 'broken' | 'unfinished';
+
 export interface ExecutionContractMeta {
-  status: 'active' | 'broken';
+  /** `executed`: every declared edit/create target was edited, or the step budget ran out. */
+  status: 'active' | 'executed' | 'broken';
   band: CapabilityBand;
   /** False when the submitting model keeps executing the plan. */
   release: boolean;
+  /** Implement-axis ratio the executor must reach; absent when the submitter keeps the plan. */
+  minimum?: number;
+  /** Requirement computed from the rubric and measurements, before band minimums. */
+  requirement: number;
+  keepReason?: ContractKeepReason;
+  rubric: ExecutionRubric;
+  measured: MeasuredFeatures;
   submitter: string;
   targets: number;
   steps: number;
+  /** Model other than the submitter that edited a declared target. */
+  executor?: string;
+  executedReason?: 'complete' | 'budget';
+  /** The submitter edited files while reviewing the executed plan. */
+  reviewEdited?: boolean;
+  /** First verifier result observed after execution. */
+  reviewVerifier?: 'pass' | 'fail';
   breakReason?: 'undeclared-target' | 'replan' | 'struggle';
   breaker?: string;
   /** Executor models excluded for this task after repeated breaks. */

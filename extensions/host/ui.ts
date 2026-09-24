@@ -75,7 +75,7 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   heuristic: 'keyword classifier',
   'continuation-context': 'keyword classifier, using earlier messages for a short follow-up',
   'router-consult': 'LLM assessment',
-  'execution-contract': 'implementation handed off through an accepted execution plan',
+  'execution-contract': 'routed by an accepted execution plan',
   'embedding-classify': 'multilingual embedding classifier',
   'error-fallback': 'a fallback model served after the top pick failed',
   'no-data': 'no benchmark data; ranked by price and context window',
@@ -152,13 +152,35 @@ const CONTRACT_BREAK_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['
   struggle: 'struggled',
 };
 
-function contractLines(contract: ExecutionContractMeta): string[] {
+const CONTRACT_KEEP_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['keepReason']>, string>> = {
+  size: 'too large to hand off',
+  difficulty: 'too hard to hand off',
+  excluded: 'earlier executors were excluded',
+  'unknown-target': 'it edits a file that does not exist',
+};
+
+function contractPlanLine(contract: ExecutionContractMeta): string {
   const size = `${contract.targets} file${contract.targets === 1 ? '' : 's'}, ${contract.steps} step${contract.steps === 1 ? '' : 's'}`;
-  const lines = contract.status === 'active'
-    ? [`  plan:       accepted, ${contract.band} (${size}); ${contract.release ? 'an executor model runs it' : `${contract.submitter} keeps running it`}`]
-    : [`  plan:       broken: ${contract.breaker ?? 'the executor'} ${CONTRACT_BREAK_LABELS[contract.breakReason ?? 'struggle']}; back to ${contract.submitter}`];
+  switch (contract.status) {
+    case 'active':
+      return contract.release
+        ? `accepted, ${contract.band} (${size}; executor minimum ${contract.minimum?.toFixed(2)}); an executor model runs it`
+        : `accepted (${size}); ${contract.submitter} keeps running it: ${CONTRACT_KEEP_LABELS[contract.keepReason ?? 'difficulty']}`;
+    case 'executed': {
+      const how = contract.executedReason === 'budget' ? ' (step budget used up)' : '';
+      return contract.release
+        ? `executed${contract.executor ? ` by ${contract.executor}` : ''}${how}; ${contract.submitter} reviews it`
+        : `executed by ${contract.submitter}${how}`;
+    }
+    case 'broken':
+      return `broken: ${contract.breaker ?? 'the executor'} ${CONTRACT_BREAK_LABELS[contract.breakReason ?? 'struggle']}; back to ${contract.submitter}`;
+  }
+}
+
+function contractLines(contract: ExecutionContractMeta): string[] {
+  const lines = [`  plan:       ${contractPlanLine(contract)}`];
   if (contract.excludedExecutors?.length) {
-    lines.push(`  excluded:   ${contract.excludedExecutors.join(', ')} (broke the plan twice)`);
+    lines.push(`  excluded:   ${contract.excludedExecutors.join(', ')} (failed two plans)`);
   }
   return lines;
 }

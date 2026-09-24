@@ -920,6 +920,61 @@ describe('mutation gate hooks', () => {
       .toMatchObject({ status: 'broken', breakReason: 'undeclared-target', breaker: 'test/cheap' });
   });
 
+  it('completes a plan from edit results and records the first verifier run of the review', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool,
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false })),
+    } as unknown as ExtensionAPI);
+    const tool = registerTool.mock.calls[0]![0] as { execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
+    defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
+    const remainingWork = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
+    const steps = [{ kind: 'create', path: 'src/a.ts', change: 'add the helper' }];
+    expect((await tool.execute('c1', { steps, remainingWork }, undefined, undefined, ctx)).details.accepted).toBe(true);
+
+    defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
+    const toolResult = handlers.get('tool_result')!;
+    const content = [{ type: 'text', text: 'ok' }];
+    await toolResult({ toolName: 'write', toolCallId: 'w1', input: { path: 'src/a.ts' }, content }, ctx);
+    expect(defaultRouterSession.getWorkPhaseState()?.contract)
+      .toMatchObject({ status: 'executed', executor: 'test/cheap', release: true });
+
+    await toolResult({ toolName: 'bash', toolCallId: 'b1', input: { command: 'npm run test' }, content, isError: true }, ctx);
+    expect(defaultRouterSession.getWorkPhaseState()?.contract?.reviewVerifier).toBe('fail');
+
+    // The last entry of a session has no next entry: the settled run closes it.
+    await handlers.get('agent_settled')!({ type: 'agent_settled' }, ctx);
+    expect(defaultRouterSession.getWorkPhaseState()?.contract).toBeUndefined();
+    const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8');
+    const outcomes = raw.trim().split('\n').map((line) => JSON.parse(line) as { executionContract?: { action: string } })
+      .filter((record) => record.executionContract?.action === 'outcome');
+    expect(outcomes.map((record) => record.executionContract)).toEqual([
+      expect.objectContaining({ outcome: 'clean', meta: expect.objectContaining({ executor: 'test/cheap', reviewVerifier: 'fail' }) }),
+    ]);
+    expect(raw).not.toContain('src/a.ts');
+    expect(raw).not.toContain('add the helper');
+  });
+
+  it('logs a rejected plan by code, never by its paths', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = registerTool.mock.calls[0]![0] as { execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
+    defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
+    const steps = [{ kind: 'edit', path: 'secret-dir/*.ts', change: 'x' }];
+    expect((await tool.execute('c1', { steps, remainingWork: {} }, undefined, undefined, ctx)).details.accepted).toBe(false);
+    const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8');
+    expect(raw).toContain('"rejectReason":"pattern-path"');
+    expect(raw).not.toContain('secret-dir');
+  });
+
   it('appends the handoff reminder once to the first plan/review edit result without a plan', async () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;

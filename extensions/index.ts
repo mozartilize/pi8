@@ -70,6 +70,8 @@ import {
   handleContractToolCall,
   nudgeContractOnEdit,
   registerExecutionContractTool,
+  closeContractOnSettle,
+  trackContractToolResult,
 } from './serve/execution-contract-tool.js';
 import {
   RouterSession,
@@ -706,6 +708,8 @@ export default async function autoModelRouterExtension(
 
   pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels, session));
 
+  pi.on('agent_settled', () => closeContractOnSettle(session));
+
   pi.on('before_agent_start', (event, ctx) => handleBeforeAgentStart(event, ctx, session));
 
   pi.on('turn_start', (event, ctx) => handleTurnStart(event, ctx, pi, session, runtime));
@@ -743,6 +747,18 @@ export default async function autoModelRouterExtension(
     }
     handleMutationToolResult(event, session);
     handleTrajectoryToolResult(event, session);
+    trackContractToolResult(
+      {
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        input: (event as { input?: unknown }).input,
+        content: event.content,
+        details: event.details,
+        isError: (event as { isError?: boolean }).isError,
+      },
+      ctx,
+      session,
+    );
     return nudgeContractOnEdit(event, session);
   });
 }

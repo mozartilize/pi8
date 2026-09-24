@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 
 import type {
   AssessmentFallbackReason,
+  ContractOutcome,
   ExecutionContractMeta,
   CandidateDiagnostic,
   Dimension,
@@ -106,6 +107,8 @@ export interface DecisionLogEntry {
     action: ExecutionContractSignal['action'] | 'route';
     /** Why a submission was refused; router-authored text, never plan content. */
     rejectReason?: string;
+    /** Set on `outcome` records: how the contract ended. */
+    outcome?: ContractOutcome;
     meta?: ExecutionContractMeta;
   };
   assessmentPromptVersion?: string;
@@ -255,15 +258,22 @@ export function appendMutationGateSignal(
   }
 }
 
-/** One execution-contract transition. Counts and model keys only: never the
- *  plan's paths or change descriptions. */
+/** One execution-contract transition. Rubric levels, counts, and model keys
+ *  only: never the plan's paths or change descriptions. */
 export interface ExecutionContractSignal {
   intentKey: string;
-  /** Model that submitted (accept/reject) or broke (break) the contract. */
+  /**
+   * Model that submitted (accept/reject), broke (break), or finished (execute)
+   * the contract; for `outcome`, its executor, else its submitter.
+   */
   served: string;
-  /** `nudge` marks a plan/review edit made without a plan: a missed handoff. */
-  action: 'accept' | 'reject' | 'break' | 'nudge';
+  /**
+   * `nudge` marks a plan/review edit made without a plan: a missed handoff.
+   * `outcome` closes a contract with the label its features are fitted against.
+   */
+  action: 'accept' | 'reject' | 'break' | 'nudge' | 'execute' | 'outcome';
   rejectReason?: string;
+  outcome?: ContractOutcome;
   meta?: ExecutionContractMeta;
 }
 
@@ -292,6 +302,7 @@ export function appendExecutionContractSignal(
       executionContract: {
         action: signal.action,
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
+        ...(signal.outcome ? { outcome: signal.outcome } : {}),
         ...(signal.meta ? { meta: signal.meta } : {}),
       },
     };

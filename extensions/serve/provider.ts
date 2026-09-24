@@ -79,10 +79,13 @@ import {
 import {
   breakContract,
   contractMeta,
-  executionMinimum,
+  attributeExecutor,
+  expireContract,
   isExcludedExecutor,
+  isUnderReview,
   type ExecutionContract,
 } from '../routing/policy/execution-contract.js';
+import { appendContractOutcome, closeContractEntry } from './execution-contract-tool.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -749,6 +752,11 @@ function advanceWorkPhase(args: {
 
   let workPhaseState = args.session.getWorkPhaseState();
   if (!args.cacheHit) {
+    // A new entry drops the previous entry's contract; log how it ended.
+    if (workPhaseState?.contract) {
+      const previous = args.session.getPreviousServed();
+      workPhaseState = closeContractEntry(workPhaseState, previous && servedKey(previous));
+    }
     workPhaseState =
       workPhaseState && args.turnInput.thin
         ? inheritThinContinuation(args.turnInput.key, workPhaseState)
@@ -1071,28 +1079,44 @@ async function assessRouterTurn(args: {
 }
 
 /**
- * This entry's execution contract, after objective trajectory struggle by an
- * executor other than the submitter has broken it. The submitter's own
- * struggle belongs to the trajectory handoff alone.
+ * This entry's execution contract, with the previous invocation's model
+ * recorded as its executor, after objective trajectory struggle by an executor
+ * other than the submitter has broken it, or after its executor used up the
+ * invocation budget. The submitter's own struggle belongs to the trajectory
+ * handoff alone.
  */
 function settleExecutionContract(
-  state: WorkPhaseState | undefined,
+  observed: WorkPhaseState | undefined,
   trajectory: PreparedTurn['trajectoryEscalation'],
   session: RouterSession,
 ): ExecutionContract | undefined {
-  const contract = state?.contract;
-  if (!state || !contract) return undefined;
-  if (contract.status !== 'active' || !trajectory) return contract;
-  if (parseCandidateKey(trajectory.fromModel).id === parseCandidateKey(contract.submitter).id) return contract;
-  const broken = breakContract(state, trajectory.fromModel, 'struggle');
-  session.commitWorkPhaseState(broken);
+  if (!observed?.contract) return undefined;
+  const previous = session.getPreviousServed();
+  const state = attributeExecutor(observed, previous && servedKey(previous));
+  if (state !== observed) session.commitWorkPhaseState(state);
+  const contract = state.contract!;
+  if (contract.status !== 'active') return contract;
+  if (trajectory && parseCandidateKey(trajectory.fromModel).id !== parseCandidateKey(contract.submitter).id) {
+    const broken = breakContract(state, trajectory.fromModel, 'struggle');
+    session.commitWorkPhaseState(broken);
+    appendExecutionContractSignal({
+      intentKey: state.intentKey,
+      served: trajectory.fromModel,
+      action: 'break',
+      meta: contractMeta(broken),
+    });
+    return broken.contract;
+  }
+  const expired = expireContract(state);
+  if (expired === state) return contract;
+  session.commitWorkPhaseState(expired);
   appendExecutionContractSignal({
     intentKey: state.intentKey,
-    served: trajectory.fromModel,
-    action: 'break',
-    meta: contractMeta(broken),
+    served: contract.executor ?? contract.submitter,
+    action: 'execute',
+    meta: contractMeta(expired),
   });
-  return broken.contract;
+  return expired.contract;
 }
 
 /** The submitter's routable candidate key, matching an unsuffixed benchmark row. */
@@ -1105,15 +1129,15 @@ function submitterKey(candidates: readonly Candidate[], submitter: string): stri
 /**
  * Candidates allowed to execute a released contract: no excluded executor
  * model at any effort, and, once any executor is excluded, measured implement
- * quality strictly above the strongest excluded one. Undefined when the band
- * keeps the submitter or nobody qualifies.
+ * quality strictly above the strongest excluded one. Undefined when the
+ * contract keeps the submitter or nobody qualifies.
  */
 function executorPool(
   candidates: Candidate[],
   state: WorkPhaseState | undefined,
-  band: ExecutionContract['band'],
+  contract: ExecutionContract,
 ): { pool: Candidate[]; minimum: number } | undefined {
-  const minimum = executionMinimum(band);
+  const minimum = contract.minimum;
   if (minimum == null) return undefined;
   const excluded = state?.excludedExecutors ?? [];
   const excludedQuality = Math.max(-Infinity, ...excluded.map((key) => {
@@ -1159,11 +1183,17 @@ function scoreRouterTurn(args: {
     (intentState.observedMutationTools > 0 || intentState.mutationGateTriggered);
   const contract = settleExecutionContract(intentState, trajectoryEscalation, session);
   const contractActive = contract?.status === 'active';
+  // A plan another model executed returns to its submitter for review: a plan
+  // can be completed wrongly without breaking. A plan only the submitter
+  // served continues as implementation.
+  const reviewing = contract != null && isUnderReview(contract);
+  const implementing = contractActive || (contract?.status === 'executed' && !reviewing);
   // A broken contract hands the next invocation back to its submitter at the
   // submitter's task type and thinking level, then is consumed.
   const restore = contract?.status === 'broken' ? contract : undefined;
-  const routedDimension = contractActive ? 'implement' : baseDimension;
-  const routedCause = contractActive ? 'execution-contract' : baseCause;
+  const handBack = restore ?? (reviewing ? contract : undefined);
+  const routedDimension = reviewing ? 'review' : implementing ? 'implement' : baseDimension;
+  const routedCause = reviewing || implementing ? 'execution-contract' : baseCause;
   const { multiWorkPolicy } = advanceWorkPhase({
     cacheHit,
     turnInput,
@@ -1178,8 +1208,8 @@ function scoreRouterTurn(args: {
   // effort that actually served, including an effort-floor bump or fallback.
   const previous = session.getPreviousServed();
   const servedCandidateKey = previous && servedKey(previous);
-  const incumbentRegistryId = restore
-    ? submitterKey(routableCandidates, restore.submitter)
+  const incumbentRegistryId = handBack
+    ? submitterKey(routableCandidates, handBack.submitter)
     : servedCandidateKey && routableCandidates.some((c) => candidateKey(c) === servedCandidateKey)
       ? servedCandidateKey
       : session.getLastChosenRegistryId();
@@ -1187,7 +1217,7 @@ function scoreRouterTurn(args: {
   const userReasoningOverride =
     requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
   const execution = contractActive && contract.release
-    ? executorPool(routableCandidates, session.getWorkPhaseState(), contract.band)
+    ? executorPool(routableCandidates, session.getWorkPhaseState(), contract)
     : undefined;
   const policy = resolveRoutingDecision({
     candidates: execution?.pool ?? routableCandidates,
@@ -1201,13 +1231,13 @@ function scoreRouterTurn(args: {
     staticPrefixTokens,
     needsVision,
     incumbentRegistryId,
-    incumbentResolvedDimension: restore?.submitterDimension ??
+    incumbentResolvedDimension: handBack?.submitterDimension ??
       session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
     vetoDepthEscalation,
     // The contract owns the implement-phase scoring; multi-work minimums would
     // re-impose the terminal band the planner already resolved.
-    ...(multiWorkPolicy && !contractActive ? { multiWorkPolicy } : {}),
+    ...(multiWorkPolicy && !implementing && !reviewing ? { multiWorkPolicy } : {}),
     ...(execution ? { executionMinimum: execution.minimum } : {}),
     config,
   });
@@ -1217,7 +1247,10 @@ function scoreRouterTurn(args: {
     const current = session.getWorkPhaseState();
     const meta = current && contractMeta(current);
     if (meta) decision.executionContract = meta;
-    if (restore && current) session.commitWorkPhaseState({ ...current, contract: undefined });
+    if (restore && current) {
+      appendContractOutcome(current, 'broken');
+      session.commitWorkPhaseState({ ...current, contract: undefined });
+    }
   }
   if (assessed.assessment) decision.assessment = assessed.assessment;
   if (assessed.fallbackReason) decision.fallbackReason = assessed.fallbackReason;

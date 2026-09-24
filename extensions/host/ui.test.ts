@@ -70,22 +70,46 @@ describe('formatStatus', () => {
     const base = {
       ...decision, cause: 'execution-contract' as const, routedDown: true, routedPickChanged: true,
     };
+    const valued = {
+      requirement: 0.34,
+      rubric: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
+      measured: { files: 1, directories: 1, steps: 2, testTargets: 0 },
+    };
     const active = formatDecisionDetail({
       ...base,
-      executionContract: { status: 'active', band: 'economy', release: true, submitter: 'beta/strong', targets: 1, steps: 2 },
+      executionContract: {
+        status: 'active', band: 'economy', release: true, minimum: 0.34, submitter: 'beta/strong', targets: 1, steps: 2,
+        ...valued,
+      },
     }, served);
-    expect(active).toContain('  cause:      implementation handed off through an accepted execution plan');
-    expect(active).toContain('  plan:       accepted, economy (1 file, 2 steps); an executor model runs it');
+    expect(active).toContain('  cause:      routed by an accepted execution plan');
+    expect(active).toContain('  plan:       accepted, economy (1 file, 2 steps; executor minimum 0.34); an executor model runs it');
     expect(active).toContain('  note:       task type lowered by the accepted execution plan, so a cheaper model served');
     const broken = formatDecisionDetail({
       ...decision,
       executionContract: {
         status: 'broken', band: 'economy', release: true, submitter: 'beta/strong', targets: 1, steps: 2,
-        breakReason: 'undeclared-target', breaker: 'alpha/cheap', excludedExecutors: ['alpha/cheap'],
+        breakReason: 'undeclared-target', breaker: 'alpha/cheap', excludedExecutors: ['alpha/cheap'], ...valued,
       },
     }, served);
     expect(broken).toContain('  plan:       broken: alpha/cheap edited a file outside the plan; back to beta/strong');
-    expect(broken).toContain('  excluded:   alpha/cheap (broke the plan twice)');
+    expect(broken).toContain('  excluded:   alpha/cheap (failed two plans)');
+    const executed = formatDecisionDetail({
+      ...decision,
+      executionContract: {
+        status: 'executed', band: 'economy', release: true, submitter: 'beta/strong', targets: 1, steps: 2,
+        executor: 'alpha/cheap', executedReason: 'complete', ...valued,
+      },
+    }, served);
+    expect(executed).toContain('  plan:       executed by alpha/cheap; beta/strong reviews it');
+    const kept = formatDecisionDetail({
+      ...decision,
+      executionContract: {
+        status: 'active', band: 'frontier', release: false, keepReason: 'difficulty', submitter: 'beta/strong',
+        targets: 1, steps: 2, ...valued,
+      },
+    }, served);
+    expect(kept).toContain('  plan:       accepted (1 file, 2 steps); beta/strong keeps running it: too hard to hand off');
   });
 
   it('marks context-pressure decisions in the status line', () => {
