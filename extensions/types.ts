@@ -306,6 +306,7 @@ export type DecisionCause =
   | 'continuation-context'
   | 'router-consult'
   | 'execution-contract'
+  | 'investigation-handoff'
   | 'embedding-classify'
   | 'error-fallback'
   | 'no-data'

@@ -19,6 +19,7 @@ import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provid
 import { setDelegationTimeouts } from './delegation.js';
 import { evaluateMutationCall } from '../routing/policy/mutation-gate.js';
 import { handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
+import { submitInvestigationHandoff } from './investigation-handoff-tool.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
 import {
@@ -2099,6 +2100,43 @@ describe('assessment orchestration', () => {
     });
     expect(decision?.cause).toBe('heuristic');
     expect(decision?.fallbackReason).toBe('expiry');
+  });
+
+  describe('investigation handoff', () => {
+    it('stays an investigation until the model requests planning', async () => {
+      const session = await newSession({ consultRouter: true });
+      expect((await session.routeTurn('investigate the flaky test'))?.dimension).toBe('gather');
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
+    });
+
+    it('plans the rest of the entry once requested, and lets the plan hand off to an executor', async () => {
+      const session = await newSession({ consultRouter: true });
+      const first = await session.routeTurn('investigate the flaky test');
+      expect(first?.dimension).toBe('gather');
+      const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
+      const request = { findings: 'the retry wrapper swallows timeouts in src/a.ts', change: 'surface the timeout' };
+      expect(submitInvestigationHandoff(request, routerCtx, harness.session).accepted).toBe(true);
+
+      const planning = await session.routeTurnAgainWithSameUserEntry();
+      expect(planning?.dimension).toBe('plan');
+      expect(planning?.cause).toBe('investigation-handoff');
+      expect(planning?.chosen).toBe('beta/strong');
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
+      // Planning has taken over: a second request no longer applies.
+      expect(submitInvestigationHandoff(request, routerCtx, harness.session).accepted).toBe(false);
+
+      const plan = {
+        steps: [{ kind: 'edit', path: 'src/a.ts', change: 'retry the flaky call' }],
+        remainingWork: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
+      };
+      expect(submitExecutionContract(plan, routerCtx, harness.session).accepted).toBe(true);
+      const executing = await session.routeTurnAgainWithSameUserEntry();
+      expect(executing?.dimension).toBe('implement');
+      expect(executing?.chosen).toBe('alpha/cheap');
+
+      // The next user entry is classified afresh.
+      expect((await session.routeTurn('investigate another flaky test'))?.dimension).toBe('gather');
+    });
   });
 
   describe('execution contract handoff', () => {

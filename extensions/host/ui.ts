@@ -76,6 +76,7 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   'continuation-context': 'keyword classifier, using earlier messages for a short follow-up',
   'router-consult': 'LLM assessment',
   'execution-contract': 'routed by an accepted execution plan',
+  'investigation-handoff': 'the investigation handed the change to planning',
   'embedding-classify': 'multilingual embedding classifier',
   'error-fallback': 'a fallback model served after the top pick failed',
   'no-data': 'no benchmark data; ranked by price and context window',

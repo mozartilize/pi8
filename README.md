@@ -60,6 +60,7 @@ For each turn, the router does these steps:
    - When the executor has edited every listed file, the planning model takes over as a reviewer until the end of your message, so checks listed after the last edit run during that review. If it submits a new plan instead, that counts against the executor.
    - A model that breaks or needs rework on two plans in one task is replaced by a strictly stronger model one band higher.
    - If the model edits before submitting a plan, the router appends one reminder to that edit's result.
+   - An investigation (`gather`) turn whose findings show that files must change can call `request_planning`. The rest of your message then routes as `plan`: a planning model decides the change, and makes it or hands it off with `commit_execution`. If the investigation edits without it, the router appends one reminder to that edit's result.
    - `/router-why` shows the plan on its `plan:` line. The decision log records each plan's ratings, measurements, and outcome, so the weights can be fitted to real results later.
 6. **Route subagents.** At spawn time, the router scores each visible structured child. It uses the role's minimum task type, the task, scoring weights, and how full the context is. The task assessment can only raise that minimum. Explicit child models and user or project pins always win. For children inside a `workflowScript` string, the router sets only the tool's default model. See [`ARCHITECTURE.md`](ARCHITECTURE.md#4-subagent-routing) for the details.
 

@@ -7,6 +7,7 @@ import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 
 import { CONTRACT_NUDGE } from './serve/execution-contract-tool.js';
+import { INVESTIGATION_NUDGE } from './serve/investigation-handoff-tool.js';
 import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
@@ -899,9 +900,10 @@ describe('mutation gate hooks', () => {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
       registerTool,
     } as unknown as ExtensionAPI);
-    expect(registerTool).toHaveBeenCalledTimes(1);
+    // Both handoff tools are registered once, up front, so the tool list never changes mid-session.
+    expect(registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name))
+      .toEqual(['commit_execution', 'request_planning']);
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
-    expect(tool.name).toBe('commit_execution');
 
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
     defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
@@ -973,6 +975,69 @@ describe('mutation gate hooks', () => {
     const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8');
     expect(raw).toContain('"rejectReason":"pattern-path"');
     expect(raw).not.toContain('secret-dir');
+  });
+
+  it('hands an investigation to planning through request_planning, logging codes but never findings', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = registerTool.mock.calls[1]![0] as {
+      name: string;
+      execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }>;
+    };
+    expect(tool.name).toBe('request_planning');
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'inspect', multiWorkEngaged: false }));
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
+    defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
+    const request = { findings: 'secret-finding in src/a.ts', change: 'secret-change' };
+
+    expect((await tool.execute('p0', { findings: ' ', change: 'x' }, undefined, undefined, ctx)).details.accepted).toBe(false);
+    expect((await tool.execute('p1', request, undefined, undefined, ctx)).details.accepted).toBe(true);
+    expect(defaultRouterSession.getWorkPhaseState()?.planningRequested).toBe(true);
+
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
+    expect((await tool.execute('p2', request, undefined, undefined, ctx)).details.accepted).toBe(false);
+
+    const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8');
+    const actions = raw.trim().split('\n').map((line) => JSON.parse(line) as { investigationHandoff?: unknown })
+      .map((record) => record.investigationHandoff);
+    expect(actions).toEqual([
+      { action: 'reject', rejectReason: 'missing-findings' },
+      { action: 'accept' },
+      { action: 'reject', rejectReason: 'not-investigation' },
+    ]);
+    expect(raw).not.toContain('secret');
+  });
+
+  it('declines request_planning for a pinned model', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = registerTool.mock.calls[1]![0] as { execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'inspect', multiWorkEngaged: false }));
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
+    defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
+    defaultRouterSession.setManualModel('test/cheap');
+    const request = { findings: 'f', change: 'c' };
+    expect((await tool.execute('p1', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
+    expect(defaultRouterSession.getWorkPhaseState()?.planningRequested).toBeUndefined();
+  });
+
+  it('reminds an investigation of request_planning once, on its first edit result, and never blocks the edit', async () => {
+    const handlers = await makeToolHandlers();
+    const content = [{ type: 'text', text: 'edited' }];
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'inspect', multiWorkEngaged: false }));
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
+    defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
+
+    expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, routerAutoCtx))
+      .toBeUndefined();
+    const toolResult = handlers.get('tool_result')!;
+    const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
+    expect(first.content.map((c) => c.text)).toEqual(['edited', INVESTIGATION_NUDGE]);
+    expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
+
+    defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, investigationNudged: undefined, planningRequested: true });
+    expect(await toolResult({ toolName: 'write', toolCallId: 'w1', content }, routerAutoCtx)).toBeUndefined();
   });
 
   it('appends the handoff reminder once to the first plan/review edit result without a plan', async () => {

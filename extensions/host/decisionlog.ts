@@ -57,7 +57,7 @@ function decisionLogPath(storageBase?: string): string {
 export interface DecisionLogEntry {
   ts: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'assessment-metric' | 'mutation-gate' | 'subagent-spend' | 'execution-contract';
+  kind?: 'decision' | 'assessment-metric' | 'mutation-gate' | 'subagent-spend' | 'execution-contract' | 'investigation-handoff';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -101,6 +101,12 @@ export interface DecisionLogEntry {
   };
   /** Intent cache key joining assessment telemetry to routing decisions. */
   intentKey?: string;
+  /** Set on `kind: 'investigation-handoff'` records only. */
+  investigationHandoff?: {
+    action: InvestigationHandoffSignal['action'];
+    /** Router-authored reject code, never the findings. */
+    rejectReason?: string;
+  };
   /** Set on `kind: 'execution-contract'` records only. */
   executionContract?: {
     /** `route` marks a routing decision the contract shaped. */
@@ -304,6 +310,49 @@ export function appendExecutionContractSignal(
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
         ...(signal.outcome ? { outcome: signal.outcome } : {}),
         ...(signal.meta ? { meta: signal.meta } : {}),
+      },
+    };
+    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+  } catch {
+    // A logging failure must never fail the user's turn.
+  }
+}
+
+/** One investigation → planning handoff transition. Model keys and codes only: never the findings. */
+export interface InvestigationHandoffSignal {
+  intentKey: string;
+  /** Model that requested planning, was declined, or was reminded. */
+  served: string;
+  /** `nudge` marks an investigation edit made without a handoff. */
+  action: 'accept' | 'reject' | 'nudge';
+  rejectReason?: string;
+}
+
+/** Append an investigation handoff transition. Best-effort; never throws into the tool path. */
+export function appendInvestigationHandoffSignal(
+  signal: InvestigationHandoffSignal,
+  storageBase?: string,
+): void {
+  try {
+    const path = decisionLogPath(storageBase);
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const entry: DecisionLogEntry = {
+      ts: Date.now(),
+      kind: 'investigation-handoff',
+      dimension: 'gather',
+      chosen: signal.served,
+      served: signal.served,
+      viaFallback: false,
+      confidence: 1,
+      routedUp: false,
+      cause: 'investigation-handoff',
+      reason: `investigation handoff ${signal.action}`,
+      chain: [signal.served],
+      intentKey: signal.intentKey,
+      investigationHandoff: {
+        action: signal.action,
+        ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
       },
     };
     appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');

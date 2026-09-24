@@ -46,6 +46,10 @@ export interface WorkPhaseState {
   excludedExecutors?: string[];
   /** The one handoff reminder for this entry was already appended. */
   contractNudged?: boolean;
+  /** The investigation handed this entry to planning; never inherited. */
+  planningRequested?: boolean;
+  /** The one planning reminder for this investigation was already appended. */
+  investigationNudged?: boolean;
 }
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
@@ -145,5 +149,7 @@ export function inheritThinContinuation(
     observedMutationTools: 0,
     contract: undefined,
     contractNudged: undefined,
+    planningRequested: undefined,
+    investigationNudged: undefined,
   };
 }

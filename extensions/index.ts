@@ -81,6 +81,7 @@ import {
 } from './serve/router-session-state.js';
 import { evaluateMutationCall, recordMutationResult } from './routing/policy/mutation-gate.js';
 import { classifyMutationCall } from './routing/policy/mutation-detector.js';
+import { nudgeInvestigationOnEdit, registerInvestigationHandoffTool } from './serve/investigation-handoff-tool.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
 const SUBAGENT_TOOL = 'subagent';
@@ -678,6 +679,7 @@ export default async function autoModelRouterExtension(
   // provider (e.g. github-copilot/gpt-5.4), so routing never happens.
   registerAutoRouterProvider(pi, undefined, session, runtime);
   registerExecutionContractTool(pi, session);
+  registerInvestigationHandoffTool(pi, session);
 
   const routingState = new SubagentRoutingState();
   const subagentCalls = new Map<string, SubagentCallObservation>();
@@ -763,6 +765,6 @@ export default async function autoModelRouterExtension(
       ctx,
       session,
     );
-    return nudgeContractOnEdit(event, session);
+    return nudgeContractOnEdit(event, session) ?? nudgeInvestigationOnEdit(event, session);
   });
 }

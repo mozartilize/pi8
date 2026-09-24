@@ -87,6 +87,7 @@ import {
   type ExecutionContract,
 } from '../routing/policy/execution-contract.js';
 import { appendContractOutcome, closeContractEntry } from './execution-contract-tool.js';
+import { investigationDimension } from '../routing/policy/investigation-handoff.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -1208,8 +1209,12 @@ function scoreRouterTurn(args: {
   // submitter's task type and thinking level, until an invocation serves.
   const restore = contract?.status === 'broken' ? contract : undefined;
   const handBack = restore ?? (reviewing ? contract : undefined);
-  const routedDimension = reviewing ? 'review' : implementing ? 'implement' : baseDimension;
-  const routedCause = reviewing || implementing ? 'execution-contract' : baseCause;
+  // An investigation handed to planning is planned for the rest of the entry,
+  // including when a broken plan hands back to its submitter.
+  const entryDimension = investigationDimension(intentState, baseDimension);
+  const entryCause = entryDimension !== baseDimension ? 'investigation-handoff' : baseCause;
+  const routedDimension = reviewing ? 'review' : implementing ? 'implement' : entryDimension;
+  const routedCause = reviewing || implementing ? 'execution-contract' : entryCause;
   const { multiWorkPolicy } = advanceWorkPhase({
     cacheHit,
     turnInput,
