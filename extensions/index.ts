@@ -710,6 +710,10 @@ export default async function autoModelRouterExtension(
 
   pi.on('agent_settled', () => closeContractOnSettle(session));
 
+  // Both rewrite the history, so no cached prefix still matches it.
+  pi.on('session_compact', () => session.clearWarmCaches());
+  pi.on('session_tree', () => session.clearWarmCaches());
+
   pi.on('before_agent_start', (event, ctx) => handleBeforeAgentStart(event, ctx, session));
 
   pi.on('turn_start', (event, ctx) => handleTurnStart(event, ctx, pi, session, runtime));

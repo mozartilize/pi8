@@ -223,6 +223,10 @@ export class RouterSession {
   private served: ServedInfo | undefined;
   /** Preserve the incumbent while the next provider invocation is in flight. */
   private previousServed: ServedInfo | undefined;
+  /** Estimated context tokens of the request being routed. */
+  private requestTokens = 0;
+  /** Per served candidate key: when it last served and the context tokens it sent. */
+  private warmCaches = new Map<string, { at: number; tokens: number }>();
   private semiHold: { intentKey: string; model: string } | undefined;
   private notifiedModel: string | undefined;
   /**
@@ -305,6 +309,30 @@ export class RouterSession {
 
   setLastServed(s: ServedInfo | undefined): void {
     this.served = s;
+    if (s) this.warmCaches.set(servedKey(s), { at: Date.now(), tokens: this.requestTokens });
+  }
+
+  /** Record the context size of the request being routed; its serve warms that much cache. */
+  noteRequestTokens(tokens: number): void {
+    this.requestTokens = Math.max(0, tokens);
+  }
+
+  /**
+   * Tokens each served candidate key's own prompt cache still holds: keys that
+   * served within `ttlMs`, with the context they sent. A cached request larger
+   * than the current one cannot be its prefix, so it holds nothing.
+   */
+  warmPrefixTokens(now: number, currentTokens: number, ttlMs: number): Map<string, number> {
+    const warm = new Map<string, number>();
+    for (const [key, entry] of this.warmCaches) {
+      if (now - entry.at < ttlMs && entry.tokens <= currentTokens) warm.set(key, entry.tokens);
+    }
+    return warm;
+  }
+
+  /** Forget every cached prefix: compaction or tree navigation rewrote the history. */
+  clearWarmCaches(): void {
+    this.warmCaches.clear();
   }
 
   updateLastServed(patch: Partial<ServedInfo>): void {
@@ -618,6 +646,8 @@ export class RouterSession {
     this.decision = undefined;
     this.chosenRegistryId = undefined;
     this.previousServed = undefined;
+    this.requestTokens = 0;
+    this.warmCaches.clear();
     this.semiHold = undefined;
     this.served = undefined;
     this.notifiedModel = undefined;

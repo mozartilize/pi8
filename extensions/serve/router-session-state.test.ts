@@ -380,3 +380,30 @@ describe('trajectory evidence ownership', () => {
     expect(decision?.signals.find((s) => s.kind === 'aor')?.severity).toBe('none');
   });
 });
+
+describe('warm prompt caches', () => {
+  it('reports each served key with the context it sent while its cache lives', () => {
+    const session = new RouterSession();
+    session.noteRequestTokens(40_000);
+    session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
+    session.noteRequestTokens(55_000);
+    session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'xhigh', viaFallback: false, accumulatedCost: 0 });
+    const now = Date.now();
+    expect(session.warmPrefixTokens(now, 60_000, 300_000))
+      .toEqual(new Map([['codex/luna:high', 40_000], ['codex/luna:xhigh', 55_000]]));
+    // Expired caches and requests larger than the current context hold nothing.
+    expect(session.warmPrefixTokens(now + 300_000, 60_000, 300_000)).toEqual(new Map());
+    expect(session.warmPrefixTokens(now, 50_000, 300_000)).toEqual(new Map([['codex/luna:high', 40_000]]));
+  });
+
+  it('forgets every cache when the history is rewritten or the session resets', () => {
+    const session = new RouterSession();
+    session.noteRequestTokens(40_000);
+    session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
+    session.clearWarmCaches();
+    expect(session.warmPrefixTokens(Date.now(), 60_000, 300_000)).toEqual(new Map());
+    session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
+    session.reset();
+    expect(session.warmPrefixTokens(Date.now(), 60_000, 300_000)).toEqual(new Map());
+  });
+});

@@ -123,6 +123,13 @@ export interface Candidate {
   vision?: boolean;
   reasoning?: boolean;
   thinkingLevelMap?: ThinkingLevelMap;
+  /**
+   * True when a reasoning-effort change keeps this model's prompt cache. Only
+   * per-message effort does (`anthropic-messages` with
+   * `compat.supportsMidConvoEffort`): elsewhere effort is part of the cache
+   * key, so each effort level has a cache of its own.
+   */
+  effortSharesCache?: boolean;
   /** Registry pricing in USD per 1M tokens. Absent when unknown. */
   cost?: {
     input?: number;

@@ -384,11 +384,7 @@ describe('scorer', () => {
       expect(decision.chosen).toBe('test/cheap');
     });
 
-    it('gives a same-model effort change partial retention credit for the static prefix', () => {
-      // A route-up that only raises effort on the incumbent model reuses the
-      // static system/tool prefix cache (effort invalidates only message
-      // blocks), so it must not be penalized as heavily as switching to a
-      // different model that shares no cache at all.
+    function effortChangeFixture(overrides: Partial<Candidate> = {}) {
       const incumbentLow = candidate('test/model', {
         bench: benchRow('test/model', {
           effort: 'low', benchSlug: 'model-low',
@@ -406,6 +402,7 @@ describe('scorer', () => {
         }),
         reasoning: true, effort: 'high',
         cost: { input: 0.000003, output: 0.000015 },
+        ...overrides,
       });
       const rival = candidate('test/rival', {
         bench: benchRow('test/rival', {
@@ -414,19 +411,28 @@ describe('scorer', () => {
         }),
         cost: { input: 0.0000029, output: 0.0000149 },
       });
-      const cands = [incumbentLow, sameModelHigh, rival];
-      const opts = {
-        estimatedContextTokens: 80000,
-        incumbentRegistryId: 'test/model:low',
-        switchMargin: 0.15,
+      return {
+        cands: [incumbentLow, sameModelHigh, rival],
+        opts: { estimatedContextTokens: 80000, incumbentRegistryId: 'test/model:low', switchMargin: 0.15 },
       };
-      // No static credit: the marginally cheaper different model wins the switch.
+    }
+
+    it('credits a same-model effort change only for the prefix its own cache still holds', () => {
+      // Where effort is part of the cache key, a cold effort level shares no
+      // cache with the incumbent: it is priced like any other switch.
+      const { cands, opts } = effortChangeFixture();
       expect(pickBest(cands, 'lightweight', undefined, opts).chosen).toBe('test/rival');
-      // With a large static prefix, the same-model effort change keeps most of
-      // the stickiness and wins instead.
-      expect(
-        pickBest(cands, 'lightweight', undefined, { ...opts, staticPrefixTokens: 60000 }).chosen,
-      ).toBe('test/model:high');
+      // A level that served recently still holds its prefix and keeps the stickiness.
+      const warm = { ...opts, warmPrefixTokens: new Map([['test/model:high', 60000]]) };
+      expect(pickBest(cands, 'lightweight', undefined, warm).chosen).toBe('test/model:high');
+      // A warm cache of the incumbent's own level does not carry over to another level.
+      const other = { ...opts, warmPrefixTokens: new Map([['test/model:low', 60000]]) };
+      expect(pickBest(cands, 'lightweight', undefined, other).chosen).toBe('test/rival');
+    });
+
+    it('credits an effort change in full where effort shares the model\'s cache', () => {
+      const { cands, opts } = effortChangeFixture({ effortSharesCache: true });
+      expect(pickBest(cands, 'lightweight', undefined, opts).chosen).toBe('test/model:high');
     });
 
     it('prices the effort-change credit by the INCUMBENT\'s own cache discount, not the destination candidate\'s', () => {
@@ -436,7 +442,7 @@ describe('scorer', () => {
       // pricing published on whichever effort variant is being switched to.
       // Here the incumbent's cacheRead sits nearly at its cacheWrite price
       // (this provider barely discounts a cache hit at all), so the credit
-      // must shrink to near-nothing even with a large static prefix, and the
+      // must shrink to nothing even with a large warm prefix, and the
       // marginally cheaper rival wins despite sharing the same model.
       const incumbentLow = candidate('test/model', {
         bench: benchRow('test/model', {
@@ -473,16 +479,15 @@ describe('scorer', () => {
         estimatedContextTokens: 80000,
         incumbentRegistryId: 'test/model:low',
         switchMargin: 0.15,
-        staticPrefixTokens: 60000,
+        warmPrefixTokens: new Map([['test/model:high', 60000], ['test/rival', 60000]]),
       };
       expect(pickBest(cands, 'lightweight', undefined, opts).chosen).toBe('test/rival');
     });
 
     it('prices a full model change on the entire context, never just the message tokens', () => {
-      // A different provider/model shares no cache at all: it must get zero
-      // switch credit regardless of staticPrefixTokens, distinct from the
-      // same-model effort change above which gets a partial (static-only)
-      // credit. Both incumbentLow and rival share the same steep cache
+      // A different provider/model shares no cache with the incumbent: it gets
+      // zero switch credit even when its own cache is warm, distinct from a
+      // same-model effort change onto a warm level. Both incumbentLow and rival share the same steep cache
       // discount so any difference in outcome is attributable only to the
       // switch mechanism, not to underlying price/quality gaps.
       const incumbentLow = candidate('test/model', {
@@ -504,7 +509,7 @@ describe('scorer', () => {
         estimatedContextTokens: 80000,
         incumbentRegistryId: 'test/model',
         switchMargin: 0.15,
-        staticPrefixTokens: 60000,
+        warmPrefixTokens: new Map([['test/model:high', 60000], ['test/rival', 60000]]),
       };
       const decision = pickBest(cands, 'lightweight', undefined, opts);
       // Identical price/quality: only the switch credit can break the tie, and
@@ -514,9 +519,8 @@ describe('scorer', () => {
 
     it('exempts a same-model candidate at the model\'s own (unmeasured) default effort from the effort-change discount', () => {
       // A same-model candidate with no measured effort represents the model's
-      // default call shape — no reasoning-driven message delta invalidates the
-      // cache, so it keeps the FULL incumbent credit rather than the reduced
-      // static-only share an explicit effort change receives.
+      // default call shape, so it keeps the FULL incumbent credit rather than
+      // the warm-prefix share an explicit effort change receives.
       const incumbentHigh = candidate('test/model', {
         bench: benchRow('test/model', {
           effort: 'high', benchSlug: 'model-high',
@@ -546,9 +550,9 @@ describe('scorer', () => {
         incumbentRegistryId: 'test/model:high',
         switchMargin: 0.15,
         // Deliberately small: the default-effort exemption must still grant
-        // the FULL credit even though a static prefix this small would only
+        // the FULL credit even though a warm prefix this small would only
         // give an ordinary effort change a negligible fraction of it.
-        staticPrefixTokens: 1000,
+        warmPrefixTokens: new Map([['test/model', 1000]]),
       };
       const decision = pickBest(cands, 'lightweight', undefined, opts);
       // sameModelDefaultEffort is priced slightly worse than rival, so on
@@ -566,7 +570,7 @@ describe('scorer', () => {
       // replaces. Absent `cacheRead` (or a `cacheWrite`/`input` write basis),
       // every candidate — including the incumbent itself and a same-model
       // effort change — is scored on quality/cost/speed alone, regardless of
-      // `staticPrefixTokens`.
+      // `warmPrefixTokens`.
       const incumbentLow = candidate('test/model', {
         bench: benchRow('test/model', {
           effort: 'low', benchSlug: 'model-low',
@@ -600,10 +604,13 @@ describe('scorer', () => {
       };
       // No pricing, no credit: the marginally cheaper different model wins.
       expect(pickBest(cands, 'lightweight', undefined, opts).chosen).toBe('test/rival');
-      // A large static prefix must not resurrect a credit the missing pricing
+      // A large warm prefix must not resurrect a credit the missing pricing
       // cannot support — the outcome is unchanged.
       expect(
-        pickBest(cands, 'lightweight', undefined, { ...opts, staticPrefixTokens: 60000 }).chosen,
+        pickBest(cands, 'lightweight', undefined, {
+          ...opts,
+          warmPrefixTokens: new Map([['test/model:high', 60000]]),
+        }).chosen,
       ).toBe('test/rival');
     });
 
@@ -637,7 +644,7 @@ describe('scorer', () => {
         estimatedContextTokens: 80000,
         incumbentRegistryId: 'test/model:low',
         switchMargin: 0.15,
-        staticPrefixTokens: 60000,
+        warmPrefixTokens: new Map([['test/model:high', 60000], ['test/rival', 60000]]),
       };
       const forward = pickBest([incumbentLow, sameModelHigh, rival], 'lightweight', undefined, opts).chosen;
       const reversed = pickBest([rival, sameModelHigh, incumbentLow], 'lightweight', undefined, opts).chosen;
@@ -665,7 +672,7 @@ describe('scorer', () => {
         estimatedContextTokens: 80000,
         incumbentRegistryId: 'test/model:low',
         switchMargin: 0.15,
-        staticPrefixTokens: 60000,
+        warmPrefixTokens: new Map([['test/model:high', 60000], ['test/rival', 60000]]),
         isSubagentSpawn: true,
       });
       expect(decision.chosen).toBe('test/rival');
@@ -735,6 +742,15 @@ describe('scorer', () => {
       expect(c.vision).toBe(true);
       expect(c.contextWindow).toBe(128000);
       expect(c.cost?.input).toBe(2.5);
+    });
+
+    it('marks effort as sharing the cache only for per-message effort on anthropic-messages', () => {
+      const perMessage = { supportsMidConvoEffort: true };
+      expect(buildCandidate(registryModel('a/claude', { api: 'anthropic-messages', compat: perMessage })).effortSharesCache)
+        .toBe(true);
+      expect(buildCandidate(registryModel('a/claude', { api: 'anthropic-messages' })).effortSharesCache).toBeUndefined();
+      expect(buildCandidate(registryModel('o/gpt', { api: 'openai-responses', compat: perMessage })).effortSharesCache)
+        .toBeUndefined();
     });
 
     it('preserves an explicit reasoning level when the model supports it', () => {

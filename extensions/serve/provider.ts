@@ -175,6 +175,12 @@ function textFromBlock(block: unknown): string {
 // scale so context-pressure detection, the long-context guard, and the
 // cache-retention bonus don't treat an image-heavy session as near-empty.
 const ESTIMATED_IMAGE_CHARS = 4800;
+/**
+ * How long a served candidate's prompt cache counts as warm: Anthropic's
+ * default cache lifetime, and the short end of OpenAI's in-memory retention.
+ * The shorter bound never credits a cache that has already expired.
+ */
+const PROMPT_CACHE_TTL_MS = 5 * 60_000;
 
 function countImageBlocks(messages: readonly Message[] | undefined): number {
   let count = 0;
@@ -402,13 +408,7 @@ function measureTurnInput(context: Context, config: AutoRouterConfig) {
     (systemPrompt ? systemPrompt + '\n' : '') + allMessagesText(context.messages);
   const imageChars = countImageBlocks(context.messages) * ESTIMATED_IMAGE_CHARS;
   const estContextTokens = estimateTokenCount(fullText) + Math.ceil(imageChars / 4);
-  // The static system prefix survives an incumbent effort change in
-  // the provider cache (effort only invalidates message blocks), so
-  // the switch bonus credits it. Tool-schema tokens aren't counted
-  // here, so this under-states the preserved prefix — the safe way to
-  // err (never over-credit a switch).
-  const staticPrefixTokens = systemPrompt ? estimateTokenCount(systemPrompt) : 0;
-  return { turnInput, systemPrompt, needsVision, estContextTokens, staticPrefixTokens };
+  return { turnInput, systemPrompt, needsVision, estContextTokens };
 }
 
 /**
@@ -937,6 +937,7 @@ async function prepareRouterTurn(args: {
 
   const config = loadConfig();
   const measured = measureTurnInput(context, config);
+  session.noteRequestTokens(measured.estContextTokens);
   const intent = await resolveBaseIntent(
     { turnInput: measured.turnInput, systemPrompt: measured.systemPrompt, config },
     session,
@@ -1165,7 +1166,7 @@ function scoreRouterTurn(args: {
 }): { kind: 'ready'; scored: ScoredTurn } | RouterTurnOutcome {
   const { prepared, assessed, options, session, pinned } = args;
   const { config, measured, intent, candidates, trajectoryEscalation } = prepared;
-  const { turnInput, needsVision, estContextTokens, staticPrefixTokens } = measured;
+  const { turnInput, needsVision, estContextTokens } = measured;
   const { classifyResult, cacheHit, confidence } = intent;
   const { baseDimension, baseCause, depthWouldEscalate, vetoDepthEscalation } = assessed;
 
@@ -1228,7 +1229,7 @@ function scoreRouterTurn(args: {
     userReasoning: requestedReasoning as ThinkingLevel | undefined,
     userReasoningOverride,
     estimatedContextTokens: estContextTokens,
-    staticPrefixTokens,
+    warmPrefixTokens: session.warmPrefixTokens(Date.now(), estContextTokens, PROMPT_CACHE_TTL_MS),
     needsVision,
     incumbentRegistryId,
     incumbentResolvedDimension: handBack?.submitterDimension ??

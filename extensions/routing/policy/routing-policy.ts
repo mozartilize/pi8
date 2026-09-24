@@ -44,12 +44,11 @@ export interface RoutingPolicyInput {
   userReasoningOverride?: boolean;
   estimatedContextTokens: number;
   /**
-   * Estimated tokens in the static prompt prefix (system prompt) an incumbent
-   * effort change preserves in the provider cache. Feeds the graded switch
-   * bonus so an effort bump on the incumbent is priced below a full model
-   * change. Absent leaves an effort change scored like any other switch.
+   * Tokens each candidate key's own prompt cache still holds (see
+   * `ScoreOpts.warmPrefixTokens`). Feeds the switch bonus so an effort change
+   * onto a recently served level is priced below a cold one.
    */
-  staticPrefixTokens?: number;
+  warmPrefixTokens?: ReadonlyMap<string, number>;
   needsVision: boolean;
   incumbentRegistryId?: string;
   /**
@@ -390,7 +389,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     userReasoning,
     userReasoningOverride,
     estimatedContextTokens,
-    staticPrefixTokens,
+    warmPrefixTokens,
     needsVision,
     incumbentRegistryId,
     incumbentResolvedDimension,
@@ -436,7 +435,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     needsVision,
     isSubagentSpawn: false,
     switchMargin: config.switchMargin,
-    ...(staticPrefixTokens != null ? { staticPrefixTokens } : {}),
+    ...(warmPrefixTokens != null ? { warmPrefixTokens } : {}),
   };
   const pickOpts: ScoreOpts = executionMinimum != null
     ? { ...baseOpts, executionMinimum }

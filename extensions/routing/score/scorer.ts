@@ -465,15 +465,12 @@ export interface ScoreOpts {
   /** Maximum incumbent-retention bonus for mid-session model switches. */
   switchMargin?: number;
   /**
-   * Estimated tokens in the static prompt prefix (system prompt + tool
-   * schemas) that a same-model effort change preserves in the provider cache.
-   * An effort change invalidates only the message blocks, so switching to a
-   * different effort of the incumbent model is strictly cheaper than switching
-   * models (which shares no cache at all) — it keeps this prefix warm. Absent /
-   * zero disables the partial credit, leaving an effort change scored like any
-   * other switch.
+   * Tokens each candidate key's own prompt cache still holds for this
+   * conversation: keys that served within the cache lifetime, with the
+   * context they sent. Where effort is part of the cache key, this is all a
+   * same-model effort change keeps. Absent grants an effort change no credit.
    */
-  staticPrefixTokens?: number;
+  warmPrefixTokens?: ReadonlyMap<string, number>;
   /**
    * Request-local terminal/inspect floors for an eligible compound-implement
    * intent. Absent selects the current live tier/promotion constants
@@ -970,9 +967,12 @@ function scoreWithinTiers(
  * an unpriced incumbent is scored on ordinary quality/cost/speed merits.
  *
  * A full model change preserves none of the cache (credit 0); the exact
- * incumbent match preserves all of it; a same-model effort change keeps the
- * static prefix warm, so its credit is priced on `staticTokens` alone. A
- * same-model candidate with no measured effort is the model's default call
+ * incumbent match preserves all of it. A same-model effort change keeps all
+ * of it only where effort shares the model's cache; elsewhere each effort
+ * level has its own cache (OpenAI reports `reasoning_effort_changed`, and
+ * top-level Anthropic effort invalidates the message blocks), so the credit
+ * covers only the prefix that level's cache still holds from a recent serve.
+ * A same-model candidate with no measured effort is the model's default call
  * shape and keeps the full credit like an exact incumbent match.
  */
 function applySwitchBonus(scored: ScoredCandidate[], opts: ScoreOpts): void {
@@ -981,10 +981,6 @@ function applySwitchBonus(scored: ScoredCandidate[], opts: ScoreOpts): void {
   const incumbent = parseCandidateKey(opts.incumbentRegistryId);
   const incumbentScored = scored.find((s) => candidateKey(s) === opts.incumbentRegistryId);
   const total = Math.max(1, opts.estimatedContextTokens);
-  // Underestimated on purpose: we can measure the system prompt but not the
-  // tool-schema tokens, so the real preserved share is at least this — the
-  // conservative direction never over-credits a switch.
-  const staticTokens = clamp(opts.staticPrefixTokens ?? 0, 0, total);
 
   const incumbentCost = incumbentScored?.cost;
   // A non-finite or negative cost field is garbage the registry never emits,
@@ -1001,7 +997,6 @@ function applySwitchBonus(scored: ScoredCandidate[], opts: ScoreOpts): void {
 
   if (perTokenLoss == null) return;
   const modelChangeBonus = Math.min(total * perTokenLoss, margin);
-  const effortChangeBonus = Math.min(staticTokens * perTokenLoss, margin);
   for (const s of scored) {
     const key = candidateKey(s);
     if (key === opts.incumbentRegistryId) {
@@ -1011,7 +1006,12 @@ function applySwitchBonus(scored: ScoredCandidate[], opts: ScoreOpts): void {
     }
     const p = parseCandidateKey(key);
     if (p.provider !== incumbent.provider || p.id !== incumbent.id) continue;
-    s.score += p.effort == null ? modelChangeBonus : effortChangeBonus;
+    if (p.effort == null || s.effortSharesCache) {
+      s.score += modelChangeBonus;
+      continue;
+    }
+    const warm = clamp(opts.warmPrefixTokens?.get(key) ?? 0, 0, total);
+    s.score += Math.min(warm * perTokenLoss, margin);
   }
 }
 
@@ -1335,6 +1335,8 @@ export interface RegistryModelInfo {
   thinkingLevelMap?: ThinkingLevelMap;
   input?: readonly ('text' | 'image')[];
   cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+  /** API-specific compatibility flags; only `supportsMidConvoEffort` is read. */
+  compat?: object;
 }
 
 export function buildCandidate(
@@ -1355,6 +1357,12 @@ export function buildCandidate(
     vision: model.input?.includes('image') ?? false,
     reasoning: model.reasoning,
     thinkingLevelMap: model.thinkingLevelMap,
+    // pi-ai sends effort per message only on these models, which keeps the
+    // cached prefix; every other call path sets effort on the request.
+    ...(model.api === 'anthropic-messages' &&
+      (model.compat as { supportsMidConvoEffort?: unknown } | undefined)?.supportsMidConvoEffort === true
+      ? { effortSharesCache: true }
+      : {}),
     cost: model.cost,
     available: true,
   };
