@@ -8,6 +8,7 @@
  * what kind of work this is and may adjust the routed dimension under the
  * assessment safety caps.
  */
+import { createHash } from 'node:crypto';
 import {
   createAssistantMessageEventStream,
   type Api,
@@ -391,6 +392,14 @@ export function expandModelCandidates(
 }
 
 // ─── Turn-callback stages ────────────────────────────────────────────
+
+/** Hash of what precedes the conversation in every request: system prompt and tool list. */
+function promptHeadIdentity(context: Context): string {
+  const hash = createHash('sha256');
+  hash.update(extractSystemPrompt(context) ?? '');
+  for (const tool of context.tools ?? []) hash.update(`\0${tool.name}\0${tool.description}`);
+  return hash.digest('hex');
+}
 
 function measureTurnInput(context: Context, config: AutoRouterConfig) {
   const turnInput = getTurnClassificationInput(
@@ -937,7 +946,7 @@ async function prepareRouterTurn(args: {
 
   const config = loadConfig();
   const measured = measureTurnInput(context, config);
-  session.noteRequestTokens(measured.estContextTokens);
+  session.noteRequest(measured.estContextTokens, promptHeadIdentity(context));
   const intent = await resolveBaseIntent(
     { turnInput: measured.turnInput, systemPrompt: measured.systemPrompt, config },
     session,

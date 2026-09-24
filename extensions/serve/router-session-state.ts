@@ -225,6 +225,8 @@ export class RouterSession {
   private previousServed: ServedInfo | undefined;
   /** Estimated context tokens of the request being routed. */
   private requestTokens = 0;
+  /** Identity of the prompt head (system prompt, tool list) the warm caches were written with. */
+  private prefixIdentity: string | undefined;
   /** Per served candidate key: when it last served and the context tokens it sent. */
   private warmCaches = new Map<string, { at: number; tokens: number }>();
   private semiHold: { intentKey: string; model: string } | undefined;
@@ -312,8 +314,14 @@ export class RouterSession {
     if (s) this.warmCaches.set(servedKey(s), { at: Date.now(), tokens: this.requestTokens });
   }
 
-  /** Record the context size of the request being routed; its serve warms that much cache. */
-  noteRequestTokens(tokens: number): void {
+  /**
+   * Record the request being routed: its serve warms `tokens` of cache. A
+   * different prompt head (skills, tools, or system prompt changed) shares no
+   * prefix with any earlier request, so every warm cache is forgotten.
+   */
+  noteRequest(tokens: number, prefixIdentity: string): void {
+    if (this.prefixIdentity !== prefixIdentity) this.warmCaches.clear();
+    this.prefixIdentity = prefixIdentity;
     this.requestTokens = Math.max(0, tokens);
   }
 
@@ -647,6 +655,7 @@ export class RouterSession {
     this.chosenRegistryId = undefined;
     this.previousServed = undefined;
     this.requestTokens = 0;
+    this.prefixIdentity = undefined;
     this.warmCaches.clear();
     this.semiHold = undefined;
     this.served = undefined;

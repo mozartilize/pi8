@@ -1439,7 +1439,7 @@ describe('scorer — task-axis eligibility', () => {
   });
 
   it('admits a review specialist that clears coding and sanity floors', () => {
-    const frontier = make('test/review-frontier', { intelligence: 100, coding: 100 }, 20);
+    const frontier = make('test/review-frontier', { intelligence: 100, agenticCoding: 100 }, 20);
     const specialist = make('test/review-specialist', { intelligence: 50, coding: 90 }, 1);
 
     expect(pickBest([frontier, specialist], 'review').chosen).toBe('test/review-specialist');
@@ -1512,6 +1512,20 @@ describe('scorer — promotion and tier ordering', () => {
       candidateKey: 'test/promotion-candidate',
       excludedReason: 'promoted',
     });
+  });
+
+  it('never promotes a candidate below an execution contract minimum', () => {
+    const frontier = make('test/promotion-frontier', { intelligence: 100, agenticCoding: 100 }, 20);
+    const cheap = make('test/promotion-candidate', { intelligence: 75, agenticCoding: 75 }, 1);
+    expect(pickBest([frontier, cheap], 'implement').chosen).toBe('test/promotion-candidate');
+    const decision = pickBest([frontier, cheap], 'implement', undefined, {
+      estimatedContextTokens: 100,
+      executionMinimum: 0.80,
+    });
+    expect(decision.chosen).toBe('test/promotion-frontier');
+    expect(decision.candidateDiagnostics).not.toContainEqual(
+      expect.objectContaining({ candidateKey: 'test/promotion-candidate', excludedReason: 'promoted' }),
+    );
   });
 
   it('does not promote a candidate whose quality was estimated rather than measured', () => {

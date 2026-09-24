@@ -819,7 +819,12 @@ function computeEligibility(
     ...(opts.executionMinimum != null ? { qualityRatio: opts.executionMinimum } : {}),
     ...(knowledgeCritical && knowledgeAvailable ? { knowledgeFloor: KNOWLEDGE_QUALITY_FLOOR } : {}),
   };
-  const activePromotionPolicy = opts.multiWorkPolicy
+  // An execution contract's minimum already is the sanctioned relaxation
+  // for its plan; promoting below it would let price override the plan's
+  // assessed difficulty.
+  const activePromotionPolicy = opts.executionMinimum != null
+    ? { enabled: false, qualityRatio: opts.executionMinimum, recordsInspectPromotion: false }
+    : opts.multiWorkPolicy
     ? {
         enabled: dimension === 'implement'
           && opts.multiWorkPolicy.inspectFloor < opts.multiWorkPolicy.terminalFloor,

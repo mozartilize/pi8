@@ -384,9 +384,9 @@ describe('trajectory evidence ownership', () => {
 describe('warm prompt caches', () => {
   it('reports each served key with the context it sent while its cache lives', () => {
     const session = new RouterSession();
-    session.noteRequestTokens(40_000);
+    session.noteRequest(40_000, 'head-a');
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
-    session.noteRequestTokens(55_000);
+    session.noteRequest(55_000, 'head-a');
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'xhigh', viaFallback: false, accumulatedCost: 0 });
     const now = Date.now();
     expect(session.warmPrefixTokens(now, 60_000, 300_000))
@@ -396,9 +396,19 @@ describe('warm prompt caches', () => {
     expect(session.warmPrefixTokens(now, 50_000, 300_000)).toEqual(new Map([['codex/luna:high', 40_000]]));
   });
 
+  it('forgets every cache when the prompt head changes', () => {
+    const session = new RouterSession();
+    session.noteRequest(40_000, 'head-a');
+    session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
+    session.noteRequest(45_000, 'head-a');
+    expect(session.warmPrefixTokens(Date.now(), 45_000, 300_000).size).toBe(1);
+    session.noteRequest(45_000, 'head-b');
+    expect(session.warmPrefixTokens(Date.now(), 45_000, 300_000)).toEqual(new Map());
+  });
+
   it('forgets every cache when the history is rewritten or the session resets', () => {
     const session = new RouterSession();
-    session.noteRequestTokens(40_000);
+    session.noteRequest(40_000, 'head-a');
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
     session.clearWarmCaches();
     expect(session.warmPrefixTokens(Date.now(), 60_000, 300_000)).toEqual(new Map());
