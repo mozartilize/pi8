@@ -148,6 +148,7 @@ export function formatDecisionDetail(
 
 const CONTRACT_BREAK_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['breakReason']>, string>> = {
   'undeclared-target': 'edited a file outside the plan',
+  'unattributed-mutation': 'wrote files from a shell command',
   replan: 'asked to re-plan',
   struggle: 'struggled',
 };

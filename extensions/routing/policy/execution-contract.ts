@@ -274,7 +274,8 @@ function strike(state: WorkPhaseState, model: string, submitter: string): WorkPh
 
 /**
  * Break the active contract. Only a different executor model earns a strike:
- * a submitter that breaks its own plan just returns to planning.
+ * a submitter that breaks its own plan just returns to planning. A shell
+ * write earns none either: the router cannot tell whether it left the plan.
  */
 export function breakContract(
   state: WorkPhaseState,
@@ -283,7 +284,7 @@ export function breakContract(
 ): WorkPhaseState {
   const contract = state.contract;
   if (contract?.status !== 'active') return state;
-  const struck = breaker ? strike(state, breaker, contract.submitter) : state;
+  const struck = breaker && reason !== 'unattributed-mutation' ? strike(state, breaker, contract.submitter) : state;
   return {
     ...struck,
     contract: {

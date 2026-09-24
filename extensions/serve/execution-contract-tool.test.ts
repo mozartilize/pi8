@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,6 +40,21 @@ describe('observeTargets', () => {
       .toEqual({ existingLines: 3, missingTargets: 1 });
     expect(await observeTargets(async () => { throw new Error('ENOENT git'); }, dir, steps))
       .toEqual({ existingLines: 3, missingTargets: 1 });
+  });
+
+  it('leaves the size unmeasured for a target that is not a regular file, without blocking', async () => {
+    const fifo = join(dir, 'pipe.ts');
+    execFileSync('mkfifo', [fifo]);
+    const exec = async () => ({ stdout: '', code: 0 });
+    for (const path of [fifo, '/dev/zero']) {
+      const observed = await observeTargets(exec, dir, [{ kind: 'edit', path, change: 'x' }]);
+      expect(observed).toEqual({ missingTargets: 0, commits: 0, fixCommits: 0 });
+    }
+  });
+
+  it('returns nothing measured once the deadline passes', async () => {
+    const exec = () => new Promise<{ stdout: string; code: number }>(() => {});
+    expect(await observeTargets(exec, dir, steps, undefined, 20)).toEqual({});
   });
 
   it('measures nothing for an invalid plan', async () => {

@@ -926,6 +926,8 @@ interface ScoredTurn {
   decision: ReturnType<typeof resolveRoutingDecision>['decision'];
   routableCandidates: Candidate[];
   requestedReasoning: string | undefined;
+  /** A broken contract this invocation hands back; consumed only once it serves. */
+  restoredContract?: ExecutionContract;
 }
 
 /** Resolve the registry, this turn's input identity, and the candidate pool. */
@@ -1139,8 +1141,10 @@ function submitterKey(candidates: readonly Candidate[], submitter: string): stri
 /**
  * Candidates allowed to execute a released contract: no excluded executor
  * model at any effort, and, once any executor is excluded, measured implement
- * quality strictly above the strongest excluded one. Undefined when the
- * contract keeps the submitter or nobody qualifies.
+ * quality strictly above the strongest excluded one. Undefined — the
+ * submitter keeps the plan with both incumbent minimums — when the contract
+ * keeps the submitter, nobody qualifies, or an excluded executor's quality
+ * cannot be found, since then no candidate can be shown to be stronger.
  */
 function executorPool(
   candidates: Candidate[],
@@ -1150,10 +1154,12 @@ function executorPool(
   const minimum = contract.minimum;
   if (minimum == null) return undefined;
   const excluded = state?.excludedExecutors ?? [];
-  const excludedQuality = Math.max(-Infinity, ...excluded.map((key) => {
+  const excludedQualities = excluded.map((key) => {
     const row = findSourceCandidate(candidates, key);
-    return (row && capabilityForDimension(row, 'implement')) ?? -Infinity;
-  }));
+    return row ? capabilityForDimension(row, 'implement') : undefined;
+  });
+  if (excludedQualities.some((quality) => quality == null)) return undefined;
+  const excludedQuality = Math.max(-Infinity, ...(excludedQualities as number[]));
   const pool = candidates.filter((c) => {
     const key = candidateKey(c);
     if (isExcludedExecutor(state, key)) return false;
@@ -1199,7 +1205,7 @@ function scoreRouterTurn(args: {
   const reviewing = contract != null && isUnderReview(contract);
   const implementing = contractActive || (contract?.status === 'executed' && !reviewing);
   // A broken contract hands the next invocation back to its submitter at the
-  // submitter's task type and thinking level, then is consumed.
+  // submitter's task type and thinking level, until an invocation serves.
   const restore = contract?.status === 'broken' ? contract : undefined;
   const handBack = restore ?? (reviewing ? contract : undefined);
   const routedDimension = reviewing ? 'review' : implementing ? 'implement' : baseDimension;
@@ -1257,10 +1263,6 @@ function scoreRouterTurn(args: {
     const current = session.getWorkPhaseState();
     const meta = current && contractMeta(current);
     if (meta) decision.executionContract = meta;
-    if (restore && current) {
-      appendContractOutcome(current, 'broken');
-      session.commitWorkPhaseState({ ...current, contract: undefined });
-    }
   }
   if (assessed.assessment) decision.assessment = assessed.assessment;
   if (assessed.fallbackReason) decision.fallbackReason = assessed.fallbackReason;
@@ -1289,7 +1291,10 @@ function scoreRouterTurn(args: {
     estContextTokens,
   });
 
-  return { kind: 'ready', scored: { decision, routableCandidates, requestedReasoning } };
+  return {
+    kind: 'ready',
+    scored: { decision, routableCandidates, requestedReasoning, ...(restore ? { restoredContract: restore } : {}) },
+  };
 }
 
 /** Resolve the served effort, run the fallback walk, and settle the handoff. */
@@ -1393,6 +1398,16 @@ async function delegateRouterTurn(args: {
     };
   }
   const result = await runDelegationLoop(delegationOptions, stream);
+
+  // Like the trajectory handoff, a broken contract's handback is consumed only
+  // by an invocation that served: a failed one leaves the next invocation
+  // bound to the submitter too.
+  const restored = scored.restoredContract;
+  const afterServe = session.getWorkPhaseState();
+  if (result.success && restored && afterServe?.contract === restored) {
+    appendContractOutcome(afterServe, 'broken');
+    session.commitWorkPhaseState({ ...afterServe, contract: undefined });
+  }
 
   if (
     result.capabilityHandoff

@@ -34,9 +34,12 @@ describe('execution requirement', () => {
     for (const over of raised) expect(executionRequirement(EASY, { ...QUIET, ...over })).toBeGreaterThan(base);
   });
 
-  it('counts a failed measurement as harder than a quiet one', () => {
+  it('never routes a failed measurement cheaper than any successful one', () => {
     const unmeasured: MeasuredFeatures = { files: 1, directories: 1, steps: 2, testTargets: 0 };
-    expect(executionRequirement(EASY, unmeasured)).toBeGreaterThan(executionRequirement(EASY, QUIET));
+    const worstMeasured = { ...QUIET, existingLines: 1e6, fixCommits: 50 };
+    for (const rubric of [EASY, { ...EASY, openDecisions: 2 }]) {
+      expect(executionRequirement(rubric, unmeasured)).toBeGreaterThanOrEqual(executionRequirement(rubric, worstMeasured));
+    }
   });
 
   it('lets open design decisions alone keep the submitter', () => {

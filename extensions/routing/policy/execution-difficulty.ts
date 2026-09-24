@@ -31,8 +31,12 @@ const OPEN_DECISION_STEPS = [0, 0.10, 0.25, 0.42, 0.60] as const;
 const CRITERION_WEIGHT = 0.08;
 /** Maximum added by each weighted measurement. */
 const MEASURED_WEIGHT = 0.04;
-/** Value of a measurement that failed: halfway, so failure never cheapens. */
-const UNMEASURED = 0.5;
+/**
+ * Value of a measurement that failed: the hardest, because the router cannot
+ * show the fact is small, and any lower value could route a plan cheaper than
+ * the same measurement would once it succeeds.
+ */
+const UNMEASURED = 1;
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 

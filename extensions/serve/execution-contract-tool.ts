@@ -17,7 +17,8 @@ import type {
   ToolResultEventResult,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
-import { readFile, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import {
   ROUTER_PROVIDER_ID,
   AUTO_MODEL_ID,
@@ -47,7 +48,9 @@ import {
 } from '../routing/policy/execution-contract.js';
 import { parseRubric } from '../routing/policy/execution-difficulty.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
-import { cycleFromToolResult, isVerifier } from '../routing/struggle/fingerprints.js';
+import { actionFromTool, cycleFromToolResult, isVerifier } from '../routing/struggle/fingerprints.js';
+import { parseCandidateKey } from '../routing/score/scorer.js';
+import { classifyMutationCall } from '../routing/policy/mutation-detector.js';
 import type { RouterSession } from './router-session-state.js';
 
 const DESCRIPTION =
@@ -56,7 +59,8 @@ const DESCRIPTION =
   'and verification runs. The router validates the plan and chooses which model executes it. Do not call it to ask ' +
   'for help or to change models. Rate the remaining work honestly: the router combines the ratings with its own ' +
   'measurements to choose the executor, and a finished plan returns to you for review. After acceptance, editing a ' +
-  'file that the plan does not list returns the work to the model that submitted the plan.';
+  'file that the plan does not list, or writing files from a shell command, returns the work to the model that ' +
+  'submitted the plan.';
 
 /** Built at registration, not import, so importing the handlers needs no schema runtime. */
 function executionContractParameters() {
@@ -178,19 +182,53 @@ const MAX_READ_BYTES = 4_000_000;
 const BYTES_PER_LINE = 40;
 const FIX_SUBJECT = /\b(fix(e[sd]|ing)?|bug(fix)?|bugs|hotfix|revert(s|ed)?)\b/i;
 
+/** Every target measurement together, `git log` included, finishes within this. */
+const OBSERVE_DEADLINE_MS = 3000;
+
+/** Thrown for a target that exists but is not a regular file. */
+class NotRegularFile extends Error {}
+
+/**
+ * Count a regular file's lines. The path comes from the model, so it may name
+ * a device, FIFO, or socket that never reaches EOF or blocks on open: the file
+ * is opened non-blocking and checked on the open handle before reading.
+ */
 async function countLines(path: string): Promise<number> {
-  const info = await stat(path);
-  if (info.size > MAX_READ_BYTES) return Math.round(info.size / BYTES_PER_LINE);
-  const text = await readFile(path, 'utf8');
-  return text.length === 0 ? 0 : text.split('\n').length;
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw new NotRegularFile();
+    if (info.size > MAX_READ_BYTES) return Math.round(info.size / BYTES_PER_LINE);
+    const text = await handle.readFile('utf8');
+    return text.length === 0 ? 0 : text.split('\n').length;
+  } finally {
+    await handle.close();
+  }
+}
+
+function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); });
+  return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
 /**
  * Measure the plan's targets: existing size, targets that should exist but do
- * not, and recent commit history. Each measurement that fails is left
- * undefined, which the requirement treats as harder, never easier.
+ * not, and recent commit history. Each measurement that fails — including a
+ * target that is not a regular file, and anything past the deadline — is left
+ * undefined, which the requirement treats as the hardest value.
  */
-export async function observeTargets(
+export function observeTargets(
+  exec: Exec,
+  cwd: string,
+  steps: readonly ExecutionStepInput[] | undefined,
+  signal?: AbortSignal,
+  deadlineMs = OBSERVE_DEADLINE_MS,
+): Promise<TargetObservations> {
+  return withDeadline(measureTargets(exec, cwd, steps, signal), deadlineMs, {});
+}
+
+async function measureTargets(
   exec: Exec,
   cwd: string,
   steps: readonly ExecutionStepInput[] | undefined,
@@ -340,6 +378,9 @@ export function submitExecutionContract(
   if (previous) {
     base = reworkContract(state);
     appendContractOutcome(base, 'rework');
+  } else if (state.contract?.status === 'broken') {
+    // The revised plan replaces a broken one whose handback has not been consumed yet.
+    appendContractOutcome(state, 'broken');
   }
   const next = acceptContract(base, {
     submitter: served,
@@ -363,7 +404,8 @@ export function submitExecutionContract(
       header,
       'Execute these steps in order:',
       ...stepLines(steps ?? []),
-      'Editing a file that is not listed returns the work to the model that submitted this plan.',
+      'Use edit/write for the listed files. Editing a file that is not listed, or writing files from a shell ' +
+        'command, returns the work to the model that submitted this plan.',
     ].join('\n'),
   };
 }
@@ -398,9 +440,10 @@ export function registerExecutionContractTool(pi: ExtensionAPI, session: RouterS
 
 /**
  * Break the active contract when a native edit/write targets an undeclared
- * file. The call itself always proceeds: reading or running anything is
- * allowed, and even an undeclared edit only changes who serves the next
- * invocation. Bash writes are not attributed to a path and never break it.
+ * file, or when an executor of a released plan runs a shell command that
+ * writes files with high confidence: such a write has no path the router can
+ * check, and the released plan dropped the incumbent minimums. The call
+ * itself always proceeds; a break only changes who serves the next invocation.
  */
 export function handleContractToolCall(
   event: Pick<ToolCallEvent, 'toolName' | 'input'>,
@@ -408,15 +451,25 @@ export function handleContractToolCall(
   session: RouterSession,
 ): void {
   try {
-    if (event.toolName !== 'edit' && event.toolName !== 'write') return;
     const state = session.getWorkPhaseState();
     const contract = state?.contract;
     if (!state || contract?.status !== 'active') return;
-    const target = (event.input as { path?: unknown } | undefined)?.path;
-    if (typeof target !== 'string' || isDeclaredTarget(contract, ctx.cwd, target)) return;
     const lastServed = session.getLastServed();
     const served = lastServed ? servedKey(lastServed) : undefined;
-    const broken = breakContract(state, served, 'undeclared-target');
+    let reason: 'undeclared-target' | 'unattributed-mutation';
+    if (event.toolName === 'edit' || event.toolName === 'write') {
+      const target = (event.input as { path?: unknown } | undefined)?.path;
+      if (typeof target !== 'string' || isDeclaredTarget(contract, ctx.cwd, target)) return;
+      reason = 'undeclared-target';
+    } else if (event.toolName === 'bash') {
+      if (!contract.release || !served || parseCandidateKey(served).id === parseCandidateKey(contract.submitter).id) return;
+      const input = (event.input ?? {}) as Record<string, unknown>;
+      if (classifyMutationCall('bash', input).confidence !== 'high') return;
+      reason = 'unattributed-mutation';
+    } else {
+      return;
+    }
+    const broken = breakContract(state, served, reason);
     session.commitWorkPhaseState(broken);
     appendExecutionContractSignal({
       intentKey: state.intentKey,
@@ -463,8 +516,10 @@ export function trackContractToolResult(
       return;
     }
     if (contract.status !== 'executed' || contract.reviewVerifier) return;
+    // Classify the call before touching its output: only a verifier's result is read.
+    const action = actionFromTool(event.toolName, event.input);
+    if (!isVerifier(action)) return;
     const cycle = cycleFromToolResult(event, state.providerInvocation);
-    if (!isVerifier(cycle.action)) return;
     const passed = !cycle.progressHint.isError && !cycle.progressHint.failureSignature;
     session.commitWorkPhaseState(noteContractVerifier(state, passed));
   } catch {

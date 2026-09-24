@@ -231,7 +231,12 @@ export interface ExecutionContractMeta {
   reviewEdited?: boolean;
   /** First verifier result observed after execution. */
   reviewVerifier?: 'pass' | 'fail';
-  breakReason?: 'undeclared-target' | 'replan' | 'struggle';
+  /**
+   * `unattributed-mutation`: a shell command that writes files, which the
+   * router cannot check against the declared targets. It breaks the plan
+   * without a strike, since the write may well be inside the plan.
+   */
+  breakReason?: 'undeclared-target' | 'unattributed-mutation' | 'replan' | 'struggle';
   breaker?: string;
   /** Executor models excluded for this task after repeated breaks. */
   excludedExecutors?: string[];

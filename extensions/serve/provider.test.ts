@@ -1822,11 +1822,13 @@ describe('assessment orchestration', () => {
     assessorUsageLimit?: boolean;
     assessorDelayMs?: number;
     assessorGate?: Promise<void>;
+    /** Every serving model fails before any output. */
+    serveFails?: boolean;
   }
 
   interface Session {
     routeTurn(prompt: string, opts?: RouteTurnOpts): Promise<RoutingDecision | undefined>;
-    routeTurnAgainWithSameUserEntry(): Promise<RoutingDecision | undefined>;
+    routeTurnAgainWithSameUserEntry(opts?: RouteTurnOpts): Promise<RoutingDecision | undefined>;
     assessmentDispatchCount: number;
     latchGeneration: number;
     lastMetricRecord: Record<string, unknown> | undefined;
@@ -1907,8 +1909,8 @@ describe('assessment orchestration', () => {
         lastCtx = { messages } as unknown as Context;
         return invokeTurn(session, lastCtx, opts);
       },
-      async routeTurnAgainWithSameUserEntry() {
-        return invokeTurn(session, lastCtx!, {});
+      async routeTurnAgainWithSameUserEntry(opts = {}) {
+        return invokeTurn(session, lastCtx!, opts);
       },
       async readDecisionRecords() {
         const { readFileSync } = await import('node:fs');
@@ -1994,6 +1996,9 @@ describe('assessment orchestration', () => {
           })() as never;
         }
         return asStream(answer);
+      }
+      if (opts.serveFails) {
+        return asStream([{ type: 'error', error: { errorMessage: 'manual failure' } }]);
       }
       return asStream([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
     });
@@ -2162,6 +2167,48 @@ describe('assessment orchestration', () => {
       expect(harness.getProviderState().lastDecision?.executionContract).toBeUndefined();
     });
 
+    it('returns a shell write by the executor to the submitter without a strike', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+      const bash = (command: string) =>
+        handleContractToolCall({ toolName: 'bash', input: { command } }, { cwd: '/repo' }, harness.session);
+      bash('npx vitest run src/a.test.ts');
+      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
+      bash('printf x > src/d.ts');
+      expect(harness.session.getWorkPhaseState()?.contract)
+        .toMatchObject({ status: 'broken', breakReason: 'unattributed-mutation', breaker: 'alpha/cheap' });
+      expect(harness.session.getWorkPhaseState()?.contractStrikes).toBeUndefined();
+      const restored = await session.routeTurnAgainWithSameUserEntry();
+      expect(restored?.dimension).toBe('plan');
+      expect(restored?.chosen).toBe('beta/strong');
+    });
+
+    it('lets the submitter write from a shell while it keeps the plan', async () => {
+      const session = await planned();
+      submitExecutionContract({ ...smallPlan, remainingWork: { ...EASY, openDecisions: 5 } }, routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+      handleContractToolCall({ toolName: 'bash', input: { command: 'sed -i s/a/b/ src/a.ts' } }, { cwd: '/repo' }, harness.session);
+      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
+    });
+
+    it('keeps a broken plan bound to its submitter until a handback invocation serves', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry();
+      breakWithUndeclaredEdit();
+      const failed = await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
+      expect(failed?.chosen).toBe('beta/strong');
+      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('broken');
+      // The provider recovers; the next invocation still owes the handback.
+      harness.session.blacklist.clearBlacklistedModels();
+      const retried = await session.routeTurnAgainWithSameUserEntry();
+      expect(retried?.dimension).toBe('plan');
+      expect(retried?.chosen).toBe('beta/strong');
+      expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'broken' });
+      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+    });
+
     it('lets an executor break a plan once, then routes later plans to a stronger model', async () => {
       const session = await planned();
       submitExecutionContract(smallPlan, routerCtx, harness.session);
@@ -2184,6 +2231,17 @@ describe('assessment orchestration', () => {
       expect(escalated?.chosen).toBe('beta/strong');
       expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
       expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ band: 'standard' });
+    });
+
+    it('keeps the submitter when an excluded executor is no longer in the pool', async () => {
+      const session = await planned();
+      const state = harness.session.getWorkPhaseState()!;
+      harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true, band: 'standard' });
+      const next = await session.routeTurnAgainWithSameUserEntry();
+      expect(next?.dimension).toBe('implement');
+      expect(next?.chosen).toBe('beta/strong');
     });
 
     it('treats executor struggle as a broken plan', async () => {
