@@ -477,9 +477,16 @@ export interface ScoreOpts {
   /**
    * Request-local terminal/inspect floors for an eligible compound-implement
    * intent. Absent selects the current live tier/promotion constants
-   * unchanged — this is the only input that changes eligibility parameters.
+   * unchanged; with `executionMinimum`, the only inputs that change
+   * eligibility parameters.
    */
   multiWorkPolicy?: MultiWorkScoringPolicy;
+  /**
+   * Implement-axis ratio an accepted execution contract requires of its
+   * executor. Replaces the live frontier ratio; never combined with
+   * `multiWorkPolicy`.
+   */
+  executionMinimum?: number;
 }
 
 export interface ScoredCandidate extends Candidate {
@@ -812,6 +819,7 @@ function computeEligibility(
   const activeTierPolicy: TierPolicy = {
     ...LIVE_TIER_POLICY,
     ...(opts.multiWorkPolicy ? { qualityRatio: opts.multiWorkPolicy.terminalFloor } : {}),
+    ...(opts.executionMinimum != null ? { qualityRatio: opts.executionMinimum } : {}),
     ...(knowledgeCritical && knowledgeAvailable ? { knowledgeFloor: KNOWLEDGE_QUALITY_FLOOR } : {}),
   };
   const activePromotionPolicy = opts.multiWorkPolicy

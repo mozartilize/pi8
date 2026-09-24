@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 
+import { CONTRACT_NUDGE } from './serve/execution-contract-tool.js';
 import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
@@ -889,6 +890,64 @@ describe('mutation gate hooks', () => {
     expect(defaultRouterSession.getLastDecision()?.dimension).toBe('plan');
     expect(defaultRouterSession.getLastDecision()?.mutationObserved).toBe(true);
     expect(status).toHaveBeenCalledWith('router', expect.stringContaining('auto:plan · editing'));
+  });
+
+  it('registers commit_execution once and breaks its plan on an undeclared edit without blocking it', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool,
+    } as unknown as ExtensionAPI);
+    expect(registerTool).toHaveBeenCalledTimes(1);
+    const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
+    expect(tool.name).toBe('commit_execution');
+
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
+    defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
+    const steps = [{ kind: 'edit', path: 'src/a.ts', change: 'reject expired tokens' }];
+    const result = await tool.execute('c1', { steps }, undefined, undefined, ctx);
+    expect(result.details.accepted).toBe(true);
+
+    defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
+    const toolCall = handlers.get('tool_call')!;
+    expect(await toolCall({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, ctx)).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()?.contract?.status).toBe('active');
+    expect(await toolCall({ toolName: 'edit', toolCallId: 'e2', input: { path: 'src/b.ts' } }, ctx)).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()?.contract)
+      .toMatchObject({ status: 'broken', breakReason: 'undeclared-target', breaker: 'test/cheap' });
+  });
+
+  it('appends the handoff reminder once to the first plan/review edit result without a plan', async () => {
+    const handlers = await makeToolHandlers();
+    const toolResult = handlers.get('tool_result')!;
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
+    defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
+    const content = [{ type: 'text', text: 'edited' }];
+
+    expect(await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx)).toBeUndefined();
+    const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
+    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTRACT_NUDGE]);
+    expect(await toolResult({ toolName: 'write', toolCallId: 'w1', content }, routerAutoCtx)).toBeUndefined();
+    expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, concreteCtx)).toBeUndefined();
+  });
+
+  it('does not remind outside plan/review or for a plan-only deliverable', async () => {
+    const handlers = await makeToolHandlers();
+    const toolResult = handlers.get('tool_result')!;
+    const content = [{ type: 'text', text: 'edited' }];
+    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'mutate', multiWorkEngaged: false }));
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/impl']), dimension: 'implement' as const, intentKey: 'intent-a' });
+    expect(await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx)).toBeUndefined();
+
+    defaultRouterSession.setLastDecision({
+      ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a',
+      assessment: { kind: 'plan', complexity: 'moderate', scope: 'bounded', compound: false, confidence: 'high', reasoning: 'plan', model: 'a/b', ms: 1, costUsd: 0, usage: { input: 0, output: 0 } },
+    });
+    expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
   });
 
   it('projects the block onto the live decision so the commands can show it', async () => {

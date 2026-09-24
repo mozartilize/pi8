@@ -5,6 +5,7 @@ import type {
   TerminalAssessment,
   WorkPhase,
 } from '../../types.js';
+import type { ExecutionContract } from './execution-contract.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
 const COMPLEXITY = { trivial: 0, routine: 0.25, moderate: 0.5, hard: 0.75, frontier: 1 } as const;
@@ -37,6 +38,14 @@ export interface WorkPhaseState {
   pendingMutationToolCallIds: Set<string>;
   observedReadTools: number;
   observedMutationTools: number;
+  /** Plan/review → implement handoff for this entry; never inherited. */
+  contract?: ExecutionContract;
+  /** Contract breaks per executor model id, kept across thin continuations. */
+  contractStrikes?: Record<string, number>;
+  /** Served keys of executor models that reached the strike limit. */
+  excludedExecutors?: string[];
+  /** The one handoff reminder for this entry was already appended. */
+  contractNudged?: boolean;
 }
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
@@ -134,5 +143,7 @@ export function inheritThinContinuation(
     pendingMutationToolCallIds: new Set(),
     observedReadTools: 0,
     observedMutationTools: 0,
+    contract: undefined,
+    contractNudged: undefined,
   };
 }

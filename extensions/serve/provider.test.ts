@@ -18,7 +18,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
 import { evaluateMutationCall } from '../routing/policy/mutation-gate.js';
-import { classifyMutationCall } from '../routing/policy/mutation-detector.js';
+import { handleContractToolCall, submitExecutionContract } from './execution-contract-tool.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
 import {
@@ -2089,74 +2089,152 @@ describe('assessment orchestration', () => {
     expect(decision?.fallbackReason).toBe('expiry');
   });
 
-  it('switches plan to implement only after a mutation call with a high-confidence implement verdict', async () => {
-    const session = await newSession({ consultRouter: true });
-    const prompt = 'design the architecture and plan the migration roadmap for this system';
-    const first = await session.routeTurn(prompt, {
-      assessorReply: 'Kind: implement\nComplexity: moderate\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: implement deliverable',
-    });
-    expect(first?.dimension).toBe('plan');
-    const state = harness.session.getWorkPhaseState()!;
-    const mutation = evaluateMutationCall({ toolName: 'write', toolCallId: 'edit-1', state, served: harness.session.getLastServed() });
-    expect(mutation.block).toBe(false);
-    harness.session.commitWorkPhaseState(mutation.nextState);
-    // A call is enough; neither tool success nor a path-based guess is required.
-    const released = await session.routeTurnAgainWithSameUserEntry();
-    expect(released?.dimension).toBe('implement');
-    expect(released?.cause).toBe('mutation-phase');
-    expect(session.assessmentDispatchCount).toBe(1);
-    const repeated = await session.routeTurnAgainWithSameUserEntry();
-    expect(repeated?.dimension).toBe('implement');
-    expect(repeated?.cause).toBe('mutation-phase');
-  });
+  describe('execution contract handoff', () => {
+    const PLAN_PROMPT = 'design the architecture and plan the migration roadmap for this system';
+    const IMPLEMENT_VERDICT =
+      'Kind: implement\nComplexity: moderate\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: implement deliverable';
+    const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
+    const smallPlan = [
+      { kind: 'edit', path: 'src/a.ts', change: 'reject expired tokens' },
+      { kind: 'verify', verifier: 'test' },
+    ];
 
-  it('releases review on an identified Bash write without requiring a successful result', async () => {
-    const session = await newSession({ consultRouter: true });
-    const first = await session.routeTurn('review the authentication flow for mistakes', {
-      assessorReply: 'Kind: implement\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: fix requested',
-    });
-    expect(first?.dimension).toBe('review');
-    const detection = classifyMutationCall('bash', { command: 'printf x > notes.md' });
-    expect(detection.confidence).toBe('high');
-    const mutation = evaluateMutationCall({ toolName: 'bash', toolCallId: 'b1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed(), detection });
-    harness.session.commitWorkPhaseState(mutation.nextState);
-    expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('implement');
-  });
+    async function planned(): Promise<Session> {
+      const session = await newSession({ consultRouter: true });
+      const first = await session.routeTurn(PLAN_PROMPT, { assessorReply: IMPLEMENT_VERDICT });
+      expect(first?.dimension).toBe('plan');
+      expect(first?.chosen).toBe('beta/strong');
+      return session;
+    }
 
-  it('keeps a plan deliverable even if its mutation call writes a file', async () => {
-    const session = await newSession({ consultRouter: true });
-    const first = await session.routeTurn('design the architecture and plan the migration roadmap for this system', {
-      assessorReply: 'Kind: plan\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: plan deliverable',
-    });
-    expect(first?.dimension).toBe('plan');
-    const mutation = evaluateMutationCall({ toolName: 'write', toolCallId: 'plan-1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed() });
-    harness.session.commitWorkPhaseState(mutation.nextState);
-    const second = await session.routeTurnAgainWithSameUserEntry();
-    expect(second?.dimension).toBe('plan');
-    expect(second?.cause).not.toBe('mutation-phase');
-  });
+    function breakWithUndeclaredEdit(): void {
+      handleContractToolCall({ toolName: 'edit', input: { path: 'src/other.ts' } }, { cwd: '/repo' }, harness.session);
+    }
 
-  it('does not lower the task type on a missing or low-confidence verdict', async () => {
-    const session = await newSession({ consultRouter: true });
-    const prompt = 'design the architecture and plan the migration roadmap for this system';
-    const first = await session.routeTurn(prompt, {
-      assessorReply: 'Kind: implement\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: low\nReasoning: uncertain',
+    it('keeps plan/review after a mutation call without an accepted plan', async () => {
+      const session = await planned();
+      const mutation = evaluateMutationCall({ toolName: 'write', toolCallId: 'w1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed() });
+      harness.session.commitWorkPhaseState(mutation.nextState);
+      const next = await session.routeTurnAgainWithSameUserEntry();
+      expect(next?.dimension).toBe('plan');
+      expect(next?.chosen).toBe('beta/strong');
     });
-    expect(first?.dimension).toBe('plan');
-    const mutation = evaluateMutationCall({ toolName: 'edit', toolCallId: 'edit-1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed() });
-    harness.session.commitWorkPhaseState(mutation.nextState);
-    expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
-  });
 
-  it('keeps the plan task type when the assessment fails before a mutation', async () => {
-    const session = await newSession({ consultRouter: true });
-    const first = await session.routeTurn('design the architecture and plan the migration roadmap for this system', {
-      assessorUsageLimit: true,
+    it('hands a small accepted plan to a cheaper executor on the next invocation', async () => {
+      const session = await planned();
+      expect(submitExecutionContract(smallPlan, routerCtx, harness.session).accepted).toBe(true);
+      const executing = await session.routeTurnAgainWithSameUserEntry();
+      expect(executing?.dimension).toBe('implement');
+      expect(executing?.cause).toBe('execution-contract');
+      expect(executing?.chosen).toBe('alpha/cheap');
+      expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'active', band: 'economy', release: true });
+      // The executor stays sticky for the rest of the entry.
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
     });
-    expect(first?.dimension).toBe('plan');
-    const mutation = evaluateMutationCall({ toolName: 'write', toolCallId: 'plan-1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed() });
-    harness.session.commitWorkPhaseState(mutation.nextState);
-    expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
+
+    it('returns an undeclared edit to the submitter at its task type, then clears the plan', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+      // Declared targets never break the plan.
+      handleContractToolCall({ toolName: 'edit', input: { path: './src/a.ts' } }, { cwd: '/repo' }, harness.session);
+      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
+      breakWithUndeclaredEdit();
+      const restored = await session.routeTurnAgainWithSameUserEntry();
+      expect(restored?.dimension).toBe('plan');
+      expect(restored?.chosen).toBe('beta/strong');
+      expect(harness.getProviderState().lastDecision?.executionContract)
+        .toMatchObject({ status: 'broken', breakReason: 'undeclared-target', breaker: 'alpha/cheap' });
+      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+      const after = await session.routeTurnAgainWithSameUserEntry();
+      expect(after?.dimension).toBe('plan');
+      expect(harness.getProviderState().lastDecision?.executionContract).toBeUndefined();
+    });
+
+    it('lets an executor break a plan once, then routes later plans to a stronger model', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+      breakWithUndeclaredEdit();
+      await session.routeTurnAgainWithSameUserEntry();
+
+      // First break: the same executor may try again.
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+      breakWithUndeclaredEdit();
+      await session.routeTurnAgainWithSameUserEntry();
+      expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
+
+      // Second break excludes it: the next plan is one band higher and must be
+      // served by a strictly stronger model.
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      const escalated = await session.routeTurnAgainWithSameUserEntry();
+      expect(escalated?.dimension).toBe('implement');
+      expect(escalated?.chosen).toBe('beta/strong');
+      expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
+      expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ band: 'standard' });
+    });
+
+    it('treats executor struggle as a broken plan', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+      harness.session.armTrajectoryEscalation(
+        { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
+        'alpha/cheap',
+        'implement',
+        false,
+      );
+      const next = await session.routeTurnAgainWithSameUserEntry();
+      expect(next?.dimension).toBe('plan');
+      expect(next?.chosen).toBe('beta/strong');
+      expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'broken', breakReason: 'struggle' });
+    });
+
+    it('treats a second submission during execution as a re-plan', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry();
+      const again = submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect(again.accepted).toBe(false);
+      expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ status: 'broken', breakReason: 'replan' });
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+    });
+
+    it('keeps the submitter executing a plan too large to hand off', async () => {
+      const session = await planned();
+      const large = ['a', 'b', 'c', 'd', 'e', 'f'].map((f) => ({ kind: 'edit', path: `${f}.ts`, change: 'rename' }));
+      expect(submitExecutionContract(large, routerCtx, harness.session).accepted).toBe(true);
+      const next = await session.routeTurnAgainWithSameUserEntry();
+      expect(next?.dimension).toBe('implement');
+      expect(next?.chosen).toBe('beta/strong');
+    });
+
+    it('rejects a plan for a plan or review deliverable', async () => {
+      const session = await newSession({ consultRouter: true });
+      await session.routeTurn(PLAN_PROMPT, {
+        assessorReply: 'Kind: plan\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: plan deliverable',
+      });
+      const result = submitExecutionContract(smallPlan, routerCtx, harness.session);
+      expect(result.accepted).toBe(false);
+      expect(result.text).toContain('asks for a plan');
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
+    });
+
+    it('accepts a plan when the assessment is unavailable', async () => {
+      const session = await newSession({ consultRouter: true });
+      await session.routeTurn(PLAN_PROMPT, { assessorUsageLimit: true });
+      expect(submitExecutionContract(smallPlan, routerCtx, harness.session).accepted).toBe(true);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('implement');
+    });
+
+    it('rejects a handoff outside plan/review and outside router/auto', async () => {
+      const session = await newSession({ consultRouter: true });
+      await session.routeTurn('investigate the flaky test');
+      expect(submitExecutionContract(smallPlan, routerCtx, harness.session).text).toContain('only after planning or review');
+      const other = { cwd: '/repo', model: { provider: 'beta', id: 'strong' } } as never;
+      expect(submitExecutionContract(smallPlan, other, harness.session).text).toContain('has no effect');
+    });
   });
 
   it('reuses the verdict on later tool-loop turns of the same entry', async () => {

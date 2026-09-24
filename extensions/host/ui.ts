@@ -9,6 +9,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type {
   AssessmentFallbackReason,
   DecisionCause,
+  ExecutionContractMeta,
   QualityExclusionReason,
   RoutingDecision,
   ServedCapabilityMeta,
@@ -74,7 +75,7 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   heuristic: 'keyword classifier',
   'continuation-context': 'keyword classifier, using earlier messages for a short follow-up',
   'router-consult': 'LLM assessment',
-  'mutation-phase': 'implementation started after an assessed mutation call',
+  'execution-contract': 'implementation handed off through an accepted execution plan',
   'embedding-classify': 'multilingual embedding classifier',
   'error-fallback': 'a fallback model served after the top pick failed',
   'no-data': 'no benchmark data; ranked by price and context window',
@@ -136,12 +137,30 @@ export function formatDecisionDetail(
       const [label, text] = EXCLUSION_LABELS[diagnostic.excludedReason];
       return [`  ${`${label}:`.padEnd(11)} ${diagnostic.candidateKey} (${text})`];
     }) ?? [],
+    ...(decision.executionContract ? contractLines(decision.executionContract) : []),
     ...(decision.multiWork ? multiWorkLines(decision.multiWork) : []),
     ...(decision.trajectoryFriction ? [trajectoryLine(decision.trajectoryFriction)] : []),
     ...(decision.switched ? ['  note:       switched models from the previous turn'] : []),
     ...(decision.contextPressure ? contextPressureLines(decision.contextPressure) : []),
     ...(chain ? [`  chain:      ${chain}`] : []),
   ];
+}
+
+const CONTRACT_BREAK_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['breakReason']>, string>> = {
+  'undeclared-target': 'edited a file outside the plan',
+  replan: 'asked to re-plan',
+  struggle: 'struggled',
+};
+
+function contractLines(contract: ExecutionContractMeta): string[] {
+  const size = `${contract.targets} file${contract.targets === 1 ? '' : 's'}, ${contract.steps} step${contract.steps === 1 ? '' : 's'}`;
+  const lines = contract.status === 'active'
+    ? [`  plan:       accepted, ${contract.band} (${size}); ${contract.release ? 'an executor model runs it' : `${contract.submitter} keeps running it`}`]
+    : [`  plan:       broken: ${contract.breaker ?? 'the executor'} ${CONTRACT_BREAK_LABELS[contract.breakReason ?? 'struggle']}; back to ${contract.submitter}`];
+  if (contract.excludedExecutors?.length) {
+    lines.push(`  excluded:   ${contract.excludedExecutors.join(', ')} (broke the plan twice)`);
+  }
+  return lines;
 }
 
 function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined): string[] {
@@ -160,10 +179,11 @@ function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined)
     );
   }
   if (decision.routedDown) {
+    const lowerer = decision.cause === 'execution-contract' ? 'the accepted execution plan' : 'the assessment';
     lines.push(
       decision.routedPickChanged
-        ? '  note:       task type lowered by the assessment, so a cheaper model served'
-        : '  note:       task type lowered by the assessment; the served model did not change',
+        ? `  note:       task type lowered by ${lowerer}, so a cheaper model served`
+        : `  note:       task type lowered by ${lowerer}; the served model did not change`,
     );
   }
   return lines;

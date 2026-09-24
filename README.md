@@ -39,6 +39,11 @@ Without steps 1 and 2, the router still works. It uses Pi's registry metadata (p
          pick best (model, effort) → fallback chain
                     ↓
              delegate with automatic retry
+                    ↓
+     plan/review done → commit_execution(plan)
+                    ↓
+     router picks executor by plan size ──→ plan broken → back to planner
+                                              (2nd break by a model → stronger executor)
 ```
 
 For each turn, the router does these steps:
@@ -47,7 +52,8 @@ For each turn, the router does these steps:
 2. **Assess.** An optional LLM assessment reads the meaning of the task to add confidence.
 3. **Score.** The router scores every available model against live benchmarks and registry metadata: quality, cost, speed, and context window. A model that is not capable enough stays in the fallback chain, but it never becomes the top pick.
 4. **Stream.** The router streams the reply from the top pick. If that model fails before any output, the router moves to the next model in the chain. Failures include missing credentials, a timeout, and a provider error. After an answer or a tool call starts to stream, the router never replays the turn.
-5. **Route subagents.** At spawn time, the router scores each visible structured child. It uses the role's minimum task type, the task, scoring weights, and how full the context is. The task assessment can only raise that minimum. Explicit child models and user or project pins always win. For children inside a `workflowScript` string, the router sets only the tool's default model. See [`ARCHITECTURE.md`](ARCHITECTURE.md#4-subagent-routing) for the details.
+5. **Hand off.** When a `plan` or `review` turn has settled every decision, the model can call `commit_execution` with the remaining file changes and checks. A plan with up to 2 files and 4 steps goes to an `economy`-band executor; up to 5 files and 8 steps, to a `standard`-band one; a larger plan stays with the current model. If the executor edits a file outside the plan, re-plans, or struggles, the next step returns to the planning model. A model that breaks plans twice in one task is replaced by a strictly stronger model one band higher. If the model edits before submitting a plan, the router appends one reminder to that edit's result. `/router-why` shows the plan on its `plan:` line.
+6. **Route subagents.** At spawn time, the router scores each visible structured child. It uses the role's minimum task type, the task, scoring weights, and how full the context is. The task assessment can only raise that minimum. Explicit child models and user or project pins always win. For children inside a `workflowScript` string, the router sets only the tool's default model. See [`ARCHITECTURE.md`](ARCHITECTURE.md#4-subagent-routing) for the details.
 
 Uncertainty always routes up. Missing data, an ambiguous prompt, or low confidence never makes routing cheaper.
 

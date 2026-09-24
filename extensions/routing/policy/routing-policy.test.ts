@@ -699,15 +699,38 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).toContain("[kept current model's thinking level]");
   });
 
-  it('keeps both incumbent protections when a mutation changes plan to implement', () => {
+  it('keeps both incumbent protections for a contract that keeps its submitter', () => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
-      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'mutation-phase',
+      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
       confidence: 0.1, incumbentRegistryId: 'bench/strong',
       incumbentResolvedDimension: 'plan', sameIntentAsLast: true,
     }));
     expect(result.decision.dimension).toBe('implement');
     expect(result.decision.effortFloorDimension).toBe('plan');
+    expect(result.decision.chosen).toBe('bench/strong');
+  });
+
+  it('lets a released contract pick a cheaper executor at its implement minimum', () => {
+    const result = resolveRoutingDecision(makePolicyInput({
+      candidates: benchmarkCandidates,
+      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
+      confidence: 0.1, incumbentRegistryId: 'bench/strong',
+      incumbentResolvedDimension: 'plan', sameIntentAsLast: true,
+      executionMinimum: 0.45,
+    }));
+    expect(result.decision.chosen).toBe('bench/cheap');
+    expect(result.decision.effortFloorDimension).toBeUndefined();
+    expect(result.decision.cause).toBe('execution-contract');
+  });
+
+  it('still demotes an executor below the contract minimum', () => {
+    const result = resolveRoutingDecision(makePolicyInput({
+      candidates: benchmarkCandidates,
+      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
+      confidence: 0.1, incumbentRegistryId: 'bench/strong', sameIntentAsLast: true,
+      executionMinimum: 0.70,
+    }));
     expect(result.decision.chosen).toBe('bench/strong');
   });
 

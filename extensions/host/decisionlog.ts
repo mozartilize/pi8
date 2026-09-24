@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 
 import type {
   AssessmentFallbackReason,
+  ExecutionContractMeta,
   CandidateDiagnostic,
   Dimension,
   RoutingAssessment,
@@ -55,7 +56,7 @@ function decisionLogPath(storageBase?: string): string {
 export interface DecisionLogEntry {
   ts: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'assessment-metric' | 'mutation-gate' | 'subagent-spend';
+  kind?: 'decision' | 'assessment-metric' | 'mutation-gate' | 'subagent-spend' | 'execution-contract';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -99,6 +100,14 @@ export interface DecisionLogEntry {
   };
   /** Intent cache key joining assessment telemetry to routing decisions. */
   intentKey?: string;
+  /** Set on `kind: 'execution-contract'` records only. */
+  executionContract?: {
+    /** `route` marks a routing decision the contract shaped. */
+    action: ExecutionContractSignal['action'] | 'route';
+    /** Why a submission was refused; router-authored text, never plan content. */
+    rejectReason?: string;
+    meta?: ExecutionContractMeta;
+  };
   assessmentPromptVersion?: string;
   /** Why the assessment was unavailable. Never changes `cause`. */
   fallbackReason?: string;
@@ -246,6 +255,52 @@ export function appendMutationGateSignal(
   }
 }
 
+/** One execution-contract transition. Counts and model keys only: never the
+ *  plan's paths or change descriptions. */
+export interface ExecutionContractSignal {
+  intentKey: string;
+  /** Model that submitted (accept/reject) or broke (break) the contract. */
+  served: string;
+  /** `nudge` marks a plan/review edit made without a plan: a missed handoff. */
+  action: 'accept' | 'reject' | 'break' | 'nudge';
+  rejectReason?: string;
+  meta?: ExecutionContractMeta;
+}
+
+/** Append an execution-contract transition. Best-effort; never throws into the tool path. */
+export function appendExecutionContractSignal(
+  signal: ExecutionContractSignal,
+  storageBase?: string,
+): void {
+  try {
+    const path = decisionLogPath(storageBase);
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const entry: DecisionLogEntry = {
+      ts: Date.now(),
+      kind: 'execution-contract',
+      dimension: 'implement',
+      chosen: signal.served,
+      served: signal.served,
+      viaFallback: false,
+      confidence: 1,
+      routedUp: false,
+      cause: 'execution-contract',
+      reason: `execution contract ${signal.action}`,
+      chain: [signal.served],
+      intentKey: signal.intentKey,
+      executionContract: {
+        action: signal.action,
+        ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
+        ...(signal.meta ? { meta: signal.meta } : {}),
+      },
+    };
+    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+  } catch {
+    // A logging failure must never fail the user's turn.
+  }
+}
+
 /**
  * Append a decision to the log. Never throws into the routing path — a logging
  * failure must not fail the user's turn.
@@ -288,6 +343,9 @@ export function appendDecision(
       trajectoryFriction: decision.trajectoryFriction,
       contextPressure: decision.contextPressure,
       candidateDiagnostics: decision.candidateDiagnostics,
+      ...(decision.executionContract
+        ? { executionContract: { action: 'route' as const, meta: decision.executionContract } }
+        : {}),
     };
     appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
   } catch {

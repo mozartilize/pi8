@@ -65,6 +65,29 @@ describe('formatStatus', () => {
     expect(formatStatus({ ...plan, dimension: 'implement' }, served)).not.toContain('· editing');
   });
 
+  it('explains an execution plan handoff and its return to the submitter', () => {
+    const served = { registryId: 'alpha/cheap', viaFallback: false, accumulatedCost: 0 };
+    const base = {
+      ...decision, cause: 'execution-contract' as const, routedDown: true, routedPickChanged: true,
+    };
+    const active = formatDecisionDetail({
+      ...base,
+      executionContract: { status: 'active', band: 'economy', release: true, submitter: 'beta/strong', targets: 1, steps: 2 },
+    }, served);
+    expect(active).toContain('  cause:      implementation handed off through an accepted execution plan');
+    expect(active).toContain('  plan:       accepted, economy (1 file, 2 steps); an executor model runs it');
+    expect(active).toContain('  note:       task type lowered by the accepted execution plan, so a cheaper model served');
+    const broken = formatDecisionDetail({
+      ...decision,
+      executionContract: {
+        status: 'broken', band: 'economy', release: true, submitter: 'beta/strong', targets: 1, steps: 2,
+        breakReason: 'undeclared-target', breaker: 'alpha/cheap', excludedExecutors: ['alpha/cheap'],
+      },
+    }, served);
+    expect(broken).toContain('  plan:       broken: alpha/cheap edited a file outside the plan; back to beta/strong');
+    expect(broken).toContain('  excluded:   alpha/cheap (broke the plan twice)');
+  });
+
   it('marks context-pressure decisions in the status line', () => {
     const s = formatStatus({ ...decision, contextPressure: { usageRatio: 0.6, threshold: 0.5, suggestion: 'offload' } }, {
       registryId: 'opencode-go/kimi-k2.7-code',

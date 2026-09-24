@@ -67,6 +67,11 @@ import {
 } from './host/decisionlog.js';
 import { clearRouterStatus, renderRouterStatus } from './host/ui.js';
 import {
+  handleContractToolCall,
+  nudgeContractOnEdit,
+  registerExecutionContractTool,
+} from './serve/execution-contract-tool.js';
+import {
   RouterSession,
   RuntimeBindings,
   defaultRouterSession,
@@ -670,6 +675,7 @@ export default async function autoModelRouterExtension(
   // cannot find `router/auto` in the registry and falls back to a concrete
   // provider (e.g. github-copilot/gpt-5.4), so routing never happens.
   registerAutoRouterProvider(pi, undefined, session, runtime);
+  registerExecutionContractTool(pi, session);
 
   const routingState = new SubagentRoutingState();
   const subagentCalls = new Map<string, SubagentCallObservation>();
@@ -713,6 +719,7 @@ export default async function autoModelRouterExtension(
     try {
       const block = handleMutationToolCall(event, ctx, session);
       if (block?.block) return block;
+      handleContractToolCall(event, ctx, session);
       const flushed = session.noteTrajectoryToolCall(event.toolName, event.toolCallId, event.input);
       if (flushed) {
         session.armTrajectoryEscalation(
@@ -736,5 +743,6 @@ export default async function autoModelRouterExtension(
     }
     handleMutationToolResult(event, session);
     handleTrajectoryToolResult(event, session);
+    return nudgeContractOnEdit(event, session);
   });
 }

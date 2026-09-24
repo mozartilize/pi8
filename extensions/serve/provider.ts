@@ -34,12 +34,14 @@ import { runAssessment, type AssessmentConfig } from '../routing/consult/consult
 import { adoptAssessment, shouldVetoLatch } from '../routing/consult/assessment-adoption.js';
 import { latestSummaryText, countToolActivity } from '../routing/consult/message-provenance.js';
 
-import { appendDecision, appendAssessmentMetric } from '../host/decisionlog.js';
+import { appendDecision, appendAssessmentMetric, appendExecutionContractSignal } from '../host/decisionlog.js';
 import { renderRouterStatus, servedKey } from '../host/ui.js';
 import {
   buildCandidate,
   buildRouterThinkingLevelMap,
   candidateKey,
+  capabilityForDimension,
+  findSourceCandidate,
   parseCandidateKey,
   isThinkingSupportedByRegistryModel,
   resolveThinkingLevel,
@@ -72,7 +74,15 @@ import {
   nextProviderInvocation,
   scoringPolicyForState,
   terminalRequirement,
+  type WorkPhaseState,
 } from '../routing/policy/work-phase.js';
+import {
+  breakContract,
+  contractMeta,
+  executionMinimum,
+  isExcludedExecutor,
+  type ExecutionContract,
+} from '../routing/policy/execution-contract.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -1060,6 +1070,66 @@ async function assessRouterTurn(args: {
   };
 }
 
+/**
+ * This entry's execution contract, after objective trajectory struggle by an
+ * executor other than the submitter has broken it. The submitter's own
+ * struggle belongs to the trajectory handoff alone.
+ */
+function settleExecutionContract(
+  state: WorkPhaseState | undefined,
+  trajectory: PreparedTurn['trajectoryEscalation'],
+  session: RouterSession,
+): ExecutionContract | undefined {
+  const contract = state?.contract;
+  if (!state || !contract) return undefined;
+  if (contract.status !== 'active' || !trajectory) return contract;
+  if (parseCandidateKey(trajectory.fromModel).id === parseCandidateKey(contract.submitter).id) return contract;
+  const broken = breakContract(state, trajectory.fromModel, 'struggle');
+  session.commitWorkPhaseState(broken);
+  appendExecutionContractSignal({
+    intentKey: state.intentKey,
+    served: trajectory.fromModel,
+    action: 'break',
+    meta: contractMeta(broken),
+  });
+  return broken.contract;
+}
+
+/** The submitter's routable candidate key, matching an unsuffixed benchmark row. */
+function submitterKey(candidates: readonly Candidate[], submitter: string): string {
+  if (candidates.some((c) => candidateKey(c) === submitter)) return submitter;
+  const row = findSourceCandidate(candidates, submitter);
+  return row ? candidateKey(row) : submitter;
+}
+
+/**
+ * Candidates allowed to execute a released contract: no excluded executor
+ * model at any effort, and, once any executor is excluded, measured implement
+ * quality strictly above the strongest excluded one. Undefined when the band
+ * keeps the submitter or nobody qualifies.
+ */
+function executorPool(
+  candidates: Candidate[],
+  state: WorkPhaseState | undefined,
+  band: ExecutionContract['band'],
+): { pool: Candidate[]; minimum: number } | undefined {
+  const minimum = executionMinimum(band);
+  if (minimum == null) return undefined;
+  const excluded = state?.excludedExecutors ?? [];
+  const excludedQuality = Math.max(-Infinity, ...excluded.map((key) => {
+    const row = findSourceCandidate(candidates, key);
+    return (row && capabilityForDimension(row, 'implement')) ?? -Infinity;
+  }));
+  const pool = candidates.filter((c) => {
+    const key = candidateKey(c);
+    if (isExcludedExecutor(state, key)) return false;
+    if (excluded.length === 0) return true;
+    const quality = capabilityForDimension(c, 'implement');
+    return quality != null && quality > excludedQuality;
+  });
+  return pool.length > 0 ? { pool, minimum } : undefined;
+}
+
 /** Advance the work phase, score the live pool, and record the decision. */
 function scoreRouterTurn(args: {
   prepared: PreparedTurn;
@@ -1084,16 +1154,16 @@ function scoreRouterTurn(args: {
   if (routableCandidates.length === 0) return noRoutableCandidates(session);
 
   const observed = session.getWorkPhaseState();
-  const mutationObserved = observed?.intentKey === turnInput.key &&
-    (observed.observedMutationTools > 0 || observed.mutationGateTriggered);
-  // The assessment names the requested deliverable; the tool call marks the
-  // point at which its implementation begins. No file-path or result heuristic.
-  const release = cacheHit && mutationObserved &&
-    (baseDimension === 'plan' || baseDimension === 'review') &&
-    assessed.assessment?.kind === 'implement' && assessed.assessment.confidence === 'high' &&
-    !trajectoryEscalation && session.getLatchGeneration() === 0;
-  const routedDimension = release ? 'implement' : baseDimension;
-  const routedCause = release ? 'mutation-phase' : baseCause;
+  const intentState = observed?.intentKey === turnInput.key ? observed : undefined;
+  const mutationObserved = intentState != null &&
+    (intentState.observedMutationTools > 0 || intentState.mutationGateTriggered);
+  const contract = settleExecutionContract(intentState, trajectoryEscalation, session);
+  const contractActive = contract?.status === 'active';
+  // A broken contract hands the next invocation back to its submitter at the
+  // submitter's task type and thinking level, then is consumed.
+  const restore = contract?.status === 'broken' ? contract : undefined;
+  const routedDimension = contractActive ? 'implement' : baseDimension;
+  const routedCause = contractActive ? 'execution-contract' : baseCause;
   const { multiWorkPolicy } = advanceWorkPhase({
     cacheHit,
     turnInput,
@@ -1108,14 +1178,19 @@ function scoreRouterTurn(args: {
   // effort that actually served, including an effort-floor bump or fallback.
   const previous = session.getPreviousServed();
   const servedCandidateKey = previous && servedKey(previous);
-  const incumbentRegistryId = servedCandidateKey && routableCandidates.some((c) => candidateKey(c) === servedCandidateKey)
-    ? servedCandidateKey
-    : session.getLastChosenRegistryId();
+  const incumbentRegistryId = restore
+    ? submitterKey(routableCandidates, restore.submitter)
+    : servedCandidateKey && routableCandidates.some((c) => candidateKey(c) === servedCandidateKey)
+      ? servedCandidateKey
+      : session.getLastChosenRegistryId();
   const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
   const userReasoningOverride =
     requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
+  const execution = contractActive && contract.release
+    ? executorPool(routableCandidates, session.getWorkPhaseState(), contract.band)
+    : undefined;
   const policy = resolveRoutingDecision({
-    candidates: routableCandidates,
+    candidates: execution?.pool ?? routableCandidates,
     classifyResult,
     baseDimension: routedDimension,
     baseCause: routedCause,
@@ -1126,16 +1201,24 @@ function scoreRouterTurn(args: {
     staticPrefixTokens,
     needsVision,
     incumbentRegistryId,
-    incumbentResolvedDimension:
+    incumbentResolvedDimension: restore?.submitterDimension ??
       session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
     vetoDepthEscalation,
-    ...(multiWorkPolicy ? { multiWorkPolicy } : {}),
+    // The contract owns the implement-phase scoring; multi-work minimums would
+    // re-impose the terminal band the planner already resolved.
+    ...(multiWorkPolicy && !contractActive ? { multiWorkPolicy } : {}),
+    ...(execution ? { executionMinimum: execution.minimum } : {}),
     config,
   });
   const decision = policy.decision;
-  if (release) session.setCachedIntent({ ...intent.cachedIntent!, dimension: routedDimension, cause: routedCause });
   if (mutationObserved) decision.mutationObserved = true;
+  if (contract) {
+    const current = session.getWorkPhaseState();
+    const meta = current && contractMeta(current);
+    if (meta) decision.executionContract = meta;
+    if (restore && current) session.commitWorkPhaseState({ ...current, contract: undefined });
+  }
   if (assessed.assessment) decision.assessment = assessed.assessment;
   if (assessed.fallbackReason) decision.fallbackReason = assessed.fallbackReason;
   decision.intentKey = turnInput.key;

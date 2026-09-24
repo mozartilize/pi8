@@ -172,6 +172,20 @@ export interface CandidateCapabilityMeta {
   viaInspectPromotion: boolean;
 }
 
+export interface ExecutionContractMeta {
+  status: 'active' | 'broken';
+  band: CapabilityBand;
+  /** False when the submitting model keeps executing the plan. */
+  release: boolean;
+  submitter: string;
+  targets: number;
+  steps: number;
+  breakReason?: 'undeclared-target' | 'replan' | 'struggle';
+  breaker?: string;
+  /** Executor models excluded for this task after repeated breaks. */
+  excludedExecutors?: string[];
+}
+
 export interface MultiWorkScoringPolicy {
   terminal: TerminalAssessment;
   terminalRequirement: number;
@@ -235,7 +249,7 @@ export type DecisionCause =
   | 'heuristic'
   | 'continuation-context'
   | 'router-consult'
-  | 'mutation-phase'
+  | 'execution-contract'
   | 'embedding-classify'
   | 'error-fallback'
   | 'no-data'
@@ -288,6 +302,8 @@ export interface RoutingDecision {
   intentKey?: string;
   /** A mutation tool call was observed; the task type may still be plan/review. */
   mutationObserved?: boolean;
+  /** Execution contract that shaped this invocation, active or just broken. */
+  executionContract?: ExecutionContractMeta;
   /** Message-origin census for this turn's context. */
   provenanceCounts?: Record<MessageProvenance, number>;
   cause: DecisionCause;

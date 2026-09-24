@@ -78,6 +78,13 @@ export interface RoutingPolicyInput {
    * repick invocations.
    */
   multiWorkPolicy?: MultiWorkScoringPolicy;
+  /**
+   * Implement-axis ratio an accepted execution contract requires of its
+   * executor. Present only when the contract releases the submitter; the
+   * caller has already removed excluded executor models from `candidates`.
+   * Both incumbent minimums stand down so the executor can be cheaper.
+   */
+  executionMinimum?: number;
   config: Pick<
     AutoRouterConfig,
     | 'dimensionWeights'
@@ -390,6 +397,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     sameIntentAsLast,
     config,
     multiWorkPolicy,
+    executionMinimum,
   } = input;
 
   // Step 1-3: the classifier's base dimension and cause are the starting
@@ -430,7 +438,9 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     switchMargin: config.switchMargin,
     ...(staticPrefixTokens != null ? { staticPrefixTokens } : {}),
   };
-  const pickOpts: ScoreOpts = multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
+  const pickOpts: ScoreOpts = executionMinimum != null
+    ? { ...baseOpts, executionMinimum }
+    : multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
   let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
 
   // Step 6: objective trajectory friction may repick away from the source
@@ -453,8 +463,9 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   // it); an inspect-phase compound-implement economic promotion; a consult
   // that actually lowered the dimension; and a genuine new-entry,
   // high-confidence trivial classification (an off-topic follow-up that
-  // resets to a cheap model). Same-intent re-invocations never reset, so the
-  // stickiness holds across a whole tool loop.
+  // resets to a cheap model); and an execution contract that releases its
+  // submitter. Same-intent re-invocations never reset, so the stickiness
+  // holds across a whole tool loop.
   const inspectPhasePromotion = multiWorkPolicy?.phase === 'inspect';
   const consultLoweredDimension =
     cause === 'router-consult' &&
@@ -470,7 +481,8 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     trajectory.applied ||
     inspectPhasePromotion ||
     consultLoweredDimension ||
-    offTopicReset;
+    offTopicReset ||
+    executionMinimum != null;
 
   // Step 6b: incumbent capability floor.
   applyIncumbentModelFloor(
