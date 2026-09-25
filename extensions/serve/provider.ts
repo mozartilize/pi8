@@ -35,7 +35,12 @@ import { runAssessment, type AssessmentConfig } from '../routing/consult/consult
 import { adoptAssessment } from '../routing/consult/assessment-adoption.js';
 import { latestSummaryText, countToolActivity } from '../routing/consult/message-provenance.js';
 
-import { appendDecision, appendAssessmentMetric, appendExecutionContractSignal } from '../host/decisionlog.js';
+import {
+  appendDecision,
+  appendAssessmentMetric,
+  appendExecutionContractSignal,
+  appendInvestigationHandoffSignal,
+} from '../host/decisionlog.js';
 import { renderRouterStatus, servedKey } from '../host/ui.js';
 import {
   buildCandidate,
@@ -84,7 +89,8 @@ import {
   type ExecutionContract,
 } from '../routing/policy/execution-contract.js';
 import { appendContractOutcome, closeContractEntry } from './execution-contract-tool.js';
-import { investigationDimension } from '../routing/policy/investigation-handoff.js';
+import { entryPhase, serveReasoningHandoff } from '../routing/policy/investigation-handoff.js';
+import { closeInvestigationEntry, investigationNote, withInvestigationNote } from './investigation-handoff-tool.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -688,25 +694,31 @@ function advanceWorkPhase(args: {
   cacheHit: boolean;
   turnInput: ReturnType<typeof getTurnClassificationInput>;
   classifyResult: ReturnType<typeof classify>;
+  /** The entry's task type after assessment adoption: what it owes the user. */
+  deliverable: Dimension;
   session: RouterSession;
 }): void {
   let workPhaseState = args.session.getWorkPhaseState();
   if (!args.cacheHit) {
-    // A new entry drops the previous entry's contract; log how it ended.
-    if (workPhaseState?.contract) {
+    // A new entry closes the previous entry's handoffs; log how they ended.
+    if (workPhaseState) {
       const previous = args.session.getPreviousServed();
-      workPhaseState = closeContractEntry(workPhaseState, previous && servedKey(previous));
+      const served = previous && servedKey(previous);
+      workPhaseState = closeInvestigationEntry(workPhaseState, served);
+      if (workPhaseState.contract) workPhaseState = closeContractEntry(workPhaseState, served);
     }
     const terminal = args.classifyResult.terminal;
     workPhaseState =
       workPhaseState && args.turnInput.thin
-        ? inheritThinContinuation(args.turnInput.key, workPhaseState)
+        ? inheritThinContinuation(args.turnInput.key, workPhaseState, args.deliverable)
         : {
             intentKey: args.turnInput.key,
+            deliverable: args.deliverable,
             terminal,
             terminalBand: capabilityBandFor(terminalRequirement(terminal)),
             providerInvocation: 1,
             observedMutationTools: 0,
+            ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
           };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
@@ -831,6 +843,8 @@ interface ScoredTurn {
   requestedReasoning: string | undefined;
   /** A broken contract this invocation hands back; consumed only once it serves. */
   restoredContract?: ExecutionContract;
+  /** A reasoning handoff this invocation releases; its boundary is consumed only once it serves. */
+  pendingHandoff?: import('../types.js').ReasoningHandoffMeta;
 }
 
 /** Resolve the registry, this turn's input identity, and the candidate pool. */
@@ -1086,13 +1100,24 @@ function scoreRouterTurn(args: {
   // submitter's task type and thinking level, until an invocation serves.
   const restore = contract?.status === 'broken' ? contract : undefined;
   const handBack = restore ?? (reviewing ? contract : undefined);
-  // An investigation handed to planning is planned for the rest of the entry,
-  // including when a broken plan hands back to its submitter.
-  const entryDimension = investigationDimension(intentState, baseDimension);
-  const entryCause = entryDimension !== baseDimension ? 'investigation-handoff' : baseCause;
-  const routedDimension = reviewing ? 'review' : implementing ? 'implement' : entryDimension;
-  const routedCause = reviewing || implementing ? 'execution-contract' : entryCause;
-  advanceWorkPhase({ cacheHit, turnInput, classifyResult, session });
+  advanceWorkPhase({ cacheHit, turnInput, classifyResult, deliverable: baseDimension, session });
+  // An entry that owes a plan or review investigates first; an accepted
+  // investigation handoff routes the rest of the entry as that plan or
+  // review, including when a broken plan hands back to its submitter. A
+  // pinned or held model serves the deliverable directly.
+  const bypassPhases = baseCause === 'manual-override' || baseCause === 'semi-hold';
+  let entry = session.getWorkPhaseState();
+  const phase = entryPhase(entry, baseDimension, bypassPhases);
+  if (phase.cause === 'investigation' && entry && !entry.investigated) {
+    entry = { ...entry, investigated: true };
+    session.commitWorkPhaseState(entry);
+  }
+  const routedDimension = reviewing ? 'review' : implementing ? 'implement' : phase.dimension;
+  const routedCause = reviewing || implementing ? 'execution-contract' : phase.cause ?? baseCause;
+  // The reasoning phase is scored at its handoff's minimum; its incumbent
+  // minimums stand down once, until a model serves the phase.
+  const reasoning = routedDimension === entry?.reasoningHandoff?.target ? entry.reasoningHandoff : undefined;
+  const reasoningPending = reasoning?.pending === true && !handBack;
 
   // Pi clears lastServed at stream start; the rotated value is the model and
   // effort that actually served, including an effort-floor bump or fallback.
@@ -1124,10 +1149,26 @@ function scoreRouterTurn(args: {
     incumbentResolvedDimension: handBack?.submitterDimension ??
       session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
-    ...(execution ? { handoffMinimum: execution.minimum, handoffPending: true } : {}),
+    ...(execution
+      ? { handoffMinimum: execution.minimum, handoffPending: true }
+      : reasoning ? { handoffMinimum: reasoning.minimum, handoffPending: reasoningPending } : {}),
+    ...(entry?.deliverable ? { deliverable: entry.deliverable } : {}),
     config,
   });
   const decision = policy.decision;
+  let servedHandoff = reasoningPending ? reasoning : undefined;
+  if (reasoning && policy.trajectoryApplied && !reasoning.trajectoryFired) {
+    const current = session.getWorkPhaseState()!;
+    const marked = { ...reasoning, trajectoryFired: true };
+    session.commitWorkPhaseState({ ...current, reasoningHandoff: marked });
+    if (servedHandoff) servedHandoff = marked;
+  }
+  if (entry?.deliverable && (phase.cause != null || reasoning)) decision.deliverable = entry.deliverable;
+  if (reasoning) decision.reasoningHandoff = session.getWorkPhaseState()?.reasoningHandoff ?? reasoning;
+  if (entry?.previousHandoffId && session.getLastDecision()?.intentKey !== turnInput.key) {
+    decision.previousHandoffId = entry.previousHandoffId;
+    decision.offTopicReset = policy.offTopicReset;
+  }
   if (mutationObserved) decision.mutationObserved = true;
   if (contract) {
     const current = session.getWorkPhaseState();
@@ -1163,7 +1204,13 @@ function scoreRouterTurn(args: {
 
   return {
     kind: 'ready',
-    scored: { decision, routableCandidates, requestedReasoning, ...(restore ? { restoredContract: restore } : {}) },
+    scored: {
+      decision,
+      routableCandidates,
+      requestedReasoning,
+      ...(restore ? { restoredContract: restore } : {}),
+      ...(servedHandoff ? { pendingHandoff: servedHandoff } : {}),
+    },
   };
 }
 
@@ -1231,10 +1278,16 @@ async function delegateRouterTurn(args: {
 
   const pendingTrajectory = session.peekPendingTrajectoryEscalation();
   const delegationSessionGeneration = session.getSessionGeneration();
+  // An investigation that owes a plan or review carries the router's standing
+  // instruction to hand off rather than write it; see withInvestigationNote.
+  const entry = session.getWorkPhaseState();
+  const delegatedContext = decision.cause === 'investigation' && entry
+    ? withInvestigationNote(context, investigationNote(entry))
+    : context;
   const delegationOptions: DelegationOptions = {
     decision,
     registry: registry!,
-    context,
+    context: delegatedContext,
     options: delegatedOptions,
     candidates: routableCandidates,
     reasoning: explicitThinking ?? resolvedReasoning,
@@ -1277,6 +1330,23 @@ async function delegateRouterTurn(args: {
   if (result.success && restored && afterServe?.contract === restored) {
     appendContractOutcome(afterServe, 'broken');
     session.commitWorkPhaseState({ ...afterServe, contract: undefined });
+  }
+  // Same rule for a reasoning handoff's boundary: the first invocation that
+  // serves the phase owns it, whichever candidate served, and a failed one
+  // leaves the boundary pending.
+  const pendingHandoff = scored.pendingHandoff;
+  const current = session.getWorkPhaseState();
+  const lastServed = session.getLastServed();
+  if (result.success && pendingHandoff && lastServed && current?.reasoningHandoff?.id === pendingHandoff.id &&
+      current.reasoningHandoff.pending) {
+    const owned = serveReasoningHandoff(current, servedKey(lastServed));
+    session.commitWorkPhaseState(owned);
+    appendInvestigationHandoffSignal({
+      intentKey: owned.intentKey,
+      served: owned.reasoningHandoff!.owner!,
+      action: 'served',
+      handoff: owned.reasoningHandoff!,
+    });
   }
 
   if (

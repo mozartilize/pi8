@@ -1,4 +1,4 @@
-import type { CapabilityBand, TerminalAssessment } from '../../types.js';
+import type { CapabilityBand, Dimension, ReasoningHandoffMeta, TerminalAssessment } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
@@ -8,6 +8,8 @@ const FLOOR = { economy: undefined, standard: 0.45, strong: 0.70, frontier: 0.85
 /** Per-entry routing state: the entry's final step and its explicit handoffs. */
 export interface WorkPhaseState {
   intentKey: string;
+  /** Task type the entry owes the user: its classification after assessment adoption. */
+  deliverable?: Dimension;
   terminal: TerminalAssessment;
   terminalBand: CapabilityBand;
   providerInvocation: number;
@@ -21,10 +23,18 @@ export interface WorkPhaseState {
   excludedExecutors?: string[];
   /** The one handoff reminder for this entry was already appended. */
   contractNudged?: boolean;
-  /** The investigation handed this entry to planning; never inherited. */
-  planningRequested?: boolean;
-  /** The one planning reminder for this investigation was already appended. */
+  /** Paths the entry read with native `read`, most recent first; router-observed, never inherited. */
+  readPaths?: string[];
+  /** Investigation → planning/review handoff for this entry; never inherited. */
+  reasoningHandoff?: ReasoningHandoffMeta;
+  /** Handoff of the entry before this one, joined to this entry's records. */
+  previousHandoffId?: string;
+  /** The one investigation reminder for this entry was already appended. */
   investigationNudged?: boolean;
+  /** An invocation of this entry was routed as its investigation. */
+  investigated?: boolean;
+  /** The entry's investigation outcome (`no-handoff` or `phase-end`) was logged. */
+  investigationClosed?: boolean;
 }
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
@@ -55,15 +65,21 @@ export function nextProviderInvocation(state: WorkPhaseState): WorkPhaseState {
 export function inheritThinContinuation(
   intentKey: string,
   prior: WorkPhaseState,
+  deliverable: Dimension,
 ): WorkPhaseState {
   return {
     ...prior,
     intentKey,
+    deliverable,
     providerInvocation: 1,
     observedMutationTools: 0,
     contract: undefined,
     contractNudged: undefined,
-    planningRequested: undefined,
+    readPaths: undefined,
+    reasoningHandoff: undefined,
+    previousHandoffId: prior.reasoningHandoff?.id,
     investigationNudged: undefined,
+    investigated: undefined,
+    investigationClosed: undefined,
   };
 }

@@ -194,6 +194,29 @@ export interface ReasoningEvidence {
   fixCommits?: number;
 }
 
+/** An accepted investigation → planning/review handoff, as routing and logs see it. */
+export interface ReasoningHandoffMeta {
+  /** Joins the handoff to later records; the intent key of the entry that accepted it. */
+  id: string;
+  /** Served key of the model that called the tool. */
+  requester: string;
+  target: 'plan' | 'review';
+  /** Plan/review-axis ratio the reasoning phase needs, at most the frontier ratio. */
+  minimum: number;
+  /** Requirement before the cap. */
+  requirement: number;
+  rubric: ReasoningRubric;
+  evidence: ReasoningEvidence;
+  /** The boundary still releases the incumbent: no invocation has served the phase yet. */
+  pending: boolean;
+  /** Served key of the model that received the phase. */
+  owner?: string;
+  /** Objective trajectory escalation repicked inside the phase. */
+  trajectoryFired?: boolean;
+  /** An execution contract was accepted after the handoff. */
+  contractAccepted?: boolean;
+}
+
 /** Plan facts the router measures; an undefined field means the measurement failed. */
 export interface MeasuredFeatures {
   /** Distinct declared file targets. */
@@ -251,6 +274,8 @@ export interface ExecutionContractMeta {
   breaker?: string;
   /** Executor models excluded for this task after repeated breaks. */
   excludedExecutors?: string[];
+  /** Investigation handoff this plan followed, in the same entry or the one before. */
+  handoffId?: string;
 }
 
 export type AssessmentFallbackReason =
@@ -287,6 +312,7 @@ export type DecisionCause =
   | 'continuation-context'
   | 'router-consult'
   | 'execution-contract'
+  | 'investigation'
   | 'investigation-handoff'
   | 'embedding-classify'
   | 'error-fallback'
@@ -341,6 +367,14 @@ export interface RoutingDecision {
   mutationObserved?: boolean;
   /** Execution contract that shaped this invocation, active or just broken. */
   executionContract?: ExecutionContractMeta;
+  /** The task type the entry owes when the routed phase is an investigation before it. */
+  deliverable?: Dimension;
+  /** Investigation handoff that shaped this invocation. */
+  reasoningHandoff?: ReasoningHandoffMeta;
+  /** Handoff of the previous entry, on the first decision of the entry after it. */
+  previousHandoffId?: string;
+  /** A new entry reset the incumbent minimums as off-topic. */
+  offTopicReset?: boolean;
   /** Message-origin census for this turn's context. */
   provenanceCounts?: Record<MessageProvenance, number>;
   cause: DecisionCause;

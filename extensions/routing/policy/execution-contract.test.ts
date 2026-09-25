@@ -202,7 +202,7 @@ describe('execution contract lifecycle', () => {
   it('drops the contract but keeps strikes across a thin continuation', () => {
     const broken = breakContract(accepted([edit('a.ts')]), 'x/luna', 'struggle');
     const withActive = accepted([edit('a.ts')], broken);
-    const next = inheritThinContinuation('intent-b', withActive);
+    const next = inheritThinContinuation('intent-b', withActive, 'plan');
     expect(next.contract).toBeUndefined();
     expect(next.contractStrikes).toEqual({ luna: 1 });
   });

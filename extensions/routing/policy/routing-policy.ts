@@ -97,6 +97,8 @@ export interface RoutingPolicyResult {
   decision: RoutingDecision;
   /** True when trajectory friction selected a stronger head pick. */
   trajectoryApplied: boolean;
+  /** True when a new entry reset the incumbent minimums as off-topic. */
+  offTopicReset: boolean;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -453,5 +455,5 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     baseOpts,
   );
 
-  return { decision, trajectoryApplied: trajectory.applied };
+  return { decision, trajectoryApplied: trajectory.applied, offTopicReset };
 }

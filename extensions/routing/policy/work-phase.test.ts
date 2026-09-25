@@ -49,17 +49,27 @@ describe('nextProviderInvocation', () => {
 
 describe('inheritThinContinuation', () => {
   it('retains terminal and band while resetting per-entry counters and handoffs', () => {
+    const handoff = {
+      id: 'intent-a', requester: 'a/cheap', target: 'plan' as const, minimum: 0.5, requirement: 0.5,
+      rubric: { alternatives: 2, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 },
+      evidence: { applicable: false, files: 0, directories: 0 }, pending: false,
+    };
     const prior = entryState({
       providerInvocation: 3,
       observedMutationTools: 1,
       contractNudged: true,
-      planningRequested: true,
+      readPaths: ['/repo/a.ts'],
+      reasoningHandoff: handoff,
       investigationNudged: true,
+      investigated: true,
+      investigationClosed: true,
       contractStrikes: { 'beta/strong': 1 },
     });
-    const next = inheritThinContinuation('intent-b', prior);
+    const next = inheritThinContinuation('intent-b', prior, 'implement');
     expect(next).toMatchObject({
       intentKey: 'intent-b',
+      deliverable: 'implement',
+      previousHandoffId: 'intent-a',
       terminal: prior.terminal,
       terminalBand: prior.terminalBand,
       providerInvocation: 1,
@@ -68,7 +78,10 @@ describe('inheritThinContinuation', () => {
     });
     expect(next.contract).toBeUndefined();
     expect(next.contractNudged).toBeUndefined();
-    expect(next.planningRequested).toBeUndefined();
+    expect(next.readPaths).toBeUndefined();
+    expect(next.reasoningHandoff).toBeUndefined();
     expect(next.investigationNudged).toBeUndefined();
+    expect(next.investigated).toBeUndefined();
+    expect(next.investigationClosed).toBeUndefined();
   });
 });

@@ -793,28 +793,26 @@ describe('provider orchestration', () => {
     // legitimately reappears as turn-2's incoming `options.reasoning` even
     // though the user never touched the thinking-level control — that must
     // still be treated as inherited, not as an explicit override, so a
-    // dimension change (review -> plan) still resolves through the new
+    // dimension change (gather -> implement) still resolves through the new
     // dimension's own floor rather than pinning the echoed level.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
-    const reviewContext = {
-      messages: [{ role: 'user', content: 'please review this pull request for security issues' }],
+    const gatherContext = {
+      messages: [{ role: 'user', content: 'investigate the flaky test' }],
     } as unknown as Context;
-    await harness.serve(reviewContext, {});
+    await harness.serve(gatherContext, {});
     const firstReasoning = harness.delegatedCall().options?.reasoning;
-    expect(firstReasoning).toBe('medium');
+    expect(firstReasoning).toBe('low');
 
     harness.resetEventStream();
     vi.mocked(streamSimple).mockClear();
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
-    const planContext = {
-      messages: [
-        { role: 'user', content: 'design the architecture and plan the migration roadmap for this system' },
-      ],
+    const implementContext = {
+      messages: [{ role: 'user', content: 'implement a function to parse the pending adjustment payload' }],
     } as unknown as Context;
     // Simulate Pi carrying forward the effective level it saw last turn.
-    await harness.serve(planContext, { reasoning: firstReasoning });
+    await harness.serve(implementContext, { reasoning: firstReasoning });
     const secondReasoning = harness.delegatedCall().options?.reasoning;
     expect(secondReasoning).toBe('medium');
   });
@@ -825,10 +823,10 @@ describe('provider orchestration', () => {
     // manually, never reflecting what the router actually picked per-turn.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
-    const reviewContext = {
-      messages: [{ role: 'user', content: 'please review this pull request for security issues' }],
+    const implementContext = {
+      messages: [{ role: 'user', content: 'implement a function to parse the pending adjustment payload' }],
     } as unknown as Context;
-    await harness.serve(reviewContext, {});
+    await harness.serve(implementContext, {});
 
     expect(setThinkingLevelSpy).toHaveBeenCalledWith('medium');
   });
@@ -1737,6 +1735,10 @@ describe('assessment orchestration', () => {
     metricRecordCount: number;
     readAssessmentMetrics(): Promise<void>;
     readDecisionRecords(): Promise<Array<Record<string, unknown>>>;
+    /** Context of the last serving (non-assessor) request, as delegated. */
+    servedContext: Context | undefined;
+    /** Context Pi passed to the router for the last invocation. */
+    piContext: Context | undefined;
   }
 
   interface RoutingDecision {
@@ -1748,6 +1750,10 @@ describe('assessment orchestration', () => {
     routedDown?: boolean;
     fallbackReason?: string;
     assessment?: unknown;
+    reasoningHandoff?: { minimum: number; pending: boolean; id: string };
+    executionContract?: { handoffId?: string };
+    previousHandoffId?: string;
+    deliverable?: string;
   }
 
   async function newSession(config: Record<string, unknown>): Promise<Session> {
@@ -1794,6 +1800,8 @@ describe('assessment orchestration', () => {
 
     const session: Session = {
       assessmentDispatchCount: 0,
+      servedContext: undefined,
+      piContext: undefined,
       lastMetricRecord: undefined,
       metricRecordCount: 0,
       async routeTurn(prompt, opts = {}) {
@@ -1898,12 +1906,14 @@ describe('assessment orchestration', () => {
         }
         return asStream(answer);
       }
+      session.servedContext = callContext;
       if (opts.serveFails) {
         return asStream([{ type: 'error', error: { errorMessage: 'manual failure' } }]);
       }
       return asStream([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
     });
 
+    session.piContext = ctx;
     await harness.serve(ctx);
     const state = harness.getProviderState();
     return state.lastDecision as unknown as RoutingDecision | undefined;
@@ -2001,39 +2011,135 @@ describe('assessment orchestration', () => {
   });
 
   describe('investigation handoff', () => {
-    it('stays an investigation until the model requests planning', async () => {
-      const session = await newSession({ consultRouter: true });
-      expect((await session.routeTurn('investigate the flaky test'))?.dimension).toBe('gather');
-      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
+    const PLAN_PROMPT = 'design the architecture and plan the migration roadmap for this system';
+    const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
+    const handoff = (alternatives: number) => ({
+      findings: 'the retry wrapper swallows timeouts',
+      question: 'where should the timeout surface',
+      difficulty: { alternatives, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 },
     });
 
-    it('plans the rest of the entry once requested, and lets the plan hand off to an executor', async () => {
+    it('keeps a gather entry an investigation, with no handoff owed', async () => {
       const session = await newSession({ consultRouter: true });
       const first = await session.routeTurn('investigate the flaky test');
       expect(first?.dimension).toBe('gather');
-      const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
-      const request = { findings: 'the retry wrapper swallows timeouts in src/a.ts', change: 'surface the timeout' };
-      expect(submitInvestigationHandoff(request, routerCtx, harness.session).accepted).toBe(true);
+      expect(first?.cause).toBe('heuristic');
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
+    });
 
+    it('investigates a plan request until the handoff, then plans at the handoff minimum', async () => {
+      const session = await newSession({ consultRouter: false });
+      const first = await session.routeTurn(PLAN_PROMPT);
+      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'plan' });
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
+
+      expect(submitInvestigationHandoff(handoff(1), routerCtx, harness.session).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
-      expect(planning?.dimension).toBe('plan');
-      expect(planning?.cause).toBe('investigation-handoff');
-      expect(planning?.chosen).toBe('beta/strong');
-      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
-      // Planning has taken over: a second request no longer applies.
-      expect(submitInvestigationHandoff(request, routerCtx, harness.session).accepted).toBe(false);
+      // An obvious decision: the cheaper model clears the minimum.
+      expect(planning).toMatchObject({ dimension: 'plan', cause: 'investigation-handoff', chosen: 'alpha/cheap' });
+      expect(planning?.reasoningHandoff).toMatchObject({ minimum: 0.4, pending: true });
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff)
+        .toMatchObject({ pending: false, owner: planning?.chosen });
+      // A second request no longer applies.
+      expect(submitInvestigationHandoff(handoff(1), routerCtx, harness.session).accepted).toBe(false);
+    });
 
+    it('picks a stronger planner for a harder handoff', async () => {
+      const session = await newSession({ consultRouter: false });
+      await session.routeTurn(PLAN_PROMPT);
+      expect(submitInvestigationHandoff(handoff(5), routerCtx, harness.session).accepted).toBe(true);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+    });
+
+    it('releases the incumbent once: the planner that served keeps the phase', async () => {
+      const session = await newSession({ consultRouter: false });
+      await session.routeTurn(PLAN_PROMPT);
+      submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
+      const planner = (await session.routeTurnAgainWithSameUserEntry())?.chosen;
+      // Lowering the minimum after the boundary served cannot move the phase to a cheaper model.
+      const state = harness.session.getWorkPhaseState()!;
+      harness.session.commitWorkPhaseState({ ...state, reasoningHandoff: { ...state.reasoningHandoff!, minimum: 0.4 } });
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe(planner);
+    });
+
+    it('keeps the boundary pending when no candidate serves it', async () => {
+      const session = await newSession({ consultRouter: false });
+      await session.routeTurn(PLAN_PROMPT);
+      submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.pending).toBe(true);
+    });
+
+    it('routes a review deliverable through its investigation to review', async () => {
+      const session = await newSession({ consultRouter: false });
+      const first = await session.routeTurn('please review this pull request for security issues');
+      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'review' });
+      submitInvestigationHandoff(handoff(2), routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('review');
+    });
+
+    it('investigates a confident compound implementation, then plans it and hands it to an executor', async () => {
+      const session = await newSession({ consultRouter: false });
+      const first = await session.routeTurn(
+        'Trace the race condition across the codebase from scratch, then fix it, refactor it, and implement the corrected logic.',
+      );
+      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'implement' });
+      submitInvestigationHandoff(handoff(1), routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
       const plan = {
         steps: [{ kind: 'edit', path: 'src/a.ts', change: 'retry the flaky call' }],
         remainingWork: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
       };
       expect(submitExecutionContract(plan, routerCtx, harness.session).accepted).toBe(true);
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.contractAccepted).toBe(true);
       const executing = await session.routeTurnAgainWithSameUserEntry();
       expect(executing?.dimension).toBe('implement');
-      expect(executing?.chosen).toBe('alpha/cheap');
+      expect(executing?.executionContract?.handoffId).toBe(harness.session.getWorkPhaseState()?.reasoningHandoff?.id);
+    });
 
-      // The next user entry is classified afresh.
-      expect((await session.routeTurn('investigate another flaky test'))?.dimension).toBe('gather');
+    it('carries the investigation note on the entry message, byte-identical, only while investigating', async () => {
+      const session = await newSession({ consultRouter: false });
+      await session.routeTurn(PLAN_PROMPT);
+      const userBlocks = () => {
+        const messages = session.servedContext!.messages;
+        const entry = messages.filter((m) => m.role === 'user').at(-1)!;
+        return entry.content as Array<{ type: string; text: string }>;
+      };
+      const first = userBlocks();
+      expect(first.map((b) => b.text)).toEqual([PLAN_PROMPT, expect.stringContaining('hand_off_investigation')]);
+      expect(first[1]!.text).toContain('do not write the plan yourself');
+      // Pi's own transcript never carries the note.
+      expect(session.piContext!.messages[0]!.content).toBe(PLAN_PROMPT);
+      await session.routeTurnAgainWithSameUserEntry();
+      expect(userBlocks()).toEqual(first);
+
+      submitInvestigationHandoff(handoff(1), routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry();
+      const entry = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
+      expect(entry.content).toBe(PLAN_PROMPT);
+    });
+
+    it('lets a pinned model serve the deliverable without an investigation', async () => {
+      const session = await newSession({ consultRouter: false });
+      harness.session.setManualModel('beta/strong');
+      const first = await session.routeTurn(PLAN_PROMPT);
+      expect(first?.dimension).toBe('plan');
+      expect(first?.cause).toBe('manual-override');
+    });
+
+    it('logs the handoff lifecycle and joins the next entry to it, never logging findings', async () => {
+      const session = await newSession({ consultRouter: false });
+      await session.routeTurn(PLAN_PROMPT);
+      submitInvestigationHandoff(handoff(3), routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry();
+      const next = await session.routeTurn('now plan the rollout for the second region as well');
+      expect(next?.previousHandoffId).toBeDefined();
+      const records = await session.readDecisionRecords();
+      const actions = records
+        .map((r) => (r.investigationHandoff as { action?: string } | undefined)?.action)
+        .filter(Boolean);
+      expect(actions).toEqual(['accept', 'served', 'phase-end']);
+      expect(JSON.stringify(records)).not.toContain('swallows timeouts');
     });
   });
 
@@ -2043,6 +2149,12 @@ describe('assessment orchestration', () => {
       'Kind: implement\nComplexity: moderate\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: implement deliverable';
     const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
     const EASY = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
+    // A real design decision: its minimum is the frontier ratio.
+    const DESIGN_HANDOFF = {
+      findings: 'the migration touches every service',
+      question: 'which migration order keeps the system up',
+      difficulty: { alternatives: 5, stakes: 5, spread: 5, knowledge: 5, uncertainty: 5 },
+    };
     const smallPlan = {
       steps: [
         { kind: 'edit', path: 'src/a.ts', change: 'reject expired tokens' },
@@ -2054,8 +2166,12 @@ describe('assessment orchestration', () => {
     async function planned(): Promise<Session> {
       const session = await newSession({ consultRouter: true });
       const first = await session.routeTurn(PLAN_PROMPT, { assessorReply: IMPLEMENT_VERDICT });
-      expect(first?.dimension).toBe('plan');
-      expect(first?.chosen).toBe('beta/strong');
+      expect(first?.dimension).toBe('gather');
+      expect(first?.cause).toBe('investigation');
+      expect(submitInvestigationHandoff(DESIGN_HANDOFF, routerCtx, harness.session).accepted).toBe(true);
+      const planning = await session.routeTurnAgainWithSameUserEntry();
+      expect(planning?.dimension).toBe('plan');
+      expect(planning?.chosen).toBe('beta/strong');
       return session;
     }
 
@@ -2330,6 +2446,8 @@ describe('assessment orchestration', () => {
       await session.routeTurn(PLAN_PROMPT, {
         assessorReply: 'Kind: plan\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: plan deliverable',
       });
+      submitInvestigationHandoff(DESIGN_HANDOFF, routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry();
       const result = submitExecutionContract(smallPlan, routerCtx, harness.session);
       expect(result.accepted).toBe(false);
       expect(result.text).toContain('asks for a plan');
@@ -2339,6 +2457,8 @@ describe('assessment orchestration', () => {
     it('accepts a plan when the assessment is unavailable', async () => {
       const session = await newSession({ consultRouter: true });
       await session.routeTurn(PLAN_PROMPT, { assessorUsageLimit: true });
+      submitInvestigationHandoff(DESIGN_HANDOFF, routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry();
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session).accepted).toBe(true);
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('implement');
     });
@@ -2466,7 +2586,9 @@ describe('trajectory capability escalation', () => {
     await harness.serve(context);
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.chosen).toBe('gamma/strong');
-    expect(decision?.cause).toBe('trajectory-escalation');
+    // A plan request investigates first; the investigation owns the task
+    // type, so the repick changes the model, not the cause.
+    expect(decision?.cause).toBe('investigation');
     expect(decision?.trajectoryFriction?.fromModel).toBe(fromModel);
   });
 

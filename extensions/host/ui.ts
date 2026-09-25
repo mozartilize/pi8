@@ -53,8 +53,10 @@ export function formatStatus(
       ? `auto:${decision.dimension} → unavailable (${decision.reason})`
       : 'auto → waiting';
   }
-  const label = decision.mutationObserved && decision.dimension !== 'implement'
-    ? `auto:${decision.dimension} · editing` : `auto:${decision.dimension}`;
+  const label = decision.cause === 'investigation'
+    ? `auto:${decision.dimension} · investigating`
+    : decision.mutationObserved && decision.dimension !== 'implement'
+      ? `auto:${decision.dimension} · editing` : `auto:${decision.dimension}`;
   const parts = [label, '→', servedKey(served)];
   if (served.viaFallback) {
     const rank = served.fallbackRank && served.fallbackRank > 1 ? ` #${served.fallbackRank}` : '';
@@ -72,7 +74,8 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   'continuation-context': 'keyword classifier, using earlier messages for a short follow-up',
   'router-consult': 'LLM assessment',
   'execution-contract': 'routed by an accepted execution plan',
-  'investigation-handoff': 'the investigation handed the change to planning',
+  investigation: 'investigating before the plan or review',
+  'investigation-handoff': 'the investigation handed off to planning or review',
   'embedding-classify': 'multilingual embedding classifier',
   'error-fallback': 'a fallback model served after the top pick failed',
   'no-data': 'no benchmark data; ranked by price and context window',
@@ -126,6 +129,7 @@ export function formatDecisionDetail(
       const [label, text] = EXCLUSION_LABELS[diagnostic.excludedReason];
       return [`  ${`${label}:`.padEnd(11)} ${diagnostic.candidateKey} (${text})`];
     }) ?? [],
+    ...handoffLine(decision),
     ...(decision.executionContract ? contractLines(decision.executionContract) : []),
     ...(decision.trajectoryFriction ? [trajectoryLine(decision.trajectoryFriction)] : []),
     ...(decision.switched ? ['  note:       switched models from the previous turn'] : []),
@@ -166,6 +170,19 @@ function contractPlanLine(contract: ExecutionContractMeta): string {
   }
 }
 
+/** The `/router-why` line for an investigation and its handoff. */
+function handoffLine(decision: RoutingDecision): string[] {
+  const handoff = decision.reasoningHandoff;
+  if (!handoff) {
+    return decision.cause === 'investigation' && decision.deliverable
+      ? [`  handoff:    investigating (deliverable ${decision.deliverable})`]
+      : [];
+  }
+  const role = handoff.target === 'plan' ? 'planning' : 'reviewing';
+  const state = handoff.pending ? 'pending' : `owned by ${handoff.owner ?? 'unknown'}`;
+  return [`  handoff:    ${role}, minimum ${handoff.minimum.toFixed(2)}, ${state}`];
+}
+
 function contractLines(contract: ExecutionContractMeta): string[] {
   const lines = [`  plan:       ${contractPlanLine(contract)}`];
   if (contract.excludedExecutors?.length) {
@@ -190,7 +207,9 @@ function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined)
     );
   }
   if (decision.routedDown) {
-    const lowerer = decision.cause === 'execution-contract' ? 'the accepted execution plan' : 'the assessment';
+    const lowerer = decision.cause === 'execution-contract'
+      ? 'the accepted execution plan'
+      : decision.cause === 'investigation' ? 'an investigation before it' : 'the assessment';
     lines.push(
       decision.routedPickChanged
         ? `  note:       task type lowered by ${lowerer}, so a cheaper model served`

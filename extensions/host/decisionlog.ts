@@ -18,6 +18,7 @@ import type {
   ExecutionContractMeta,
   CandidateDiagnostic,
   Dimension,
+  ReasoningHandoffMeta,
   RoutingAssessment,
   RoutingDecision,
 } from '../types.js';
@@ -105,7 +106,14 @@ export interface DecisionLogEntry {
     action: InvestigationHandoffSignal['action'];
     /** Router-authored reject code, never the findings. */
     rejectReason?: string;
+    handoff?: ReasoningHandoffMeta;
+    deliverable?: Dimension;
   };
+  /** Routed phase records: the deliverable behind an investigation, and the join to the previous entry's handoff. */
+  deliverable?: string;
+  reasoningHandoff?: ReasoningHandoffMeta;
+  previousHandoffId?: string;
+  offTopicReset?: boolean;
   /** Set on `kind: 'execution-contract'` records only. */
   executionContract?: {
     /** `route` marks a routing decision the contract shaped. */
@@ -243,14 +251,23 @@ export function appendExecutionContractSignal(
   }
 }
 
-/** One investigation → planning handoff transition. Model keys and codes only: never the findings. */
+/**
+ * One investigation → planning/review handoff transition. Model keys, codes,
+ * rubric levels and counts only: never the findings, the question, or paths.
+ */
 export interface InvestigationHandoffSignal {
   intentKey: string;
-  /** Model that requested planning, was declined, or was reminded. */
+  /** Model that handed off, was declined, was reminded, or owns the phase. */
   served: string;
-  /** `nudge` marks an investigation edit made without a handoff. */
-  action: 'accept' | 'reject' | 'nudge';
+  /**
+   * `nudge` marks a reminder to hand off. `served` marks the first invocation
+   * that served the reasoning phase. At entry end, `phase-end` closes an
+   * accepted handoff and `no-handoff` an owed investigation that never handed off.
+   */
+  action: 'accept' | 'reject' | 'nudge' | 'served' | 'phase-end' | 'no-handoff';
   rejectReason?: string;
+  handoff?: ReasoningHandoffMeta;
+  deliverable?: Dimension;
 }
 
 /** Append an investigation handoff transition. Best-effort; never throws into the tool path. */
@@ -278,6 +295,8 @@ export function appendInvestigationHandoffSignal(
       investigationHandoff: {
         action: signal.action,
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
+        ...(signal.handoff ? { handoff: signal.handoff } : {}),
+        ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
       },
     };
     appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
@@ -330,6 +349,11 @@ export function appendDecision(
       candidateDiagnostics: decision.candidateDiagnostics,
       ...(decision.executionContract
         ? { executionContract: { action: 'route' as const, meta: decision.executionContract } }
+        : {}),
+      ...(decision.deliverable ? { deliverable: decision.deliverable } : {}),
+      ...(decision.reasoningHandoff ? { reasoningHandoff: decision.reasoningHandoff } : {}),
+      ...(decision.previousHandoffId
+        ? { previousHandoffId: decision.previousHandoffId, offTopicReset: decision.offTopicReset === true }
         : {}),
     };
     appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');

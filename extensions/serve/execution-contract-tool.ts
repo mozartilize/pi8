@@ -168,7 +168,7 @@ export interface ContractParams {
 /** Router-measured target facts that need I/O; the rest come from validation. */
 export type TargetObservations = Pick<MeasuredFeatures, 'existingLines' | 'missingTargets' | 'commits' | 'fixCommits'>;
 
-type Exec = (
+export type Exec = (
   command: string,
   args: string[],
   options?: { cwd?: string; timeout?: number; signal?: AbortSignal },
@@ -239,24 +239,43 @@ async function measureTargets(
   const existing = [...new Set((steps ?? [])
     .filter((step) => (step.kind === 'edit' || step.kind === 'delete') && typeof step.path === 'string')
     .map((step) => resolveToolPath(cwd, step.path!.trim())))];
-  const observed: TargetObservations = {};
+  return measureFiles(exec, cwd, existing, validation.targets, signal);
+}
+
+/** Size of the files that exist, how many do not, and their recent history. */
+export type FileObservations = TargetObservations;
+
+/**
+ * Measure files the router did not choose: line counts of `sized` (absolute
+ * paths) and `git log` history of `history`. Each measurement that fails —
+ * including a path that is not a regular file — is left undefined, which the
+ * requirements treat as the hardest value.
+ */
+async function measureFiles(
+  exec: Exec,
+  cwd: string,
+  sized: readonly string[],
+  history: readonly string[],
+  signal?: AbortSignal,
+): Promise<FileObservations> {
+  const observed: FileObservations = {};
   let lines = 0;
   let missing = 0;
-  let sized = true;
-  for (const path of existing) {
+  let measured = true;
+  for (const path of sized) {
     try {
       lines += await countLines(path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') missing += 1;
-      else sized = false;
+      else measured = false;
     }
   }
-  if (sized) observed.existingLines = lines;
+  if (measured) observed.existingLines = lines;
   observed.missingTargets = missing;
   try {
     const result = await exec(
       'git',
-      ['log', `--since=${HISTORY_WINDOW}`, '--format=%s', '--', ...validation.targets],
+      ['log', `--since=${HISTORY_WINDOW}`, '--format=%s', '--', ...history],
       { cwd, timeout: HISTORY_TIMEOUT_MS, ...(signal ? { signal } : {}) },
     );
     if (result.code === 0) {
@@ -268,6 +287,17 @@ async function measureTargets(
     // No repository or no git: the history stays unmeasured.
   }
   return observed;
+}
+
+/** Measure absolute file paths within the observation deadline. */
+export function observeFiles(
+  exec: Exec,
+  cwd: string,
+  paths: readonly string[],
+  signal?: AbortSignal,
+  deadlineMs = OBSERVE_DEADLINE_MS,
+): Promise<FileObservations> {
+  return withDeadline(measureFiles(exec, cwd, paths, paths, signal), deadlineMs, {});
 }
 
 /** Log how a contract ended, with the rubric and measurements it was valued on. */
@@ -382,13 +412,17 @@ export function submitExecutionContract(
     // The revised plan replaces a broken one whose handback has not been consumed yet.
     appendContractOutcome(state, 'broken');
   }
-  const next = acceptContract(base, {
+  const accepted = acceptContract(base, {
     submitter: served,
     submitterDimension: previous?.submitterDimension ?? last.dimension,
     validation,
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },
   });
+  // The investigation handoff this plan came from records that it led to one.
+  const next = accepted.reasoningHandoff && !accepted.reasoningHandoff.contractAccepted
+    ? { ...accepted, reasoningHandoff: { ...accepted.reasoningHandoff, contractAccepted: true } }
+    : accepted;
   session.commitWorkPhaseState(next);
   const meta = contractMeta(next);
   appendExecutionContractSignal({ intentKey: state.intentKey, served, action: 'accept', meta });

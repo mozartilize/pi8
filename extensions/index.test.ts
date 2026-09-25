@@ -878,7 +878,7 @@ describe('mutation observation hooks', () => {
     } as unknown as ExtensionAPI);
     // Both handoff tools are registered once, up front, so the tool list never changes mid-session.
     expect(registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name))
-      .toEqual(['commit_execution', 'request_planning']);
+      .toEqual(['commit_execution', 'hand_off_investigation']);
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
 
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
@@ -953,67 +953,148 @@ describe('mutation observation hooks', () => {
     expect(raw).not.toContain('secret-dir');
   });
 
-  it('hands an investigation to planning through request_planning, logging codes but never findings', async () => {
-    const registerTool = vi.fn();
-    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+  const DIFFICULTY = { alternatives: 3, stakes: 2, spread: 1, knowledge: 1, uncertainty: 1 };
+
+  function handoffTool(registerTool: ReturnType<typeof vi.fn>) {
     const tool = registerTool.mock.calls[1]![0] as {
       name: string;
       execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }>;
     };
-    expect(tool.name).toBe('request_planning');
-    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
-    defaultRouterSession.intent.commitWorkPhaseState(entryState());
+    return tool;
+  }
+
+  function investigating(over: Partial<WorkPhaseState> = {}) {
+    defaultRouterSession.intent.commitWorkPhaseState(entryState({ deliverable: 'plan', ...over }));
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
-    const request = { findings: 'secret-finding in src/a.ts', change: 'secret-change' };
+  }
 
-    expect((await tool.execute('p0', { findings: ' ', change: 'x' }, undefined, undefined, ctx)).details.accepted).toBe(false);
+  it('hands an investigation off through hand_off_investigation, logging codes and levels but never findings or paths', async () => {
+    const registerTool = vi.fn();
+    const exec = vi.fn(async () => ({ stdout: 'fix: secret subject\n', stderr: '', code: 0, killed: false }));
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec } as unknown as ExtensionAPI);
+    const tool = handoffTool(registerTool);
+    expect(tool.name).toBe('hand_off_investigation');
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    investigating({ readPaths: ['/repo/secret-read.ts'] });
+    const request = {
+      findings: 'secret-finding', question: 'secret-question', files: ['secret-dir/a.ts'], difficulty: DIFFICULTY,
+    };
+
+    expect((await tool.execute('p0', { ...request, question: ' ' }, undefined, undefined, ctx)).details.accepted).toBe(false);
+    expect(exec).not.toHaveBeenCalled();
     expect((await tool.execute('p1', request, undefined, undefined, ctx)).details.accepted).toBe(true);
-    expect(defaultRouterSession.getWorkPhaseState()?.planningRequested).toBe(true);
+    const handoff = defaultRouterSession.getWorkPhaseState()?.reasoningHandoff;
+    expect(handoff).toMatchObject({ requester: 'test/cheap', target: 'plan', pending: true, rubric: DIFFICULTY });
+    // Declared file first, then the read one; the missing file counts as unmeasured.
+    expect(handoff?.evidence).toMatchObject({ applicable: true, files: 2, directories: 2, fixCommits: 1 });
+    expect(handoff?.evidence.existingLines).toBeUndefined();
+    expect((exec.mock.calls[0] as unknown[])[1]).toEqual(expect.arrayContaining(['/repo/secret-dir/a.ts', '/repo/secret-read.ts']));
 
-    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
     expect((await tool.execute('p2', request, undefined, undefined, ctx)).details.accepted).toBe(false);
 
     const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8');
-    const actions = raw.trim().split('\n').map((line) => JSON.parse(line) as { investigationHandoff?: unknown })
-      .map((record) => record.investigationHandoff);
-    expect(actions).toEqual([
-      { action: 'reject', rejectReason: 'missing-findings' },
-      { action: 'accept' },
-      { action: 'reject', rejectReason: 'not-investigation' },
+    const records = raw.trim().split('\n').map((line) => JSON.parse(line) as { investigationHandoff: { action: string; rejectReason?: string } });
+    expect(records.map((record) => [record.investigationHandoff.action, record.investigationHandoff.rejectReason])).toEqual([
+      ['reject', 'missing-findings'],
+      ['accept', undefined],
+      ['reject', 'already-handed-off'],
     ]);
     expect(raw).not.toContain('secret');
   });
 
-  it('declines request_planning for a pinned model', async () => {
+  it('accepts a handoff whose evidence is in the conversation without measuring anything', async () => {
     const registerTool = vi.fn();
-    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
-    const tool = registerTool.mock.calls[1]![0] as { execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
-    defaultRouterSession.intent.commitWorkPhaseState(entryState());
-    defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
-    defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
-    defaultRouterSession.setManualModel('test/cheap');
-    const request = { findings: 'f', change: 'c' };
-    expect((await tool.execute('p1', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
-    expect(defaultRouterSession.getWorkPhaseState()?.planningRequested).toBeUndefined();
+    const exec = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec } as unknown as ExtensionAPI);
+    investigating({ deliverable: 'review' });
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    const request = { findings: 'f', question: 'q', files: [], difficulty: DIFFICULTY };
+    expect((await handoffTool(registerTool).execute('p1', request, undefined, undefined, ctx)).details.accepted).toBe(true);
+    expect(exec).not.toHaveBeenCalled();
+    expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff)
+      .toMatchObject({ target: 'review', evidence: { applicable: false } });
   });
 
-  it('reminds an investigation of request_planning once, on its first edit result, and never blocks the edit', async () => {
-    const handlers = await makeToolHandlers();
-    const content = [{ type: 'text', text: 'edited' }];
-    defaultRouterSession.intent.commitWorkPhaseState(entryState());
-    defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
-    defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
+  it('declines hand_off_investigation for a pinned model or outside an investigation', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = handoffTool(registerTool);
+    const request = { findings: 'f', question: 'q', difficulty: DIFFICULTY };
+    investigating();
+    defaultRouterSession.setManualModel('test/cheap');
+    expect((await tool.execute('p1', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
+    defaultRouterSession.resumeManual();
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
+    expect((await tool.execute('p2', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
+    expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
+  });
 
+  it('never hangs measuring a declared file that is a device', async () => {
+    const registerTool = vi.fn();
+    const exec = vi.fn(async () => ({ stdout: '', stderr: '', code: 0, killed: false }));
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec } as unknown as ExtensionAPI);
+    investigating();
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    const request = { findings: 'f', question: 'q', files: ['/dev/zero'], difficulty: DIFFICULTY };
+    expect((await handoffTool(registerTool).execute('p1', request, undefined, undefined, ctx)).details.accepted).toBe(true);
+    expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff?.evidence.existingLines).toBeUndefined();
+  });
+
+  it('records reads for the handoff evidence', async () => {
+    const handlers = await makeToolHandlers();
+    investigating();
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    await handlers.get('tool_call')!({ toolName: 'read', toolCallId: 'r1', input: { path: 'src/a.ts' } }, ctx);
+    await handlers.get('tool_call')!({ toolName: 'read', toolCallId: 'r2', input: { path: 'src/b.ts' } }, ctx);
+    expect(defaultRouterSession.getWorkPhaseState()?.readPaths).toEqual(['/repo/src/b.ts', '/repo/src/a.ts']);
+  });
+
+  it('reminds an owed investigation once, on its first tool result', async () => {
+    const handlers = await makeToolHandlers();
+    const toolResult = handlers.get('tool_result')!;
+    const content = [{ type: 'text', text: 'read' }];
+    investigating({ deliverable: 'review' });
+    const first = await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
+    expect(first.content[1]!.text).toContain('needs a review');
+    expect(first.content[1]!.text).toContain('hand_off_investigation');
+    expect(await toolResult({ toolName: 'read', toolCallId: 'r2', content }, routerAutoCtx)).toBeUndefined();
+  });
+
+  it('reminds a gather entry with an ordinary final step only on its first edit result, and never after a handoff', async () => {
+    const handlers = await makeToolHandlers();
+    const toolResult = handlers.get('tool_result')!;
+    const content = [{ type: 'text', text: 'edited' }];
+    investigating({ deliverable: 'gather', terminalBand: 'standard' });
+
+    expect(await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx)).toBeUndefined();
     expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, routerAutoCtx))
       .toBeUndefined();
-    const toolResult = handlers.get('tool_result')!;
     const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
     expect(first.content.map((c) => c.text)).toEqual(['edited', INVESTIGATION_NUDGE]);
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
 
-    defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, investigationNudged: undefined, planningRequested: true });
-    expect(await toolResult({ toolName: 'write', toolCallId: 'w1', content }, routerAutoCtx)).toBeUndefined();
+    investigating({ deliverable: 'plan' });
+    const state = defaultRouterSession.getWorkPhaseState()!;
+    defaultRouterSession.commitWorkPhaseState({
+      ...state,
+      reasoningHandoff: {
+        id: 'intent-a', requester: 'test/cheap', target: 'plan', minimum: 0.5, requirement: 0.5,
+        rubric: DIFFICULTY, evidence: { applicable: false, files: 0, directories: 0 }, pending: true,
+      },
+    });
+    expect(await toolResult({ toolName: 'read', toolCallId: 'r3', content }, routerAutoCtx)).toBeUndefined();
+  });
+
+  it('logs no-handoff when an owed investigation ends without handing off', async () => {
+    const handlers = await makeToolHandlers();
+    investigating({ investigated: true });
+    await handlers.get('agent_settled')!({ type: 'agent_settled' }, routerAutoCtx);
+    await handlers.get('agent_settled')!({ type: 'agent_settled' }, routerAutoCtx);
+    const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8').trim().split('\n');
+    expect(raw.map((line) => (JSON.parse(line) as { investigationHandoff: unknown }).investigationHandoff)).toEqual([
+      { action: 'no-handoff', deliverable: 'plan' },
+    ]);
   });
 
   it('appends the handoff reminder once to the first plan/review edit result without a plan', async () => {

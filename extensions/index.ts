@@ -79,7 +79,12 @@ import {
   defaultRuntimeBindings,
 } from './serve/router-session-state.js';
 import { classifyMutationCall } from './routing/policy/mutation-detector.js';
-import { nudgeInvestigationOnEdit, registerInvestigationHandoffTool } from './serve/investigation-handoff-tool.js';
+import {
+  closeInvestigationOnSettle,
+  nudgeInvestigation,
+  observeInvestigationRead,
+  registerInvestigationHandoffTool,
+} from './serve/investigation-handoff-tool.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
 const SUBAGENT_TOOL = 'subagent';
@@ -631,7 +636,10 @@ export default async function autoModelRouterExtension(
 
   pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels, session));
 
-  pi.on('agent_settled', () => closeContractOnSettle(session));
+  pi.on('agent_settled', () => {
+    closeInvestigationOnSettle(session);
+    closeContractOnSettle(session);
+  });
 
   // Both rewrite the history, so no cached prefix still matches it.
   pi.on('session_compact', () => session.clearWarmCaches());
@@ -649,6 +657,7 @@ export default async function autoModelRouterExtension(
     }
     try {
       observeMutationToolCall(event, ctx, session);
+      observeInvestigationRead(event, ctx, session);
       handleContractToolCall(event, ctx, session);
       const flushed = session.noteTrajectoryToolCall(event.toolName, event.toolCallId, event.input);
       if (flushed) {
@@ -684,6 +693,6 @@ export default async function autoModelRouterExtension(
       ctx,
       session,
     );
-    return nudgeContractOnEdit(event, session) ?? nudgeInvestigationOnEdit(event, session);
+    return nudgeContractOnEdit(event, session) ?? nudgeInvestigation(event, session);
   });
 }
