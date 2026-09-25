@@ -657,7 +657,6 @@ export default async function autoModelRouterExtension(
     }
     try {
       observeMutationToolCall(event, ctx, session);
-      observeInvestigationRead(event, ctx, session);
       handleContractToolCall(event, ctx, session);
       const flushed = session.noteTrajectoryToolCall(event.toolName, event.toolCallId, event.input);
       if (flushed) {
@@ -681,6 +680,7 @@ export default async function autoModelRouterExtension(
       return;
     }
     handleTrajectoryToolResult(event, session);
+    observeInvestigationRead(event, ctx, session);
     trackContractToolResult(
       {
         toolName: event.toolName,

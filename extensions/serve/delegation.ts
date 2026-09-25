@@ -192,6 +192,11 @@ export interface DelegationOptions {
   turnTimer: () => number;
   /** Owning session state for this delegation loop. */
   session?: RouterSession;
+  /**
+   * Settle the phase state a successful serve decides, before the decision is
+   * recorded; returns the decision to record.
+   */
+  settleServed?: (lastServed: ServedInfo, decision: RoutingDecision) => RoutingDecision;
 }
 
 export interface DelegationResult {
@@ -1388,6 +1393,11 @@ export async function runDelegationLoop(
   });
   if (lastServed) {
     finalDecision = stampTurnSpend(finalDecision, turnSpend);
+    try {
+      finalDecision = opts.settleServed?.(lastServed, finalDecision) ?? finalDecision;
+    } catch {
+      // A settlement bug must not fail a turn that already answered.
+    }
     if (stillCurrent()) {
       session.setLastDecision(finalDecision);
       appendDecision(finalDecision, lastServed);

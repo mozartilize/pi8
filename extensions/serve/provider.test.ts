@@ -1755,7 +1755,7 @@ describe('assessment orchestration', () => {
     routedDown?: boolean;
     fallbackReason?: string;
     assessment?: unknown;
-    reasoningHandoff?: { minimum: number; pending: boolean; id: string };
+    reasoningHandoff?: { minimum: number; pending: boolean; id: string; owner?: string; trajectoryFired?: boolean };
     executionContract?: { handoffId?: string };
     previousHandoffId?: string;
     deliverable?: string;
@@ -2042,9 +2042,15 @@ describe('assessment orchestration', () => {
       const planning = await session.routeTurnAgainWithSameUserEntry();
       // An obvious decision: the cheaper model clears the minimum.
       expect(planning).toMatchObject({ dimension: 'plan', cause: 'investigation-handoff', chosen: 'alpha/cheap' });
-      expect(planning?.reasoningHandoff).toMatchObject({ minimum: 0.4, pending: true });
+      // The invocation that takes the boundary records its owner, in the
+      // decision `/router-why` reads and in the decision log.
+      expect(planning?.reasoningHandoff).toMatchObject({ minimum: 0.4, pending: false, owner: planning?.chosen });
       expect(harness.session.getWorkPhaseState()?.reasoningHandoff)
         .toMatchObject({ pending: false, owner: planning?.chosen });
+      const logged = (await session.readDecisionRecords())
+        .filter((r) => r.dimension === 'plan')
+        .map((r) => r.reasoningHandoff as { pending?: boolean; owner?: string } | undefined);
+      expect(logged.at(-1)).toMatchObject({ pending: false, owner: planning?.chosen });
       // A second request no longer applies.
       expect(submitInvestigationHandoff(handoff(1), routerCtx, harness.session).accepted).toBe(false);
     });
@@ -2114,6 +2120,57 @@ describe('assessment orchestration', () => {
       const executing = await session.routeTurnAgainWithSameUserEntry();
       expect(executing?.dimension).toBe('implement');
       expect(executing?.executionContract?.handoffId).toBe(harness.session.getWorkPhaseState()?.reasoningHandoff?.id);
+
+      await session.routeTurn('thanks, what else is left in the backlog');
+      const phaseEnd = (await session.readDecisionRecords())
+        .map((r) => r.investigationHandoff as { action?: string; handoff?: { contractAccepted?: boolean } } | undefined)
+        .find((h) => h?.action === 'phase-end');
+      expect(phaseEnd?.handoff?.contractAccepted).toBe(true);
+    });
+
+    it('joins a plan accepted in the entry after the handoff to that handoff', async () => {
+      const session = await newSession({ consultRouter: true });
+      await session.routeTurn(PLAN_PROMPT);
+      submitInvestigationHandoff(handoff(1), routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry();
+      const handoffId = harness.session.getWorkPhaseState()!.reasoningHandoff!.id;
+
+      await session.routeTurn('go with item 1 first', {
+        assessorReply:
+          'Kind: implement\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: implement item 1',
+      });
+      expect(harness.session.getWorkPhaseState()?.previousHandoffId).toBe(handoffId);
+      const plan = {
+        steps: [{ kind: 'edit', path: 'src/a.ts', change: 'retry the flaky call' }],
+        remainingWork: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
+      };
+      expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+      const executing = await session.routeTurnAgainWithSameUserEntry();
+      expect(executing?.dimension).toBe('implement');
+      expect(executing?.executionContract?.handoffId).toBe(handoffId);
+    });
+
+    it('repicks a struggling planner within the reasoning phase and logs it at phase end', async () => {
+      const session = await newSession({ consultRouter: false });
+      await session.routeTurn(PLAN_PROMPT);
+      submitInvestigationHandoff(handoff(1), routerCtx, harness.session);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+      const served = harness.session.getLastServed()!;
+      harness.session.armTrajectoryEscalation(
+        { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
+        served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId,
+        'plan',
+        false,
+      );
+      const repicked = await session.routeTurnAgainWithSameUserEntry();
+      expect(repicked).toMatchObject({ dimension: 'plan', chosen: 'beta/strong' });
+      expect(repicked?.reasoningHandoff?.trajectoryFired).toBe(true);
+
+      await session.routeTurn('now plan the rollout for the second region as well');
+      const phaseEnd = (await session.readDecisionRecords())
+        .map((r) => r.investigationHandoff as { action?: string; handoff?: { trajectoryFired?: boolean } } | undefined)
+        .find((h) => h?.action === 'phase-end');
+      expect(phaseEnd?.handoff?.trajectoryFired).toBe(true);
     });
 
     it('carries the investigation note on the entry message, byte-identical, only while investigating', async () => {

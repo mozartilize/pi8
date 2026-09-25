@@ -1041,13 +1041,28 @@ describe('mutation observation hooks', () => {
     expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff?.evidence.existingLines).toBeUndefined();
   });
 
-  it('records reads for the handoff evidence', async () => {
+  it('records successful reads inside the working directory for the handoff evidence', async () => {
+    const handlers = await makeToolHandlers();
+    const toolResult = handlers.get('tool_result')!;
+    const content = [{ type: 'text', text: 'read' }];
+    investigating();
+    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
+    const read = (id: string, path: string, isError = false) =>
+      toolResult({ toolName: 'read', toolCallId: id, input: { path }, content, isError }, ctx);
+    await read('r1', 'src/a.ts');
+    await read('r2', 'src/missing.ts', true);
+    await read('r3', '/home/user/.pi/agent/skills/x/SKILL.md');
+    await read('r4', '../sibling/c.ts');
+    await read('r5', '/repo/src/b.ts');
+    expect(defaultRouterSession.getWorkPhaseState()?.readPaths).toEqual(['/repo/src/b.ts', '/repo/src/a.ts']);
+  });
+
+  it('does not record a read before its result', async () => {
     const handlers = await makeToolHandlers();
     investigating();
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
     await handlers.get('tool_call')!({ toolName: 'read', toolCallId: 'r1', input: { path: 'src/a.ts' } }, ctx);
-    await handlers.get('tool_call')!({ toolName: 'read', toolCallId: 'r2', input: { path: 'src/b.ts' } }, ctx);
-    expect(defaultRouterSession.getWorkPhaseState()?.readPaths).toEqual(['/repo/src/b.ts', '/repo/src/a.ts']);
+    expect(defaultRouterSession.getWorkPhaseState()?.readPaths).toBeUndefined();
   });
 
   it('reminds an owed investigation once, on its first tool result', async () => {

@@ -1327,32 +1327,34 @@ async function delegateRouterTurn(args: {
       };
     };
   }
-  const result = await runDelegationLoop(delegationOptions, stream);
-
-  // Like the trajectory handoff, a broken contract's handback is consumed only
-  // by an invocation its submitter served: a failed one, or a fallback to
-  // another model, leaves the next invocation bound to the submitter too.
-  const served = result.success && result.lastServed ? servedKey(result.lastServed) : undefined;
-  const restored = scored.restoredContract;
-  const afterServe = session.getWorkPhaseState();
-  if (served && restored && afterServe?.contract === restored && servedBySubmitter(restored, served)) {
-    appendContractOutcome(afterServe, 'broken');
-    session.commitWorkPhaseState({ ...afterServe, contract: undefined });
-  }
-  // A plan's release and a reasoning handoff's boundary belong to the first
-  // invocation served by a candidate that clears the phase's minimum. A
-  // fallback below it leaves the boundary pending; when no candidate clears
-  // it, whichever serves is the best the pool offers.
-  const qualifiers = boundaryQualifiers(scored.decision);
-  const qualifies = served != null && (qualifiers.length === 0 || servesBoundary(served, qualifiers));
-  const releasing = session.getWorkPhaseState();
-  if (qualifies && scored.releasesContract && releasing?.contract?.status === 'active') {
-    session.commitWorkPhaseState(serveContractRelease(releasing));
-  }
-  const pendingHandoff = scored.pendingHandoff;
-  const current = session.getWorkPhaseState();
-  if (qualifies && pendingHandoff && current?.reasoningHandoff?.id === pendingHandoff.id &&
-      current.reasoningHandoff.pending) {
+  // Settled before the loop records the decision, so the decision log and
+  // `/router-why` show the boundary's owner for the invocation that took it.
+  delegationOptions.settleServed = (lastServed, finalDecision) => {
+    const served = servedKey(lastServed);
+    // Like the trajectory handoff, a broken contract's handback is consumed only
+    // by an invocation its submitter served: a failed one, or a fallback to
+    // another model, leaves the next invocation bound to the submitter too.
+    const restored = scored.restoredContract;
+    const afterServe = session.getWorkPhaseState();
+    if (restored && afterServe?.contract === restored && servedBySubmitter(restored, served)) {
+      appendContractOutcome(afterServe, 'broken');
+      session.commitWorkPhaseState({ ...afterServe, contract: undefined });
+    }
+    // A plan's release and a reasoning handoff's boundary belong to the first
+    // invocation served by a candidate that clears the phase's minimum. A
+    // fallback below it leaves the boundary pending; when no candidate clears
+    // it, whichever serves is the best the pool offers.
+    const qualifiers = boundaryQualifiers(scored.decision);
+    if (qualifiers.length > 0 && !servesBoundary(served, qualifiers)) return finalDecision;
+    const releasing = session.getWorkPhaseState();
+    if (scored.releasesContract && releasing?.contract?.status === 'active') {
+      session.commitWorkPhaseState(serveContractRelease(releasing));
+    }
+    const pendingHandoff = scored.pendingHandoff;
+    const current = session.getWorkPhaseState();
+    if (!pendingHandoff || current?.reasoningHandoff?.id !== pendingHandoff.id || !current.reasoningHandoff.pending) {
+      return finalDecision;
+    }
     const owned = serveReasoningHandoff(current, served);
     session.commitWorkPhaseState(owned);
     appendInvestigationHandoffSignal({
@@ -1361,7 +1363,9 @@ async function delegateRouterTurn(args: {
       action: 'served',
       handoff: owned.reasoningHandoff!,
     });
-  }
+    return { ...finalDecision, reasoningHandoff: owned.reasoningHandoff! };
+  };
+  const result = await runDelegationLoop(delegationOptions, stream);
 
   if (
     result.capabilityHandoff

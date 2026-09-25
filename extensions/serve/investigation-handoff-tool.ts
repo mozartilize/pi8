@@ -11,10 +11,10 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
-  ToolCallEvent,
   ToolResultEvent,
   ToolResultEventResult,
 } from '@earendil-works/pi-coding-agent';
+import { isAbsolute, relative, sep } from 'node:path';
 import { Type, type Context, type UserMessage } from '@earendil-works/pi-ai';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type ReasoningEvidence } from '../types.js';
 import { appendInvestigationHandoffSignal } from '../host/decisionlog.js';
@@ -228,18 +228,27 @@ export function registerInvestigationHandoffTool(pi: ExtensionAPI, session: Rout
   }
 }
 
-/** Remember the paths an investigation reads, for measuring its handoff. */
+/**
+ * Remember the paths an investigation read, for measuring its handoff. Only a
+ * successful read inside the working directory counts: a failed read read
+ * nothing, and a file outside the repository (a skill, a temp file) is not
+ * evidence about the change and would fail the repository's history
+ * measurement for the whole evidence set.
+ */
 export function observeInvestigationRead(
-  event: Pick<ToolCallEvent, 'toolName' | 'input'>,
+  event: Pick<ToolResultEvent, 'toolName' | 'input' | 'isError'>,
   ctx: Pick<ExtensionContext, 'cwd'>,
   session: RouterSession,
 ): void {
   try {
-    if (event.toolName !== 'read') return;
+    if (event.toolName !== 'read' || event.isError) return;
     const path = (event.input as { path?: unknown } | undefined)?.path;
     const state = session.getWorkPhaseState();
     if (!state || typeof path !== 'string' || path.trim() === '') return;
-    const next = noteInvestigationRead(state, resolveToolPath(ctx.cwd, path.trim()));
+    const resolved = resolveToolPath(ctx.cwd, path.trim());
+    const inside = relative(ctx.cwd, resolved);
+    if (inside === '' || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return;
+    const next = noteInvestigationRead(state, resolved);
     if (next !== state) session.commitWorkPhaseState(next);
   } catch {
     // Observation must never fail a tool call.
