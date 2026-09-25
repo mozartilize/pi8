@@ -173,7 +173,9 @@ export function extractFailureSignature(
 ): string | undefined {
   const normalized = normalizeText(text);
   if (!normalized) return undefined;
-  const pytest = normalized.match(/([a-z0-9_./-]+\.py(?:::[a-z0-9_]+)+)/);
+  // A match starts only where a path token starts: from inside a long token
+  // every start would rescan the rest of it, quadratic in the token's length.
+  const pytest = normalized.match(/(?<![a-z0-9_./-])([a-z0-9_./-]+\.py(?:::[a-z0-9_]+)+)/);
   if (pytest) return fingerprint(['fail', commandClass, pytest[1]]);
   const fileFail = normalized.match(
     /(?:fail(?:ed)?|error)\s+([a-z0-9_./-]+\.(?:ts|js|tsx|py|rs|go))/,
@@ -275,6 +277,30 @@ function matchIdentity(match: Record<string, unknown>): string {
   return fingerprint([path, line, column, text]);
 }
 
+/**
+ * Tool-result text cut to `limit` characters. Parts past the limit are never
+ * joined, so an oversized result costs no more than the limit to scan.
+ */
+function boundedContentText(content: unknown, limit: number): { text: string; truncated: boolean } {
+  if (typeof content === 'string') {
+    return content.length > limit ? { text: content.slice(0, limit), truncated: true } : { text: content, truncated: false };
+  }
+  if (!Array.isArray(content)) return { text: '', truncated: false };
+  const parts: string[] = [];
+  let size = 0;
+  for (const part of content) {
+    const text = part && typeof part === 'object' && 'text' in part && typeof part.text === 'string' ? part.text : '';
+    const room = limit - size - (parts.length > 0 ? 1 : 0);
+    if (text.length > room) {
+      parts.push(text.slice(0, Math.max(room, 0)));
+      return { text: parts.join('\n'), truncated: true };
+    }
+    parts.push(text);
+    size += text.length + (parts.length > 1 ? 1 : 0);
+  }
+  return { text: parts.join('\n'), truncated: false };
+}
+
 function observationKey(action: ActionFingerprint, event: ToolCycleInput): { key: string; verified: boolean } {
   const content = event.content;
   if (typeof content === 'string' && content.length > MAX_OBSERVATION_CHARS) {
@@ -320,7 +346,7 @@ function observationKey(action: ActionFingerprint, event: ToolCycleInput): { key
 export function cycleFromToolResult(event: ToolCycleInput, invocation: number): ObservedCycle {
   const action = actionFromTool(event.toolName, event.input);
   const observation = observationKey(action, event);
-  const text = contentText(event.content);
+  const { text, truncated } = boundedContentText(event.content, MAX_OBSERVATION_CHARS);
   const isError = event.isError === true;
   const verifier = action.family === 'shell'
     && (action.commandClass === 'test'
@@ -334,7 +360,8 @@ export function cycleFromToolResult(event: ToolCycleInput, invocation: number): 
   const writeBody = action.family === 'mutation' && typeof args.content === 'string'
     ? args.content
     : undefined;
-  const readBody = action.family === 'read' ? contentText(event.content) : undefined;
+  // A cut file body would be recorded as the file's content; only a whole one is kept.
+  const readBody = action.family === 'read' && !truncated ? text : undefined;
   const evidenceId = `${action.key}:${observation.key}`;
   return {
     invocation,

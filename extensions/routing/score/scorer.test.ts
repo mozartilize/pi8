@@ -1540,6 +1540,20 @@ describe('scorer — promotion and tier ordering', () => {
     expect(decision.fallbackChain).toContain('test/handoff-below');
   });
 
+  it('caps review quality at the handoff minimum on the axis that gates review', () => {
+    // A model without a coding score ranks on intelligence, which must not
+    // raise the ceiling the coding-gated minimum sets.
+    const stronger = make('test/review-stronger', { intelligence: 70, coding: 70 }, 1.2);
+    const adequate = make('test/review-adequate', { intelligence: 60, coding: 60 }, 1);
+    const pricey = make('test/review-pricey', { intelligence: 57, coding: 57 }, 20);
+    const broad = make('test/review-broad', { intelligence: 100, coding: undefined, agenticCoding: undefined }, 20);
+    const decision = pickBest([stronger, adequate, pricey, broad], 'review', undefined, {
+      estimatedContextTokens: 100,
+      handoffMinimum: 0.8,
+    });
+    expect(decision.chosen).toBe('test/review-adequate');
+  });
+
   it('never promotes a candidate below an execution contract minimum', () => {
     const frontier = make('test/promotion-frontier', { intelligence: 100, agenticCoding: 100 }, 20);
     const cheap = make('test/promotion-candidate', { intelligence: 75, agenticCoding: 75 }, 1);

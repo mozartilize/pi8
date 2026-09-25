@@ -121,3 +121,26 @@ describe('search observation identity', () => {
     expect(observation(first)).toBe(observation([...first].reverse()));
   });
 });
+
+describe('oversized tool results', () => {
+  const huge = 'x'.repeat(1_200_000);
+
+  it('still reads a failure signature from the start of a cut verifier result', () => {
+    const cycle = cycleFromToolResult({
+      toolName: 'bash',
+      toolCallId: 't',
+      input: { command: 'npx vitest run' },
+      content: [{ type: 'text', text: 'FAIL src/a.ts' }, { type: 'text', text: huge }],
+      isError: true,
+    }, 1);
+    expect(cycle.observationVerified).toBe(false);
+    expect(cycle.progressHint.failureSignature).toBeDefined();
+  });
+
+  it('keeps no file body for a read cut at the limit', () => {
+    const read = (text: string) =>
+      cycleFromToolResult({ toolName: 'read', toolCallId: 'r', input: { path: 'a' }, content: [{ type: 'text', text }] }, 1);
+    expect(read('body').progressHint.fileBody).toBe('body');
+    expect(read(huge).progressHint.fileBody).toBeUndefined();
+  });
+});

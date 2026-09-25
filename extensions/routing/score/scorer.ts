@@ -947,7 +947,12 @@ function scoreWithinTiers(
   });
 }
 
-/** Normalized ranking-axis quality the handoff minimum asks for, if any. */
+/**
+ * Normalized quality the handoff minimum asks for, if any. It is taken on the
+ * task axis that gates eligibility: a ranking-axis fallback (review ranks a
+ * model without a coding score on intelligence) is a different scale and must
+ * not move the point where credit stops.
+ */
 function handoffQualityCeiling(
   filtered: Candidate[],
   dimension: Dimension,
@@ -955,7 +960,7 @@ function handoffQualityCeiling(
 ): number | undefined {
   if (handoffMinimum == null) return undefined;
   const measured = filtered.flatMap((c) => {
-    const quality = c.bench ? qualityForDimension(c.bench, dimension) : undefined;
+    const quality = taskAxis(c, dimension);
     return quality == null ? [] : [clamp(quality / 100, 0, 1)];
   });
   return measured.length === 0 ? undefined : handoffMinimum * Math.max(...measured);
