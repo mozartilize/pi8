@@ -17,7 +17,6 @@ import type { Api, Context, Model } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
-import { evaluateMutationCall } from '../routing/policy/mutation-gate.js';
 import { handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
 import { submitInvestigationHandoff } from './investigation-handoff-tool.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
@@ -2066,11 +2065,12 @@ describe('assessment orchestration', () => {
 
     it('keeps plan/review after a mutation call without an accepted plan', async () => {
       const session = await planned();
-      const mutation = evaluateMutationCall({ toolName: 'write', toolCallId: 'w1', state: harness.session.getWorkPhaseState(), served: harness.session.getLastServed() });
-      harness.session.commitWorkPhaseState(mutation.nextState);
+      const state = harness.session.getWorkPhaseState()!;
+      harness.session.commitWorkPhaseState({ ...state, observedMutationTools: state.observedMutationTools + 1 });
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('plan');
       expect(next?.chosen).toBe('beta/strong');
+      expect(harness.getProviderState().lastDecision?.mutationObserved).toBe(true);
     });
 
     it('hands a small accepted plan to a cheaper executor on the next invocation', async () => {
@@ -2874,176 +2874,6 @@ describe('embedding classifier blend', () => {
     expect(decision?.cause).toBe('heuristic');
     expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 1 });
   });
-});
-
-describe('multi-work phase engagement', () => {
-  // Keyword-classifies as 'implement' AND satisfies the deterministic terminal
-  // classifier's prerequisite -> sequence -> mutation structure with an
-  // explicit frontier-complexity and open-scope cue, so terminal.compound,
-  // .discountEligible, and .confidence:'high' all hold without defaulting.
-  const compoundPrompt =
-    'Trace the race condition across the codebase from scratch, then fix it, refactor it, and implement the corrected logic.';
-  const compoundContext = { messages: [{ role: 'user', content: compoundPrompt, timestamp: 1 }] } as unknown as Context;
-  const nonCompoundImplementContext = {
-    messages: [{ role: 'user', content: 'implement the parser', timestamp: 1 }],
-  } as unknown as Context;
-
-  const multiWorkBenchmarks: BenchModel[] = [
-    {
-      registryId: 'alpha/first',
-      benchSlug: 'alpha-first',
-      active: true,
-      quality: { intelligence: 95, coding: 95, agenticCoding: 95 },
-      priceInputPer1M: 10,
-      priceOutputPer1M: 50,
-      source: 'test',
-    },
-    {
-      registryId: 'beta/second',
-      benchSlug: 'beta-second',
-      active: true,
-      quality: { intelligence: 80, coding: 80, agenticCoding: 80 },
-      priceInputPer1M: 1,
-      priceOutputPer1M: 5,
-      source: 'test',
-    },
-  ];
-
-  it('engages inspect once for explicit compound frontier work', async () => {
-    const harness = await setupProviderTest({
-      dir: temp.path,
-      config: { consultRouter: false },
-      benchmarks: multiWorkBenchmarks,
-    });
-    harness.scriptReply([{ type: 'text_delta', delta: 'inspect' }, { type: 'done' }]);
-
-    await harness.serve(compoundContext);
-
-    expect(harness.getProviderState().workPhaseState).toMatchObject({
-      phase: 'inspect',
-      multiWorkEngaged: true,
-      providerInvocation: 1,
-    });
-  });
-
-  it('does not engage an ordinary implementation', async () => {
-    const harness = await setupProviderTest({
-      dir: temp.path,
-      config: { consultRouter: false },
-      benchmarks: multiWorkBenchmarks,
-    });
-    harness.scriptReply([{ type: 'text_delta', delta: 'serve' }, { type: 'done' }]);
-
-    await harness.serve(nonCompoundImplementContext);
-
-    expect(harness.getProviderState().workPhaseState).toMatchObject({
-      multiWorkEngaged: false,
-      phase: 'mutate',
-    });
-  });
-
-  it('does not let assessor compound diagnostics engage multi-work in active v2 mode', async () => {
-    const harness = await setupProviderTest({
-      dir: temp.path,
-      config: { consultRouter: true },
-      benchmarks: multiWorkBenchmarks,
-    });
-    harness.scriptReply((_model, context) => asStream(
-      ((context as Context).systemPrompt ?? '').includes('Kind: [lightweight|gather|plan|implement|review]')
-        ? [
-            { type: 'text_delta', delta: [
-              'Kind: implement', 'Complexity: frontier', 'Scope: open-ended',
-              'Compound: yes', 'Confidence: high', 'Reasoning: semantic diagnostic',
-            ].join('\n') },
-            { type: 'done' },
-          ]
-        : [{ type: 'text_delta', delta: 'serve' }, { type: 'done' }],
-    ));
-
-    await harness.serve(nonCompoundImplementContext);
-
-    expect(harness.getProviderState().workPhaseState).toMatchObject({
-      terminal: expect.objectContaining({ compound: false }),
-      multiWorkEngaged: false,
-    });
-  });
-
-  it('increments providerInvocation across same-intent tool-loop reinvocations', async () => {
-    const harness = await setupProviderTest({
-      dir: temp.path,
-      config: { consultRouter: false },
-      benchmarks: multiWorkBenchmarks,
-    });
-    harness.scriptReply([{ type: 'text_delta', delta: 'inspect' }, { type: 'done' }]);
-
-    await harness.serve(compoundContext);
-    expect(harness.getProviderState().workPhaseState).toMatchObject({ providerInvocation: 1, multiWorkEngaged: true });
-
-    harness.resetEventStream();
-    harness.scriptReply([{ type: 'text_delta', delta: 'inspect again' }, { type: 'done' }]);
-    await harness.serve(compoundContext);
-
-    expect(harness.getProviderState().workPhaseState).toMatchObject({ providerInvocation: 2, multiWorkEngaged: true, phase: 'inspect' });
-  });
-
-  it('inherits engagement and phase across a thin continuation of the same intent', async () => {
-    const harness = await setupProviderTest({
-      dir: temp.path,
-      config: { consultRouter: false },
-      benchmarks: multiWorkBenchmarks,
-    });
-    harness.scriptReply([{ type: 'text_delta', delta: 'inspect' }, { type: 'done' }]);
-    await harness.serve(compoundContext);
-    expect(harness.getProviderState().workPhaseState).toMatchObject({ multiWorkEngaged: true, phase: 'inspect' });
-
-    harness.resetEventStream();
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-    const thinContinuation = {
-      messages: [
-        { role: 'user', content: compoundPrompt, timestamp: 1 },
-        { role: 'assistant', content: 'Found the source of the race condition.', timestamp: 1.5 },
-        { role: 'user', content: 'go ahead', timestamp: 2 },
-      ],
-    } as unknown as Context;
-    await harness.serve(thinContinuation);
-
-    expect(harness.getProviderState().workPhaseState).toMatchObject({
-      multiWorkEngaged: true,
-      phase: 'inspect',
-      providerInvocation: 1,
-    });
-  });
-
-  it('produces the same decision as a direct pickBest call for a non-engaged intent', async () => {
-    const harness = await setupProviderTest({
-      dir: temp.path,
-      config: { consultRouter: false },
-      benchmarks: multiWorkBenchmarks,
-    });
-    harness.scriptReply([{ type: 'text_delta', delta: 'serve' }, { type: 'done' }]);
-
-    await harness.serve(nonCompoundImplementContext);
-
-    const decision = harness.getProviderState().lastDecision!;
-    expect(decision.multiWork).toBeUndefined();
-
-    const { pickBest } = await import('../routing/score/scorer.js');
-    const { expandModelCandidates } = await import('./provider.js');
-    const rows = new Map(multiWorkBenchmarks.map((b) => [b.registryId, [b]]));
-    const baselineCandidates = REGISTRY_MODELS.flatMap((rm) =>
-      expandModelCandidates(rm, rows.get(`${rm.provider}/${rm.id}`) ?? []),
-    );
-    const baseline = pickBest(baselineCandidates, 'implement', undefined, {
-      estimatedContextTokens: 0,
-      needsVision: false,
-      isSubagentSpawn: false,
-    });
-    expect(decision.chosen).toBe(baseline.chosen);
-    expect(decision.fallbackChain).toEqual(baseline.fallbackChain);
-    expect(decision.dimension).toBe(baseline.dimension);
-    expect(decision.cause).toBe(baseline.cause);
-  });
-
 });
 
 describe('router-report counterfactual baseline', () => {

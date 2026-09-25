@@ -61,7 +61,6 @@ import { debugLog, setConfigDebug } from './host/debuglog.js';
 import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 import {
-  appendMutationGateSignal,
   appendSubagentGapSignal,
   appendSubagentSpend,
 } from './host/decisionlog.js';
@@ -79,7 +78,6 @@ import {
   defaultRouterSession,
   defaultRuntimeBindings,
 } from './serve/router-session-state.js';
-import { evaluateMutationCall, recordMutationResult } from './routing/policy/mutation-gate.js';
 import { classifyMutationCall } from './routing/policy/mutation-detector.js';
 import { nudgeInvestigationOnEdit, registerInvestigationHandoffTool } from './serve/investigation-handoff-tool.js';
 
@@ -438,82 +436,33 @@ function handleSubagentToolCall(
   }
 }
 
-function handleMutationToolCall(
+/**
+ * Count mutation calls for the `editing` status. Observation only: a mutation
+ * never blocks and never changes the routed task type.
+ */
+function observeMutationToolCall(
   event: ToolCallEvent,
   ctx: ExtensionContext,
   session: RouterSession,
-): { block: true; reason: string } | undefined {
-  // Bounded mutation handoff: an internal failure here must fail
-  // open, not fail the tool call). Returning `undefined` allows execution;
-  // only an intentional `{ block: true, reason }` stops it. Bash is
-  // classified best-effort: high-confidence write shapes feed the same
-  // bounded gate as `edit`/`write`; possible/opaque shapes stay observable
-  // but never block.
+): void {
   try {
+    const native = event.toolName === 'edit' || event.toolName === 'write';
+    const shell = event.toolName === 'bash' &&
+      classifyMutationCall('bash', event.input as Record<string, unknown>).confidence === 'high';
+    if (!native && !shell) return;
     const state = session.getWorkPhaseState();
-    const served = session.getLastServed();
-    const detection = classifyMutationCall(event.toolName, event.input as Record<string, unknown>);
-    const decision = evaluateMutationCall({
-      toolName: event.toolName,
-      toolCallId: event.toolCallId,
-      state,
-      served,
-      detection,
-    });
-    if (decision.nextState) {
-      session.commitWorkPhaseState(decision.nextState);
-    }
-    if (decision.metadata) {
-      const capability = served?.capability;
-      // `/router-status` and `/router-why` read the in-memory decision, so
-      // gate outcomes have to land there too, not only in the log.
-      const last = session.getLastDecision();
-      const committed = decision.nextState ?? state;
-      if (last?.multiWork && committed) {
-        const updated = {
-          ...last,
-          multiWork: {
-            ...last.multiWork,
-            phase: committed.phase,
-            phaseReason: committed.phaseReason,
-            gateBlockedInvocation: committed.gateBlockedInvocation,
-            capabilityDegraded: decision.metadata.capabilityDegraded,
-            mutationGateEscaped: decision.metadata.mutationGateEscaped,
-          },
-        };
-        session.setLastDecision(updated);
-      }
-      appendMutationGateSignal({
-        intentKey: (decision.nextState ?? state)?.intentKey ?? 'unknown',
-        served: served?.registryId ?? 'unknown/unknown',
-        providerInvocation: capability?.providerInvocation ?? 0,
-        gateBlockedInvocation: decision.nextState?.gateBlockedInvocation,
-        terminalFloor: capability?.terminalFloor,
-        servedTaskRatio: capability?.candidate.taskRatio,
-        clearance: decision.metadata.clearance,
-        action: decision.block
-          ? 'block'
-          : decision.metadata.mutationGateEscaped
-            ? 'escape'
-            : 'allow',
-        capabilityDegraded: decision.metadata.capabilityDegraded,
-        mutationSurface: decision.metadata.mutationSurface,
-        mutationSignal: decision.metadata.mutationSignal,
-      });
-    }
+    if (!state) return;
+    const committed = { ...state, observedMutationTools: state.observedMutationTools + 1 };
+    session.commitWorkPhaseState(committed);
     const last = session.getLastDecision();
-    const committed = decision.nextState;
-    if (last && committed && committed.intentKey === last.intentKey && !last.mutationObserved &&
-        (committed.observedMutationTools > 0 || committed.mutationGateTriggered)) {
+    if (last && committed.intentKey === last.intentKey && !last.mutationObserved) {
       const updated = { ...last, mutationObserved: true };
       session.setLastDecision(updated);
-      renderRouterStatus(ctx, updated, served);
+      renderRouterStatus(ctx, updated, session.getLastServed());
     }
-    if (decision.block) return { block: true, reason: decision.reason ?? '' };
   } catch {
-    // An internal gate failure must never block a mutation call.
+    // Observation must never fail a tool call.
   }
-  return undefined;
 }
 
 /** Provider of a `provider/id[:effort]` model id, or undefined if unparseable. */
@@ -611,34 +560,6 @@ function handleSubagentToolResult(
   }
 }
 
-function handleMutationToolResult(
-  event: ToolResultEvent,
-  session: RouterSession,
-): void {
-  // Correlate a mutation result back to its pending call, if this extension
-  // recorded one. Installed Pi does not invoke this hook for a blocked
-  // preflight, so only allowed calls ever reach here.
-  try {
-    const state = session.getWorkPhaseState();
-    if (!state?.pendingMutationToolCallIds.has(event.toolCallId)) return;
-    const isError = (event as { isError?: boolean }).isError === true;
-    const next = recordMutationResult({ state, toolCallId: event.toolCallId, isError });
-    session.commitWorkPhaseState(next);
-    const served = session.getLastServed();
-    appendMutationGateSignal({
-      intentKey: state.intentKey,
-      served: served?.registryId ?? 'unknown/unknown',
-      providerInvocation: served?.capability?.providerInvocation ?? state.providerInvocation,
-      terminalFloor: served?.capability?.terminalFloor,
-      servedTaskRatio: served?.capability?.candidate.taskRatio,
-      clearance: served?.capability?.candidate.clearsTerminalFloor ?? 'unknown',
-      action: isError ? 'error' : 'complete',
-    });
-  } catch {
-    // A gate-observability failure must never surface as a tool error.
-  }
-}
-
 function handleTrajectoryToolResult(event: ToolResultEvent, session: RouterSession): void {
   try {
     const invocation = session.getWorkPhaseState()?.providerInvocation ?? 0;
@@ -727,8 +648,7 @@ export default async function autoModelRouterExtension(
       return;
     }
     try {
-      const block = handleMutationToolCall(event, ctx, session);
-      if (block?.block) return block;
+      observeMutationToolCall(event, ctx, session);
       handleContractToolCall(event, ctx, session);
       const flushed = session.noteTrajectoryToolCall(event.toolName, event.toolCallId, event.input);
       if (flushed) {
@@ -751,7 +671,6 @@ export default async function autoModelRouterExtension(
       handleSubagentToolResult(event, ctx, session, routingState, subagentCalls, refreshRoleModels);
       return;
     }
-    handleMutationToolResult(event, session);
     handleTrajectoryToolResult(event, session);
     trackContractToolResult(
       {

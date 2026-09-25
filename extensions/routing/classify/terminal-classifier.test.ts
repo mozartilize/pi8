@@ -17,8 +17,8 @@ describe('terminal classifier', () => {
     'review and improve this',
     'quote this text: "investigate it, then fix it"',
     "investigate the issue, but don't edit or fix anything",
-  ])('does not grant compound cheap-first eligibility: %s', (prompt) => {
-    expect(assessTerminal(prompt).discountEligible).toBe(false);
+  ])('withholds high confidence without explicit compound evidence: %s', (prompt) => {
+    expect(assessTerminal(prompt).confidence).not.toBe('high');
   });
 
   it.each([
@@ -40,15 +40,15 @@ describe('terminal classifier', () => {
     expect(assessTerminal('investigate the auth flow, then fix it')).toMatchObject({
       complexity: 'moderate',
       compound: true,
-      discountEligible: true,
+      confidence: 'high',
     });
   });
 
-  it('raises the floor but withholds eligibility when scope is defaulted', () => {
+  it('raises the floor but withholds high confidence when scope is defaulted', () => {
     expect(assessTerminal('fix the auth failure')).toMatchObject({
       kind: 'implement',
       scope: 'open-ended',
-      discountEligible: false,
+      confidence: 'medium',
     });
   });
 
@@ -56,7 +56,7 @@ describe('terminal classifier', () => {
     expect(assessTerminal('investigate the race condition, then fix it')).toMatchObject({
       complexity: 'hard',
       compound: true,
-      discountEligible: true,
+      confidence: 'high',
     });
   });
 

@@ -10,7 +10,7 @@
  * classification/consult cache, candidate construction, thinking resolution,
  * and delegation.
  */
-import type { Candidate, DecisionCause, Dimension, MultiWorkScoringPolicy, RoutingDecision } from '../../types.js';
+import type { Candidate, DecisionCause, Dimension, RoutingDecision } from '../../types.js';
 import { addReasonDetail } from '../score/decision-reason.js';
 import type { ClassifyResult } from '../classify/classifier.js';
 import type { AutoRouterConfig } from '../../types.js';
@@ -67,14 +67,6 @@ export interface RoutingPolicyInput {
    * re-invocation of one cached intent.
    */
   sameIntentAsLast?: boolean;
-  /**
-   * Request-local terminal/inspect floors for an eligible compound-implement
-   * intent. Only the caller's latched-eligible work-phase state supplies
-   * this; its absence makes the shared scorer path use current live
-   * tier/promotion parameters for non-engaged, non-implement, and active-
-   * repick invocations.
-   */
-  multiWorkPolicy?: MultiWorkScoringPolicy;
   /**
    * Implement-axis ratio an accepted execution contract requires of its
    * executor. Present only when the contract releases the submitter; the
@@ -350,7 +342,6 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     incumbentResolvedDimension,
     sameIntentAsLast,
     config,
-    multiWorkPolicy,
     executionMinimum,
   } = input;
 
@@ -364,9 +355,9 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   if (!hasAnyBenchmark && cause === 'heuristic') cause = 'no-data';
 
   // Score with the configured active-dimension weights.
-  // The multi-work phase floors are request-local to the primary pick: a
-  // trajectory repick and the routed-pick counterfactual answer different
-  // questions, so they score with ordinary options.
+  // The execution minimum is request-local to the primary pick: a trajectory
+  // repick and the routed-pick counterfactual answer different questions, so
+  // they score with ordinary options.
   const baseOpts: ScoreOpts = {
     estimatedContextTokens,
     incumbentRegistryId,
@@ -377,7 +368,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   };
   const pickOpts: ScoreOpts = executionMinimum != null
     ? { ...baseOpts, executionMinimum }
-    : multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
+    : baseOpts;
   let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
 
   // Objective trajectory friction may repick away from the source
@@ -397,13 +388,11 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   // The floor stands down for the sanctioned downward moves, never widening
   // them (R3): an applied trajectory handoff owns the model (its repick
   // deliberately excludes the source model, so the floor must not restore
-  // it); an inspect-phase compound-implement economic promotion; a consult
-  // that actually lowered the dimension; and a genuine new-entry,
+  // it); a consult that actually lowered the dimension; and a genuine new-entry,
   // high-confidence trivial classification (an off-topic follow-up that
   // resets to a cheap model); and an execution contract that releases its
   // submitter. Same-intent re-invocations never reset, so the stickiness
   // holds across a whole tool loop.
-  const inspectPhasePromotion = multiWorkPolicy?.phase === 'inspect';
   const consultLoweredDimension =
     cause === 'router-consult' &&
     DIMENSION_STRENGTH[baseDimension] < DIMENSION_STRENGTH[classifyResult.dimension];
@@ -416,7 +405,6 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     DIMENSION_STRENGTH[dimension] <= DIMENSION_STRENGTH['gather'];
   const incumbentFloorStandsDown =
     trajectory.applied ||
-    inspectPhasePromotion ||
     consultLoweredDimension ||
     offTopicReset ||
     executionMinimum != null;

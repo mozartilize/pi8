@@ -12,7 +12,7 @@
 import type { Api } from '@earendil-works/pi-ai';
 
 import type { RegistryModelInfo } from '../routing/score/scorer.js';
-import type { BenchModel, Candidate, MultiWorkRoutingMeta, RoutingDecision, TerminalAssessment } from '../types.js';
+import type { BenchModel, Candidate, RoutingDecision, TerminalAssessment } from '../types.js';
 import type { SubagentResultRow } from '../agents/subagent-results.js';
 
 /** A minimal, hand-filled routing decision across `chain`. */
@@ -39,26 +39,6 @@ export function terminalAssessment(
     scope: 'open-ended',
     compound: true,
     confidence: 'high',
-    discountEligible: true,
-    ...overrides,
-  };
-}
-
-/** A minimal, hand-filled multi-work routing meta blob for `MultiWorkRoutingMeta`. */
-export function multiWorkRoutingMeta(
-  overrides: Partial<MultiWorkRoutingMeta> = {},
-): MultiWorkRoutingMeta {
-  return {
-    terminal: terminalAssessment(),
-    terminalRequirement: 0.775,
-    terminalBand: 'frontier',
-    phase: 'mutate',
-    phaseReason: 'test',
-    terminalFloor: 0.775,
-    inspectFloor: 0.775,
-    providerInvocation: 1,
-    candidateCapability: {},
-    terminalCapableInScoringSet: true,
     ...overrides,
   };
 }

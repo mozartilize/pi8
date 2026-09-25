@@ -161,9 +161,8 @@ function maxBand(a: CapabilityBand, b: CapabilityBand): CapabilityBand {
 
 /**
  * Lowest implement-axis ratio a band admits; undefined keeps the submitter.
- * The multi-work band table has no economy minimum because it never engages
- * below `strong`; a contract still needs one, or the scorer would fall back to
- * its frontier ratio.
+ * The band table has no economy minimum; a contract still needs one, or the
+ * scorer would fall back to its frontier ratio.
  */
 export function executionMinimum(band: CapabilityBand): number | undefined {
   if (band === 'frontier') return undefined;

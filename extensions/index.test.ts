@@ -12,18 +12,12 @@ import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
 import { computeRoleModels } from './agents/subagents.js';
-import { multiWorkRoutingMeta, routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
-import { formatDecisionDetail } from './host/ui.js';
+import { routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
 import { DECISION_LOG_FILE, setDecisionLogBase } from './host/decisionlog.js';
 import { defaultRouterSession } from './serve/router-session-state.js';
 import type { WorkPhaseState } from './routing/policy/work-phase.js';
-import { evaluateMutationCall } from './routing/policy/mutation-gate.js';
 
 vi.mock('./host/commands.js', () => ({ registerCommands: vi.fn(() => vi.fn()) }));
-vi.mock('./routing/policy/mutation-gate.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./routing/policy/mutation-gate.js')>();
-  return { ...actual, evaluateMutationCall: vi.fn(actual.evaluateMutationCall) };
-});
 vi.mock('./serve/provider.js', () => ({
   registerAutoRouterProvider: vi.fn(),
   buildSubagentProviderAuthFilter: vi.fn(() => () => true),
@@ -32,7 +26,7 @@ vi.mock('./serve/provider.js', () => ({
 vi.mock('./bench/store.js', () => ({
   loadStore: vi.fn(() => undefined),
   // The real decisionlog module resolves its log path through this; without it
-  // gate-observability writes throw inside their fail-open catch and never land.
+  // handoff-log writes throw inside their fail-open catch and never land.
   resolveStoragePath: (base?: string) => base ?? '/tmp/pi8-test-store',
 }));
 vi.mock('./config.js', () => ({ loadConfig: vi.fn(() => ({ debug: false })) }));
@@ -775,33 +769,24 @@ describe('assessment lifecycle resets', () => {
   });
 });
 
-describe('mutation gate hooks', () => {
+describe('mutation observation hooks', () => {
   const concreteCtx = { model: { provider: 'openai-codex', id: 'gpt-5.3' } } as unknown as ExtensionContext;
   const routerAutoCtx = { model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } } as unknown as ExtensionContext;
 
   let logDir: string;
 
   beforeEach(() => {
-    // Keep gate-observability writes out of the real user-scope decision log.
+    // Keep handoff-log writes out of the real user-scope decision log.
     logDir = mkdtempSync(join(tmpdir(), 'ar-index-log-'));
     setDecisionLogBase(logDir);
   });
 
-  function inspectState(overrides: Partial<WorkPhaseState> = {}): WorkPhaseState {
+  function entryState(overrides: Partial<WorkPhaseState> = {}): WorkPhaseState {
     return {
       intentKey: 'intent-a',
       terminal: terminalAssessment(),
-      terminalRequirement: 0.775,
       terminalBand: 'frontier',
-      phase: 'inspect',
-      phaseReason: 'explicit-compound-inspect',
-      multiWorkEngaged: true,
       providerInvocation: 1,
-      mutationGateBlocks: 0,
-      mutationGateTriggered: false,
-      mutationCompleted: false,
-      pendingMutationToolCallIds: new Set(),
-      observedReadTools: 0,
       observedMutationTools: 0,
       ...overrides,
     };
@@ -819,15 +804,14 @@ describe('mutation gate hooks', () => {
 
   afterEach(() => {
     defaultRouterSession.reset();
-    vi.mocked(evaluateMutationCall).mockRestore();
     setDecisionLogBase(undefined);
     rmSync(logDir, { recursive: true, force: true });
   });
 
-  it('keeps concrete-model sessions a complete mutation-gate no-op', async () => {
+  it('keeps concrete-model sessions a complete no-op', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     const before = defaultRouterSession.intent.getWorkPhaseState();
     expect(toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, concreteCtx)).toBeUndefined();
     expect(defaultRouterSession.intent.getWorkPhaseState()).toEqual(before);
@@ -853,32 +837,26 @@ describe('mutation gate hooks', () => {
     flush.mockRestore();
   });
 
-  it('returns a non-terminating intentional block for router/auto', async () => {
+  it('never blocks an edit and never changes the routed task type', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
-    defaultRouterSession.setLastServed({
-      registryId: 'test/inspect',
-      viaFallback: false,
-      accumulatedCost: 0,
-      capability: {
-        providerInvocation: 1,
-        terminalFloor: 0.85,
-        terminalCapableInScoringSet: true,
-        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
-      },
-    });
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
+    defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
+    const note = vi.spyOn(defaultRouterSession, 'noteTrajectoryToolCall');
 
-    const result = await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
-    expect(result).toEqual({ block: true, reason: expect.any(String) });
-    expect(result).not.toHaveProperty('terminate');
+    expect(await toolCall({ toolName: 'edit', toolCallId: 'e1', input: { path: 'a.ts' } }, routerAutoCtx)).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(1);
+    expect(defaultRouterSession.getLastDecision()?.dimension).toBe('gather');
+    expect(note).toHaveBeenCalledTimes(1);
+    note.mockRestore();
   });
 
   it('shows editing as a phase without changing an unconfirmed plan task type', async () => {
     const handlers = await makeToolHandlers();
     const status = vi.fn();
     const ctx = { ...routerAutoCtx, ui: { setStatus: status } } as unknown as ExtensionContext;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     const decision = { ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' };
     defaultRouterSession.setLastDecision(decision);
     defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
@@ -904,7 +882,7 @@ describe('mutation gate hooks', () => {
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
 
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
     const steps = [{ kind: 'edit', path: 'src/a.ts', change: 'reject expired tokens' }];
@@ -930,7 +908,7 @@ describe('mutation gate hooks', () => {
     } as unknown as ExtensionAPI);
     const tool = registerTool.mock.calls[0]![0] as { execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
     const remainingWork = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
@@ -965,7 +943,7 @@ describe('mutation gate hooks', () => {
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
     const tool = registerTool.mock.calls[0]![0] as { execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
     const steps = [{ kind: 'edit', path: 'secret-dir/*.ts', change: 'x' }];
@@ -984,7 +962,7 @@ describe('mutation gate hooks', () => {
     };
     expect(tool.name).toBe('request_planning');
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'inspect', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
     const request = { findings: 'secret-finding in src/a.ts', change: 'secret-change' };
@@ -1011,7 +989,7 @@ describe('mutation gate hooks', () => {
     const registerTool = vi.fn();
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
     const tool = registerTool.mock.calls[1]![0] as { execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'inspect', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
     defaultRouterSession.setManualModel('test/cheap');
@@ -1023,7 +1001,7 @@ describe('mutation gate hooks', () => {
   it('reminds an investigation of request_planning once, on its first edit result, and never blocks the edit', async () => {
     const handlers = await makeToolHandlers();
     const content = [{ type: 'text', text: 'edited' }];
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'inspect', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
 
@@ -1041,7 +1019,7 @@ describe('mutation gate hooks', () => {
   it('appends the handoff reminder once to the first plan/review edit result without a plan', async () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'reason', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
     const content = [{ type: 'text', text: 'edited' }];
@@ -1057,7 +1035,7 @@ describe('mutation gate hooks', () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;
     const content = [{ type: 'text', text: 'edited' }];
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ phase: 'mutate', multiWorkEngaged: false }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/impl']), dimension: 'implement' as const, intentKey: 'intent-a' });
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx)).toBeUndefined();
 
@@ -1068,164 +1046,23 @@ describe('mutation gate hooks', () => {
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
   });
 
-  it('projects the block onto the live decision so the commands can show it', async () => {
+  it('counts a high-confidence mutating bash call without blocking it', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
-    defaultRouterSession.setLastServed({
-      registryId: 'test/inspect',
-      viaFallback: false,
-      accumulatedCost: 0,
-      capability: {
-        providerInvocation: 1,
-        terminalFloor: 0.85,
-        terminalCapableInScoringSet: true,
-        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
-      },
-    });
-    const decision = routingDecision(['test/inspect']);
-    decision.multiWork = multiWorkRoutingMeta({ phase: 'inspect' });
-    defaultRouterSession.setLastDecision(decision);
-
-    await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
-
-    expect(defaultRouterSession.getLastDecision()?.multiWork).toMatchObject({
-      phase: 'mutate',
-      phaseReason: 'gate-handoff',
-      gateBlockedInvocation: 1,
-    });
-    expect(formatDecisionDetail(defaultRouterSession.getLastDecision(), undefined).join('\n')).toContain(
-      'held at provider call 1 until a model strong enough for the final step serves',
-    );
-  });
-
-  it('does not register a locally blocked mutation into the trajectory batch', async () => {
-    const handlers = await makeToolHandlers();
-    const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
-    defaultRouterSession.setLastServed({
-      registryId: 'test/inspect',
-      viaFallback: false,
-      accumulatedCost: 0,
-      capability: {
-        providerInvocation: 1,
-        terminalFloor: 0.85,
-        terminalCapableInScoringSet: true,
-        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
-      },
-    });
-    const note = vi.spyOn(defaultRouterSession, 'noteTrajectoryToolCall');
-
-    const blocked = await toolCall({ toolName: 'edit', toolCallId: 'blocked', input: {} }, routerAutoCtx);
-    expect(blocked).toEqual({ block: true, reason: expect.any(String) });
-    expect(note).not.toHaveBeenCalled();
-
-    await toolCall({ toolName: 'read', toolCallId: 'ok', input: { path: 'a.ts' } }, routerAutoCtx);
-    expect(note).toHaveBeenCalledTimes(1);
-    note.mockRestore();
-  });
-
-  it('projects the escape and its degradation onto the live decision', async () => {
-    const handlers = await makeToolHandlers();
-    const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({
-      phase: 'mutate',
-      mutationGateTriggered: true,
-      mutationGateBlocks: 1,
-      gateBlockedInvocation: 1,
-    }));
-    defaultRouterSession.setLastServed({
-      registryId: 'test/inspect',
-      viaFallback: false,
-      accumulatedCost: 0,
-      capability: {
-        providerInvocation: 2,
-        terminalFloor: 0.85,
-        terminalCapableInScoringSet: true,
-        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
-      },
-    });
-    const decision = routingDecision(['test/inspect']);
-    decision.multiWork = multiWorkRoutingMeta({ phase: 'inspect' });
-    defaultRouterSession.setLastDecision(decision);
-
-    const result = await toolCall({ toolName: 'edit', toolCallId: 'e2', input: {} }, routerAutoCtx);
-
-    expect(result).toBeUndefined();
-    expect(defaultRouterSession.getLastDecision()?.multiWork).toMatchObject({
-      mutationGateEscaped: true,
-      capabilityDegraded: true,
-    });
-    expect(formatDecisionDetail(defaultRouterSession.getLastDecision(), undefined).join('\n')).toContain('then allowed without a strong enough model');
-  });
-
-  it('fails open without changing state when the gate throws', async () => {
-    const handlers = await makeToolHandlers();
-    const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
-    const before = defaultRouterSession.intent.getWorkPhaseState();
-    vi.mocked(evaluateMutationCall).mockImplementationOnce(() => {
-      throw new Error('boom');
-    });
-
-    const result = await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
-    expect(result).toBeUndefined();
-    expect(defaultRouterSession.intent.getWorkPhaseState()).toEqual(before);
-  });
-
-  it('correlates a mutation result back to its pending call', async () => {
-    const handlers = await makeToolHandlers();
-    const toolCall = handlers.get('tool_call')!;
-    const toolResult = handlers.get('tool_result')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState({ multiWorkEngaged: false, phase: 'mutate' }));
-
-    await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx);
-    expect(defaultRouterSession.intent.getWorkPhaseState()?.pendingMutationToolCallIds.has('e1')).toBe(true);
-
-    await toolResult({ toolName: 'edit', toolCallId: 'e1', content: [], isError: false }, routerAutoCtx);
-    expect(defaultRouterSession.intent.getWorkPhaseState()?.pendingMutationToolCallIds.has('e1')).toBe(false);
-    expect(defaultRouterSession.intent.getWorkPhaseState()?.mutationCompleted).toBe(true);
-  });
-
-  it('gates a high-confidence mutating bash call for router/auto', async () => {
-    const handlers = await makeToolHandlers();
-    const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
-    defaultRouterSession.setLastServed({
-      registryId: 'test/inspect',
-      viaFallback: false,
-      accumulatedCost: 0,
-      capability: {
-        providerInvocation: 1,
-        terminalFloor: 0.85,
-        terminalCapableInScoringSet: true,
-        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
-      },
-    });
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
 
     const result = await toolCall(
       { toolName: 'bash', toolCallId: 'bash-1', input: { command: 'echo x > out.txt' } },
       routerAutoCtx,
     );
-    expect(result).toEqual({ block: true, reason: expect.any(String) });
-    expect(defaultRouterSession.intent.getWorkPhaseState()).toMatchObject({ phase: 'mutate', mutationGateTriggered: true });
+    expect(result).toBeUndefined();
+    expect(defaultRouterSession.intent.getWorkPhaseState()?.observedMutationTools).toBe(1);
   });
 
-  it('allows opaque python and read-only bash without state change', async () => {
+  it('does not count opaque python or read-only bash', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
-    defaultRouterSession.setLastServed({
-      registryId: 'test/inspect',
-      viaFallback: false,
-      accumulatedCost: 0,
-      capability: {
-        providerInvocation: 1,
-        terminalFloor: 0.85,
-        terminalCapableInScoringSet: true,
-        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
-      },
-    });
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
 
     expect(
       await toolCall({ toolName: 'bash', toolCallId: 'bash-2', input: { command: 'python script.py' } }, routerAutoCtx),
@@ -1233,47 +1070,13 @@ describe('mutation gate hooks', () => {
     expect(
       await toolCall({ toolName: 'bash', toolCallId: 'bash-3', input: { command: 'ls -la' } }, routerAutoCtx),
     ).toBeUndefined();
-    expect(defaultRouterSession.intent.getWorkPhaseState()).toMatchObject({ phase: 'inspect', mutationGateBlocks: 0 });
-    expect(defaultRouterSession.intent.getWorkPhaseState()?.pendingMutationToolCallIds.size).toBe(0);
-  });
-
-  it('records bash gate outcomes as enums only, never command text', async () => {
-    const handlers = await makeToolHandlers();
-    const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
-    defaultRouterSession.setLastServed({
-      registryId: 'test/inspect',
-      viaFallback: false,
-      accumulatedCost: 0,
-      capability: {
-        providerInvocation: 1,
-        terminalFloor: 0.85,
-        terminalCapableInScoringSet: true,
-        candidate: { clearsTerminalFloor: false, viaInspectPromotion: true },
-      },
-    });
-
-    await toolCall(
-      { toolName: 'bash', toolCallId: 'bash-1', input: { command: 'echo secret > out.txt' } },
-      routerAutoCtx,
-    );
-    await toolCall(
-      { toolName: 'bash', toolCallId: 'bash-2', input: { command: 'python script.py' } },
-      routerAutoCtx,
-    );
-
-    const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8');
-    expect(raw).toContain('"mutationSignal":"shell-redirect"');
-    expect(raw).toContain('"mutationSignal":"python-opaque"');
-    expect(raw).not.toContain('out.txt');
-    expect(raw).not.toContain('secret');
-    expect(raw).not.toContain('script.py');
+    expect(defaultRouterSession.intent.getWorkPhaseState()?.observedMutationTools).toBe(0);
   });
 
   it('keeps concrete-model sessions a complete no-op for bash too', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
-    defaultRouterSession.intent.commitWorkPhaseState(inspectState());
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
     const before = defaultRouterSession.intent.getWorkPhaseState();
     expect(
       await toolCall({ toolName: 'bash', toolCallId: 'bash-1', input: { command: 'rm -rf x' } }, concreteCtx),

@@ -6,7 +6,7 @@
  * command with `unbash` and recognizes high-confidence write shapes — file
  * redirection, in-place editors, file-writer commands, filesystem mutators,
  * `dd of=`, destructive git worktree resets/discards, and inline Python write
- * APIs — so the bounded mutation gate can treat them like `edit`/`write`.
+ * APIs — so a shell write counts like `edit`/`write`.
  * Everything else is `none` (no recognized mutation shape) or `possible`
  * (opaque Python: scripts, `-m` modules, eval/subprocess/import indirection),
  * which only feeds observability and never blocks.

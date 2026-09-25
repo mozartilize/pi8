@@ -314,9 +314,9 @@ async function handleStatusCommand(
     lines.push(formatEmbeddingStats(embStats));
   }
   // M4: show recent routing history, surfacing any real fallbacks.
-  // Only actual routing decisions belong here: assessment metrics and
-  // mutation-gate signals join decisions by intentKey offline, and letting
-  // them through would push real turns out of the recent window.
+  // Only actual routing decisions belong here: secondary records join
+  // decisions by intentKey offline, and letting them through would push real
+  // turns out of the recent window.
   const history = readRecentDecisions(20);
   const routingHistory = history.filter(
     (e) => e.cause !== 'self-healing-gap' && (e.kind === undefined || e.kind === 'decision'),

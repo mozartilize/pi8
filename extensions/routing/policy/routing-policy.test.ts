@@ -571,8 +571,8 @@ describe('incumbent capability floor', () => {
   // Contract: within one task the served model stays at or above the
   // incumbent's measured capability. Uncertainty holds the floor; only a
   // genuine new entry with a high-confidence trivial classification resets to a
-  // cheaper model. Sanctioned downward moves (trajectory escalation, inspect
-  // promotion, consult that lowered the dimension) stand the floor down.
+  // cheaper model. Sanctioned downward moves (trajectory escalation, a consult
+  // that lowered the dimension) stand the floor down.
   it('baseline (no incumbent) picks the cheap model at gather', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
@@ -867,74 +867,5 @@ describe('incumbent capability floor', () => {
     expect(result.decision.fallbackChain).not.toContain('bench/strong');
     expect(result.decision.chosen).toBe('bench/cheap');
     expect(result.decision.reason).not.toContain('incumbent-floor');
-  });
-});
-
-describe('resolveRoutingDecision — multiWorkPolicy threading', () => {
-  it('threads multiWorkPolicy onto the primary scoring call and attaches decision.multiWork', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'implement',
-        baseDimension: 'implement',
-        baseCause: 'heuristic',
-        multiWorkPolicy: {
-          terminal: terminalAssessment(),
-          terminalRequirement: 0.85,
-          terminalBand: 'standard',
-          phase: 'inspect',
-          phaseReason: 'test-inspect',
-          terminalFloor: 0.85,
-          inspectFloor: 0.70,
-          providerInvocation: 1,
-        },
-      }),
-    );
-    expect(result.decision.multiWork).toBeDefined();
-    expect(result.decision.multiWork?.phase).toBe('inspect');
-  });
-
-  it('keeps the request-local floors out of the routed-pick counterfactual', () => {
-    const policy = {
-      terminal: terminalAssessment(),
-      terminalRequirement: 0.85,
-      terminalBand: 'frontier' as const,
-      phase: 'inspect' as const,
-      phaseReason: 'test-inspect',
-      terminalFloor: 0.85,
-      inspectFloor: 0.70,
-      providerInvocation: 1,
-    };
-    const withPolicy = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
-        baseDimension: 'implement',
-        multiWorkPolicy: policy,
-      }),
-    );
-    const withoutPolicy = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
-        baseDimension: 'implement',
-      }),
-    );
-
-    expect(withPolicy.decision.routedUp).toBe(true);
-    expect(withPolicy.decision.chosen).toBe(withoutPolicy.decision.chosen);
-    expect(withPolicy.decision.routedPickChanged).toBe(withoutPolicy.decision.routedPickChanged);
-  });
-
-  it('leaves decision.multiWork undefined when no multiWorkPolicy is supplied', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'implement',
-        baseDimension: 'implement',
-        baseCause: 'heuristic',
-      }),
-    );
-    expect(result.decision.multiWork).toBeUndefined();
   });
 });

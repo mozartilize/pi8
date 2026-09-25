@@ -8,9 +8,7 @@
  */
 import type {
   Candidate,
-  CandidateCapabilityMeta,
   Dimension,
-  MultiWorkScoringPolicy,
   QualityExclusionReason,
   RoutingDecision,
   ScoreWeights,
@@ -472,16 +470,9 @@ export interface ScoreOpts {
    */
   warmPrefixTokens?: ReadonlyMap<string, number>;
   /**
-   * Request-local terminal/inspect floors for an eligible compound-implement
-   * intent. Absent selects the current live tier/promotion constants
-   * unchanged; with `executionMinimum`, the only inputs that change
-   * eligibility parameters.
-   */
-  multiWorkPolicy?: MultiWorkScoringPolicy;
-  /**
    * Implement-axis ratio an accepted execution contract requires of its
-   * executor. Replaces the live frontier ratio; never combined with
-   * `multiWorkPolicy`.
+   * executor. Replaces the live frontier ratio and disables promotion; its
+   * absence selects the live tier/promotion constants unchanged.
    */
   executionMinimum?: number;
 }
@@ -793,21 +784,18 @@ export function applyCandidateGuards(
  * and speed may rank comparable models, but cannot offset a material quality
  * gap. Lower tiers stay in the chain as objective fallbacks.
  *
- * `multiWorkPolicy` changes only which parameters feed this single
+ * `executionMinimum` changes only which parameters feed this single
  * eligibility/promotion implementation; its absence selects the current live
- * constants unchanged. Knowledge is task-critical for planning/review and for
- * the terminal phase of compound implementation. Activate its floor only when
- * the scoring pool has at least one measurement: absent coverage is
- * uncertainty, not proof that every model is weak.
+ * constants unchanged. Knowledge is task-critical for planning/review.
+ * Activate its floor only when the scoring pool has at least one measurement:
+ * absent coverage is uncertainty, not proof that every model is weak.
  */
 function computeEligibility(
   filtered: Candidate[],
   dimension: Dimension,
   opts: ScoreOpts,
 ) {
-  const knowledgeCritical = dimension === 'plan'
-    || dimension === 'review'
-    || (dimension === 'implement' && opts.multiWorkPolicy != null);
+  const knowledgeCritical = dimension === 'plan' || dimension === 'review';
   const knowledgeByCandidate = new Map(filtered.map((candidate) => [
     candidateKey(candidate),
     effectiveKnowledge(candidate, filtered, dimension),
@@ -815,7 +803,6 @@ function computeEligibility(
   const knowledgeAvailable = [...knowledgeByCandidate.values()].some((value) => value != null);
   const activeTierPolicy: TierPolicy = {
     ...LIVE_TIER_POLICY,
-    ...(opts.multiWorkPolicy ? { qualityRatio: opts.multiWorkPolicy.terminalFloor } : {}),
     ...(opts.executionMinimum != null ? { qualityRatio: opts.executionMinimum } : {}),
     ...(knowledgeCritical && knowledgeAvailable ? { knowledgeFloor: KNOWLEDGE_QUALITY_FLOOR } : {}),
   };
@@ -823,18 +810,10 @@ function computeEligibility(
   // for its plan; promoting below it would let price override the plan's
   // assessed difficulty.
   const activePromotionPolicy = opts.executionMinimum != null
-    ? { enabled: false, qualityRatio: opts.executionMinimum, recordsInspectPromotion: false }
-    : opts.multiWorkPolicy
-    ? {
-        enabled: dimension === 'implement'
-          && opts.multiWorkPolicy.inspectFloor < opts.multiWorkPolicy.terminalFloor,
-        qualityRatio: opts.multiWorkPolicy.inspectFloor,
-        recordsInspectPromotion: true,
-      }
+    ? { enabled: false, qualityRatio: opts.executionMinimum }
     : {
         enabled: dimension === 'gather' || dimension === 'implement' || dimension === 'review',
         qualityRatio: ECONOMY_QUALITY_RATIO,
-        recordsInspectPromotion: false,
       };
 
   const relative = relativeQualities(filtered, dimension);
@@ -855,7 +834,6 @@ function computeEligibility(
     activePromotionPolicy,
     relative,
     eligibility,
-    terminalEligibility: new Map(eligibility),
   };
 }
 
@@ -871,14 +849,12 @@ function applyEconomicPromotion(
   filtered: Candidate[],
   dimension: Dimension,
   eligibility: Map<string, Eligibility>,
-  inspectPromoted: Set<string>,
   relative: ReturnType<typeof relativeQualities>,
   knowledgeByCandidate: Map<string, number | undefined>,
   activeTierPolicy: TierPolicy,
   activePromotionPolicy: {
     enabled: boolean;
     qualityRatio: number;
-    recordsInspectPromotion: boolean;
   },
   costOf: (c: Candidate) => number | undefined,
 ): void {
@@ -925,9 +901,6 @@ function applyEconomicPromotion(
       && !dominated
     ) {
       eligibility.set(candidateKey(c), { tier: 0, excludedReason: 'promoted' });
-      if (activePromotionPolicy.recordsInspectPromotion) {
-        inspectPromoted.add(candidateKey(c));
-      }
     }
   }
 }
@@ -1029,14 +1002,10 @@ function applySwitchBonus(scored: ScoredCandidate[], opts: ScoreOpts): void {
  */
 function assembleDecision(
   scored: ScoredCandidate[],
-  filtered: Candidate[],
   dimension: Dimension,
   eligibility: Map<string, Eligibility>,
   relative: ReturnType<typeof relativeQualities>,
-  terminalEligibility: Map<string, Eligibility>,
-  inspectPromoted: Set<string>,
   costBasis: 'task' | 'per-1m',
-  opts: ScoreOpts,
 ): RoutingDecision {
   const compareScore = (a: ScoredCandidate, b: ScoredCandidate): number => {
     if (b.score !== a.score) return b.score - a.score;
@@ -1089,27 +1058,6 @@ function assembleDecision(
     .filter((candidate) => candidate.excludedReason != null)
     .map((s) => ({ candidateKey: candidateKey(s), excludedReason: s.excludedReason }));
 
-  const multiWorkPolicy = opts.multiWorkPolicy;
-  const multiWork = multiWorkPolicy
-    ? {
-        ...multiWorkPolicy,
-        candidateCapability: Object.fromEntries(filtered.map((c): [string, CandidateCapabilityMeta] => {
-          const key = candidateKey(c);
-          const quality = relative.get(key);
-          const terminalTier = terminalEligibility.get(key)?.tier;
-          const clears: boolean | 'unknown' = terminalTier === 0
-            ? true
-            : terminalTier === 1 ? 'unknown' : false;
-          return [key, {
-            ...(quality ? { taskRatio: quality.taskRatio } : {}),
-            clearsTerminalFloor: clears,
-            viaInspectPromotion: inspectPromoted.has(key),
-          }];
-        })),
-        terminalCapableInScoringSet: filtered.some((c) => terminalEligibility.get(candidateKey(c))?.tier === 0),
-      }
-    : undefined;
-
   const scoredReason: ScoredReason = {
     score: top.score,
     quality: top.qualityComponent,
@@ -1130,7 +1078,6 @@ function assembleDecision(
     routedDown: false,
     cause: 'heuristic',
     fallbackChain,
-    ...(multiWork ? { multiWork } : {}),
   };
 }
 
@@ -1149,9 +1096,7 @@ export function pickBest(
     activePromotionPolicy,
     relative,
     eligibility,
-    terminalEligibility,
   } = computeEligibility(filtered, dimension, opts);
-  const inspectPromoted = new Set<string>();
 
   // Request-local cost scale, chosen once for this pickBest call. Task cost is
   // used only when every candidate in the pool that can actually win carries
@@ -1173,7 +1118,6 @@ export function pickBest(
     filtered,
     dimension,
     eligibility,
-    inspectPromoted,
     relative,
     knowledgeByCandidate,
     activeTierPolicy,
@@ -1192,14 +1136,10 @@ export function pickBest(
   applySwitchBonus(scored, opts);
   return assembleDecision(
     scored,
-    filtered,
     dimension,
     eligibility,
     relative,
-    terminalEligibility,
-    inspectPromoted,
     costBasis,
-    opts,
   );
 }
 

@@ -17,7 +17,6 @@ import { getProviderState } from '../serve/provider.js';
 import { defaultBlacklistState } from '../serve/blacklist.js';
 import {
   appendDecision,
-  appendMutationGateSignal,
   appendAssessmentMetric,
   appendSubagentGapSignal,
   appendSubagentSpend,
@@ -630,54 +629,6 @@ describe('/router-status history filtering', () => {
     // Assessment telemetry must never appear as a routing decision.
     expect(msg).not.toContain('gather →');
     expect(msg).not.toContain('unknown/unknown');
-  });
-
-  it('excludes mutation-gate signals from routing history', async () => {
-    const { pi, handlers } = fakePi();
-    registerCommands(pi);
-    const { ctx, messages } = fakeCtx([{ provider: 'beta', id: 'second' }]);
-    saveStore({
-      version: 2,
-      syncedAt: Date.now(),
-      aliases: {},
-      models: [
-        {
-          registryId: 'beta/second',
-          benchSlug: 'beta-second',
-          active: true,
-          quality: { coding: 80 },
-          source: 'test',
-        },
-      ],
-    } satisfies BenchmarkStore);
-
-    appendDecision(
-      {
-        dimension: 'implement',
-        chosen: 'beta/second',
-        reason: 'scored',
-        confidence: 0.7,
-        routedUp: false,
-        routedDown: false,
-        cause: 'heuristic',
-        fallbackChain: ['beta/second'],
-      },
-      { registryId: 'beta/second', viaFallback: false, accumulatedCost: 0.01 },
-    );
-    appendMutationGateSignal({
-      intentKey: '3:1:abc:0',
-      served: 'gamma/gate',
-      providerInvocation: 2,
-      gateBlockedInvocation: 2,
-      clearance: false,
-      action: 'block',
-    });
-
-    await handlers.get('router-status')!('', ctx);
-
-    const msg = messages[messages.length - 1] ?? '';
-    expect(msg).toContain('→ beta/second');
-    expect(msg).not.toContain('gamma/gate');
   });
 });
 

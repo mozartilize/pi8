@@ -5,19 +5,10 @@ import type { WorkPhaseState } from './work-phase.js';
 const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
   intentKey: 'intent-a',
   terminal: {
-    kind: 'gather', complexity: 'routine', scope: 'bounded', compound: false, confidence: 'high', discountEligible: false,
+    kind: 'gather', complexity: 'routine', scope: 'bounded', compound: false, confidence: 'high',
   },
-  terminalRequirement: 0.3,
   terminalBand: 'standard',
-  phase: 'inspect',
-  phaseReason: 'terminal-gather',
-  multiWorkEngaged: false,
   providerInvocation: 2,
-  mutationGateBlocks: 0,
-  mutationGateTriggered: false,
-  mutationCompleted: false,
-  pendingMutationToolCallIds: new Set(),
-  observedReadTools: 0,
   observedMutationTools: 0,
   ...over,
 });

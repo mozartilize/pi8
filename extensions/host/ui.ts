@@ -12,8 +12,6 @@ import type {
   ExecutionContractMeta,
   QualityExclusionReason,
   RoutingDecision,
-  ServedCapabilityMeta,
-  WorkPhase,
 } from '../types.js';
 import type { EmbeddingStats } from '../serve/router-session-state.js';
 
@@ -29,8 +27,6 @@ export interface ServedInfo {
   fallbackRank?: number;
   /** Session cost accumulated across routed turns, in USD. */
   accumulatedCost: number;
-  /** Terminal capability evidence for the candidate that actually served, when known. */
-  capability?: ServedCapabilityMeta;
 }
 
 /**
@@ -105,13 +101,6 @@ const ASSESSMENT_FALLBACK_LABELS: Readonly<Record<AssessmentFallbackReason, stri
   disabled: 'turned off',
 };
 
-const PHASE_LABELS: Readonly<Record<WorkPhase, string>> = {
-  answer: 'answering',
-  inspect: 'investigating',
-  reason: 'reasoning',
-  mutate: 'editing',
-};
-
 /** Multi-line detail for `/router-status`. */
 export function formatDecisionDetail(
   decision: RoutingDecision | undefined,
@@ -138,7 +127,6 @@ export function formatDecisionDetail(
       return [`  ${`${label}:`.padEnd(11)} ${diagnostic.candidateKey} (${text})`];
     }) ?? [],
     ...(decision.executionContract ? contractLines(decision.executionContract) : []),
-    ...(decision.multiWork ? multiWorkLines(decision.multiWork) : []),
     ...(decision.trajectoryFriction ? [trajectoryLine(decision.trajectoryFriction)] : []),
     ...(decision.switched ? ['  note:       switched models from the previous turn'] : []),
     ...(decision.contextPressure ? contextPressureLines(decision.contextPressure) : []),
@@ -226,30 +214,6 @@ function assessmentLines(decision: RoutingDecision): string[] {
   if (decision.fallbackReason) {
     const why = ASSESSMENT_FALLBACK_LABELS[decision.fallbackReason] ?? decision.fallbackReason;
     lines.push(`  note:       assessment unavailable (${why}); kept the keyword result`);
-  }
-  return lines;
-}
-
-function multiWorkLines(mw: NonNullable<RoutingDecision['multiWork']>): string[] {
-  const lines = [
-    `  final step: ${mw.terminal.kind}, ${mw.terminal.complexity} complexity, needs a ${mw.terminalBand}-level model; ` +
-    `now ${PHASE_LABELS[mw.phase]} (provider call ${mw.providerInvocation})`,
-  ];
-  if (mw.servedCapability) {
-    const { taskRatio, clearsTerminalFloor } = mw.servedCapability;
-    const strength = taskRatio != null ? `${(taskRatio * 100).toFixed(0)}% of the strongest model` : 'strength unknown';
-    const verdict = clearsTerminalFloor === 'unknown'
-      ? 'unknown whether strong enough'
-      : clearsTerminalFloor ? 'strong enough' : 'not strong enough';
-    lines.push(`  served:     ${strength}; ${verdict} for the final step`);
-  }
-  if (mw.mutationGateEscaped) {
-    const weaker = mw.capabilityDegraded ? ' without a strong enough model' : '';
-    lines.push(`  edits:      held at provider call ${mw.gateBlockedInvocation}, then allowed${weaker}`);
-  } else if (mw.gateBlockedInvocation !== undefined) {
-    lines.push(`  edits:      held at provider call ${mw.gateBlockedInvocation} until a model strong enough for the final step serves`);
-  } else if (mw.capabilityDegraded) {
-    lines.push('  edits:      allowed without a model strong enough for the final step');
   }
   return lines;
 }

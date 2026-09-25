@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { clearRouterStatus, formatStatus, formatDecisionDetail, formatAssessmentSpend, formatEmbeddingStats, servedKey } from './ui.js';
 import { candidateKey } from '../routing/score/scorer.js';
-import { multiWorkRoutingMeta } from '../test-support/router-fixtures.js';
 import type { RoutingDecision } from '../types.js';
 
 const decision: RoutingDecision = {
@@ -211,63 +210,6 @@ describe('formatDecisionDetail', () => {
 
     expect(lines).toContain('promoted:   cheap/model (much cheaper and strong enough)');
     expect(lines).toContain('demoted:    weak/model (too weak for this task type)');
-  });
-
-  it('shows the final step, its required model level, and the current phase for engaged multi-work decisions', () => {
-    const lines = formatDecisionDetail(
-      { ...decision, multiWork: multiWorkRoutingMeta({ phase: 'inspect', providerInvocation: 2 }) },
-      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
-    ).join('\n');
-    expect(lines).toContain(
-      'final step: implement, hard complexity, needs a frontier-level model; now investigating (provider call 2)',
-    );
-  });
-
-  it('reports the actual served capability ratio, or unknown without a task ratio', () => {
-    const withRatio = formatDecisionDetail(
-      {
-        ...decision,
-        multiWork: multiWorkRoutingMeta({
-          servedCandidateKey: decision.chosen,
-          servedCapability: { taskRatio: 0.72, clearsTerminalFloor: true, viaInspectPromotion: false },
-        }),
-      },
-      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
-    ).join('\n');
-    expect(withRatio).toContain('served:     72% of the strongest model; strong enough for the final step');
-
-    const withoutRatio = formatDecisionDetail(
-      {
-        ...decision,
-        multiWork: multiWorkRoutingMeta({
-          servedCandidateKey: decision.chosen,
-          servedCapability: { clearsTerminalFloor: 'unknown', viaInspectPromotion: false },
-        }),
-      },
-      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
-    ).join('\n');
-    expect(withoutRatio).toContain('served:     strength unknown; unknown whether strong enough for the final step');
-  });
-
-  it('reports a mutation-gate escape and capability degradation only when present', () => {
-    const escaped = formatDecisionDetail(
-      {
-        ...decision,
-        multiWork: multiWorkRoutingMeta({
-          gateBlockedInvocation: 2,
-          mutationGateEscaped: true,
-          capabilityDegraded: true,
-        }),
-      },
-      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
-    ).join('\n');
-    expect(escaped).toContain('edits:      held at provider call 2, then allowed without a strong enough model');
-
-    const clean = formatDecisionDetail(
-      { ...decision, multiWork: multiWorkRoutingMeta() },
-      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
-    ).join('\n');
-    expect(clean).not.toContain('edits:');
   });
 
   it('adds advisory detail for context pressure', () => {

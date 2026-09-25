@@ -161,7 +161,6 @@ export type AssessmentConfidence = 'high' | 'medium' | 'low';
 export type TaskKind = Dimension;
 export type TaskScope = 'bounded' | 'open-ended';
 export type ComplexityBand = 'trivial' | 'routine' | 'moderate' | 'hard' | 'frontier';
-export type WorkPhase = 'answer' | 'inspect' | 'reason' | 'mutate';
 export type CapabilityBand = 'economy' | 'standard' | 'strong' | 'frontier';
 
 export interface TerminalAssessment {
@@ -170,13 +169,6 @@ export interface TerminalAssessment {
   scope: TaskScope;
   compound: boolean;
   confidence: AssessmentConfidence;
-  discountEligible: boolean;
-}
-
-export interface CandidateCapabilityMeta {
-  taskRatio?: number;
-  clearsTerminalFloor: boolean | 'unknown';
-  viaInspectPromotion: boolean;
 }
 
 export type RubricCriterion = 'openDecisions' | 'spread' | 'verification' | 'knowledge' | 'coupling';
@@ -240,34 +232,6 @@ export interface ExecutionContractMeta {
   breaker?: string;
   /** Executor models excluded for this task after repeated breaks. */
   excludedExecutors?: string[];
-}
-
-export interface MultiWorkScoringPolicy {
-  terminal: TerminalAssessment;
-  terminalRequirement: number;
-  terminalBand: CapabilityBand;
-  phase: WorkPhase;
-  phaseReason: string;
-  terminalFloor: number;
-  inspectFloor: number;
-  providerInvocation: number;
-}
-
-export interface MultiWorkRoutingMeta extends MultiWorkScoringPolicy {
-  candidateCapability: Record<string, CandidateCapabilityMeta>;
-  terminalCapableInScoringSet: boolean;
-  servedCandidateKey?: string;
-  servedCapability?: CandidateCapabilityMeta;
-  capabilityDegraded?: boolean;
-  mutationGateEscaped?: boolean;
-  gateBlockedInvocation?: number;
-}
-
-export interface ServedCapabilityMeta {
-  providerInvocation: number;
-  terminalFloor: number;
-  terminalCapableInScoringSet: boolean;
-  candidate: CandidateCapabilityMeta;
 }
 
 export type AssessmentFallbackReason =
@@ -391,8 +355,6 @@ export interface RoutingDecision {
     threshold: number;
     suggestion: string;
   };
-  /** Multi-work routing metadata when an eligible compound intent is engaged. */
-  multiWork?: MultiWorkRoutingMeta;
   /**
    * Counterfactual baseline this turn is priced against for `/router-report`.
    * `source: 'config'` means `config.baselineModel` was routable this turn;

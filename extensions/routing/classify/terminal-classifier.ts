@@ -1,9 +1,8 @@
 import type { ComplexityBand, TaskKind, TaskScope, TerminalAssessment } from '../../types.js';
 
-// Compound eligibility is a licence to route the inspect phase below the
-// terminal requirement, so every signal here is deliberately narrow: only an
-// explicit prerequisite -> sequence -> mutation structure counts, and any
-// evidence we had to default withholds the discount.
+// Every compound signal here is deliberately narrow: only an explicit
+// prerequisite -> sequence -> mutation structure counts, and any evidence we
+// had to default withholds high confidence.
 
 const PREREQUISITE = [
   'investigate', 'research', 'find', 'trace', 'inspect', 'look into',
@@ -148,7 +147,6 @@ export function assessTerminal(prompt: string): TerminalAssessment {
     scope,
     compound,
     confidence,
-    discountEligible: compound && !complexityDefaulted && !scopeDefaulted,
   };
 }
 
@@ -156,7 +154,7 @@ function terminalKind(text: string, compound: boolean, mutates: boolean): TaskKi
   if (compound) return 'implement';
   // The terminal deliverable is the last one stated: "review the auth flow,
   // then fix it" ends in a mutation even though it opens with a review cue.
-  // This decides `kind` only — compound discount eligibility stays narrow.
+  // This decides `kind` only — `compound` stays narrow.
   if (mutates && lastIndex(text, MUTATION_RE) > Math.max(lastIndex(text, REVIEW_RE), lastIndex(text, PLAN_RE))) {
     return 'implement';
   }

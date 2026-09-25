@@ -480,7 +480,7 @@ function recordServedAttempt(
   const hopCause: DecisionCause = hop
     ? (POLICY_PASSIVE_CAUSES.has(decision.cause) ? 'trajectory-escalation' : decision.cause)
     : decision.cause === 'manual-override' ? 'manual-override' : 'error-fallback';
-  const baseDecision = viaFallback
+  const finalDecision = viaFallback
     ? {
         ...decision,
         chosen: candidateId,
@@ -510,20 +510,6 @@ function recordServedAttempt(
         ],
       }
     : decision;
-  // Terminal capability is scored for every candidate up front, but only
-  // the model that actually streams the turn's output has "served"
-  // capability — fallback can substitute a lower-tier sibling.
-  const servedCandidateCapability = baseDecision.multiWork?.candidateCapability[candidateId];
-  const finalMultiWork = baseDecision.multiWork && servedCandidateCapability
-    ? {
-        ...baseDecision.multiWork,
-        servedCandidateKey: candidateId,
-        servedCapability: servedCandidateCapability,
-      }
-    : baseDecision.multiWork;
-  const finalDecision = finalMultiWork
-    ? { ...baseDecision, multiWork: finalMultiWork }
-    : baseDecision;
   const lastServed: ServedInfo = {
     registryId: `${candidate.provider}/${candidate.modelId}`,
     thinkingLevel: (candidate.effectiveReasoning
@@ -531,16 +517,6 @@ function recordServedAttempt(
     viaFallback,
     fallbackRank: viaFallback ? candidateIndex + 1 : undefined,
     accumulatedCost: session.getAccumulatedCost(),
-    ...(finalMultiWork?.servedCapability
-      ? {
-          capability: {
-            providerInvocation: finalMultiWork.providerInvocation,
-            terminalFloor: finalMultiWork.terminalFloor,
-            terminalCapableInScoringSet: finalMultiWork.terminalCapableInScoringSet,
-            candidate: finalMultiWork.servedCapability,
-          },
-        }
-      : {}),
   };
   // Evaluated here, not at attempt start: a newer session or intent may have
   // taken ownership while this attempt was streaming.

@@ -26,7 +26,6 @@ import { servedKey } from './ui.js';
 import { sessionSidecarPath } from '../sessionpaths.js';
 import { ASSESSMENT_PROMPT_VERSION } from '../routing/consult/assessment-prompt.js';
 import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
-import type { MutationSignal, MutationSurface } from '../routing/policy/mutation-detector.js';
 
 export const DECISION_LOG_FILE = 'decisions.jsonl';
 /** Sidecar suffix used when writing next to a persisted session file. */
@@ -57,7 +56,7 @@ function decisionLogPath(storageBase?: string): string {
 export interface DecisionLogEntry {
   ts: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'assessment-metric' | 'mutation-gate' | 'subagent-spend' | 'execution-contract' | 'investigation-handoff';
+  kind?: 'decision' | 'assessment-metric' | 'subagent-spend' | 'execution-contract' | 'investigation-handoff';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -171,36 +170,6 @@ export interface DecisionLogEntry {
     allowedTools?: string[];
     workaroundTool?: string;
   };
-  /** Mutation-gate secondary observability record. */
-  mutationGate?: {
-    providerInvocation: number;
-    gateBlockedInvocation?: number;
-    terminalFloor?: number;
-    servedTaskRatio?: number;
-    clearance: boolean | 'unknown';
-    action: 'block' | 'allow' | 'escape' | 'complete' | 'error';
-    capabilityDegraded?: boolean;
-    /** Enum classifier output; never command text or tool arguments. */
-    mutationSurface?: MutationSurface;
-    mutationSignal?: MutationSignal;
-  };
-}
-
-/** A durable, joinable secondary record of one mutation-gate transition. Never
- *  serializes tool arguments or payload content — identity and clearance only. */
-export interface MutationGateSignal {
-  intentKey: string;
-  served: string;
-  providerInvocation: number;
-  gateBlockedInvocation?: number;
-  terminalFloor?: number;
-  servedTaskRatio?: number;
-  clearance: boolean | 'unknown';
-  action: 'block' | 'allow' | 'escape' | 'complete' | 'error';
-  capabilityDegraded?: boolean;
-  /** Enum classifier output; never command text or tool arguments. */
-  mutationSurface?: MutationSurface;
-  mutationSignal?: MutationSignal;
 }
 
 function serializeAssessment(
@@ -218,46 +187,6 @@ function serializeAssessment(
     ms: assessment.ms,
     costUsd: assessment.costUsd,
   };
-}
-
-/** Append a mutation-gate transition. Best-effort; never throws into the tool call/result path. */
-export function appendMutationGateSignal(
-  signal: MutationGateSignal,
-  storageBase?: string,
-): void {
-  try {
-    const path = decisionLogPath(storageBase);
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const entry: DecisionLogEntry = {
-      ts: Date.now(),
-      kind: 'mutation-gate',
-      dimension: 'implement',
-      chosen: signal.served,
-      served: signal.served,
-      viaFallback: false,
-      confidence: 1,
-      routedUp: false,
-      cause: 'heuristic',
-      reason: `mutation gate ${signal.action}`,
-      chain: [signal.served],
-      intentKey: signal.intentKey,
-      mutationGate: {
-        providerInvocation: signal.providerInvocation,
-        gateBlockedInvocation: signal.gateBlockedInvocation,
-        terminalFloor: signal.terminalFloor,
-        servedTaskRatio: signal.servedTaskRatio,
-        clearance: signal.clearance,
-        action: signal.action,
-        capabilityDegraded: signal.capabilityDegraded,
-        mutationSurface: signal.mutationSurface,
-        mutationSignal: signal.mutationSignal,
-      },
-    };
-    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
-  } catch {
-    // A logging failure must never fail the user's turn.
-  }
 }
 
 /** One execution-contract transition. Rubric levels, counts, and model keys

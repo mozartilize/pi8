@@ -68,12 +68,9 @@ import { runDelegationLoop, type DelegationOptions } from './delegation.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import { resolveRoutingDecision } from '../routing/policy/routing-policy.js';
 import {
-  advanceForRoutingOwner,
   capabilityBandFor,
-  deriveInitialPhase,
   inheritThinContinuation,
   nextProviderInvocation,
-  scoringPolicyForState,
   terminalRequirement,
   type WorkPhaseState,
 } from '../routing/policy/work-phase.js';
@@ -691,11 +688,8 @@ function advanceWorkPhase(args: {
   cacheHit: boolean;
   turnInput: ReturnType<typeof getTurnClassificationInput>;
   classifyResult: ReturnType<typeof classify>;
-  baseDimension: Dimension;
   session: RouterSession;
-}) {
-  const resolvedDimensionForPhase: Dimension = args.baseDimension;
-
+}): void {
   let workPhaseState = args.session.getWorkPhaseState();
   if (!args.cacheHit) {
     // A new entry drops the previous entry's contract; log how it ended.
@@ -703,47 +697,21 @@ function advanceWorkPhase(args: {
       const previous = args.session.getPreviousServed();
       workPhaseState = closeContractEntry(workPhaseState, previous && servedKey(previous));
     }
+    const terminal = args.classifyResult.terminal;
     workPhaseState =
       workPhaseState && args.turnInput.thin
         ? inheritThinContinuation(args.turnInput.key, workPhaseState)
-        : (() => {
-            const terminal = args.classifyResult.terminal;
-            const requirement = terminalRequirement(terminal);
-            const band = capabilityBandFor(requirement);
-            const initial = deriveInitialPhase(terminal, band, {
-              resolvedDimension: resolvedDimensionForPhase,
-            });
-            return {
-              intentKey: args.turnInput.key,
-              terminal,
-              terminalRequirement: requirement,
-              terminalBand: band,
-              phase: initial.phase,
-              phaseReason: initial.phaseReason,
-              multiWorkEngaged: initial.multiWorkEngaged,
-              providerInvocation: 1,
-              mutationGateBlocks: 0,
-              mutationGateTriggered: false,
-              mutationCompleted: false,
-              pendingMutationToolCallIds: new Set<string>(),
-              observedReadTools: 0,
-              observedMutationTools: 0,
-            };
-          })();
+        : {
+            intentKey: args.turnInput.key,
+            terminal,
+            terminalBand: capabilityBandFor(terminalRequirement(terminal)),
+            providerInvocation: 1,
+            observedMutationTools: 0,
+          };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
   }
-  if (workPhaseState) {
-    workPhaseState = advanceForRoutingOwner(
-      workPhaseState,
-      resolvedDimensionForPhase,
-    );
-  }
-  const multiWorkPolicy = workPhaseState
-    ? scoringPolicyForState(workPhaseState, resolvedDimensionForPhase)
-    : undefined;
   args.session.commitWorkPhaseState(workPhaseState);
-  return { multiWorkPolicy };
 }
 
 function resolveTurnEffort(args: {
@@ -1106,8 +1074,7 @@ function scoreRouterTurn(args: {
 
   const observed = session.getWorkPhaseState();
   const intentState = observed?.intentKey === turnInput.key ? observed : undefined;
-  const mutationObserved = intentState != null &&
-    (intentState.observedMutationTools > 0 || intentState.mutationGateTriggered);
+  const mutationObserved = intentState != null && intentState.observedMutationTools > 0;
   const contract = settleExecutionContract(intentState, trajectoryEscalation, session);
   const contractActive = contract?.status === 'active';
   // A plan another model executed returns to its submitter for review: a plan
@@ -1125,13 +1092,7 @@ function scoreRouterTurn(args: {
   const entryCause = entryDimension !== baseDimension ? 'investigation-handoff' : baseCause;
   const routedDimension = reviewing ? 'review' : implementing ? 'implement' : entryDimension;
   const routedCause = reviewing || implementing ? 'execution-contract' : entryCause;
-  const { multiWorkPolicy } = advanceWorkPhase({
-    cacheHit,
-    turnInput,
-    classifyResult,
-    baseDimension: routedDimension,
-    session,
-  });
+  advanceWorkPhase({ cacheHit, turnInput, classifyResult, session });
 
   // Pi clears lastServed at stream start; the rotated value is the model and
   // effort that actually served, including an effort-floor bump or fallback.
@@ -1163,9 +1124,6 @@ function scoreRouterTurn(args: {
     incumbentResolvedDimension: handBack?.submitterDimension ??
       session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
-    // The contract owns the implement-phase scoring; multi-work minimums would
-    // re-impose the terminal band the planner already resolved.
-    ...(multiWorkPolicy && !implementing && !reviewing ? { multiWorkPolicy } : {}),
     ...(execution ? { executionMinimum: execution.minimum } : {}),
     config,
   });

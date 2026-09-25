@@ -201,25 +201,15 @@ describe('assessment session state', () => {
     expect(defaultRouterSession.getActiveSkillNames()).toEqual([]);
   });
 
-  it('clears phase, invocation, and pending mutation state on reset', () => {
+  it('clears the entry state on reset', () => {
     defaultRouterSession.intent.commitWorkPhaseState({
       intentKey: 'intent-a',
       terminal: terminalAssessment(),
-      terminalRequirement: 0.775,
       terminalBand: 'frontier',
-      phase: 'inspect',
-      phaseReason: 'explicit-compound-inspect',
-      multiWorkEngaged: true,
       providerInvocation: 2,
-      gateBlockedInvocation: 1,
-      mutationGateBlocks: 1,
-      mutationGateTriggered: true,
-      mutationCompleted: false,
-      pendingMutationToolCallIds: new Set(['call-1']),
-      observedReadTools: 1,
       observedMutationTools: 1,
     });
-    expect(defaultRouterSession.intent.getWorkPhaseState()?.phase).toBe('inspect');
+    expect(defaultRouterSession.intent.getWorkPhaseState()?.providerInvocation).toBe(2);
 
     defaultRouterSession.reset();
 

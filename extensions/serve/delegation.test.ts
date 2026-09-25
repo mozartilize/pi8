@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Model, Api, Context } from '@earendil-works/pi-ai';
 
-import { multiWorkRoutingMeta, routingDecision, registryModel, candidate, benchRow } from '../test-support/router-fixtures.js';
+import { routingDecision, registryModel, candidate, benchRow } from '../test-support/router-fixtures.js';
 import { createDelegationHarness, rejectingReturnStream, hangingReturnStream } from '../test-support/delegation-harness.js';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { setDecisionLogBase } from '../host/decisionlog.js';
@@ -1204,33 +1204,6 @@ describe('runDelegationLoop usage-limit provider blacklist', () => {
     expect(result.lastServed?.registryId).toBe('beta/answer');
     expect(h.blacklistedProviders).toEqual([]);
     expect(h.blacklist).toEqual(['alpha/one']);
-  });
-
-  it('publishes capability for the fallback that actually emits the tool call', async () => {
-    const decision = routingDecision(['test/frontier', 'test/inspect']);
-    decision.multiWork = multiWorkRoutingMeta({
-      candidateCapability: {
-        'test/frontier': { taskRatio: 1, clearsTerminalFloor: true, viaInspectPromotion: false },
-        'test/inspect': { taskRatio: 0.7, clearsTerminalFloor: false, viaInspectPromotion: true },
-      },
-    });
-    const harness = createDelegationHarness({
-      chain: ['test/frontier', 'test/inspect'],
-      decision,
-      scripts: {
-        'test/frontier': [new Error('provider failed')],
-        'test/inspect': [[
-          { type: 'toolcall_start' },
-          { type: 'toolcall_end' },
-          { type: 'done' },
-        ]],
-      },
-    });
-    const result = await harness.run();
-    expect(result.lastServed?.registryId).toBe('test/inspect');
-    expect(result.lastServed?.capability?.candidate.clearsTerminalFloor).toBe(false);
-    expect(harness.session.getLastDecision()?.cause).toBe('error-fallback');
-    expect(harness.session.getLastDecision()?.multiWork?.servedCandidateKey).toBe('test/inspect');
   });
 });
 

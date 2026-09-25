@@ -93,7 +93,7 @@ describe('terminal corpus', () => {
       const terminal = classify(prompt).terminal;
       expect(terminal.kind).toBe(kind);
       expect(terminal.compound).toBe(compound);
-      expect(terminal.discountEligible).toBe(compound);
+      expect(terminal.confidence === 'high').toBe(compound);
     });
   }
 });
