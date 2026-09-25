@@ -1514,13 +1514,39 @@ describe('scorer — promotion and tier ordering', () => {
     });
   });
 
+  it('prefers a measured candidate that clears a handoff minimum over a cheaper unknown one', () => {
+    const frontier = make('test/handoff-frontier', { intelligence: 100 }, 20);
+    const adequate = make('test/handoff-adequate', { intelligence: 66 }, 4);
+    const unknown = candidate('test/handoff-unknown', { bench: undefined, cost: { input: 0.1, output: 0.1 } });
+    const decision = pickBest([frontier, adequate, unknown], 'plan', undefined, {
+      estimatedContextTokens: 100,
+      handoffMinimum: 0.62,
+    });
+    expect(decision.chosen).toBe('test/handoff-adequate');
+    expect(decision.fallbackChain.indexOf('test/handoff-frontier'))
+      .toBeLessThan(decision.fallbackChain.indexOf('test/handoff-unknown'));
+  });
+
+  it('gives no quality credit above a handoff minimum, so price decides among candidates that clear it', () => {
+    const strongest = make('test/handoff-strongest', { intelligence: 100 }, 3);
+    const cheaper = make('test/handoff-cheaper', { intelligence: 72 }, 1);
+    const below = make('test/handoff-below', { intelligence: 60 }, 0.1);
+    expect(pickBest([strongest, cheaper, below], 'plan').chosen).toBe('test/handoff-strongest');
+    const decision = pickBest([strongest, cheaper, below], 'plan', undefined, {
+      estimatedContextTokens: 100,
+      handoffMinimum: 0.7,
+    });
+    expect(decision.chosen).toBe('test/handoff-cheaper');
+    expect(decision.fallbackChain).toContain('test/handoff-below');
+  });
+
   it('never promotes a candidate below an execution contract minimum', () => {
     const frontier = make('test/promotion-frontier', { intelligence: 100, agenticCoding: 100 }, 20);
     const cheap = make('test/promotion-candidate', { intelligence: 75, agenticCoding: 75 }, 1);
     expect(pickBest([frontier, cheap], 'implement').chosen).toBe('test/promotion-candidate');
     const decision = pickBest([frontier, cheap], 'implement', undefined, {
       estimatedContextTokens: 100,
-      executionMinimum: 0.80,
+      handoffMinimum: 0.80,
     });
     expect(decision.chosen).toBe('test/promotion-frontier');
     expect(decision.candidateDiagnostics).not.toContainEqual(
@@ -1916,6 +1942,18 @@ describe('scorer — AA-Omniscience reliability floor', () => {
       { candidateKey: unknown.registryId, excludedReason: 'unknown-quality' },
       { candidateKey: unreliable.registryId, excludedReason: 'below-knowledge-floor' },
     ]));
+  });
+
+  it('still applies the reliability floor under a handoff minimum', () => {
+    const decision = pickBest([reliable, unreliable], 'plan', undefined, {
+      estimatedContextTokens: 100,
+      handoffMinimum: 0.5,
+    });
+    expect(decision.chosen).toBe(reliable.registryId);
+    expect(decision.candidateDiagnostics).toContainEqual({
+      candidateKey: unreliable.registryId,
+      excludedReason: 'below-knowledge-floor',
+    });
   });
 
   it('keeps measured negative knowledge weak when the task axis is missing', () => {

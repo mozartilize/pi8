@@ -1,20 +1,31 @@
 /**
- * Residual difficulty of an execution contract: the implement-axis ratio an
- * executor must reach before the router hands it the plan.
+ * Residual difficulty of a handoff: the task-axis ratio the next phase's
+ * model must reach before the router hands it the work. An execution
+ * contract values its remaining implementation; an investigation handoff
+ * values the planning or review it leaves.
  *
- * The submitting model describes the remaining work on a fixed rubric; the
+ * The handing-off model describes the remaining work on a fixed rubric; the
  * router, not the model, turns that description into a requirement, and adds
- * the facts it measures itself (plan size, target size, target history). No
+ * the facts it measures itself (size and history of the files involved). No
  * input can make the requirement lower than its base, and an unscored or
  * unmeasured input counts as harder, never easier.
  *
- * The weights are hand-set. Every accepted contract logs its rubric, its
+ * The weights are hand-set. Every accepted handoff logs its rubric, its
  * measurements, and its outcome, so the weights can be fitted to observed
  * results instead.
  *
  * Pure functions only: no I/O.
  */
-import type { CapabilityBand, ExecutionRubric, MeasuredFeatures, RubricCriterion } from '../../types.js';
+import type {
+  CapabilityBand,
+  ExecutionRubric,
+  MeasuredFeatures,
+  ReasoningCriterion,
+  ReasoningEvidence,
+  ReasoningRubric,
+  RubricCriterion,
+} from '../../types.js';
+import { FRONTIER_QUALITY_RATIO } from '../score/scorer.js';
 
 export const RUBRIC_CRITERIA: readonly RubricCriterion[] = ['openDecisions', 'spread', 'verification', 'knowledge', 'coupling'];
 
@@ -40,18 +51,24 @@ const UNMEASURED = 1;
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
-/** Levels outside 1–5 or non-integers count as the hardest level. */
-export function parseRubric(input: unknown): ExecutionRubric {
+function parseLevels<C extends string>(input: unknown, criteria: readonly C[]): Record<C, number> {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
-  const rubric = {} as ExecutionRubric;
-  for (const criterion of RUBRIC_CRITERIA) {
+  const rubric = {} as Record<C, number>;
+  for (const criterion of criteria) {
     const level = record[criterion];
     rubric[criterion] = typeof level === 'number' && Number.isInteger(level) && level >= 1 && level <= 5 ? level : 5;
   }
   return rubric;
 }
 
-function measuredTerms(measured: MeasuredFeatures): number[] {
+/** Levels outside 1–5 or non-integers count as the hardest level. */
+export function parseRubric(input: unknown): ExecutionRubric {
+  return parseLevels(input, RUBRIC_CRITERIA);
+}
+
+type WeightedFacts = Pick<MeasuredFeatures, 'files' | 'directories' | 'existingLines' | 'fixCommits'>;
+
+function measuredTerms(measured: WeightedFacts): number[] {
   const known = (value: number | undefined, scale: (v: number) => number) =>
     value == null ? UNMEASURED : clamp01(scale(value));
   return [
@@ -71,6 +88,51 @@ export function executionRequirement(rubric: ExecutionRubric, measured: Measured
       .reduce((sum, criterion) => sum + CRITERION_WEIGHT * (rubric[criterion] - 1) / 4, 0);
   const measuredTerm = measuredTerms(measured).reduce((sum, term) => sum + MEASURED_WEIGHT * term, 0);
   return Math.min(1, BASE_REQUIREMENT + rubricTerm + measuredTerm);
+}
+
+export const REASONING_CRITERIA: readonly ReasoningCriterion[] = ['alternatives', 'stakes', 'spread', 'knowledge', 'uncertainty'];
+
+/** Lowest reasoning requirement: the cheapest thinking-capable planner clears it. */
+export const REASONING_BASE_REQUIREMENT = 0.40;
+
+/**
+ * Added per `alternatives` level. Choosing between designs is what a weaker
+ * planner gets wrong, so this criterion dominates. The levels sit on the price
+ * steps of a dense pool: an obvious approach stays with the cheapest capable
+ * models, a behaviour or interface choice (level 4) needs a mid-price one, and
+ * a real design decision (level 5) reaches the frontier ratio.
+ */
+const ALTERNATIVE_STEPS = [0, 0.06, 0.18, 0.34, 0.46] as const;
+/** Maximum added by each other reasoning criterion at level 5. */
+const REASONING_CRITERION_WEIGHT = 0.08;
+/** Maximum added by each weighted measurement. */
+const REASONING_MEASURED_WEIGHT = 0.03;
+
+/** Levels outside 1–5 or non-integers count as the hardest level. */
+export function parseReasoningRubric(input: unknown): ReasoningRubric {
+  return parseLevels(input, REASONING_CRITERIA);
+}
+
+/**
+ * Plan- or review-axis ratio, in [REASONING_BASE_REQUIREMENT, 1], the
+ * reasoning phase needs. Evidence that is not applicable (no file backs the
+ * handoff) adds nothing; applicable evidence whose measurement failed adds
+ * the maximum.
+ */
+export function reasoningRequirement(rubric: ReasoningRubric, evidence: ReasoningEvidence): number {
+  const rubricTerm = ALTERNATIVE_STEPS[rubric.alternatives - 1]! +
+    REASONING_CRITERIA
+      .filter((criterion) => criterion !== 'alternatives')
+      .reduce((sum, criterion) => sum + REASONING_CRITERION_WEIGHT * (rubric[criterion] - 1) / 4, 0);
+  const measuredTerm = evidence.applicable
+    ? measuredTerms(evidence).reduce((sum, term) => sum + REASONING_MEASURED_WEIGHT * term, 0)
+    : 0;
+  return Math.min(1, REASONING_BASE_REQUIREMENT + rubricTerm + measuredTerm);
+}
+
+/** The requirement as a tier-0 ratio: never above what an ordinary plan asks. */
+export function reasoningMinimum(requirement: number): number {
+  return Math.min(requirement, FRONTIER_QUALITY_RATIO);
 }
 
 /** Band whose executor minimum covers `requirement`; `frontier` keeps the submitter. */

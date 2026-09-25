@@ -68,12 +68,23 @@ export interface RoutingPolicyInput {
    */
   sameIntentAsLast?: boolean;
   /**
-   * Implement-axis ratio an accepted execution contract requires of its
-   * executor. Present only when the contract releases the submitter; the
-   * caller has already removed excluded executor models from `candidates`.
-   * Both incumbent minimums stand down so the executor can be cheaper.
+   * Task-axis ratio an accepted handoff requires of the next phase's model
+   * (see `ScoreOpts.handoffMinimum`). For an execution contract the caller has
+   * already removed excluded executor models from `candidates`.
    */
-  executionMinimum?: number;
+  handoffMinimum?: number;
+  /**
+   * True while a handoff boundary has not yet been served: both incumbent
+   * minimums stand down so the scorer may pick a cheaper or stronger model
+   * for the new phase. Once a model serves the phase, it is the incumbent.
+   */
+  handoffPending?: boolean;
+  /**
+   * Task type the entry owes the user when it differs from the routed phase
+   * (an investigation before planning or review). The off-topic reset keys
+   * on it, so an on-topic planning follow-up keeps its incumbent.
+   */
+  deliverable?: Dimension;
   config: Pick<
     AutoRouterConfig,
     | 'dimensionWeights'
@@ -342,7 +353,9 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     incumbentResolvedDimension,
     sameIntentAsLast,
     config,
-    executionMinimum,
+    handoffMinimum,
+    handoffPending,
+    deliverable = baseDimension,
   } = input;
 
   // The caller's base dimension and cause are the routed task type. Context
@@ -355,7 +368,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   if (!hasAnyBenchmark && cause === 'heuristic') cause = 'no-data';
 
   // Score with the configured active-dimension weights.
-  // The execution minimum is request-local to the primary pick: a trajectory
+  // The handoff minimum is request-local to the primary pick: a trajectory
   // repick and the routed-pick counterfactual answer different questions, so
   // they score with ordinary options.
   const baseOpts: ScoreOpts = {
@@ -366,8 +379,8 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     switchMargin: config.switchMargin,
     ...(warmPrefixTokens != null ? { warmPrefixTokens } : {}),
   };
-  const pickOpts: ScoreOpts = executionMinimum != null
-    ? { ...baseOpts, executionMinimum }
+  const pickOpts: ScoreOpts = handoffMinimum != null
+    ? { ...baseOpts, handoffMinimum }
     : baseOpts;
   let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
 
@@ -390,24 +403,25 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   // deliberately excludes the source model, so the floor must not restore
   // it); a consult that actually lowered the dimension; and a genuine new-entry,
   // high-confidence trivial classification (an off-topic follow-up that
-  // resets to a cheap model); and an execution contract that releases its
-  // submitter. Same-intent re-invocations never reset, so the stickiness
+  // resets to a cheap model); and a handoff boundary until a model serves the
+  // new phase. Same-intent re-invocations never reset, so the stickiness
   // holds across a whole tool loop.
   const consultLoweredDimension =
     cause === 'router-consult' &&
     DIMENSION_STRENGTH[baseDimension] < DIMENSION_STRENGTH[classifyResult.dimension];
-  // Reset keys on the FINAL resolved dimension, not the heuristic: a fresh
-  // entry whose heuristic gather was raised to an involved dimension (adopted
-  // consult, embedding) is not off-topic, so the floor must still hold.
+  // Reset keys on the entry's FINAL resolved deliverable, not the heuristic
+  // or a temporary investigation phase: a fresh entry whose heuristic gather
+  // was raised to an involved dimension (adopted consult, embedding) is not
+  // off-topic, so the floor must still hold.
   const offTopicReset =
     !sameIntentAsLast &&
     classifyResult.confidence >= config.lowConfidenceThreshold &&
-    DIMENSION_STRENGTH[dimension] <= DIMENSION_STRENGTH['gather'];
+    DIMENSION_STRENGTH[deliverable] <= DIMENSION_STRENGTH['gather'];
   const incumbentFloorStandsDown =
     trajectory.applied ||
     consultLoweredDimension ||
     offTopicReset ||
-    executionMinimum != null;
+    handoffPending === true;
 
   // Incumbent capability floor.
   applyIncumbentModelFloor(

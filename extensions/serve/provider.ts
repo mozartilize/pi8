@@ -1124,7 +1124,7 @@ function scoreRouterTurn(args: {
     incumbentResolvedDimension: handBack?.submitterDimension ??
       session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
-    ...(execution ? { executionMinimum: execution.minimum } : {}),
+    ...(execution ? { handoffMinimum: execution.minimum, handoffPending: true } : {}),
     config,
   });
   const decision = policy.decision;

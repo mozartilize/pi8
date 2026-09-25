@@ -668,11 +668,32 @@ describe('incumbent capability floor', () => {
       classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
       confidence: 0.1, incumbentRegistryId: 'bench/strong',
       incumbentResolvedDimension: 'plan', sameIntentAsLast: true,
-      executionMinimum: 0.45,
+      handoffMinimum: 0.45, handoffPending: true,
     }));
     expect(result.decision.chosen).toBe('bench/cheap');
     expect(result.decision.effortFloorDimension).toBeUndefined();
     expect(result.decision.cause).toBe('execution-contract');
+  });
+
+  it('keeps the incumbent once a handoff boundary has served', () => {
+    const result = resolveRoutingDecision(makePolicyInput({
+      candidates: benchmarkCandidates,
+      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
+      confidence: 0.1, incumbentRegistryId: 'bench/strong', sameIntentAsLast: true,
+      handoffMinimum: 0.45,
+    }));
+    expect(result.decision.chosen).toBe('bench/strong');
+  });
+
+  it('keys the off-topic reset on the deliverable, not a temporary investigation phase', () => {
+    const entry = (deliverable: 'plan' | 'gather') => resolveRoutingDecision(makePolicyInput({
+      candidates: benchmarkCandidates,
+      classifyDimension: 'gather', baseDimension: 'gather', baseCause: 'heuristic',
+      confidence: 0.9, incumbentRegistryId: 'bench/strong', sameIntentAsLast: false,
+      deliverable,
+    }));
+    expect(entry('gather').decision.chosen).toBe('bench/cheap');
+    expect(entry('plan').decision.chosen).toBe('bench/strong');
   });
 
   it('still demotes an executor below the contract minimum', () => {
@@ -680,7 +701,7 @@ describe('incumbent capability floor', () => {
       candidates: benchmarkCandidates,
       classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
       confidence: 0.1, incumbentRegistryId: 'bench/strong', sameIntentAsLast: true,
-      executionMinimum: 0.70,
+      handoffMinimum: 0.70, handoffPending: true,
     }));
     expect(result.decision.chosen).toBe('bench/strong');
   });

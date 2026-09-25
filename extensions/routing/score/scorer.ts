@@ -470,11 +470,12 @@ export interface ScoreOpts {
    */
   warmPrefixTokens?: ReadonlyMap<string, number>;
   /**
-   * Implement-axis ratio an accepted execution contract requires of its
-   * executor. Replaces the live frontier ratio and disables promotion; its
-   * absence selects the live tier/promotion constants unchanged.
+   * Task-axis ratio an accepted handoff requires of the next phase's model:
+   * the executor of an execution contract, or the planner or reviewer of an
+   * investigation. Replaces the live frontier ratio and disables promotion;
+   * its absence selects the live tier/promotion constants unchanged.
    */
-  executionMinimum?: number;
+  handoffMinimum?: number;
 }
 
 export interface ScoredCandidate extends Candidate {
@@ -784,7 +785,7 @@ export function applyCandidateGuards(
  * and speed may rank comparable models, but cannot offset a material quality
  * gap. Lower tiers stay in the chain as objective fallbacks.
  *
- * `executionMinimum` changes only which parameters feed this single
+ * `handoffMinimum` changes only which parameters feed this single
  * eligibility/promotion implementation; its absence selects the current live
  * constants unchanged. Knowledge is task-critical for planning/review.
  * Activate its floor only when the scoring pool has at least one measurement:
@@ -803,14 +804,14 @@ function computeEligibility(
   const knowledgeAvailable = [...knowledgeByCandidate.values()].some((value) => value != null);
   const activeTierPolicy: TierPolicy = {
     ...LIVE_TIER_POLICY,
-    ...(opts.executionMinimum != null ? { qualityRatio: opts.executionMinimum } : {}),
+    ...(opts.handoffMinimum != null ? { qualityRatio: opts.handoffMinimum } : {}),
     ...(knowledgeCritical && knowledgeAvailable ? { knowledgeFloor: KNOWLEDGE_QUALITY_FLOOR } : {}),
   };
-  // An execution contract's minimum already is the sanctioned relaxation
-  // for its plan; promoting below it would let price override the plan's
-  // assessed difficulty.
-  const activePromotionPolicy = opts.executionMinimum != null
-    ? { enabled: false, qualityRatio: opts.executionMinimum }
+  // A handoff minimum already is the sanctioned relaxation for the work
+  // handed off; promoting below it would let price override the router's
+  // valuation of that work.
+  const activePromotionPolicy = opts.handoffMinimum != null
+    ? { enabled: false, qualityRatio: opts.handoffMinimum }
     : {
         enabled: dimension === 'gather' || dimension === 'implement' || dimension === 'review',
         qualityRatio: ECONOMY_QUALITY_RATIO,
@@ -927,14 +928,36 @@ function scoreWithinTiers(
     });
   }
 
+  // A handoff minimum states how much capability the handed-off work needs.
+  // Quality above it earns no credit, so among candidates that clear it price
+  // decides; otherwise a quality-heavy task weighting would pick the strongest
+  // model whatever the minimum says.
+  const qualityCeiling = handoffQualityCeiling(filtered, dimension, opts.handoffMinimum);
   return filtered.map((c) => {
     const s = scoreCandidate(c, dimension, weights, opts);
+    if (qualityCeiling != null) {
+      s.qualityComponent = Math.min(s.qualityComponent, qualityCeiling * weights.quality);
+    }
     s.excludedReason = eligibility.get(candidateKey(s))?.excludedReason;
     const costUtility = costUtilities.get(candidateKey(c));
     s.costComponent = costUtility == null ? 0 : costUtility * weights.cost;
     s.score = s.qualityComponent + s.costComponent + s.speedComponent;
     return s;
   });
+}
+
+/** Normalized ranking-axis quality the handoff minimum asks for, if any. */
+function handoffQualityCeiling(
+  filtered: Candidate[],
+  dimension: Dimension,
+  handoffMinimum: number | undefined,
+): number | undefined {
+  if (handoffMinimum == null) return undefined;
+  const measured = filtered.flatMap((c) => {
+    const quality = c.bench ? qualityForDimension(c.bench, dimension) : undefined;
+    return quality == null ? [] : [clamp(quality / 100, 0, 1)];
+  });
+  return measured.length === 0 ? undefined : handoffMinimum * Math.max(...measured);
 }
 
 /**

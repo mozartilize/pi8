@@ -175,6 +175,25 @@ export type RubricCriterion = 'openDecisions' | 'spread' | 'verification' | 'kno
 /** Submitter's description of the remaining work: one level per criterion, 1 (easiest) to 5 (hardest). */
 export type ExecutionRubric = Record<RubricCriterion, number>;
 
+export type ReasoningCriterion = 'alternatives' | 'stakes' | 'spread' | 'knowledge' | 'uncertainty';
+/** Investigator's description of the planning or review left to do: 1 (easiest) to 5 (hardest). */
+export type ReasoningRubric = Record<ReasoningCriterion, number>;
+
+/**
+ * Facts the router measures about the files a planning or review handoff
+ * rests on; an undefined field means the measurement failed.
+ */
+export interface ReasoningEvidence {
+  /** False when no file backs the handoff: the evidence is in the conversation. */
+  applicable: boolean;
+  files: number;
+  directories: number;
+  existingLines?: number;
+  /** Commits touching the files in the history window. Logged; not weighted. */
+  commits?: number;
+  fixCommits?: number;
+}
+
 /** Plan facts the router measures; an undefined field means the measurement failed. */
 export interface MeasuredFeatures {
   /** Distinct declared file targets. */
