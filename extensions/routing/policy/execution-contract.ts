@@ -137,7 +137,8 @@ export type ContractRejectCode =
   | 'no-files'
   | 'not-plan-or-review'
   | 'plan-deliverable'
-  | 'review-deliverable';
+  | 'review-deliverable'
+  | 'handoff-pending';
 
 export interface ContractRejection {
   ok: false;

@@ -48,7 +48,7 @@ import {
   type ExecutionStepInput,
 } from '../routing/policy/execution-contract.js';
 import { parseRubric } from '../routing/policy/execution-difficulty.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import { boundaryQualifiers, servesBoundary, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { actionFromTool, cycleFromToolResult, isVerifier } from '../routing/struggle/fingerprints.js';
 import { parseCandidateKey } from '../routing/score/scorer.js';
 import { classifyMutationCall } from '../routing/policy/mutation-detector.js';
@@ -139,8 +139,15 @@ function implementRaisedByIncumbent(last: RoutingDecision): boolean {
   return last.scoredReason?.details.some((detail) => INCUMBENT_RAISES.has(detail.kind)) ?? false;
 }
 
-/** Why a handoff does not apply to this decision, or undefined when it does. */
-function handoffInapplicable(last: RoutingDecision): ContractRejection | undefined {
+/**
+ * Why a handoff does not apply to this decision, or undefined when it does.
+ * `served` is the model serving the invocation that asks.
+ */
+function handoffInapplicable(
+  last: RoutingDecision,
+  state: WorkPhaseState,
+  served: string | undefined,
+): ContractRejection | undefined {
   if (last.dimension !== 'plan' && last.dimension !== 'review' && last.dimension !== 'implement') {
     return {
       ok: false,
@@ -155,6 +162,21 @@ function handoffInapplicable(last: RoutingDecision): ContractRejection | undefin
       code: `${assessment.kind}-deliverable`,
       reason: `the request asks for a ${assessment.kind}, not an implementation`,
     };
+  }
+  // A plan written by a fallback below the planning step's minimum must not
+  // end that step: the step stays owed to a model that clears it. The test is
+  // on the serving model, not on the step's pending flag, which is settled
+  // only after the invocation's stream ends.
+  const reasoning = state.reasoningHandoff;
+  if (reasoning?.pending && last.dimension === reasoning.target && served) {
+    const qualifiers = boundaryQualifiers(last);
+    if (qualifiers.length > 0 && !servesBoundary(served, qualifiers)) {
+      return {
+        ok: false,
+        code: 'handoff-pending',
+        reason: `this model serves the ${reasoning.target} step only as a fallback below its minimum`,
+      };
+    }
   }
   return undefined;
 }
@@ -172,8 +194,9 @@ export function contractSubmissionOpen(ctx: Pick<ExtensionContext, 'model'> | un
   if (!isRouterAuto(ctx)) return false;
   const state = session.getWorkPhaseState();
   const last = session.getLastDecision();
-  if (!state || !last || !session.getLastServed() || last.intentKey !== state.intentKey) return false;
-  return state.contract?.status !== 'active' && handoffInapplicable(last) == null;
+  const lastServed = session.getLastServed();
+  if (!state || !last || !lastServed || last.intentKey !== state.intentKey) return false;
+  return state.contract?.status !== 'active' && handoffInapplicable(last, state, servedKey(lastServed)) == null;
 }
 
 export interface ContractSubmission {
@@ -428,7 +451,7 @@ export function submitExecutionContract(
         'submitted it, which may submit a revised plan.',
     };
   }
-  const inapplicable = handoffInapplicable(last);
+  const inapplicable = handoffInapplicable(last, state, served);
   if (inapplicable) return reject(state.intentKey, served, inapplicable);
   const validation = validateContract(steps, ctx.cwd);
   if (!validation.ok) return reject(state.intentKey, served, validation);
@@ -613,13 +636,14 @@ export function nudgeContractOnEdit(
     const state = session.getWorkPhaseState();
     const last = session.getLastDecision();
     if (!state || !last || last.intentKey !== state.intentKey) return undefined;
-    if (state.contract || state.contractNudged || handoffInapplicable(last)) return undefined;
+    const lastServed = session.getLastServed();
+    const served = lastServed ? servedKey(lastServed) : undefined;
+    if (state.contract || state.contractNudged || handoffInapplicable(last, state, served)) return undefined;
     if (last.dimension === 'implement' && !implementRaisedByIncumbent(last)) return undefined;
     session.commitWorkPhaseState({ ...state, contractNudged: true });
-    const lastServed = session.getLastServed();
     appendExecutionContractSignal({
       intentKey: state.intentKey,
-      served: lastServed ? servedKey(lastServed) : 'unknown/unknown',
+      served: served ?? 'unknown/unknown',
       action: 'nudge',
     });
     return { content: [...(event.content ?? []), { type: 'text', text: CONTRACT_NUDGE }] };

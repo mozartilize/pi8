@@ -2087,6 +2087,54 @@ describe('assessment orchestration', () => {
         .toMatchObject({ pending: false, owner: expect.stringMatching(/^beta\/strong/) });
     });
 
+    describe('a plan submitted while the planning step is still owed', () => {
+      const COMPOUND = 'Trace the race condition across the codebase from scratch, then fix it, refactor it, and implement the corrected logic.';
+      const plan = {
+        steps: [{ kind: 'edit', path: 'src/a.ts', change: 'retry the flaky call' }],
+        remainingWork: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
+      };
+      const contractRecords = async (session: Session) => (await session.readDecisionRecords())
+        .map((r) => r.executionContract as { action?: string; rejectReason?: string } | undefined)
+        .filter((c) => c != null);
+
+      it('rejects a plan from a fallback below the planning minimum and keeps the step owed', async () => {
+        const session = await newSession({ consultRouter: false });
+        await session.routeTurn(COMPOUND);
+        submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
+        await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
+        expect(harness.session.getLastServed()?.registryId).toBe('alpha/cheap');
+        expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(false);
+        expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+        expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toMatchObject({ pending: true });
+        expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.contractAccepted).toBeUndefined();
+        expect(await contractRecords(session)).toContainEqual(expect.objectContaining({ action: 'reject', rejectReason: 'handoff-pending' }));
+
+        harness.session.clearBlacklistedModels();
+        expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+        expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+        await session.routeTurn('thanks, what else is left in the backlog');
+        const phaseEnd = (await session.readDecisionRecords())
+          .map((r) => r.investigationHandoff as { action?: string; handoff?: Record<string, unknown> } | undefined)
+          .find((h) => h?.action === 'phase-end');
+        expect(phaseEnd?.handoff).toMatchObject({ pending: false, contractAccepted: true, owner: expect.stringMatching(/^beta\/strong/) });
+      });
+
+      it('accepts a plan from a qualifying planner before its serve settles the step', async () => {
+        const session = await newSession({ consultRouter: false });
+        await session.routeTurn(COMPOUND);
+        submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
+        await session.routeTurnAgainWithSameUserEntry();
+        expect(harness.session.getLastServed()?.registryId).toBe('beta/strong');
+        // The tool can run before the invocation settles its serve.
+        const state = harness.session.getWorkPhaseState()!;
+        harness.session.commitWorkPhaseState({
+          ...state,
+          reasoningHandoff: { ...state.reasoningHandoff!, pending: true, owner: undefined },
+        });
+        expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+      });
+    });
+
     it('keeps the boundary pending when no candidate serves it', async () => {
       const session = await newSession({ consultRouter: false });
       await session.routeTurn(PLAN_PROMPT);
