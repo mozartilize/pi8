@@ -129,7 +129,7 @@ The full configuration reference is in [`ARCHITECTURE.md`](ARCHITECTURE.md#9-con
 
 ## Observability
 
-- **Decision log**: one append-only JSONL file for each session, next to Pi's transcript: `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`. Each routing decision records the task type, chosen model, cause, and fallback order. Separate assessment records show how the assessment changed the keyword result. They also show when it cancelled an upgrade prompted by a long conversation. A session without a saved session file writes to the shared `~/.pi/agent/pi8/decisions.jsonl`.
+- **Decision log**: one append-only JSONL file for each session, next to Pi's transcript: `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`. Each routing decision records the task type, chosen model, cause, and fallback order. Separate assessment records show how the assessment changed the keyword result. A session without a saved session file writes to the shared `~/.pi/agent/pi8/decisions.jsonl`.
 - **Debug timing log** (turn it on with `debug`): per-step timing in milliseconds, in a per-session `*.router-debug.log` file. A session without a saved session file writes to `/tmp/pi8-debug.log`.
 
 ## Further reading

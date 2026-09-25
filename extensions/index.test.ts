@@ -714,7 +714,6 @@ describe('assessment lifecycle resets', () => {
       const { handlers, pi } = makePi();
       await autoModelRouterExtension(pi);
 
-      defaultRouterSession.intent.bumpLatchGeneration();
       defaultRouterSession.assessment.addCost(0.05);
       defaultRouterSession.setActiveSkillNames(['writing-plans']);
       defaultRouterSession.intent.setCachedIntent({
@@ -741,7 +740,6 @@ describe('assessment lifecycle resets', () => {
         } as unknown as ExtensionContext,
       );
 
-      expect(defaultRouterSession.intent.getLatchGeneration()).toBe(0);
       expect(defaultRouterSession.assessment.getCost()).toBe(0);
       expect(defaultRouterSession.intent.getCachedIntent()).toBeUndefined();
     });

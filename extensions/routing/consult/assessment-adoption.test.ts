@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adoptAssessment, shouldVetoLatch, oneTierAbove, oneTierBelow } from './assessment-adoption.js';
+import { adoptAssessment, oneTierAbove, oneTierBelow } from './assessment-adoption.js';
 import type { AssessmentConfidence, Dimension, RoutingAssessment, TaskScope } from '../../types.js';
 
 const verdict = (
@@ -22,7 +22,7 @@ const verdict = (
 });
 
 const adopt = (over: Partial<Parameters<typeof adoptAssessment>[0]>) =>
-  adoptAssessment({ heuristic: 'gather', latchEngaged: false, ...over });
+  adoptAssessment({ heuristic: 'gather', ...over });
 
 describe('tier helpers', () => {
   it('orders lightweight < gather < implement < review < plan', () => {
@@ -108,16 +108,6 @@ describe('adoptAssessment — high confidence', () => {
     }
   });
 
-  it('refuses downward movement while the depth latch is engaged', () => {
-    expect(
-      adoptAssessment({
-        heuristic: 'gather',
-        assessment: verdict('lightweight', 'high', 'bounded'),
-        latchEngaged: true,
-      }),
-    ).toEqual({ dimension: 'gather', changed: false });
-  });
-
   it('still routes up on a high-confidence stronger verdict', () => {
     expect(adopt({ assessment: verdict('plan', 'high', 'open-ended') })).toEqual({
       dimension: 'plan',
@@ -134,7 +124,6 @@ describe('adoptAssessment — high confidence', () => {
         rawHeuristic: 'gather',
         ambiguityBumped: true,
         assessment: verdict('gather', 'high', 'bounded'),
-        latchEngaged: false,
       }),
     ).toEqual({
       dimension: 'gather',
@@ -151,7 +140,6 @@ describe('adoptAssessment — high confidence', () => {
         rawHeuristic: 'gather',
         ambiguityBumped: false,
         assessment: verdict('gather', 'high', 'bounded'),
-        latchEngaged: false,
       }),
     ).toEqual({
       dimension: 'review',
@@ -159,20 +147,6 @@ describe('adoptAssessment — high confidence', () => {
     });
   });
 
-  it('refuses to release an ambiguity bump down to rawHeuristic when latch is engaged', () => {
-    expect(
-      adoptAssessment({
-        heuristic: 'plan',
-        rawHeuristic: 'gather',
-        ambiguityBumped: true,
-        assessment: verdict('gather', 'high', 'bounded'),
-        latchEngaged: true,
-      }),
-    ).toEqual({
-      dimension: 'plan',
-      changed: false,
-    });
-  });
 });
 
 describe('adoptAssessment — medium confidence', () => {
@@ -200,23 +174,5 @@ describe('adoptAssessment — low confidence', () => {
     expect(
       adopt({ heuristic: 'plan', assessment: verdict('lightweight', 'low', 'bounded') }),
     ).toEqual({ dimension: 'plan', changed: false });
-  });
-});
-
-describe('shouldVetoLatch', () => {
-  it('vetoes on a high-confidence bounded verdict', () => {
-    expect(shouldVetoLatch(verdict('gather', 'high', 'bounded'))).toBe(true);
-  });
-
-  it('does not veto on medium confidence', () => {
-    expect(shouldVetoLatch(verdict('gather', 'medium', 'bounded'))).toBe(false);
-  });
-
-  it('does not veto on an open-ended verdict', () => {
-    expect(shouldVetoLatch(verdict('gather', 'high', 'open-ended'))).toBe(false);
-  });
-
-  it('does not veto when the assessment is unavailable — failure is up', () => {
-    expect(shouldVetoLatch(undefined)).toBe(false);
   });
 });

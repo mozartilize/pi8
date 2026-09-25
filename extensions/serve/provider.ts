@@ -32,7 +32,7 @@ import { getTurnClassificationInput, buildRoleLabelledContext } from '../routing
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter, loadConfigBlacklistFilter } from '../routing/policy/allowlist.js';
 import { loadConfig } from '../config.js';
 import { runAssessment, type AssessmentConfig } from '../routing/consult/consult.js';
-import { adoptAssessment, shouldVetoLatch } from '../routing/consult/assessment-adoption.js';
+import { adoptAssessment } from '../routing/consult/assessment-adoption.js';
 import { latestSummaryText, countToolActivity } from '../routing/consult/message-provenance.js';
 
 import { appendDecision, appendAssessmentMetric, appendExecutionContractSignal } from '../host/decisionlog.js';
@@ -66,7 +66,7 @@ import {
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop, type DelegationOptions } from './delegation.js';
 import { makeTerminalErrorEvent } from './error-event.js';
-import { resolveRoutingDecision, wouldDepthEscalate } from '../routing/policy/routing-policy.js';
+import { resolveRoutingDecision } from '../routing/policy/routing-policy.js';
 import {
   advanceForRoutingOwner,
   capabilityBandFor,
@@ -573,9 +573,8 @@ function buildRoutableCandidates(args: {
 
 /**
  * Everything an assessment dispatch needs that is constant for the whole
- * turn. Both the entry assessment and the depth latch resolve against this
- * same environment, so they cannot disagree about the assessor, the routable
- * pool, or which session generation is current.
+ * turn, so the dispatch cannot disagree with the turn about the assessor, the
+ * routable pool, or which session generation is current.
  */
 interface AssessmentEnv {
   assessmentConfig: AssessmentConfig;
@@ -589,16 +588,10 @@ interface AssessmentEnv {
   session: RouterSession;
 }
 
-/**
- * The entry's single assessment budget and its verdict so far. Mutated in
- * place by the two phases below: the privacy rule is one dispatch per real
- * user entry whatever asks for it, so `dispatched` has to be one flag both
- * phases read and write, not a value threaded out and back.
- */
+/** The entry's assessment verdict so far, mutated in place by the dispatch below. */
 interface AssessmentState {
   assessment: import('../types.js').RoutingAssessment | undefined;
   fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
-  dispatched: boolean;
 }
 
 type AssessmentDispatch =
@@ -608,15 +601,13 @@ type AssessmentDispatch =
 
 /**
  * Spend the entry's one assessment dispatch and fold the outcome into
- * `state`. `dispatched` is set before the await so a failure still counts as
- * the entry's spend; a session change during the await yields `aborted` with
- * `state` untouched beyond that flag.
+ * `state`. A session change during the await yields `aborted` with `state`
+ * untouched.
  */
 async function dispatchAssessment(
   env: AssessmentEnv,
   state: AssessmentState,
 ): Promise<AssessmentDispatch> {
-  state.dispatched = true;
   const attempt = await runAssessment(
     env.assessmentConfig,
     env.registry,
@@ -661,7 +652,6 @@ async function runEntryAssessment(
         rawHeuristic: classifyResult.rawDimension,
         ambiguityBumped: classifyResult.ambiguityBumped,
         assessment: dispatched.assessment,
-        latchEngaged: env.session.getLatchGeneration() > 0,
       });
       appendAssessmentMetric({
         intentKey: env.turnInputKey,
@@ -687,7 +677,6 @@ async function runEntryAssessment(
       rawHeuristic: classifyResult.rawDimension,
       ambiguityBumped: classifyResult.ambiguityBumped,
       assessment: state.assessment,
-      latchEngaged: env.session.getLatchGeneration() > 0,
     });
     if (adoption.changed) {
       dimension = adoption.dimension;
@@ -698,67 +687,14 @@ async function runEntryAssessment(
   return { dimension, cause, aborted: false };
 }
 
-/**
- * Latch transition. Receives the parent-computed depthWouldEscalate boolean;
- * ANDs with the session's latch generation being 0 itself. Does not call
- * wouldDepthEscalate. Does not touch the stream.
- */
-async function evaluateDepthLatch(
-  env: AssessmentEnv,
-  state: AssessmentState,
-  latch: { depthWouldEscalate: boolean; baseDimension: Dimension },
-): Promise<{ vetoDepthEscalation: boolean; aborted: boolean }> {
-  let vetoDepthEscalation = env.session.getLatchVetoIntentKey() === env.turnInputKey;
-  const atLatchTransition = env.session.getLatchGeneration() === 0 && latch.depthWouldEscalate;
-  if (vetoDepthEscalation || !atLatchTransition) return { vetoDepthEscalation, aborted: false };
-
-  env.session.bumpLatchGeneration();
-  if (!env.assessmentConfig.enabled) return { vetoDepthEscalation, aborted: false };
-
-  let latchVerdict = state.assessment;
-  if (!latchVerdict && !state.dispatched) {
-    const dispatched = await dispatchAssessment(env, state);
-    if (dispatched.kind === 'aborted') return { vetoDepthEscalation, aborted: true };
-    if (dispatched.kind === 'verdict') latchVerdict = dispatched.assessment;
-  }
-
-  if (latchVerdict) {
-    vetoDepthEscalation = shouldVetoLatch(latchVerdict);
-    if (vetoDepthEscalation) env.session.setLatchVetoIntentKey(env.turnInputKey);
-    state.assessment = { ...latchVerdict, vetoedLatch: vetoDepthEscalation };
-    appendAssessmentMetric({
-      intentKey: env.turnInputKey,
-      heuristicDimension: latch.baseDimension,
-      latchTransition: true,
-      wouldVetoLatch: vetoDepthEscalation,
-      assessment: latchVerdict,
-    });
-  } else if (state.fallbackReason) {
-    appendAssessmentMetric({
-      intentKey: env.turnInputKey,
-      heuristicDimension: latch.baseDimension,
-      latchTransition: true,
-      wouldVetoLatch: false,
-      fallbackReason: state.fallbackReason,
-    });
-  }
-
-  return { vetoDepthEscalation, aborted: false };
-}
-
 function advanceWorkPhase(args: {
   cacheHit: boolean;
   turnInput: ReturnType<typeof getTurnClassificationInput>;
   classifyResult: ReturnType<typeof classify>;
-  vetoDepthEscalation: boolean;
-  depthWouldEscalate: boolean;
   baseDimension: Dimension;
   session: RouterSession;
 }) {
-  const resolvedDimensionForPhase: Dimension =
-    !args.vetoDepthEscalation && args.depthWouldEscalate
-      ? (args.baseDimension === 'lightweight' ? 'gather' : 'implement')
-      : args.baseDimension;
+  const resolvedDimensionForPhase: Dimension = args.baseDimension;
 
   let workPhaseState = args.session.getWorkPhaseState();
   if (!args.cacheHit) {
@@ -918,8 +854,6 @@ interface AssessedTurn {
   fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
   baseDimension: Dimension;
   baseCause: DecisionCause;
-  depthWouldEscalate: boolean;
-  vetoDepthEscalation: boolean;
   assessmentStillCurrent: () => boolean;
 }
 
@@ -987,7 +921,7 @@ async function prepareRouterTurn(args: {
   };
 }
 
-/** Spend this entry's one bounded assessment and settle the depth latch. */
+/** Spend this entry's one bounded assessment. */
 async function assessRouterTurn(args: {
   prepared: PreparedTurn;
   context: Context;
@@ -996,7 +930,7 @@ async function assessRouterTurn(args: {
 }): Promise<{ kind: 'ready'; assessed: AssessedTurn } | RouterTurnOutcome> {
   const { prepared, context, pi, session } = args;
   const { config, measured, intent, registry, routableCandidates } = prepared;
-  const { turnInput, estContextTokens } = measured;
+  const { turnInput } = measured;
   const { cacheHit, cachedIntent, classifyResult } = intent;
 
   const assessmentSessionGeneration = session.getSessionGeneration();
@@ -1024,7 +958,6 @@ async function assessRouterTurn(args: {
   const state: AssessmentState = {
     assessment: cacheHit ? cachedIntent?.assessment : undefined,
     fallbackReason: cacheHit ? cachedIntent?.fallbackReason : undefined,
-    dispatched: cacheHit,
   };
 
   const entry = await runEntryAssessment(env, state, {
@@ -1056,27 +989,6 @@ async function assessRouterTurn(args: {
     key: turnInput.key,
   });
 
-  // Shared with resolveRoutingDecision so the latch probe and the
-  // policy's depth gate agree. Computed once here; the latch ANDs
-  // with generation === 0 itself, and the phase engine reuses the
-  // boolean rather than probing again.
-  const depthWouldEscalate = wouldDepthEscalate({
-    dimension: baseDimension,
-    cause: baseCause,
-    estimatedContextTokens: estContextTokens,
-    config,
-  });
-
-  // A veto holds until the next real user entry, so the first
-  // invocation sets the latchVetoIntentKey and subsequent
-  // invocations of the same entry reuse it.  The latch question —
-  // "is the stated deliverable still bounded?" — is the same
-  // question the ordinary assessment already answered, so when an
-  // entry-level verdict already exists we reuse it instead of
-  // dispatching a dedicated latch assessment.
-  const latch = await evaluateDepthLatch(env, state, { depthWouldEscalate, baseDimension });
-  if (latch.aborted) return ASSESSMENT_ABORTED;
-
   return {
     kind: 'ready',
     assessed: {
@@ -1084,8 +996,6 @@ async function assessRouterTurn(args: {
       fallbackReason: state.fallbackReason,
       baseDimension,
       baseCause,
-      depthWouldEscalate,
-      vetoDepthEscalation: latch.vetoDepthEscalation,
       assessmentStillCurrent,
     },
   };
@@ -1184,7 +1094,7 @@ function scoreRouterTurn(args: {
   const { config, measured, intent, candidates, trajectoryEscalation } = prepared;
   const { turnInput, needsVision, estContextTokens } = measured;
   const { classifyResult, cacheHit, confidence } = intent;
-  const { baseDimension, baseCause, depthWouldEscalate, vetoDepthEscalation } = assessed;
+  const { baseDimension, baseCause } = assessed;
 
   // An awaited assessment can add a provider-wide usage-limit
   // exclusion after this turn's initial candidate snapshot. Apply
@@ -1219,8 +1129,6 @@ function scoreRouterTurn(args: {
     cacheHit,
     turnInput,
     classifyResult,
-    vetoDepthEscalation,
-    depthWouldEscalate,
     baseDimension: routedDimension,
     session,
   });
@@ -1255,7 +1163,6 @@ function scoreRouterTurn(args: {
     incumbentResolvedDimension: handBack?.submitterDimension ??
       session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
-    vetoDepthEscalation,
     // The contract owns the implement-phase scoring; multi-work minimums would
     // re-impose the terminal band the planner already resolved.
     ...(multiWorkPolicy && !implementing && !reviewing ? { multiWorkPolicy } : {}),
@@ -1779,8 +1686,6 @@ async function runManualTurn(args: {
     fallbackReason: undefined,
     baseDimension: prepared.intent.baseDimension,
     baseCause: cause,
-    depthWouldEscalate: false,
-    vetoDepthEscalation: true,
     assessmentStillCurrent: () => true,
   };
   const scoring = scoreRouterTurn({
@@ -1894,8 +1799,6 @@ async function runResumeTurn(args: {
     fallbackReason: undefined,
     baseDimension: decision.dimension,
     baseCause: 'resume',
-    depthWouldEscalate: false,
-    vetoDepthEscalation: true,
     assessmentStillCurrent: () => true,
   };
   const scored: ScoredTurn = {

@@ -1,7 +1,7 @@
 /**
  * Pure routing-decision policy.
  *
- * Owns: depth escalation, scoring invocation, trajectory-friction handoff,
+ * Owns: scoring invocation, trajectory-friction handoff,
  * context-pressure metadata (advisory only), and all decision metadata/reason
  * suffixes. No I/O, no global-state reads or writes — everything is threaded
  * through the input and the returned result.
@@ -67,8 +67,6 @@ export interface RoutingPolicyInput {
    * re-invocation of one cached intent.
    */
   sameIntentAsLast?: boolean;
-  /** True when a bounded high-confidence assessment refused the first latch. */
-  vetoDepthEscalation?: boolean;
   /**
    * Request-local terminal/inspect floors for an eligible compound-implement
    * intent. Only the caller's latched-eligible work-phase state supplies
@@ -89,8 +87,6 @@ export interface RoutingPolicyInput {
     | 'dimensionWeights'
     | 'switchMargin'
     | 'lowConfidenceThreshold'
-    | 'depthEscalation'
-    | 'depthEscalationTokens'
   >;
 }
 
@@ -103,31 +99,15 @@ export interface RoutingPolicyResult {
 // ─── Constants ───────────────────────────────────────────────────────
 
 /**
- * Causes that carry no active routing intent. Depth escalation may replace
- * these, but it never overrides a cause that already owns the dimension.
- *
- * Trajectory-friction same-dimension repicks use POLICY_PASSIVE_CAUSES
- * because a consult that raised the dimension owns that decision — the repick
- * is secondary model selection and should not claim the dimension-owning
- * cause.
+ * Causes that carry no active routing intent. A trajectory-friction
+ * same-dimension repick may claim these, but a consult that raised the
+ * dimension owns that decision — the repick is secondary model selection and
+ * should not claim the dimension-owning cause.
  */
 export const POLICY_PASSIVE_CAUSES: ReadonlySet<DecisionCause> = new Set([
   'heuristic',
   'continuation-context',
   'no-data',
-] satisfies DecisionCause[]);
-
-/**
- * Depth escalation asks "is the context deep enough that the token counter
- * should override the classifier?". An assessment answers what kind of work
- * this is, not how deep the context got, so a consult-owned dimension is
- * still a legitimate depth-gate subject. The narrower POLICY_PASSIVE_CAUSES
- * remains correct for trajectory repicks, which do compete for dimension
- * ownership.
- */
-const DEPTH_PASSIVE_CAUSES: ReadonlySet<DecisionCause> = new Set([
-  ...POLICY_PASSIVE_CAUSES,
-  'router-consult',
 ] satisfies DecisionCause[]);
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
@@ -151,28 +131,6 @@ export function nextStrongerDimension(dimension: Dimension): Dimension {
  * user preference.
  */
 const CONTEXT_PRESSURE_THRESHOLD = 0.6;
-
-export interface DepthEscalationProbe {
-  dimension: Dimension;
-  cause: DecisionCause;
-  estimatedContextTokens: number;
-  config: Pick<AutoRouterConfig, 'depthEscalation' | 'depthEscalationTokens'>;
-}
-
-/**
- * Exported so the caller can ask "is this the latch transition?" without
- * duplicating the condition. Two copies of this predicate would drift, and a
- * drifted copy means the veto fires on turns the latch would not have
- * escalated.
- */
-export function wouldDepthEscalate(probe: DepthEscalationProbe): boolean {
-  return (
-    probe.config.depthEscalation &&
-    DEPTH_PASSIVE_CAUSES.has(probe.cause) &&
-    DIMENSION_STRENGTH[probe.dimension] <= DIMENSION_STRENGTH['gather'] &&
-    probe.estimatedContextTokens >= probe.config.depthEscalationTokens
-  );
-}
 
 // ─── Decision steps ──────────────────────────────────────────────────
 
@@ -352,9 +310,6 @@ function annotateDecision(
     addReasonDetail(decision, { kind: 'context-pressure' });
   }
 
-  if (cause === 'context-depth') {
-    addReasonDetail(decision, { kind: 'context-depth', tokens: estimatedContextTokens, threshold: config.depthEscalationTokens });
-  }
   if (cause === 'no-data') {
     addReasonDetail(decision, { kind: 'no-data' });
   }
@@ -399,33 +354,16 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     executionMinimum,
   } = input;
 
-  // Step 1-3: the classifier's base dimension and cause are the starting
-  // point; depth escalation below may replace them.
-  let dimension: Dimension = baseDimension;
+  // The caller's base dimension and cause are the routed task type. Context
+  // size never changes it: a token count cannot tell synthesis over gathered
+  // material from a long session with a small question.
+  const dimension: Dimension = baseDimension;
   let cause: DecisionCause = baseCause;
 
   const hasAnyBenchmark = candidates.some((candidate) => candidate.bench !== undefined);
   if (!hasAnyBenchmark && cause === 'heuristic') cause = 'no-data';
 
-  // Step 4: depth escalation. A token counter cannot distinguish "synthesizing
-  // over gathered material" from "long session, small question", so a bounded
-  // high-confidence assessment may veto the first transition in a session. A
-  // veto retains the existing cause, which is why no new DecisionCause value
-  // exists for it and POLICY_PASSIVE_CAUSES is unchanged.
-  if (
-    !input.vetoDepthEscalation &&
-    wouldDepthEscalate({
-      dimension,
-      cause,
-      estimatedContextTokens,
-      config,
-    })
-  ) {
-    dimension = dimension === 'lightweight' ? 'gather' : 'implement';
-    cause = 'context-depth';
-  }
-
-  // Step 5: score with the configured active-dimension weights.
+  // Score with the configured active-dimension weights.
   // The multi-work phase floors are request-local to the primary pick: a
   // trajectory repick and the routed-pick counterfactual answer different
   // questions, so they score with ordinary options.
@@ -442,7 +380,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     : multiWorkPolicy ? { ...baseOpts, multiWorkPolicy } : baseOpts;
   let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
 
-  // Step 6: objective trajectory friction may repick away from the source
+  // Objective trajectory friction may repick away from the source
   // model when scoring would keep it.
   const trajectory = applyTrajectoryRepick(
     decision,
@@ -471,7 +409,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     DIMENSION_STRENGTH[baseDimension] < DIMENSION_STRENGTH[classifyResult.dimension];
   // Reset keys on the FINAL resolved dimension, not the heuristic: a fresh
   // entry whose heuristic gather was raised to an involved dimension (adopted
-  // consult, depth, embedding) is not off-topic, so the floor must still hold.
+  // consult, embedding) is not off-topic, so the floor must still hold.
   const offTopicReset =
     !sameIntentAsLast &&
     classifyResult.confidence >= config.lowConfidenceThreshold &&
@@ -483,7 +421,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     offTopicReset ||
     executionMinimum != null;
 
-  // Step 6b: incumbent capability floor.
+  // Incumbent capability floor.
   applyIncumbentModelFloor(
     decision,
     candidates,
@@ -492,7 +430,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     incumbentFloorStandsDown,
   );
 
-  // Step 6c: incumbent effort floor.
+  // Incumbent effort floor.
   applyIncumbentEffortFloor(
     decision,
     dimension,
@@ -500,7 +438,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     incumbentFloorStandsDown,
   );
 
-  // Steps 7–8: metadata and reason suffixes.
+  // Metadata and reason suffixes.
   annotateDecision(
     decision,
     dimension,

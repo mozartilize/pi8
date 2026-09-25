@@ -10,7 +10,6 @@ import { join } from 'node:path';
 
 import { loadConfig, saveBlacklist, saveApiKey, getConfigPath, saveSemi } from './config.js';
 import {
-  DEFAULT_DEPTH_ESCALATION_TOKENS,
   DEFAULT_DIMENSION_WEIGHTS,
   DEFAULT_LOW_CONFIDENCE_THRESHOLD,
   DEFAULT_SWITCH_MARGIN,
@@ -127,7 +126,6 @@ it('drops malformed values and clamps routing policy to documented defaults', ()
       sources: ['artificial-analysis', 7, ''],
       switchMargin: 'large',
       lowConfidenceThreshold: -1,
-      depthEscalationTokens: 0,
       escalationTtlTurns: 'infinite',
       models: ['alpha/*', 9, '  '],
       blacklist: [null, '*/broken'],
@@ -142,32 +140,12 @@ it('drops malformed values and clamps routing policy to documented defaults', ()
   const config = loadConfig();
   expect(config.switchMargin).toBe(DEFAULT_SWITCH_MARGIN);
   expect(config.lowConfidenceThreshold).toBe(DEFAULT_LOW_CONFIDENCE_THRESHOLD);
-  expect(config.depthEscalationTokens).toBe(DEFAULT_DEPTH_ESCALATION_TOKENS);
   expect(config.models).toEqual(['alpha/*']);
   expect(config.blacklist).toEqual(['*/broken']);
   expect(config.dimensionWeights.implement).toEqual({
     quality: 0.7,
     cost: DEFAULT_DIMENSION_WEIGHTS.implement.cost,
     speed: DEFAULT_DIMENSION_WEIGHTS.implement.speed,
-  });
-});
-
-describe('depth escalation config', () => {
-  it('defaults to enabled with the standard threshold', () => {
-    const config = loadConfig();
-    expect(config.depthEscalation).toBe(true);
-    expect(config.depthEscalationTokens).toBe(32768);
-  });
-
-  it('honours opt-out and a custom threshold', () => {
-    writeFileSync(
-      getConfigPath(),
-      JSON.stringify({ depthEscalation: false, depthEscalationTokens: 4096 }),
-      'utf8',
-    );
-    const config = loadConfig();
-    expect(config.depthEscalation).toBe(false);
-    expect(config.depthEscalationTokens).toBe(4096);
   });
 });
 
@@ -227,16 +205,6 @@ describe('malformed config values are normalized to defaults', () => {
   it('drops an object consultModel', () => {
     writeFileSync(getConfigPath(), JSON.stringify({ consultModel: { provider: 'x', id: 'y' } }), 'utf8');
     expect(loadConfig().consultModel).toBeUndefined();
-  });
-
-  it('coerces a non-boolean depthEscalation to true (default on)', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ depthEscalation: 'yes' }), 'utf8');
-    expect(loadConfig().depthEscalation).toBe(true);
-  });
-
-  it('coerces a numeric depthEscalation to true (default on)', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ depthEscalation: 1 }), 'utf8');
-    expect(loadConfig().depthEscalation).toBe(true);
   });
 
   it('coerces a non-boolean prompt to true (default on)', () => {

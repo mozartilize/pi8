@@ -148,21 +148,10 @@ describe('candidate expansion memo', () => {
 describe('assessment session state', () => {
   beforeEach(() => defaultRouterSession.reset());
 
-  it('starts at latch generation 0', () => {
-    expect(defaultRouterSession.intent.getLatchGeneration()).toBe(0);
-  });
-
   it('advances the session generation on every reset', () => {
     const before = defaultRouterSession.getSessionGeneration();
     defaultRouterSession.reset();
     expect(defaultRouterSession.getSessionGeneration()).toBe(before + 1);
-  });
-
-  it('bumps the latch generation exactly once per call', () => {
-    defaultRouterSession.intent.bumpLatchGeneration();
-    expect(defaultRouterSession.intent.getLatchGeneration()).toBe(1);
-    defaultRouterSession.intent.bumpLatchGeneration();
-    expect(defaultRouterSession.intent.getLatchGeneration()).toBe(2);
   });
 
   it('accumulates assessment cost separately from routed cost', () => {
@@ -199,13 +188,11 @@ describe('assessment session state', () => {
     expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual(blended);
   });
 
-  it('clears latch generation, assessment cost, and assessor EMA on session reset', () => {
-    defaultRouterSession.intent.bumpLatchGeneration();
+  it('clears assessment cost and assessor EMA on session reset', () => {
     defaultRouterSession.assessment.addCost(0.01);
     defaultRouterSession.assessment.recordSuccessfulUsage({ input: 500, output: 100 });
     defaultRouterSession.setActiveSkillNames(['systematic-debugging', 'writing-plans']);
     defaultRouterSession.reset();
-    expect(defaultRouterSession.intent.getLatchGeneration()).toBe(0);
     expect(defaultRouterSession.assessment.getCost()).toBe(0);
     expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
       input: 1_000,
@@ -238,15 +225,6 @@ describe('assessment session state', () => {
 
     expect(defaultRouterSession.intent.getWorkPhaseState()).toBeUndefined();
   });
-
-  it('folds latchVetoIntentKey into session state and clears it on reset (regression fix)', () => {
-    defaultRouterSession.intent.setLatchVetoIntentKey('vetoed-intent-123');
-    expect(defaultRouterSession.intent.getLatchVetoIntentKey()).toBe('vetoed-intent-123');
-
-    defaultRouterSession.reset();
-
-    expect(defaultRouterSession.intent.getLatchVetoIntentKey()).toBeUndefined();
-  });
 });
 
 describe('RouterSession independent instances', () => {
@@ -254,15 +232,12 @@ describe('RouterSession independent instances', () => {
     const s1 = new RouterSession();
     const s2 = new RouterSession();
 
-    s1.bumpLatchGeneration();
     s1.addAssessmentCost(0.05);
     s1.blacklistModel('model-1');
 
-    expect(s1.getLatchGeneration()).toBe(1);
     expect(s1.getAssessmentCost()).toBe(0.05);
     expect(s1.getBlacklistedModels().has('model-1')).toBe(true);
 
-    expect(s2.getLatchGeneration()).toBe(0);
     expect(s2.getAssessmentCost()).toBe(0);
     expect(s2.getBlacklistedModels().has('model-1')).toBe(false);
   });

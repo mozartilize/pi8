@@ -47,12 +47,6 @@ export const CONFIDENCE_FLOOR = 0.1;
  * cheaper (R3). Default 0.15.
  */
 export const DEFAULT_EMBEDDING_MIN_CONFIDENCE = 0.15;
-/**
- * Default context-size threshold for depth escalation. A lightweight/gather
- * session whose live context grows past this is synthesizing over gathered
- * material, not just looking things up — route one tier up.
- */
-export const DEFAULT_DEPTH_ESCALATION_TOKENS = 32768;
 
 /**
  * One end-to-end assessment budget. It bounds selection, auth, startup,

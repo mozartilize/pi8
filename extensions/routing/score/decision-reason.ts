@@ -15,7 +15,6 @@ export type ReasonDetail =
   | { kind: 'incumbent-capability' }
   | { kind: 'incumbent-effort' }
   | { kind: 'context-pressure' }
-  | { kind: 'context-depth'; tokens: number; threshold: number }
   | { kind: 'no-data' }
   | { kind: 'trajectory'; fromModel: string }
   | { kind: 'assessment'; task: string; scope: 'bounded' | 'open-ended'; confidence: string };
@@ -26,7 +25,6 @@ function renderDetail(detail: ReasonDetail): string {
     case 'incumbent-capability': return 'kept current capability with another model';
     case 'incumbent-effort': return "kept current model's thinking level";
     case 'context-pressure': return 'context nearly full: prefer a fresh planner subagent';
-    case 'context-depth': return `long conversation: ${detail.tokens} tokens ≥ ${detail.threshold}`;
     case 'no-data': return 'no benchmark quality data';
     case 'trajectory': return `${detail.fromModel} struggled: stronger model`;
     case 'assessment': return `assessment: ${detail.task}, ${detail.scope === 'bounded' ? 'limited' : 'open-ended'} scope, ${detail.confidence} confidence`;

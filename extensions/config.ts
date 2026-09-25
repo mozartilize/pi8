@@ -9,7 +9,6 @@ import {
   DEFAULT_ASSESSMENT_DEADLINE_MS,
   DEFAULT_ASSESSMENT_MAX_INPUT_CHARS,
   DEFAULT_ASSESSOR_QUALITY_RATIO,
-  DEFAULT_DEPTH_ESCALATION_TOKENS,
   DEFAULT_DIMENSION_WEIGHTS,
   DEFAULT_EMBEDDING_MIN_CONFIDENCE,
   DEFAULT_LOW_CONFIDENCE_THRESHOLD,
@@ -49,13 +48,6 @@ export interface PersistedConfig {
   assessmentMaxInputChars?: number;
   /** Assessor intelligence floor as a ratio of the best routable (default 0.5). */
   assessorQualityRatio?: number;
-  /**
-   * Automatic one-tier raise for lightweight/gather dimensions once the live
-   * context exceeds `depthEscalationTokens` (default true).
-   */
-  depthEscalation?: boolean;
-  /** Token threshold for depth escalation (default 32768). */
-  depthEscalationTokens?: number;
   /**
    * Show a TUI notification when the router picks a model for a turn or
    * switches models between turns. Default true. Set false to route silently
@@ -211,11 +203,6 @@ export function loadConfig(): AutoRouterConfig {
       DEFAULT_ASSESSOR_QUALITY_RATIO,
       0,
       1,
-    ),
-    depthEscalation: typeof persisted.depthEscalation === 'boolean' ? persisted.depthEscalation : true,
-    depthEscalationTokens: positiveInteger(
-      persisted.depthEscalationTokens,
-      DEFAULT_DEPTH_ESCALATION_TOKENS,
     ),
     prompt: typeof persisted.prompt === 'boolean' ? persisted.prompt : true,
     semi: typeof persisted.semi === 'boolean' ? persisted.semi : false,

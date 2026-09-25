@@ -376,21 +376,6 @@ describe('appendAssessmentMetric', () => {
     expect(entry.dimensionDelta).toBe(1);
   });
 
-  it('records latch-transition metadata on the metric record', () => {
-    appendAssessmentMetric(
-      {
-        intentKey: 'k3',
-        heuristicDimension: 'gather',
-        latchTransition: true,
-        wouldVetoLatch: true,
-      },
-      dir,
-    );
-    const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.latchTransition).toBe(true);
-    expect(entry.wouldVetoLatch).toBe(true);
-  });
-
   it('records an unavailable assessment with its fallbackReason', () => {
     appendAssessmentMetric(
       { intentKey: 'k', heuristicDimension: 'gather', fallbackReason: 'expiry' },

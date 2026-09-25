@@ -177,7 +177,6 @@ describe('formatDecisionDetail', () => {
 
   it('explains the decision cause without changing its stored value', () => {
     const causes = [
-      ['context-depth', 'long conversation raised the task type'],
       ['router-consult', 'LLM assessment'],
       ['manual-override', 'manual pin'],
       ['trajectory-escalation', 'stronger model, because the previous one struggled'],
@@ -373,14 +372,6 @@ describe('assessment in /router-why', () => {
     expect(lines.join('\n')).toContain('task type lowered by the assessment, so a cheaper model served');
   });
 
-  it('reports a skipped long-conversation upgrade', () => {
-    const lines = formatDecisionDetail(
-      decisionWith({ assessment: { ...validAssessment(), vetoedLatch: true } }),
-      served(),
-    );
-    expect(lines.join('\n')).toContain('long-conversation upgrade skipped');
-  });
-
   it('reports why the assessment was unavailable', () => {
     const lines = formatDecisionDetail(decisionWith({ fallbackReason: 'no-assessor' }), served());
     expect(lines.join('\n')).toContain('assessment unavailable (no model available to assess)');
@@ -403,7 +394,7 @@ describe('assessment in /router-why', () => {
     );
     expect(status).not.toContain('(upgraded)');
     const detail = formatDecisionDetail(
-      decisionWith({ routedUp: true, routedPickChanged: false, cause: 'context-depth' }),
+      decisionWith({ routedUp: true, routedPickChanged: false, cause: 'embedding-classify' }),
       served(),
     ).join('\n');
     expect(detail).not.toContain('so a stronger model served');

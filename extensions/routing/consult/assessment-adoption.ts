@@ -48,8 +48,6 @@ export interface AdoptionInput {
   ambiguityBumped?: boolean;
   /** The assessor's verdict, `A`. Absent means unavailable. */
   assessment?: RoutingAssessment;
-  /** True once depth escalation has engaged for this session. */
-  latchEngaged: boolean;
 }
 
 export interface AdoptionResult {
@@ -64,7 +62,7 @@ export interface AdoptionResult {
 }
 
 export function adoptAssessment(input: AdoptionInput): AdoptionResult {
-  const { heuristic, assessment, latchEngaged } = input;
+  const { heuristic, assessment } = input;
   const unchanged: AdoptionResult = { dimension: heuristic, changed: false };
 
   if (!assessment) return unchanged;
@@ -81,11 +79,7 @@ export function adoptAssessment(input: AdoptionInput): AdoptionResult {
   const downwardPermitted =
     assessment.confidence === 'high' &&
     assessment.scope === 'bounded' &&
-    !NEVER_ROUTE_DOWN_FROM.has(heuristic) &&
-    // While the latch is engaged the only legal refusal is the veto at the
-    // transition itself, which is a refusal to escalate, not an escalation
-    // in reverse.
-    !latchEngaged;
+    !NEVER_ROUTE_DOWN_FROM.has(heuristic);
 
   // Ordinary downward routing drops at most one tier from the heuristic.
   // When the keyword classifier bumped the dimension due to low confidence or prompt length,
@@ -102,15 +96,4 @@ export function adoptAssessment(input: AdoptionInput): AdoptionResult {
   }
   const adopted = stronger(floor, verdict);
   return { dimension: adopted, changed: adopted !== heuristic };
-}
-
-/**
- * The depth latch fires on a token counter, which cannot tell "synthesizing
- * over gathered material" from "long session, small question". A high-
- * confidence bounded verdict is the only evidence strong enough to refuse it,
- * and every other outcome — including unavailability — escalates as today.
- */
-export function shouldVetoLatch(assessment: RoutingAssessment | undefined): boolean {
-  if (!assessment) return false;
-  return assessment.confidence === 'high' && assessment.scope === 'bounded';
 }

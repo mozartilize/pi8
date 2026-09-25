@@ -3,7 +3,7 @@
  *
  * Encapsulated domain aggregates:
  * - `AssessmentState`: Assessment spend, EMA usage calculation, and strikes.
- * - `IntentState`: Cached routing intent, latch generation, and veto intent key.
+ * - `IntentState`: Cached routing intent and per-entry work-phase state.
  * - `RuntimeBindings`: Pi extension runtime context & model registry (survives session reset).
  * - `RouterSession`: Unified session aggregate owning the lifecycle and domain objects.
  * Paths given an injected session must read and write that same owner, not a
@@ -120,12 +120,10 @@ export class AssessmentState {
 }
 
 /**
- * Domain object for per-turn intent caching, latch evaluation/veto, and multi-work phases.
+ * Domain object for per-turn intent caching and per-entry work-phase state.
  */
 export class IntentState {
   private cachedIntent: CachedRoutingIntent | undefined;
-  private latchGen = 0;
-  private vetoIntentKey: string | undefined;
   private phaseState: WorkPhaseState | undefined;
 
   getCachedIntent(): CachedRoutingIntent | undefined {
@@ -134,23 +132,6 @@ export class IntentState {
 
   setCachedIntent(intent: CachedRoutingIntent | undefined): void {
     this.cachedIntent = intent;
-  }
-
-  getLatchGeneration(): number {
-    return this.latchGen;
-  }
-
-  bumpLatchGeneration(): number {
-    this.latchGen += 1;
-    return this.latchGen;
-  }
-
-  getLatchVetoIntentKey(): string | undefined {
-    return this.vetoIntentKey;
-  }
-
-  setLatchVetoIntentKey(key: string | undefined): void {
-    this.vetoIntentKey = key;
   }
 
   getWorkPhaseState(): WorkPhaseState | undefined {
@@ -163,8 +144,6 @@ export class IntentState {
 
   reset(): void {
     this.cachedIntent = undefined;
-    this.latchGen = 0;
-    this.vetoIntentKey = undefined;
     this.phaseState = undefined;
   }
 }
@@ -543,22 +522,6 @@ export class RouterSession {
 
   setCachedIntent(intent: CachedRoutingIntent | undefined): void {
     this.intent.setCachedIntent(intent);
-  }
-
-  getLatchGeneration(): number {
-    return this.intent.getLatchGeneration();
-  }
-
-  bumpLatchGeneration(): number {
-    return this.intent.bumpLatchGeneration();
-  }
-
-  getLatchVetoIntentKey(): string | undefined {
-    return this.intent.getLatchVetoIntentKey();
-  }
-
-  setLatchVetoIntentKey(key: string | undefined): void {
-    this.intent.setLatchVetoIntentKey(key);
   }
 
   getWorkPhaseState(): WorkPhaseState | undefined {

@@ -188,15 +188,11 @@ describe('getTurnClassificationInput — provenance', () => {
     expect(input.key).toBe('none');
   });
 
-  it('does not include the latch generation in the key', () => {
-    // The latch veto is session state bound to an intent key, not a key
-    // input.  Keeping latchGeneration out of the key means a latch bump
-    // does not invalidate the cached verdict.
+  it('keys an entry only by its messages', () => {
     const messages = [userMessage('what is in this file?', 1)];
     const gen0 = getTurnClassificationInput(messages);
     const gen1 = getTurnClassificationInput(messages);
 
-    // Same messages produce the same key regardless of latch state.
     expect(gen0.key).toBe(gen1.key);
     // The key has exactly three colon-separated fields (ordinal:timestamp:hash).
     expect(gen0.key.split(':').length).toBe(3);

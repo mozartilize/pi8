@@ -140,10 +140,6 @@ export interface DecisionLogEntry {
   counterfactualDimension?: string;
   /** Strength difference assessment − heuristic. */
   dimensionDelta?: number;
-  /** True when this metric records a latch transition. */
-  latchTransition?: boolean;
-  /** True when the assessment vetoed the latch escalation. */
-  wouldVetoLatch?: boolean;
   /** Populated when an inline LLM consultation ran (adopted or not). */
   consult?: {
     model: string;
@@ -514,8 +510,7 @@ export function appendSubagentSpend(
 
 /**
  * Write a separate, joinable assessment record so heuristic-vs-assessment
- * deltas and latch-veto evidence remain queryable without overloading the
- * routing decision entry.
+ * deltas remain queryable without overloading the routing decision entry.
  */
 export function appendAssessmentMetric(
   record: AssessmentMetricRecord,
@@ -549,8 +544,6 @@ export function appendAssessmentMetric(
       assessment: serializeAssessment(record.assessment),
       assessmentPromptVersion: ASSESSMENT_PROMPT_VERSION,
       fallbackReason: record.fallbackReason,
-      latchTransition: record.latchTransition,
-      wouldVetoLatch: record.wouldVetoLatch,
     };
     appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
   } catch {
@@ -567,9 +560,6 @@ export interface AssessmentMetricRecord {
   counterfactualDimension?: Dimension;
   assessment?: RoutingAssessment;
   fallbackReason?: AssessmentFallbackReason;
-  latchTransition?: boolean;
-  /** True when the assessment vetoed a latch escalation. */
-  wouldVetoLatch?: boolean;
 }
 
 /** Read the most recent N entries (for /router-status history). */

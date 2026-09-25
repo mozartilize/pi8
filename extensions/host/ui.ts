@@ -82,7 +82,6 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   'no-data': 'no benchmark data; ranked by price and context window',
   'capability-escalation': 'stronger model, picked by quality alone',
   'trajectory-escalation': 'stronger model, because the previous one struggled',
-  'context-depth': 'long conversation raised the task type',
   'self-healing-gap': 'subagent tool gap',
   'manual-override': 'manual pin',
   resume: 'reused the route from before the pin',
@@ -223,9 +222,6 @@ function assessmentLines(decision: RoutingDecision): string[] {
       `${a.confidence} confidence (${a.model}, ${a.ms} ms, $${a.costUsd.toFixed(5)})`,
       `  rationale:  ${a.reasoning}`,
     );
-    if (a.vetoedLatch) {
-      lines.push('  note:       long-conversation upgrade skipped: a confident assessment judged the task limited in scope');
-    }
   }
   if (decision.fallbackReason) {
     const why = ASSESSMENT_FALLBACK_LABELS[decision.fallbackReason] ?? decision.fallbackReason;

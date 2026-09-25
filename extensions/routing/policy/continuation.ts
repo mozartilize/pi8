@@ -271,10 +271,6 @@ export function getTurnClassificationInput(
   const promptText = textFromMessage(latestUser);
   const thin = isThinContinuation(promptText);
   const timestamp = typeof latestUser.timestamp === 'number' ? latestUser.timestamp : 'none';
-  // The latch generation is session state bound to an intent key, not a key
-  // input — see router-session-state.ts getLatchVetoIntentKey.  Keeping it
-  // out of the key means a latch bump does not invalidate the cached verdict,
-  // so the veto holds for the vetoed entry's whole tool loop.
   const key = `${userOrdinal}:${timestamp}:${hashText(promptText)}`;
   const classifyText = thin
     ? buildRoleLabelledContext(source, latestUserIndex, Math.max(1, maxChars), syntheticPrefixes) ||

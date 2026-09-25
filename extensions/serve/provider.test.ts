@@ -891,7 +891,9 @@ describe('provider orchestration', () => {
   });
 
   it('flags context pressure against the chosen model window (not registry max)', async () => {
-    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ lowConfidenceThreshold: 0 }, null, 2));
+    // Pressure advice attaches only under uncertainty; a threshold above any
+    // confidence makes this deep context uncertain.
+    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ lowConfidenceThreshold: 1 }, null, 2));
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
     const longContext = {
@@ -900,12 +902,11 @@ describe('provider orchestration', () => {
 
     await harness.serve(longContext);
 
-    // Both depth escalation and context pressure fire on a deep cheap-tier
-    // context. Depth escalation owns the cause because it actually changed
-    // the routed dimension; pressure remains as advisory metadata.
+    // Pressure is advisory metadata: it never owns the cause or the task type.
     const { lastDecision } = harness.getProviderState();
     const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { cause: 'context-depth', dimension: 'implement' } });
+    expectDecisionContract({ ...handles, match: { cause: lastDecision?.cause, dimension: lastDecision?.dimension } });
+    expect(lastDecision?.cause).not.toBe('context-pressure');
     expect(lastDecision?.contextPressure?.usageRatio).toBeGreaterThanOrEqual(0.6);
   });
 
@@ -1697,14 +1698,11 @@ describe('M4/M4b — consult and model escalation on first prompt', () => {
     });
   });
 
-  it('raises gather one tier once the live context exceeds the depth threshold', async () => {
-    await setupWithConfig({
-      consultRouter: false,
-      depthEscalationTokens: 1000,
-    });
+  it('never raises a gather entry on a deep context', async () => {
+    await setupWithConfig({ consultRouter: false });
 
-    // ~5400 chars ≈ 1350 tokens, no keyword evidence → gather heuristic fallback.
-    const prompt = 'lorem ipsum dolor sit amet '.repeat(200);
+    // No keyword evidence → gather heuristic fallback, however long the prompt.
+    const prompt = 'lorem ipsum dolor sit amet '.repeat(20_000);
     const ctx = { messages: [{ role: 'user', content: prompt }] } as unknown as Context;
 
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
@@ -1712,104 +1710,9 @@ describe('M4/M4b — consult and model escalation on first prompt', () => {
     await harness.serve(ctx);
 
     const decision = harness.getProviderState().lastDecision;
-    expect(decision).toBeDefined();
-    expect(decision!.routedUp).toBe(true);
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'implement', cause: 'context-depth' } });
-  });
-
-  it('leaves a shallow gather context below the depth threshold alone', async () => {
-    await setupWithConfig({
-      consultRouter: false,
-      depthEscalationTokens: 1000,
-    });
-
-    const ctx = {
-      messages: [{ role: 'user', content: 'lorem ipsum dolor' }],
-    } as unknown as Context;
-
-    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
-
-    await harness.serve(ctx);
-
+    expect(decision?.routedUp).toBe(false);
     const handles = await fetchDecisionContractHandles(temp.path);
     expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'no-data' } });
-  });
-
-  it('respects the depthEscalation opt-out', async () => {
-    await setupWithConfig({
-      consultRouter: false,
-      depthEscalation: false,
-      depthEscalationTokens: 1,
-    });
-
-    const prompt = 'lorem ipsum dolor sit amet '.repeat(200);
-    const ctx = { messages: [{ role: 'user', content: prompt }] } as unknown as Context;
-
-    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
-
-    await harness.serve(ctx);
-
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'no-data' } });
-  });
-
-  it('does not raise a dimension already above gather', async () => {
-    await setupWithConfig({
-      consultRouter: false,
-      depthEscalationTokens: 1,
-    });
-
-    const ctx = {
-      messages: [{ role: 'user', content: 'implement a function to parse the pending adjustment payload' }],
-    } as unknown as Context;
-
-    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
-
-    await harness.serve(ctx);
-
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'implement', cause: 'no-data' } });
-  });
-
-  it('routes prompt text containing "!escalate" through the ordinary depth path', async () => {
-    await setupWithConfig({
-      consultRouter: false,
-      depthEscalationTokens: 1,
-    });
-
-    const ctx = {
-      messages: [{ role: 'user', content: '!escalate lorem ipsum dolor sit amet' }],
-    } as unknown as Context;
-
-    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
-
-    await harness.serve(ctx);
-
-    // Depth escalation still fires on context size; the literal token in the
-    // prompt contributes nothing.
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'implement', cause: 'context-depth' } });
-  });
-
-  it('applies depth escalation when the assessment is unavailable', async () => {
-    await setupWithConfig({
-      consultRouter: true,
-      depthEscalationTokens: 1000,
-    });
-
-    const prompt = 'lorem ipsum dolor sit amet '.repeat(200);
-    const ctx = { messages: [{ role: 'user', content: prompt }] } as unknown as Context;
-
-    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
-
-    await harness.serve(ctx);
-
-    const decision = harness.getProviderState().lastDecision;
-    expect(decision).toBeDefined();
-    expect(decision!.assessment).toBeUndefined();
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'implement', cause: 'context-depth' } });
   });
 });
 
@@ -1831,7 +1734,6 @@ describe('assessment orchestration', () => {
     routeTurn(prompt: string, opts?: RouteTurnOpts): Promise<RoutingDecision | undefined>;
     routeTurnAgainWithSameUserEntry(opts?: RouteTurnOpts): Promise<RoutingDecision | undefined>;
     assessmentDispatchCount: number;
-    latchGeneration: number;
     lastMetricRecord: Record<string, unknown> | undefined;
     metricRecordCount: number;
     readAssessmentMetrics(): Promise<void>;
@@ -1893,7 +1795,6 @@ describe('assessment orchestration', () => {
 
     const session: Session = {
       assessmentDispatchCount: 0,
-      latchGeneration: 0,
       lastMetricRecord: undefined,
       metricRecordCount: 0,
       async routeTurn(prompt, opts = {}) {
@@ -2006,7 +1907,6 @@ describe('assessment orchestration', () => {
 
     await harness.serve(ctx);
     const state = harness.getProviderState();
-    session.latchGeneration = (await import('./router-session-state.js')).defaultRouterSession.intent.getLatchGeneration();
     return state.lastDecision as unknown as RoutingDecision | undefined;
   }
 
@@ -2038,7 +1938,6 @@ describe('assessment orchestration', () => {
       counterfactualDimension: 'gather',
     });
     expect(session.lastMetricRecord?.intentKey).toEqual(expect.any(String));
-    expect(session.lastMetricRecord?.latchTransition).toBeUndefined();
   });
 
   it('updates assessor economics from successful reported usage', async () => {
@@ -2486,141 +2385,23 @@ describe('assessment orchestration', () => {
     expect(decision?.cause).toBe('heuristic');
   });
 
-describe('latch veto', () => {
-  it('logs entry and latch metrics while vetoing the first latch', async () => {
+describe('deep context', () => {
+  it('never changes the routed task type and spends one assessment per entry', async () => {
     const session = await newSession({ consultRouter: true });
-    const result = await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 90_000,
+    const first = await session.routeTurn('investigate the flaky test', {
+      estimatedContextTokens: 150_000,
       assessorReply:
-        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
+        'Kind: gather\nComplexity: routine\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: broad',
     });
-
-    expect(result?.dimension).toBe('gather');
-    expect(result?.cause).toBe('heuristic');
+    const after = await session.routeTurnAgainWithSameUserEntry();
+    expect(first?.dimension).toBe('gather');
+    expect(after?.dimension).toBe('gather');
+    expect(after?.cause).toBe(first?.cause);
+    expect(session.assessmentDispatchCount).toBe(1);
     await session.readAssessmentMetrics();
-    expect(session.metricRecordCount).toBe(2);
-    expect(session.lastMetricRecord?.latchTransition).toBe(true);
-    expect(session.lastMetricRecord?.wouldVetoLatch).toBe(true);
-    expect(session.assessmentDispatchCount).toBe(1);
+    expect(session.metricRecordCount).toBe(1);
   });
 
-  it('vetoes the first latch on a bounded high-confidence verdict', async () => {
-    const session = await newSession({ consultRouter: true });
-    const result = await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 90_000,
-      assessorReply:
-        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
-    });
-    expect(result?.dimension).toBe('gather');
-    expect(result?.cause).toBe('heuristic');
-    expect((result?.assessment as { vetoedLatch?: boolean } | undefined)?.vetoedLatch).toBe(true);
-  });
-
-  it('escalates on any other verdict', async () => {
-    const session = await newSession({ consultRouter: true });
-    const result = await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 90_000,
-      assessorReply:
-        'Kind: gather\nComplexity: routine\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: broad',
-    });
-    expect(result?.cause).toBe('context-depth');
-    expect((result?.assessment as { vetoedLatch?: boolean } | undefined)?.vetoedLatch).toBe(false);
-  });
-
-  it('escalates when the latch assessment is unavailable — failure is up', async () => {
-    const session = await newSession({
-      consultRouter: true,
-      assessmentDeadlineMs: 60,
-    });
-    const result = await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 90_000,
-      assessorNeverResponds: true,
-    });
-    expect(result?.cause).toBe('context-depth');
-    // An unavailable verdict is not a licence for a second dispatch.
-    expect(session.assessmentDispatchCount).toBe(1);
-  });
-
-  it('bumps the latch generation exactly once per session, whichever way it resolves', async () => {
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('investigate the flaky test', { estimatedContextTokens: 90_000 });
-    await session.routeTurn('what is in this file?', { estimatedContextTokens: 120_000 });
-    await session.routeTurn('investigate the flaky test', { estimatedContextTokens: 150_000 });
-    expect(session.latchGeneration).toBe(1);
-  });
-
-  it('bumps the generation once even in fully deterministic mode', async () => {
-    const session = await newSession({ consultRouter: false });
-    await session.routeTurn('investigate the flaky test', { estimatedContextTokens: 90_000 });
-    await session.routeTurn('investigate the flaky test', { estimatedContextTokens: 120_000 });
-    // No assessments at all, but the latch evaluation still consumed its turn.
-    expect(session.assessmentDispatchCount).toBe(0);
-    expect(session.latchGeneration).toBe(1);
-  });
-
-  it('the veto holds for the whole tool loop after the latch bump', async () => {
-    // Behavior test rewritten with redesign: the latch veto is session state
-    // bound to the intent key, so it holds for the whole tool loop of the
-    // vetoed entry rather than lasting only one invocation.  The cached
-    // verdict is reused instead of invalidated.
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 90_000,
-      assessorReply:
-        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
-    });
-    const after = await session.routeTurnAgainWithSameUserEntry();
-    // The veto holds: dimension stays gather, cause stays heuristic.
-    // At most one assessment dispatched (the ordinary entry assessment;
-    // the latch reused its verdict).
-    expect(session.assessmentDispatchCount).toBe(1);
-    expect(after?.dimension).toBe('gather');
-    expect(after?.cause).toBe('heuristic');
-    expect(session.latchGeneration).toBe(1);
-  });
-
-  it('re-arms the latch on the next real user entry after a veto', async () => {
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 90_000,
-      assessorReply:
-        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
-    });
-    const next = await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 95_000,
-      assessorReply:
-        'Kind: gather\nComplexity: routine\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: broad',
-    });
-    // The veto applied only to the first latch evaluation; the next real user
-    // entry escalates through the ordinary depth path again.
-    expect(next?.dimension).toBe('implement');
-    expect(next?.cause).toBe('context-depth');
-  });
-
-  it('a veto holds for the whole tool loop of the vetoed entry', async () => {
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 90_000,
-      assessorReply:
-        'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded',
-    });
-    // The next invocation in the same tool loop must reuse the veto — the
-    // dimension stays gather (not bumped to implement by depth escalation)
-    // and the cause stays heuristic (not overridden to context-depth).
-    const after = await session.routeTurnAgainWithSameUserEntry();
-    expect(after?.dimension).toBe('gather');
-    expect(after?.cause).toBe('heuristic');
-  });
-
-  it('dispatches at most one assessment on a latch-transition user entry', async () => {
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('investigate the flaky test', { estimatedContextTokens: 90_000 });
-    await session.routeTurnAgainWithSameUserEntry();
-    // The latch turn dispatches the ordinary assessment; the latch reuses its
-    // verdict rather than dispatching a second one.  The tool-loop turn
-    // reuses the cache rather than dispatching a third.  One total.
-    expect(session.assessmentDispatchCount).toBe(1);
-  });
 });
 
 });

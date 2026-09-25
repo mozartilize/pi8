@@ -297,8 +297,6 @@ export interface RoutingAssessment {
   ms: number;
   usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
   costUsd: number;
-  /** Set when this assessment was requested by the depth-latch transition. */
-  vetoedLatch?: boolean;
 }
 
 export type DecisionCause =
@@ -312,7 +310,6 @@ export type DecisionCause =
   | 'no-data'
   | 'capability-escalation'
   | 'trajectory-escalation'
-  | 'context-depth'
   | 'self-healing-gap'
   | 'manual-override'
   | 'resume'
@@ -483,16 +480,6 @@ export interface AutoRouterConfig {
   assessorQualityRatio: number;
   /** Optional "provider/id" override for the consultation model. */
   consultModel?: string;
-  /**
-   * If true (default), raise a lightweight/gather dimension one tier once the
-   * live context grows past `depthEscalationTokens`. The classifier scores only
-   * the latest entry's phrasing, so it cannot see a gather session turning
-   * into synthesis over gathered material — the context size is the objective
-   * proxy for that transition.
-   */
-  depthEscalation: boolean;
-  /** Context-token threshold for depth escalation. */
-  depthEscalationTokens: number;
   /**
    * Show a TUI notification when the router picks/switches the model for a
    * turn (default true). The footer status widget updates regardless.

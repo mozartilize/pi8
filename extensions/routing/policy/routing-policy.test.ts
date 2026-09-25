@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveRoutingDecision,
-  wouldDepthEscalate,
   POLICY_PASSIVE_CAUSES,
   type RoutingPolicyInput,
 } from './routing-policy.js';
@@ -32,7 +31,7 @@ const registryOnlyCandidates: Candidate[] = [
   makeCandidate({ registryId: 'test/beta', provider: 'test', id: 'beta' }),
 ];
 
-// Benchmark candidates: with quality data so depth/scoring exercises real paths
+// Benchmark candidates: with quality data so scoring exercises real paths
 const strongPaid = makeCandidate({
   registryId: 'bench/strong-paid',
   provider: 'bench',
@@ -99,8 +98,6 @@ function makePolicyConfig(
     dimensionWeights: DEFAULT_DIMENSION_WEIGHTS,
     switchMargin: 0.15,
     lowConfidenceThreshold: 0.15,
-    depthEscalation: true,
-    depthEscalationTokens: 32_768,
     ...overrides,
   };
 }
@@ -139,7 +136,6 @@ describe('resolveRoutingDecision', () => {
     const { decision } = resolveRoutingDecision(makePolicyInput({
       estimatedContextTokens: 150_000,
       confidence: 0.05,
-      config: makePolicyConfig({ depthEscalation: false }),
     }));
     expect(decision.contextPressure).toBeDefined();
     expect(decision.scoredReason?.details.map((detail) => detail.kind)).toEqual([
@@ -156,7 +152,6 @@ describe('resolveRoutingDecision', () => {
         input: {
           baseCause: 'continuation-context' as const,
           baseDimension: 'implement' as const,
-          // implement has strength 2 > gather strength 1, so depth never fires
           estimatedContextTokens: 100_000,
           candidates: registryOnlyCandidates,
         },
@@ -164,15 +159,26 @@ describe('resolveRoutingDecision', () => {
         expectedDimension: 'implement',
       },
       {
-        name: 'depth escalation replaces passive heuristic',
+        name: 'a deep context never changes the routed task type',
         input: {
           baseCause: 'heuristic' as const,
           baseDimension: 'gather' as const,
           candidates: benchmarkCandidates,
-          estimatedContextTokens: 100_000,
+          estimatedContextTokens: 150_000,
         },
-        expectedCause: 'context-depth',
-        expectedDimension: 'implement',
+        expectedCause: 'heuristic',
+        expectedDimension: 'gather',
+      },
+      {
+        name: 'a deep context never raises a lightweight entry',
+        input: {
+          baseCause: 'heuristic' as const,
+          baseDimension: 'lightweight' as const,
+          candidates: benchmarkCandidates,
+          estimatedContextTokens: 150_000,
+        },
+        expectedCause: 'heuristic',
+        expectedDimension: 'lightweight',
       },
     ])('$name', ({ input, expectedCause, expectedDimension }) => {
       const result = resolveRoutingDecision(makePolicyInput(input));
@@ -268,28 +274,6 @@ describe('resolveRoutingDecision', () => {
       expect(result.decision.cause).toBe('no-data');
       expect(result.decision.contextPressure).toBeDefined();
       expect(result.decision.reason).toContain('[context nearly full: prefer a fresh planner subagent]');
-    });
-
-    it('does not change context-depth cause when pressure also fires', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'heuristic',
-          baseDimension: 'gather',
-          estimatedContextTokens: 150_000,
-          classifyResult: {
-            dimension: 'gather',
-            confidence: 0.05,
-            signals: [],
-            terminal: terminalAssessment(),
-      hasCategoricalEvidence: false,
-          },
-          candidates: [makeCandidate({ registryId: 'test/alpha', contextWindow: 200_000 })],
-        }),
-      );
-      // depth escalation fires first (gather→implement), then pressure check sees routedUp=true
-      // but cause must remain 'context-depth', not be overwritten to 'context-pressure'
-      expect(result.decision.cause).toBe('context-depth');
-      expect(result.decision.contextPressure).toBeDefined();
     });
   });
 
@@ -495,25 +479,6 @@ describe('resolveRoutingDecision', () => {
   });
 
   describe('metadata', () => {
-    it('sets routedUp when dimension differs from classifyResult.dimension', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          classifyResult: {
-            dimension: 'gather',
-            confidence: 0.8,
-            signals: [],
-            terminal: terminalAssessment(),
-      hasCategoricalEvidence: false,
-          },
-          baseDimension: 'gather',
-          baseCause: 'heuristic',
-          estimatedContextTokens: 100_000, // depth escalation fires
-          candidates: registryOnlyCandidates,
-        }),
-      );
-      expect(result.decision.routedUp).toBe(true);
-    });
-
     it('sets switched when incumbent differs from chosen', () => {
       const result = resolveRoutingDecision(
         makePolicyInput({
@@ -524,17 +489,6 @@ describe('resolveRoutingDecision', () => {
       expect(result.decision.switched).toBe(true);
     });
 
-    it('appends context-depth reason suffix', () => {
-      const result = resolveRoutingDecision(
-        makePolicyInput({
-          baseCause: 'heuristic',
-          baseDimension: 'gather',
-          estimatedContextTokens: 100_000,
-          candidates: registryOnlyCandidates,
-        }),
-      );
-      expect(result.decision.reason).toContain('long conversation: 100000 tokens');
-    });
   });
 
   describe('POLICY_PASSIVE_CAUSES export', () => {
@@ -543,9 +497,8 @@ describe('resolveRoutingDecision', () => {
       expect(POLICY_PASSIVE_CAUSES.has('continuation-context')).toBe(true);
       expect(POLICY_PASSIVE_CAUSES.has('no-data')).toBe(true);
       // Active causes must NOT be passive — they own the dimension and are
-      // not overridable by depth escalation or trajectory repicks.
+      // not overridable by trajectory repicks.
       expect(POLICY_PASSIVE_CAUSES.has('router-consult')).toBe(false);
-      expect(POLICY_PASSIVE_CAUSES.has('context-depth')).toBe(false);
     });
   });
 });
@@ -592,11 +545,9 @@ describe('routing direction', () => {
       makePolicyInput({
         classifyDimension: 'gather',
         baseDimension: 'lightweight',
-        // High enough to clear CONTEXT_PRESSURE_THRESHOLD against the pick —
-        // but depth escalation is disabled so the downward route survives.
+        // High enough to clear CONTEXT_PRESSURE_THRESHOLD against the pick.
         estimatedContextTokens: 180_000,
         confidence: 0.9,
-        config: makePolicyConfig({ depthEscalation: false }),
       }),
     );
     expect(result.decision.routedDown).toBe(true);
@@ -919,91 +870,6 @@ describe('incumbent capability floor', () => {
   });
 });
 
-describe('depth-escalation probe and veto', () => {
-  it('predicts exactly when step 4 would fire', () => {
-    const base = {
-      dimension: 'gather' as const,
-      cause: 'heuristic' as const,
-      config: { depthEscalation: true, depthEscalationTokens: 32_768 },
-    };
-    expect(wouldDepthEscalate({ ...base, estimatedContextTokens: 40_000 })).toBe(true);
-    expect(wouldDepthEscalate({ ...base, estimatedContextTokens: 10_000 })).toBe(false);
-    expect(wouldDepthEscalate({ ...base, dimension: 'plan', estimatedContextTokens: 90_000 })).toBe(false);
-    expect(
-      wouldDepthEscalate({
-        ...base,
-        config: { depthEscalation: false, depthEscalationTokens: 32_768 },
-        estimatedContextTokens: 90_000,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    { cause: 'router-consult' as const, expectEscalate: true },
-    { cause: 'capability-escalation' as const, expectEscalate: false },
-    { cause: 'error-fallback' as const, expectEscalate: false },
-    { cause: 'context-depth' as const, expectEscalate: false },
-  ])('returns $expectEscalate for cause $cause', ({ cause, expectEscalate }) => {
-    expect(
-      wouldDepthEscalate({
-        dimension: 'gather',
-        cause,
-        estimatedContextTokens: 90_000,
-        config: { depthEscalation: true, depthEscalationTokens: 32_768 },
-      }),
-    ).toBe(expectEscalate);
-  });
-
-  it('skips depth escalation when the veto flag is set, keeping cause heuristic', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
-        baseDimension: 'gather',
-        estimatedContextTokens: 90_000,
-        vetoDepthEscalation: true,
-      }),
-    );
-    expect(result.decision.dimension).toBe('gather');
-    // A veto is a refusal to escalate, so no cause changed hands. This is why
-    // no new DecisionCause value is needed and POLICY_PASSIVE_CAUSES is untouched.
-    expect(result.decision.cause).toBe('heuristic');
-    expect(result.decision.routedUp).toBe(false);
-  });
-
-  it('escalates normally when the veto flag is absent', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
-        baseDimension: 'gather',
-        estimatedContextTokens: 90_000,
-      }),
-    );
-    expect(result.decision.dimension).toBe('implement');
-    expect(result.decision.cause).toBe('context-depth');
-  });
-
-  it('depth escalates when cause is router-consult and dimension is depth-eligible', () => {
-    // The assessment lowered gather→lightweight and was adopted, so cause is
-    // router-consult. lightweight is still depth-eligible (strength 0 ≤ gather),
-    // and router-consult is in DEPTH_PASSIVE_CAUSES (unlike POLICY_PASSIVE_CAUSES),
-    // so the 90k-token context must trigger depth escalation: lightweight → gather.
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
-        baseDimension: 'lightweight',
-        baseCause: 'router-consult',
-        estimatedContextTokens: 90_000,
-        vetoDepthEscalation: false,
-      }),
-    );
-    expect(result.decision.dimension).toBe('gather');
-    expect(result.decision.cause).toBe('context-depth');
-  });
-});
-
 describe('resolveRoutingDecision — multiWorkPolicy threading', () => {
   it('threads multiWorkPolicy onto the primary scoring call and attaches decision.multiWork', () => {
     const result = resolveRoutingDecision(
@@ -1043,8 +909,7 @@ describe('resolveRoutingDecision — multiWorkPolicy threading', () => {
       makePolicyInput({
         candidates: benchmarkCandidates,
         classifyDimension: 'gather',
-        baseDimension: 'gather',
-        estimatedContextTokens: 90_000,
+        baseDimension: 'implement',
         multiWorkPolicy: policy,
       }),
     );
@@ -1052,8 +917,7 @@ describe('resolveRoutingDecision — multiWorkPolicy threading', () => {
       makePolicyInput({
         candidates: benchmarkCandidates,
         classifyDimension: 'gather',
-        baseDimension: 'gather',
-        estimatedContextTokens: 90_000,
+        baseDimension: 'implement',
       }),
     );
 
