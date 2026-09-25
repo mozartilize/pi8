@@ -89,6 +89,11 @@ export interface ExecutionContract {
   release: boolean;
   /** Implement-axis ratio the executor must reach; undefined when not released. */
   minimum?: number;
+  /**
+   * A released plan still releases the incumbent minimums: no invocation has
+   * served it yet. The first invocation that serves the plan owns it.
+   */
+  releasePending?: boolean;
   requirement: number;
   keepReason?: ContractKeepReason;
   rubric: ExecutionRubric;
@@ -243,7 +248,7 @@ export function acceptContract(
     submitterDimension: input.submitterDimension,
     band: bandMinimum != null ? band : 'frontier',
     release: bandMinimum != null,
-    ...(bandMinimum != null ? { minimum: Math.max(requirement, bandMinimum) } : {}),
+    ...(bandMinimum != null ? { minimum: Math.max(requirement, bandMinimum), releasePending: true } : {}),
     requirement,
     ...(keepReason ? { keepReason } : {}),
     rubric,
@@ -322,6 +327,13 @@ export function attributeExecutor(state: WorkPhaseState, served: string | undefi
  * Whether the submitter is reviewing the plan: another model executed it.
  * A plan only its submitter served continues as implementation.
  */
+/** The plan's release boundary has been served: its executor keeps it from here. */
+export function serveContractRelease(state: WorkPhaseState): WorkPhaseState {
+  const contract = state.contract;
+  if (!contract?.releasePending) return state;
+  return { ...state, contract: { ...contract, releasePending: false } };
+}
+
 export function isUnderReview(contract: ExecutionContract): boolean {
   return contract.status === 'executed' && contract.release && contract.executor != null;
 }

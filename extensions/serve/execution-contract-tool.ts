@@ -38,6 +38,7 @@ import {
   contractMeta,
   entryEndOutcome,
   isDeclaredTarget,
+  isUnderReview,
   noteContractEdit,
   noteContractVerifier,
   resolveToolPath,
@@ -54,9 +55,9 @@ import { classifyMutationCall } from '../routing/policy/mutation-detector.js';
 import type { RouterSession } from './router-session-state.js';
 
 const DESCRIPTION =
-  'Hand off the remaining implementation as a closed execution plan. Call it only after planning or review has ' +
-  'settled every design decision, when all remaining work is concrete file edits, file creations, file deletions, ' +
-  'and verification runs. The router validates the plan and chooses which model executes it. Do not call it to ask ' +
+  'Hand off the remaining implementation as a closed execution plan. Call it only when the user asked for the ' +
+  'change to be made, never when the user asked only for a plan or a review, and only once every design decision ' +
+  'is settled and all remaining work is concrete file edits, file creations, file deletions, and verification runs. The router validates the plan and chooses which model executes it. Do not call it to ask ' +
   'for help or to change models. Rate the remaining work honestly: the router combines the ratings with its own ' +
   'measurements to choose the executor, and a finished plan returns to you for review. After acceptance, editing a ' +
   'file that the plan does not list, or writing files from a shell command, returns the work to the model that ' +
@@ -117,15 +118,35 @@ function executionContractParameters() {
   });
 }
 
-/** Appended once per entry to the first plan/review edit result without a plan. */
+/**
+ * Appended once per entry to the first edit result without a plan: in a
+ * plan/review entry, or in an implement entry whose model the incumbent
+ * minimums raised above what the work needs.
+ */
 export const CONTRACT_NUDGE =
-  `Router note: if the remaining work is fully decided, call ${EXECUTION_CONTRACT_TOOL} with the remaining ` +
-  'steps so the router can choose the executor. Otherwise continue.';
+  `Router note: if the user asked for this change and the remaining work is fully decided, call ` +
+  `${EXECUTION_CONTRACT_TOOL} with the remaining steps so the router can choose the executor. Otherwise continue.`;
+
+/** Reason details that mark a pick raised by the incumbent minimums. */
+const INCUMBENT_RAISES = new Set(['incumbent-model', 'incumbent-capability', 'incumbent-effort']);
+
+/**
+ * An implement entry is worth reminding only when the incumbent minimums
+ * raised its pick: otherwise the router already chose the model for the
+ * work, and a handoff could not route it cheaper.
+ */
+function implementRaisedByIncumbent(last: RoutingDecision): boolean {
+  return last.scoredReason?.details.some((detail) => INCUMBENT_RAISES.has(detail.kind)) ?? false;
+}
 
 /** Why a handoff does not apply to this decision, or undefined when it does. */
 function handoffInapplicable(last: RoutingDecision): ContractRejection | undefined {
-  if (last.dimension !== 'plan' && last.dimension !== 'review') {
-    return { ok: false, code: 'not-plan-or-review', reason: 'a handoff applies only after planning or review' };
+  if (last.dimension !== 'plan' && last.dimension !== 'review' && last.dimension !== 'implement') {
+    return {
+      ok: false,
+      code: 'not-plan-or-review',
+      reason: 'a handoff applies only to planning, review, or implementation',
+    };
   }
   const assessment = last.assessment;
   if (assessment?.confidence === 'high' && (assessment.kind === 'plan' || assessment.kind === 'review')) {
@@ -405,9 +426,12 @@ export function submitExecutionContract(
   // thinking level rather than the review's.
   let base = state;
   const previous = state.contract?.status === 'executed' ? state.contract : undefined;
-  if (previous) {
+  if (previous && isUnderReview(previous)) {
     base = reworkContract(state);
     appendContractOutcome(base, 'rework');
+  } else if (previous) {
+    // A plan only its submitter executed ends like an entry; the next plan is new work.
+    appendContractOutcome(state, entryEndOutcome(previous));
   } else if (state.contract?.status === 'broken') {
     // The revised plan replaces a broken one whose handback has not been consumed yet.
     appendContractOutcome(state, 'broken');
@@ -577,6 +601,7 @@ export function nudgeContractOnEdit(
     const last = session.getLastDecision();
     if (!state || !last || last.intentKey !== state.intentKey) return undefined;
     if (state.contract || state.contractNudged || handoffInapplicable(last)) return undefined;
+    if (last.dimension === 'implement' && !implementRaisedByIncumbent(last)) return undefined;
     session.commitWorkPhaseState({ ...state, contractNudged: true });
     const lastServed = session.getLastServed();
     appendExecutionContractSignal({

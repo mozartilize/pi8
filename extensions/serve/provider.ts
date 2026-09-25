@@ -86,6 +86,7 @@ import {
   expireContract,
   isExcludedExecutor,
   isUnderReview,
+  serveContractRelease,
   type ExecutionContract,
 } from '../routing/policy/execution-contract.js';
 import { appendContractOutcome, closeContractEntry } from './execution-contract-tool.js';
@@ -845,6 +846,8 @@ interface ScoredTurn {
   restoredContract?: ExecutionContract;
   /** A reasoning handoff this invocation releases; its boundary is consumed only once it serves. */
   pendingHandoff?: import('../types.js').ReasoningHandoffMeta;
+  /** This invocation releases an accepted plan's incumbent minimums; consumed only once it serves. */
+  releasesContract?: boolean;
 }
 
 /** Resolve the registry, this turn's input identity, and the candidate pool. */
@@ -1150,7 +1153,7 @@ function scoreRouterTurn(args: {
       session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
     ...(execution
-      ? { handoffMinimum: execution.minimum, handoffPending: true }
+      ? { handoffMinimum: execution.minimum, handoffPending: contract?.releasePending === true }
       : reasoning ? { handoffMinimum: reasoning.minimum, handoffPending: reasoningPending } : {}),
     ...(entry?.deliverable ? { deliverable: entry.deliverable } : {}),
     config,
@@ -1210,6 +1213,7 @@ function scoreRouterTurn(args: {
       requestedReasoning,
       ...(restore ? { restoredContract: restore } : {}),
       ...(servedHandoff ? { pendingHandoff: servedHandoff } : {}),
+      ...(execution && contract?.releasePending ? { releasesContract: true } : {}),
     },
   };
 }
@@ -1331,9 +1335,14 @@ async function delegateRouterTurn(args: {
     appendContractOutcome(afterServe, 'broken');
     session.commitWorkPhaseState({ ...afterServe, contract: undefined });
   }
-  // Same rule for a reasoning handoff's boundary: the first invocation that
-  // serves the phase owns it, whichever candidate served, and a failed one
-  // leaves the boundary pending.
+  // Same rule for a plan's release and for a reasoning handoff's boundary:
+  // the first invocation that serves the new phase owns it.
+  const releasing = session.getWorkPhaseState();
+  if (result.success && scored.releasesContract && releasing?.contract?.status === 'active') {
+    session.commitWorkPhaseState(serveContractRelease(releasing));
+  }
+  // Whichever candidate served owns it, and a failed invocation leaves the
+  // boundary pending.
   const pendingHandoff = scored.pendingHandoff;
   const current = session.getWorkPhaseState();
   const lastServed = session.getLastServed();

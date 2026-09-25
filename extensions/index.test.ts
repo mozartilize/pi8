@@ -1127,6 +1127,21 @@ describe('mutation observation hooks', () => {
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
   });
 
+  it('reminds an implement entry only when the incumbent minimums raised its pick', async () => {
+    const handlers = await makeToolHandlers();
+    const toolResult = handlers.get('tool_result')!;
+    const content = [{ type: 'text', text: 'edited' }];
+    defaultRouterSession.intent.commitWorkPhaseState(entryState());
+    const scoredReason = { score: 0.8, quality: 0.5, cost: 0.2, speed: 0.1, costBasis: 'per-1m' as const, upgraded: false };
+    defaultRouterSession.setLastDecision({
+      ...routingDecision(['test/impl']), dimension: 'implement' as const, intentKey: 'intent-a',
+      scoredReason: { ...scoredReason, details: [{ kind: 'incumbent-model' as const }] },
+    });
+    const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
+    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTRACT_NUDGE]);
+    expect(CONTRACT_NUDGE).toContain('if the user asked for this change');
+  });
+
   it('counts a high-confidence mutating bash call without blocking it', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
