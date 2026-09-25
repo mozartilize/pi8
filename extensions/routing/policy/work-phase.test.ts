@@ -3,7 +3,9 @@ import {
   capabilityBandFor,
   floorForBand,
   inheritThinContinuation,
+  boundaryQualifiers,
   nextProviderInvocation,
+  servesBoundary,
   terminalRequirement,
 } from './work-phase.js';
 import type { TerminalAssessment } from '../../types.js';
@@ -83,5 +85,27 @@ describe('inheritThinContinuation', () => {
     expect(next.investigationNudged).toBeUndefined();
     expect(next.investigated).toBeUndefined();
     expect(next.investigationClosed).toBeUndefined();
+  });
+});
+
+describe('phase boundary qualifiers', () => {
+  it('keeps the first-tier chain candidates, promoted ones included', () => {
+    expect(boundaryQualifiers({
+      fallbackChain: ['a/x:high', 'b/y:max', 'c/z', 'd/w:low'],
+      candidateDiagnostics: [
+        { candidateKey: 'b/y:max', excludedReason: 'below-task-floor' },
+        { candidateKey: 'c/z', excludedReason: 'unknown-quality' },
+        { candidateKey: 'd/w:low', excludedReason: 'promoted' },
+      ],
+    })).toEqual(['a/x:high', 'd/w:low']);
+  });
+
+  it('matches the served model at the qualifying effort or higher', () => {
+    expect(servesBoundary('a/x:high', ['a/x:high'])).toBe(true);
+    expect(servesBoundary('a/x:max', ['a/x:high'])).toBe(true);
+    expect(servesBoundary('a/x:medium', ['a/x:high'])).toBe(false);
+    expect(servesBoundary('a/x:low', ['a/x'])).toBe(true);
+    expect(servesBoundary('a/x', ['a/x:high'])).toBe(false);
+    expect(servesBoundary('b/x:high', ['a/x:high'])).toBe(false);
   });
 });

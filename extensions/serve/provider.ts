@@ -77,6 +77,8 @@ import {
   inheritThinContinuation,
   nextProviderInvocation,
   terminalRequirement,
+  boundaryQualifiers,
+  servesBoundary,
   type WorkPhaseState,
 } from '../routing/policy/work-phase.js';
 import {
@@ -87,6 +89,7 @@ import {
   isExcludedExecutor,
   isUnderReview,
   serveContractRelease,
+  servedBySubmitter,
   type ExecutionContract,
 } from '../routing/policy/execution-contract.js';
 import { appendContractOutcome, closeContractEntry } from './execution-contract-tool.js';
@@ -1327,28 +1330,30 @@ async function delegateRouterTurn(args: {
   const result = await runDelegationLoop(delegationOptions, stream);
 
   // Like the trajectory handoff, a broken contract's handback is consumed only
-  // by an invocation that served: a failed one leaves the next invocation
-  // bound to the submitter too.
+  // by an invocation its submitter served: a failed one, or a fallback to
+  // another model, leaves the next invocation bound to the submitter too.
+  const served = result.success && result.lastServed ? servedKey(result.lastServed) : undefined;
   const restored = scored.restoredContract;
   const afterServe = session.getWorkPhaseState();
-  if (result.success && restored && afterServe?.contract === restored) {
+  if (served && restored && afterServe?.contract === restored && servedBySubmitter(restored, served)) {
     appendContractOutcome(afterServe, 'broken');
     session.commitWorkPhaseState({ ...afterServe, contract: undefined });
   }
-  // Same rule for a plan's release and for a reasoning handoff's boundary:
-  // the first invocation that serves the new phase owns it.
+  // A plan's release and a reasoning handoff's boundary belong to the first
+  // invocation served by a candidate that clears the phase's minimum. A
+  // fallback below it leaves the boundary pending; when no candidate clears
+  // it, whichever serves is the best the pool offers.
+  const qualifiers = boundaryQualifiers(scored.decision);
+  const qualifies = served != null && (qualifiers.length === 0 || servesBoundary(served, qualifiers));
   const releasing = session.getWorkPhaseState();
-  if (result.success && scored.releasesContract && releasing?.contract?.status === 'active') {
+  if (qualifies && scored.releasesContract && releasing?.contract?.status === 'active') {
     session.commitWorkPhaseState(serveContractRelease(releasing));
   }
-  // Whichever candidate served owns it, and a failed invocation leaves the
-  // boundary pending.
   const pendingHandoff = scored.pendingHandoff;
   const current = session.getWorkPhaseState();
-  const lastServed = session.getLastServed();
-  if (result.success && pendingHandoff && lastServed && current?.reasoningHandoff?.id === pendingHandoff.id &&
+  if (qualifies && pendingHandoff && current?.reasoningHandoff?.id === pendingHandoff.id &&
       current.reasoningHandoff.pending) {
-    const owned = serveReasoningHandoff(current, servedKey(lastServed));
+    const owned = serveReasoningHandoff(current, served);
     session.commitWorkPhaseState(owned);
     appendInvestigationHandoffSignal({
       intentKey: owned.intentKey,

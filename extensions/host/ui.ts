@@ -149,7 +149,8 @@ const CONTRACT_KEEP_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['k
   size: 'too large to hand off',
   difficulty: 'too hard to hand off',
   excluded: 'earlier executors were excluded',
-  'unknown-target': 'it edits a file that does not exist',
+  'unknown-target': 'it edits a file that does not exist or could not be checked',
+  delete: 'it deletes a file',
 };
 
 function contractPlanLine(contract: ExecutionContractMeta): string {

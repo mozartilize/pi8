@@ -1,5 +1,6 @@
 import type { CapabilityBand, Dimension, ReasoningHandoffMeta, TerminalAssessment } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
+import { MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
 const COMPLEXITY = { trivial: 0, routine: 0.25, moderate: 0.5, hard: 0.75, frontier: 1 } as const;
@@ -82,4 +83,34 @@ export function inheritThinContinuation(
     investigated: undefined,
     investigationClosed: undefined,
   };
+}
+
+/**
+ * Chain candidates that clear a phase boundary's minimum: those the scorer
+ * left in the first capability tier. A candidate kept only as a fallback —
+ * below the minimum, or of unknown quality — may serve an invocation, but it
+ * does not satisfy the boundary.
+ */
+export function boundaryQualifiers(decision: {
+  fallbackChain: readonly string[];
+  candidateDiagnostics?: ReadonlyArray<{ candidateKey: string; excludedReason?: string }>;
+}): string[] {
+  const excluded = new Set((decision.candidateDiagnostics ?? [])
+    .filter((diagnostic) => diagnostic.excludedReason != null && diagnostic.excludedReason !== 'promoted')
+    .map((diagnostic) => diagnostic.candidateKey));
+  return decision.fallbackChain.filter((key) => !excluded.has(key));
+}
+
+/**
+ * Whether the served key is one of `qualifiers`. Serving raises a candidate's
+ * effort to the task type's effort minimum, never lowers it, so the same model
+ * at a higher effort than a qualifying key also qualifies.
+ */
+export function servesBoundary(served: string, qualifiers: readonly string[]): boolean {
+  const s = parseCandidateKey(served);
+  const rank = (effort: string | undefined) => (effort == null ? -1 : MODEL_THINKING_LEVELS.indexOf(effort as never));
+  return qualifiers.some((key) => {
+    const q = parseCandidateKey(key);
+    return q.provider === s.provider && q.id === s.id && (q.effort == null || rank(s.effort) >= rank(q.effort));
+  });
 }

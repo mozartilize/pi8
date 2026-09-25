@@ -121,6 +121,8 @@ export interface ValidatedContract {
   steps: number;
   /** Lowest band the plan's shape allows; undefined keeps the submitter. */
   shapeBand: CapabilityBand | undefined;
+  /** The plan deletes a file. */
+  deletes: boolean;
   structural: Pick<MeasuredFeatures, 'files' | 'directories' | 'steps' | 'testTargets'>;
 }
 
@@ -188,6 +190,7 @@ export function validateContract(steps: readonly ExecutionStepInput[] | undefine
   const targets = new Set<string>();
   const editTargets = new Set<string>();
   const testTargets = new Set<string>();
+  let deletes = false;
   for (const step of steps) {
     if (step.kind === 'verify') continue;
     if (!FILE_STEPS.has(step.kind)) return fail('unsupported-step', `unsupported step kind "${String(step.kind)}"`);
@@ -200,6 +203,7 @@ export function validateContract(steps: readonly ExecutionStepInput[] | undefine
     const target = resolveToolPath(cwd, path);
     targets.add(target);
     if (step.kind !== 'delete') editTargets.add(target);
+    else deletes = true;
     if (isTestPath(path)) testTargets.add(target);
   }
   if (targets.size === 0) return fail('no-files', 'the plan changes no files');
@@ -210,6 +214,7 @@ export function validateContract(steps: readonly ExecutionStepInput[] | undefine
     editTargets: [...editTargets],
     steps: steps.length,
     shapeBand: contractShapeBand(targets.size, steps.length),
+    deletes,
     structural: {
       files: targets.size,
       directories: new Set(all.map((target) => dirname(target))).size,
@@ -234,13 +239,18 @@ export function acceptContract(
   const assessed = bandForRequirement(requirement);
   const excluded = state.excludedExecutors?.length ?? 0;
   const band = raiseBand(maxBand(assessed, validation.shapeBand ?? 'frontier'), excluded);
-  const keepReason: ContractKeepReason | undefined = (measured.missingTargets ?? 0) > 0
+  // A target whose existence was not measured is as unknown as a missing one.
+  // A deleted file never completes a plan through an edit, and deleting it
+  // from a shell breaks the plan, so only the submitter can finish it.
+  const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
     ? 'unknown-target'
-    : validation.shapeBand == null
-      ? 'size'
-      : assessed === 'frontier'
-        ? 'difficulty'
-        : band === 'frontier' ? 'excluded' : undefined;
+    : validation.deletes
+      ? 'delete'
+      : validation.shapeBand == null
+        ? 'size'
+        : assessed === 'frontier'
+          ? 'difficulty'
+          : band === 'frontier' ? 'excluded' : undefined;
   const bandMinimum = keepReason == null ? executionMinimum(band) : undefined;
   const contract: ExecutionContract = {
     status: 'active',
@@ -392,6 +402,11 @@ export function entryEndOutcome(contract: ExecutionContract): ContractOutcome {
 
 export function isDeclaredTarget(contract: ExecutionContract, cwd: string, path: string): boolean {
   return contract.targets.includes(resolveToolPath(cwd, path));
+}
+
+/** Whether the submitter's model, at any effort, served `served`. */
+export function servedBySubmitter(contract: ExecutionContract, served: string): boolean {
+  return sameModel(served, contract.submitter);
 }
 
 /** Whether `key` names a model excluded from executing this task. */

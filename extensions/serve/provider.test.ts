@@ -424,6 +424,9 @@ vi.mock('@earendil-works/pi-ai/compat', () => ({
   streamSimple: vi.fn(),
 }));
 
+/** Every plan target exists; the router measured nothing else. */
+const EXISTING_TARGETS = { missingTargets: 0 };
+
 const REGISTRY_MODELS = [
   registryModel('alpha/first', {
     contextWindow: 200000,
@@ -1725,6 +1728,8 @@ describe('assessment orchestration', () => {
     assessorGate?: Promise<void>;
     /** Every serving model fails before any output. */
     serveFails?: boolean;
+    /** These serving models (`provider/id`) fail before any output. */
+    failModels?: string[];
   }
 
   interface Session {
@@ -1859,7 +1864,7 @@ describe('assessment orchestration', () => {
     opts: RouteTurnOpts,
   ): Promise<RoutingDecision | undefined> {
     harness.resetEventStream();
-    harness.scriptReply((_model: Model<Api>, callContext: Context) => {
+    harness.scriptReply((model: Model<Api>, callContext: Context) => {
       const userText =
         typeof callContext.messages[0]?.content === 'string'
           ? callContext.messages[0].content
@@ -1907,7 +1912,7 @@ describe('assessment orchestration', () => {
         return asStream(answer);
       }
       session.servedContext = callContext;
-      if (opts.serveFails) {
+      if (opts.serveFails || opts.failModels?.includes(`${model.provider}/${model.id}`)) {
         return asStream([{ type: 'error', error: { errorMessage: 'manual failure' } }]);
       }
       return asStream([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
@@ -2062,6 +2067,20 @@ describe('assessment orchestration', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe(planner);
     });
 
+    it('keeps the boundary pending when only a fallback below the minimum serves', async () => {
+      const session = await newSession({ consultRouter: false });
+      await session.routeTurn(PLAN_PROMPT);
+      submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
+      await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
+      expect(harness.session.getLastServed()?.registryId).toBe('alpha/cheap');
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toMatchObject({ pending: true });
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.owner).toBeUndefined();
+      harness.session.clearBlacklistedModels();
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff)
+        .toMatchObject({ pending: false, owner: expect.stringMatching(/^beta\/strong/) });
+    });
+
     it('keeps the boundary pending when no candidate serves it', async () => {
       const session = await newSession({ consultRouter: false });
       await session.routeTurn(PLAN_PROMPT);
@@ -2090,7 +2109,7 @@ describe('assessment orchestration', () => {
         steps: [{ kind: 'edit', path: 'src/a.ts', change: 'retry the flaky call' }],
         remainingWork: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
       };
-      expect(submitExecutionContract(plan, routerCtx, harness.session).accepted).toBe(true);
+      expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
       expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.contractAccepted).toBe(true);
       const executing = await session.routeTurnAgainWithSameUserEntry();
       expect(executing?.dimension).toBe('implement');
@@ -2191,7 +2210,7 @@ describe('assessment orchestration', () => {
 
     it('hands a small accepted plan to a cheaper executor on the next invocation', async () => {
       const session = await planned();
-      expect(submitExecutionContract(smallPlan, routerCtx, harness.session).accepted).toBe(true);
+      expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
       const executing = await session.routeTurnAgainWithSameUserEntry();
       expect(executing?.dimension).toBe('implement');
       expect(executing?.cause).toBe('execution-contract');
@@ -2203,7 +2222,7 @@ describe('assessment orchestration', () => {
 
     it('releases the incumbent once: the executor that served keeps the plan', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(harness.session.getWorkPhaseState()?.contract?.releasePending).toBe(true);
       await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
       expect(harness.session.getWorkPhaseState()?.contract?.releasePending).toBe(true);
@@ -2219,7 +2238,7 @@ describe('assessment orchestration', () => {
       });
       expect(implementing?.dimension).toBe('implement');
       expect(implementing?.chosen).toBe('beta/strong');
-      expect(submitExecutionContract(smallPlan, routerCtx, harness.session).accepted).toBe(true);
+      expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
       expect(harness.session.getWorkPhaseState()?.contract?.submitterDimension).toBe('implement');
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       breakWithUndeclaredEdit();
@@ -2230,7 +2249,7 @@ describe('assessment orchestration', () => {
 
     it('returns an undeclared edit to the submitter at its task type, then clears the plan', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       // Declared targets never break the plan.
       handleContractToolCall({ toolName: 'edit', input: { path: './src/a.ts' } }, { cwd: '/repo' }, harness.session);
@@ -2249,7 +2268,7 @@ describe('assessment orchestration', () => {
 
     it('returns a shell write by the executor to the submitter without a strike', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       const bash = (command: string) =>
         handleContractToolCall({ toolName: 'bash', input: { command } }, { cwd: '/repo' }, harness.session);
@@ -2266,15 +2285,28 @@ describe('assessment orchestration', () => {
 
     it('lets the submitter write from a shell while it keeps the plan', async () => {
       const session = await planned();
-      submitExecutionContract({ ...smallPlan, remainingWork: { ...EASY, openDecisions: 5 } }, routerCtx, harness.session);
+      submitExecutionContract({ ...smallPlan, remainingWork: { ...EASY, openDecisions: 5 } }, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
       handleContractToolCall({ toolName: 'bash', input: { command: 'sed -i s/a/b/ src/a.ts' } }, { cwd: '/repo' }, harness.session);
       expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
     });
 
+    it('keeps a broken plan bound to its submitter while another model serves the handback', async () => {
+      const session = await planned();
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
+      await session.routeTurnAgainWithSameUserEntry();
+      breakWithUndeclaredEdit();
+      await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
+      expect(harness.session.getLastServed()?.registryId).toBe('alpha/cheap');
+      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('broken');
+      harness.session.clearBlacklistedModels();
+      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+    });
+
     it('keeps a broken plan bound to its submitter until a handback invocation serves', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       await session.routeTurnAgainWithSameUserEntry();
       breakWithUndeclaredEdit();
       const failed = await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
@@ -2291,13 +2323,13 @@ describe('assessment orchestration', () => {
 
     it('lets an executor break a plan once, then routes later plans to a stronger model', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       breakWithUndeclaredEdit();
       await session.routeTurnAgainWithSameUserEntry();
 
       // First break: the same executor may try again.
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       breakWithUndeclaredEdit();
       await session.routeTurnAgainWithSameUserEntry();
@@ -2305,7 +2337,7 @@ describe('assessment orchestration', () => {
 
       // Second break excludes it: the next plan is one band higher and must be
       // served by a strictly stronger model.
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       const escalated = await session.routeTurnAgainWithSameUserEntry();
       expect(escalated?.dimension).toBe('implement');
       expect(escalated?.chosen).toBe('beta/strong');
@@ -2317,7 +2349,7 @@ describe('assessment orchestration', () => {
       const session = await planned();
       const state = harness.session.getWorkPhaseState()!;
       harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true, band: 'standard' });
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
@@ -2326,7 +2358,7 @@ describe('assessment orchestration', () => {
 
     it('treats executor struggle as a broken plan', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       harness.session.armTrajectoryEscalation(
         { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
@@ -2342,9 +2374,9 @@ describe('assessment orchestration', () => {
 
     it('treats a second submission during execution as a re-plan', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       await session.routeTurnAgainWithSameUserEntry();
-      const again = submitExecutionContract(smallPlan, routerCtx, harness.session);
+      const again = submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(again.accepted).toBe(false);
       expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ status: 'broken', breakReason: 'replan' });
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
@@ -2356,7 +2388,7 @@ describe('assessment orchestration', () => {
         steps: ['a', 'b', 'c', 'd', 'e', 'f'].map((f) => ({ kind: 'edit', path: `${f}.ts`, change: 'rename' })),
         remainingWork: EASY,
       };
-      expect(submitExecutionContract(large, routerCtx, harness.session).accepted).toBe(true);
+      expect(submitExecutionContract(large, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
       expect(next?.chosen).toBe('beta/strong');
@@ -2369,7 +2401,7 @@ describe('assessment orchestration', () => {
     it('keeps the submitter when the rubric says design choices remain', async () => {
       const session = await planned();
       const open = { ...smallPlan, remainingWork: { ...EASY, openDecisions: 5 } };
-      expect(submitExecutionContract(open, routerCtx, harness.session).text).toContain('keeps executing it');
+      expect(submitExecutionContract(open, routerCtx, harness.session, EXISTING_TARGETS).text).toContain('keeps executing it');
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
       expect(next?.chosen).toBe('beta/strong');
@@ -2379,7 +2411,7 @@ describe('assessment orchestration', () => {
 
     it('returns an executed plan to the submitter for review until the entry ends', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       editResult('src/a.ts', true);
       expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
@@ -2397,7 +2429,7 @@ describe('assessment orchestration', () => {
 
     it('records the review verifier result and logs the outcome when the entry ends', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       await session.routeTurnAgainWithSameUserEntry();
       editResult('src/a.ts');
       await session.routeTurnAgainWithSameUserEntry();
@@ -2425,7 +2457,7 @@ describe('assessment orchestration', () => {
     it('counts a new plan during review as rework against the executor', async () => {
       const session = await planned();
       const executeOnce = async () => {
-        submitExecutionContract(smallPlan, routerCtx, harness.session);
+        submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
         expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
         editResult('src/a.ts');
         expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('review');
@@ -2435,7 +2467,7 @@ describe('assessment orchestration', () => {
       expect(harness.session.getWorkPhaseState()?.contractStrikes).toEqual({ cheap: 1 });
       // The revised plan was submitted during review but belongs to the planning task.
       expect(harness.session.getWorkPhaseState()?.contract?.submitterDimension).toBe('plan');
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
       const escalated = await session.routeTurnAgainWithSameUserEntry();
       expect(escalated?.chosen).toBe('beta/strong');
@@ -2444,7 +2476,7 @@ describe('assessment orchestration', () => {
 
     it('executes a plan whose executor used up its invocation budget', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       let decision = await session.routeTurnAgainWithSameUserEntry();
       for (let i = 0; i < 12 && decision?.dimension === 'implement'; i += 1) {
         decision = await session.routeTurnAgainWithSameUserEntry();
@@ -2457,7 +2489,7 @@ describe('assessment orchestration', () => {
 
     it('continues as implementation when only the submitter served a released plan', async () => {
       const session = await planned();
-      submitExecutionContract(smallPlan, routerCtx, harness.session);
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       harness.session.blacklist.blacklistModel('alpha/cheap');
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
       editResult('src/a.ts');
@@ -2475,7 +2507,7 @@ describe('assessment orchestration', () => {
       });
       submitInvestigationHandoff(DESIGN_HANDOFF, routerCtx, harness.session);
       await session.routeTurnAgainWithSameUserEntry();
-      const result = submitExecutionContract(smallPlan, routerCtx, harness.session);
+      const result = submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(result.accepted).toBe(false);
       expect(result.text).toContain('asks for a plan');
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
@@ -2486,17 +2518,17 @@ describe('assessment orchestration', () => {
       await session.routeTurn(PLAN_PROMPT, { assessorUsageLimit: true });
       submitInvestigationHandoff(DESIGN_HANDOFF, routerCtx, harness.session);
       await session.routeTurnAgainWithSameUserEntry();
-      expect(submitExecutionContract(smallPlan, routerCtx, harness.session).accepted).toBe(true);
+      expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('implement');
     });
 
     it('rejects a handoff during an investigation and outside router/auto', async () => {
       const session = await newSession({ consultRouter: true });
       await session.routeTurn('investigate the flaky test');
-      expect(submitExecutionContract(smallPlan, routerCtx, harness.session).text)
+      expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).text)
         .toContain('only to planning, review, or implementation');
       const other = { cwd: '/repo', model: { provider: 'beta', id: 'strong' } } as never;
-      expect(submitExecutionContract(smallPlan, other, harness.session).text).toContain('has no effect');
+      expect(submitExecutionContract(smallPlan, other, harness.session, EXISTING_TARGETS).text).toContain('has no effect');
     });
   });
 

@@ -929,8 +929,9 @@ function scoreWithinTiers(
   }
 
   // A handoff minimum states how much capability the handed-off work needs.
-  // Quality above it earns no credit, so among candidates that clear it price
-  // decides; otherwise a quality-heavy task weighting would pick the strongest
+  // Quality above it earns no credit, so among candidates that clear it the
+  // economic components — cost, speed, and the incumbent's cache credit —
+  // decide; otherwise a quality-heavy task weighting would pick the strongest
   // model whatever the minimum says.
   const qualityCeiling = handoffQualityCeiling(filtered, dimension, opts.handoffMinimum);
   return filtered.map((c) => {

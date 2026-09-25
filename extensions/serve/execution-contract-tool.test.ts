@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,9 +52,17 @@ describe('observeTargets', () => {
     }
   });
 
-  it('returns nothing measured once the deadline passes', async () => {
+  it('leaves existence unmeasured when a target cannot be checked', async () => {
+    const loop = join(dir, 'loop.ts');
+    symlinkSync(loop, loop);
+    const exec = async () => ({ stdout: '', code: 0 });
+    expect(await observeTargets(exec, dir, [{ kind: 'edit', path: loop, change: 'x' }]))
+      .toEqual({ commits: 0, fixCommits: 0 });
+  });
+
+  it('keeps the file facts and leaves the history unmeasured once the deadline passes', async () => {
     const exec = () => new Promise<{ stdout: string; code: number }>(() => {});
-    expect(await observeTargets(exec, dir, steps, undefined, 20)).toEqual({});
+    expect(await observeTargets(exec, dir, steps, undefined, 20)).toEqual({ existingLines: 3, missingTargets: 1 });
   });
 
   it('measures nothing for an invalid plan', async () => {

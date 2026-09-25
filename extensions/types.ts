@@ -228,7 +228,10 @@ export interface MeasuredFeatures {
   testTargets: number;
   /** Lines in the edit/delete targets that already exist. */
   existingLines?: number;
-  /** Edit/delete targets that do not exist on disk. */
+  /**
+   * Edit/delete targets that do not exist on disk; undefined when any
+   * target's existence could not be checked.
+   */
   missingTargets?: number;
   /** Commits touching the targets in the history window. Logged; not weighted. */
   commits?: number;
@@ -237,7 +240,7 @@ export interface MeasuredFeatures {
 }
 
 /** Why an accepted plan stays with its submitter. */
-export type ContractKeepReason = 'size' | 'difficulty' | 'excluded' | 'unknown-target';
+export type ContractKeepReason = 'size' | 'difficulty' | 'excluded' | 'unknown-target' | 'delete';
 
 /** How a contract ended; the label its logged features are fitted against. */
 export type ContractOutcome = 'clean' | 'fixed' | 'rework' | 'broken' | 'unfinished';

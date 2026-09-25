@@ -66,6 +66,7 @@ describe('execution contract validation', () => {
       editTargets: ['/repo/src/a.ts'],
       steps: 3,
       shapeBand: 'economy',
+      deletes: false,
       structural: { files: 1, directories: 1, steps: 3, testTargets: 0 },
     });
   });
@@ -161,6 +162,16 @@ describe('execution contract lifecycle', () => {
       .toMatchObject({ release: false, keepReason: 'unknown-target' });
   });
 
+  it('keeps the submitter when target existence was not measured', () => {
+    expect(accepted([edit('a.ts')], state(), {}, { missingTargets: undefined }).contract)
+      .toMatchObject({ release: false, keepReason: 'unknown-target' });
+  });
+
+  it('keeps the submitter for a plan that deletes a file', () => {
+    expect(accepted([edit('a.ts'), { kind: 'delete', path: 'b.ts' }]).contract)
+      .toMatchObject({ release: false, keepReason: 'delete' });
+  });
+
   it('checks declared targets by resolved path', () => {
     const contract = accepted([edit('src/a.ts')]).contract!;
     expect(isDeclaredTarget(contract, '/repo', './src/a.ts')).toBe(true);
@@ -209,7 +220,7 @@ describe('execution contract lifecycle', () => {
 });
 
 describe('execution contract completion and outcome', () => {
-  const plan = () => accepted([edit('src/a.ts'), edit('src/b.ts'), { kind: 'delete', path: 'src/c.ts' }, verify]);
+  const plan = () => accepted([edit('src/a.ts'), edit('src/b.ts'), verify]);
 
   it('executes the plan once every declared edit/create target is edited, recording the executor', () => {
     const first = noteContractEdit(plan(), '/repo', 'src/a.ts', 'copilot/luna:high');

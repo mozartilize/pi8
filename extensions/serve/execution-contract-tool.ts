@@ -227,9 +227,9 @@ async function countLines(path: string): Promise<number> {
   }
 }
 
-function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+function withDeadline<T>(work: Promise<T>, ms: number, fallback: () => T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); });
+  const expired = new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback()), ms); });
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
 }
 
@@ -246,53 +246,64 @@ export function observeTargets(
   signal?: AbortSignal,
   deadlineMs = OBSERVE_DEADLINE_MS,
 ): Promise<TargetObservations> {
-  return withDeadline(measureTargets(exec, cwd, steps, signal), deadlineMs, {});
+  const observed: TargetObservations = {};
+  return withDeadline(measureTargets(exec, cwd, steps, observed, signal), deadlineMs, () => ({ ...observed }));
 }
 
 async function measureTargets(
   exec: Exec,
   cwd: string,
   steps: readonly ExecutionStepInput[] | undefined,
+  observed: TargetObservations,
   signal?: AbortSignal,
 ): Promise<TargetObservations> {
   const validation = validateContract(steps, cwd);
-  if (!validation.ok) return {};
+  if (!validation.ok) return observed;
   const existing = [...new Set((steps ?? [])
     .filter((step) => (step.kind === 'edit' || step.kind === 'delete') && typeof step.path === 'string')
     .map((step) => resolveToolPath(cwd, step.path!.trim())))];
-  return measureFiles(exec, cwd, existing, validation.targets, signal);
+  return measureFiles(exec, cwd, existing, validation.targets, observed, signal);
 }
 
 /** Size of the files that exist, how many do not, and their recent history. */
 export type FileObservations = TargetObservations;
 
 /**
- * Measure files the router did not choose: line counts of `sized` (absolute
- * paths) and `git log` history of `history`. Each measurement that fails —
- * including a path that is not a regular file — is left undefined, which the
- * requirements treat as the hardest value.
+ * Measure files the router did not choose into `observed`: line counts of
+ * `sized` (absolute paths), how many of them do not exist, and `git log`
+ * history of `history`. Each measurement that fails — a path that is not a
+ * regular file leaves the size unmeasured, any other failure also leaves
+ * existence unmeasured — stays undefined, which the requirements treat as the
+ * hardest value. The files are measured before the history, so a slow `git`
+ * past the deadline leaves their facts in place.
  */
 async function measureFiles(
   exec: Exec,
   cwd: string,
   sized: readonly string[],
   history: readonly string[],
+  observed: FileObservations,
   signal?: AbortSignal,
 ): Promise<FileObservations> {
-  const observed: FileObservations = {};
   let lines = 0;
   let missing = 0;
-  let measured = true;
+  let sizedAll = true;
+  let checkedAll = true;
   for (const path of sized) {
     try {
       lines += await countLines(path);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') missing += 1;
-      else measured = false;
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        missing += 1;
+        continue;
+      }
+      sizedAll = false;
+      if (!(error instanceof NotRegularFile)) checkedAll = false;
     }
   }
-  if (measured) observed.existingLines = lines;
-  observed.missingTargets = missing;
+  if (sizedAll) observed.existingLines = lines;
+  if (checkedAll) observed.missingTargets = missing;
   try {
     const result = await exec(
       'git',
@@ -318,7 +329,8 @@ export function observeFiles(
   signal?: AbortSignal,
   deadlineMs = OBSERVE_DEADLINE_MS,
 ): Promise<FileObservations> {
-  return withDeadline(measureFiles(exec, cwd, paths, paths, signal), deadlineMs, {});
+  const observed: FileObservations = {};
+  return withDeadline(measureFiles(exec, cwd, paths, paths, observed, signal), deadlineMs, () => ({ ...observed }));
 }
 
 /** Log how a contract ended, with the rubric and measurements it was valued on. */
@@ -366,7 +378,8 @@ const KEEP_REASONS = {
   size: 'the plan is too large to hand off',
   difficulty: 'the remaining work needs a model at the current level',
   excluded: 'earlier executors broke plans in this task',
-  'unknown-target': 'a file the plan edits or deletes does not exist',
+  'unknown-target': 'a file the plan edits or deletes does not exist, or could not be checked',
+  delete: 'the plan deletes a file, which only the submitting model can finish',
 } as const;
 
 function reject(intentKey: string, served: string, rejection: ContractRejection): ContractSubmission {
@@ -391,7 +404,7 @@ export function submitExecutionContract(
   params: ContractParams | undefined,
   ctx: Pick<ExtensionContext, 'cwd' | 'model'> | undefined,
   session: RouterSession,
-  observed: TargetObservations = {},
+  observed: TargetObservations,
 ): ContractSubmission {
   const steps = params?.steps;
   if (!ctx || !isRouterAuto(ctx)) {
