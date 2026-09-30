@@ -80,6 +80,7 @@ import {
 } from './serve/router-session-state.js';
 import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
 import { observeContextGrounding } from './serve/context-grounding.js';
+import { registerRoutingContextTool } from './serve/routing-context-tool.js';
 import { classifyMutationCall } from './routing/policy/mutation-detector.js';
 import {
   closeInvestigationOnSettle,
@@ -628,6 +629,7 @@ export default async function autoModelRouterExtension(
   registerAutoRouterProvider(pi, undefined, session, runtime);
   registerExecutionContractTool(pi, session);
   registerInvestigationHandoffTool(pi, session);
+  registerRoutingContextTool(pi, session);
   session.context.bindPersistence((event) => {
     if (typeof pi.appendEntry === 'function') pi.appendEntry(CONTEXT_ENTRY_TYPE, event);
   });

@@ -901,6 +901,22 @@ describe('work ledger lifecycle', () => {
     }
   });
 
+  it('registers routing_context once at init and never changes the tool list afterwards', async () => {
+    const tree = new SessionTree();
+    const { handlers, pi } = makePi(tree);
+    await autoModelRouterExtension(pi);
+    const registerTool = vi.mocked(pi.registerTool);
+    const names = () => registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name);
+    expect(names().filter((name) => name === 'routing_context')).toHaveLength(1);
+    const before = registerTool.mock.calls.length;
+    const ctx = { ...ctxFor(tree), model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } };
+    await handlers.get('session_start')!({ reason: 'startup' }, ctx);
+    await handlers.get('before_agent_start')!({ prompt: 'implement it', systemPromptOptions: {} }, ctx);
+    await handlers.get('turn_start')!({}, ctx);
+    await handlers.get('session_tree')!({ newLeafId: null, oldLeafId: null }, ctx);
+    expect(registerTool.mock.calls.length).toBe(before);
+  });
+
   it('writes appended events to the session branch as custom entries', async () => {
     const tree = new SessionTree();
     const { handlers, pi, appendEntry } = makePi(tree);
@@ -1027,7 +1043,7 @@ describe('mutation observation hooks', () => {
     } as unknown as ExtensionAPI);
     // Both handoff tools are registered once, up front, so the tool list never changes mid-session.
     expect(registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name))
-      .toEqual(['commit_execution', 'hand_off_investigation']);
+      .toEqual(['commit_execution', 'hand_off_investigation', 'routing_context']);
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
 
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
