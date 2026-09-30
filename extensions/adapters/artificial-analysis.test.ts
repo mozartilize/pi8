@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { AA_FETCH_TIMEOUT_MS, fetchRaw, normalize, unwrap } from './artificial-analysis.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const fixture = join(__dirname, '../__fixtures__/aa-sample.json');
+const fixture = join(__dirname, '../../fixtures/aa-sample.json');
 const payload = JSON.parse(readFileSync(fixture, 'utf8'));
 
 describe('artificial-analysis adapter', () => {

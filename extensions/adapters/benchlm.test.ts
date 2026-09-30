@@ -14,7 +14,7 @@ import { resolveRows } from '../bench/matcher.js';
 import { DEFAULT_BENCHMARK_ALIASES } from '../bench/store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const fixture = readFileSync(join(__dirname, '../__fixtures__/benchlm-aaomniscience.html'), 'utf8');
+const fixture = readFileSync(join(__dirname, '../../fixtures/benchlm-aaomniscience.html'), 'utf8');
 
 const fixtureRows = () => normalize(unwrap(JSON.parse(extractNextData(fixture))).rows);
 

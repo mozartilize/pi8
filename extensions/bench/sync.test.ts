@@ -50,7 +50,7 @@ describe('syncBenchmarks', () => {
   });
 
   it('syncs the keyless benchlm source into the store', async () => {
-    const fixtureHtml = readFileSync(join(__dirname, '../__fixtures__/benchlm-aaomniscience.html'), 'utf8');
+    const fixtureHtml = readFileSync(join(__dirname, '../../fixtures/benchlm-aaomniscience.html'), 'utf8');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(fixtureHtml, { status: 200 })));
     const ctx = {
       modelRegistry: {

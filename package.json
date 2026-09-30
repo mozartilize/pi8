@@ -6,7 +6,6 @@
     "extensions",
     "!extensions/*.test.ts",
     "!extensions/**/*.test.ts",
-    "!extensions/__fixtures__/",
     "!extensions/test-support/",
     "index.ts",
     "README.md"
