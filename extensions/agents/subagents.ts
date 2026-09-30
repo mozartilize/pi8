@@ -33,9 +33,7 @@ import { ROLE_DIMENSIONS } from '../types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../constants.js';
 import { activeModels, loadStore } from '../bench/store.js';
 import { pickBest, candidateKey, type RegistryModelInfo } from '../routing/score/scorer.js';
-import { assessTerminal } from '../routing/classify/terminal-classifier.js';
 import { estimateTokenCount } from '../routing/classify/classifier.js';
-import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
 import { expandModelCandidates } from '../serve/provider.js';
 import { effortDropsPerStep } from '../routing/score/effort-estimate.js';
 import { loadModelFilter } from '../routing/policy/allowlist.js';
@@ -175,11 +173,6 @@ export interface SubagentTaskRequest {
   requestedModel?: string;
   /** False for explicit concrete models and roles omitted from router ownership. */
   routerOwned?: boolean;
-  /**
-   * The task's kind as the embedding reader read it, for a task the keyword
-   * rules cannot read; it can only raise the role's task type.
-   */
-  kindHint?: Dimension;
 }
 
 export interface RoleRoutingSnapshot {
@@ -302,17 +295,9 @@ function excludedCandidate(
   return isBlacklisted(stripThinkingSuffix(id));
 }
 
-function targetDimensionForTask(role: Role, task?: string, kindHint?: Dimension): Dimension {
-  const baseline = ROLE_DIMENSIONS[role];
-  if (typeof task !== 'string' || task.trim() === '') return baseline;
-  const stronger = (a: Dimension, b: Dimension): Dimension => (DIMENSION_STRENGTH[a] > DIMENSION_STRENGTH[b] ? a : b);
-  const assessed = kindHint ? stronger(kindHint, assessTerminal(task).kind) : assessTerminal(task).kind;
-  return stronger(assessed, baseline);
-}
-
 /**
- * Pure spawn-time selection. Role is the minimum capability; task assessment
- * can only raise that floor. Candidates remain limited to the role's baseline
+ * Pure spawn-time selection. The structured role sets the task type; the
+ * task text never changes it and only sizes the child's context. Candidates remain limited to the role's baseline
  * fallback chain so auth, allowlists, and pinned-role ownership stay intact.
  */
 export function selectTaskAwareRoleChildren(
@@ -393,7 +378,7 @@ export function selectTaskAwareRoleChildren(
         : undefined;
     }
 
-    const dimension = targetDimensionForTask(request.role, request.task, request.kindHint);
+    const dimension = ROLE_DIMENSIONS[request.role];
     const decision = pickBest(
       unrestricted,
       dimension,
@@ -681,7 +666,7 @@ export function isRole(value: unknown): value is Role {
 }
 
 /** Collect visible structured role/task pairs without parsing workflowScript. */
-export function collectSubagentTaskRequests(
+function collectSubagentTaskRequests(
   input: unknown,
   roleModels: ReadonlyMap<Role, string>,
 ): SubagentTaskRequest[] {

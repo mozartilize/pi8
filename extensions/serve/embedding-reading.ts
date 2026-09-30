@@ -9,15 +9,14 @@
  *    task type, an unresolved fallback instead of new work) but never takes
  *    the fast path, which stays with the exact English rules because it
  *    reuses a work item's state without collecting more context;
- *  - a decided kind stronger than the keyword one raises the final step's
- *    kind, of the entry and of a subagent task.
+ *  - a decided kind stronger than the keyword one raises the entry's final
+ *    step's kind.
  */
 import { readPrompt, type EmbeddingReading } from '../embed/embedding.js';
 import { debugLog } from '../host/debuglog.js';
-import { classify, type ClassifyResult } from '../routing/classify/classifier.js';
+import type { ClassifyResult } from '../routing/classify/classifier.js';
 import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
 import type { TurnClassificationInput } from '../routing/policy/continuation.js';
-import type { SubagentTaskRequest } from '../agents/subagents.js';
 import type { AutoRouterConfig, EmbeddingMeta, TaskKind } from '../types.js';
 import type { RouterSession } from './router-session-state.js';
 
@@ -89,59 +88,6 @@ export async function readEntryPrompt(
       ...(kind ? { kindRaised: true } : {}),
     },
   };
-}
-
-/**
- * Read the tasks of a subagent spawn the keyword rules cannot read, within
- * one `embeddingDeadlineMs` budget for the whole spawn, and return each
- * task's kind when the reading decided one stronger than the keyword kind.
- * A task that is not read keeps its keyword kind.
- */
-export async function readSubagentTaskKinds(
-  requests: readonly SubagentTaskRequest[],
-  config: AutoRouterConfig,
-  session: RouterSession,
-  now: () => number = Date.now,
-): Promise<Map<string, TaskKind>> {
-  const kinds = new Map<string, TaskKind>();
-  if (!config.embeddingClassifier) return kinds;
-  const tasks = [...new Set(requests
-    .filter((request) => request.routerOwned !== false && typeof request.task === 'string')
-    .map((request) => request.task!))];
-  const deadline = now() + config.embeddingDeadlineMs;
-  for (const task of tasks) {
-    const keywords = classify(task);
-    if (!keywordsCannotRead(task, keywords.hasCategoricalEvidence)) continue;
-    const remaining = deadline - now();
-    if (remaining <= 0) break;
-    let reading: EmbeddingReading | undefined;
-    try {
-      reading = await readPrompt(task, { deadlineMs: remaining });
-    } catch {
-      reading = undefined;
-    }
-    if (!reading) {
-      session.recordEmbedding('failed');
-      continue;
-    }
-    session.recordEmbedding('read');
-    const kind = raisedKind(reading, keywords.terminal.kind);
-    if (!kind) continue;
-    session.recordEmbedding('kindRaised');
-    kinds.set(task, kind);
-  }
-  return kinds;
-}
-
-/** Attach each request's task kind from the embedding reader, when it has one. */
-export function withKindHints(
-  requests: readonly SubagentTaskRequest[],
-  kinds: ReadonlyMap<string, TaskKind>,
-): SubagentTaskRequest[] {
-  return requests.map((request) => {
-    const kindHint = request.task != null ? kinds.get(request.task) : undefined;
-    return kindHint ? { ...request, kindHint } : request;
-  });
 }
 
 const round = (value: number): number => Math.round(value * 1000) / 1000;

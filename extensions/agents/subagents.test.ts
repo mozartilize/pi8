@@ -85,7 +85,7 @@ describe('computeRoleAssignments — role→dimension', () => {
   it('maps each role to its expected dimension and picks a model', () => {
     const a = computeRoleAssignments(candidatesFor());
     const byRole = Object.fromEntries(a.map((x) => [x.role, x])) as Record<string, RoleAssignment>;
-    expect(byRole.researcher.dimension).toBe('gather');
+    expect(byRole.researcher.dimension).toBe('plan');
     expect(byRole.planner.dimension).toBe('plan');
     expect(byRole.worker.dimension).toBe('implement');
     expect(byRole.reviewer.dimension).toBe('review');
@@ -112,12 +112,14 @@ describe('spawn-time task-aware role selection', () => {
     return { roleModels, roleFallbacks };
   }
 
-  it('raises a worker floor from its task but never lowers it', () => {
+  it('routes a child at its role\'s task type, whatever its task text says', () => {
     const { roleModels, roleFallbacks } = baselineRouting();
     const selected = selectTaskAwareRoleChildren(
       [
         { path: '$.tasks[0]', role: 'worker', task: 'plan the distributed architecture' },
         { path: '$.tasks[1]', role: 'worker', task: 'rename this variable' },
+        { path: '$.tasks[2]', role: 'researcher', task: 'find where the cache is invalidated' },
+        { path: '$.tasks[3]', role: 'reviewer', task: 'implement the fix' },
       ],
       roleModels,
       roleFallbacks,
@@ -125,27 +127,10 @@ describe('spawn-time task-aware role selection', () => {
       () => false,
       100,
     );
-    expect(selected.get('$.tasks[0]')?.dimension).toBe('plan');
+    expect(selected.get('$.tasks[0]')?.dimension).toBe('implement');
     expect(selected.get('$.tasks[1]')?.dimension).toBe('implement');
-  });
-
-  it('raises a child to the embedding reader\'s kind, never below the role or the keyword kind', () => {
-    const { roleModels, roleFallbacks } = baselineRouting();
-    const selected = selectTaskAwareRoleChildren(
-      [
-        { path: '$.tasks[0]', role: 'worker', task: 'thiết kế kiến trúc cho dịch vụ đồng bộ', kindHint: 'plan' },
-        { path: '$.tasks[1]', role: 'worker', task: 'đổi tên biến', kindHint: 'lightweight' },
-        { path: '$.tasks[2]', role: 'reviewer', task: 'review the diff', kindHint: 'implement' },
-      ],
-      roleModels,
-      roleFallbacks,
-      { candidates: candidatesFor(), weights: {} },
-      () => false,
-      100,
-    );
-    expect(selected.get('$.tasks[0]')?.dimension).toBe('plan');
-    expect(selected.get('$.tasks[1]')?.dimension).toBe('implement');
-    expect(selected.get('$.tasks[2]')?.dimension).toBe('review');
+    expect(selected.get('$.tasks[2]')?.dimension).toBe('plan');
+    expect(selected.get('$.tasks[3]')?.dimension).toBe('review');
   });
 
   it('preserves the baseline pick when a child has no task', () => {

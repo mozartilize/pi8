@@ -39,7 +39,6 @@ import { registerAutoRouterProvider, buildSubagentProviderAuthFilter } from './s
 
 import {
   computeRoleModels,
-  collectSubagentTaskRequests,
   injectSubagentRoutingWithMetadata,
   pickSubagentDefaultModel,
   stripThinkingSuffix,
@@ -57,11 +56,10 @@ import { computeSubagentSpend } from './agents/subagent-spend.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './routing/policy/allowlist.js';
 import { loadConfig } from './config.js';
 import { ensureEmbeddingEngine } from './embed/embedding.js';
-import { readSubagentTaskKinds, withKindHints } from './serve/embedding-reading.js';
 import { setSessionFile } from './sessionpaths.js';
 import { debugLog, setConfigDebug } from './host/debuglog.js';
 import type { RegistryModelInfo } from './routing/score/scorer.js';
-import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role, type TaskKind } from './types.js';
+import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 import {
   appendSubagentGapSignal,
   appendSubagentSpend,
@@ -444,30 +442,12 @@ function liveRoleRouting(session: RouterSession, routingState: SubagentRoutingSt
   return { isExcluded, live: routingState.resolveLive(isExcluded) };
 }
 
-/**
- * The embedding reader's kinds for the spawn's tasks the keyword rules
- * cannot read. Never fails: a spawn routes on keywords alone without them.
- */
-async function readSubagentKinds(
-  event: ToolCallEvent,
-  session: RouterSession,
-  routingState: SubagentRoutingState,
-): Promise<ReadonlyMap<string, TaskKind>> {
-  try {
-    const { live } = liveRoleRouting(session, routingState);
-    return await readSubagentTaskKinds(collectSubagentTaskRequests(event.input, live.roleModels), loadConfig(), session);
-  } catch {
-    return new Map();
-  }
-}
-
 function handleSubagentToolCall(
   event: ToolCallEvent,
   ctx: ExtensionContext,
   session: RouterSession,
   routingState: SubagentRoutingState,
   subagentCalls: Map<string, SubagentCallObservation>,
-  kinds: ReadonlyMap<string, TaskKind> = new Map(),
 ): void {
   try {
     const { isExcluded, live } = liveRoleRouting(session, routingState);
@@ -478,7 +458,7 @@ function handleSubagentToolCall(
       ? usage.tokens
       : 0;
     const traversal = injectSubagentRoutingWithMetadata(event.input, live.roleModels, {
-      selectChildren: (requests) => routingState.selectChildren(withKindHints(requests, kinds), isExcluded, currentTokens),
+      selectChildren: (requests) => routingState.selectChildren(requests, isExcluded, currentTokens),
       defaultModel: pickSubagentDefaultModel(live.roleModels),
     });
     subagentCalls.set(event.toolCallId, {
@@ -713,17 +693,8 @@ export default async function autoModelRouterExtension(
     const restricted = gateContextToolCall(event, session);
     if (restricted) return restricted;
     if (event.toolName === SUBAGENT_TOOL) {
-      // Tasks the keyword rules cannot read are read by the embedding model
-      // before routing, when it is on; its kind can only raise a child's
-      // task type. With it off, routing stays synchronous.
-      if (!loadConfig().embeddingClassifier) {
-        handleSubagentToolCall(event, ctx, session, routingState, subagentCalls);
-        return;
-      }
-      return readSubagentKinds(event, session, routingState).then((kinds) => {
-        handleSubagentToolCall(event, ctx, session, routingState, subagentCalls, kinds);
-        return undefined;
-      });
+      handleSubagentToolCall(event, ctx, session, routingState, subagentCalls);
+      return;
     }
     try {
       // A change stopped for an owed plan never runs: it is not counted,

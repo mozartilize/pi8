@@ -441,7 +441,7 @@ export interface RoutingDecision {
 export type Role = 'researcher' | 'planner' | 'worker' | 'reviewer' | 'advisor';
 
 export const ROLE_DIMENSIONS: Record<Role, Dimension> = {
-  researcher: 'gather',
+  researcher: 'plan',
   planner: 'plan',
   worker: 'implement',
   reviewer: 'review',

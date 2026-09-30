@@ -13,8 +13,7 @@ import { SessionTree } from '../test-support/session-tree.js';
 import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
 import type { EmbeddingReading } from '../embed/embedding-head.js';
 import type { RoutingDecision } from '../types.js';
-import { EMBEDDING_THIN_MAX_CHARS, keywordsCannotRead, readSubagentTaskKinds, withKindHints } from './embedding-reading.js';
-import { RouterSession } from './router-session-state.js';
+import { EMBEDDING_THIN_MAX_CHARS, keywordsCannotRead } from './embedding-reading.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
 
 const embedding = vi.hoisted(() => ({ readPrompt: vi.fn() }));
@@ -59,68 +58,6 @@ describe('keywordsCannotRead', () => {
 
   it('does not count typographic punctuation as a letter the rules cannot read', () => {
     expect(keywordsCannotRead('let’s ship the fix', true)).toBe(false);
-  });
-});
-
-describe('subagent task kinds', () => {
-  const config = { embeddingClassifier: true, embeddingDeadlineMs: 1000 } as never;
-  beforeEach(() => {
-    embedding.readPrompt.mockReset();
-  });
-
-  it('reads each unread task once and keeps only decided kinds stronger than the keyword one', async () => {
-    embedding.readPrompt.mockImplementation(async (task: string) => (
-      task.startsWith('thiết kế')
-        ? reading({ kind: 'plan', kindMargin: 0.02, kindDecided: true })
-        : task.startsWith('đổi tên')
-          ? reading({ kind: 'lightweight', kindMargin: 0.05, kindDecided: true })
-          : reading({ kind: 'review', kindMargin: 0.004, kindDecided: false })
-    ));
-    const session = new RouterSession();
-    const kinds = await readSubagentTaskKinds([
-      { path: '$.a', role: 'worker', task: 'thiết kế kiến trúc dịch vụ đồng bộ' },
-      { path: '$.b', role: 'worker', task: 'thiết kế kiến trúc dịch vụ đồng bộ' },
-      { path: '$.c', role: 'worker', task: 'đổi tên biến user' },
-      { path: '$.d', role: 'reviewer', task: 'xem lại thay đổi' },
-      { path: '$.e', role: 'worker', task: 'implement the export command' },
-      { path: '$.f', role: 'worker', task: 'thiết kế lại cache', routerOwned: false },
-    ], config, session);
-    expect([...kinds]).toEqual([['thiết kế kiến trúc dịch vụ đồng bộ', 'plan']]);
-    expect(embedding.readPrompt).toHaveBeenCalledTimes(3);
-    expect(session.getEmbeddingStats()).toMatchObject({ read: 3, kindRaised: 1 });
-  });
-
-  it('stops reading once the spawn has used its deadline', async () => {
-    let clock = 0;
-    embedding.readPrompt.mockImplementation(async () => {
-      clock += 600;
-      return reading({ kind: 'plan', kindMargin: 0.02, kindDecided: true });
-    });
-    const kinds = await readSubagentTaskKinds([
-      { path: '$.a', role: 'worker', task: 'thiết kế một' },
-      { path: '$.b', role: 'worker', task: 'thiết kế hai' },
-      { path: '$.c', role: 'worker', task: 'thiết kế ba' },
-    ], config, new RouterSession(), () => clock);
-    expect(embedding.readPrompt).toHaveBeenCalledTimes(2);
-    expect(kinds.size).toBe(2);
-  });
-
-  it('reads nothing when the reader is off', async () => {
-    const kinds = await readSubagentTaskKinds(
-      [{ path: '$.a', role: 'worker', task: 'thiết kế' }],
-      { embeddingClassifier: false, embeddingDeadlineMs: 1000 } as never,
-      new RouterSession(),
-    );
-    expect(kinds.size).toBe(0);
-    expect(embedding.readPrompt).not.toHaveBeenCalled();
-  });
-
-  it('attaches a kind only to requests whose task has one', () => {
-    const requests = withKindHints(
-      [{ path: '$.a', role: 'worker', task: 'x' }, { path: '$.b', role: 'worker', task: 'y' }, { path: '$.c', role: 'worker' }],
-      new Map([['x', 'plan' as const]]),
-    );
-    expect(requests.map((request) => request.kindHint)).toEqual(['plan', undefined, undefined]);
   });
 });
 
