@@ -175,6 +175,11 @@ export interface SubagentTaskRequest {
   requestedModel?: string;
   /** False for explicit concrete models and roles omitted from router ownership. */
   routerOwned?: boolean;
+  /**
+   * The task's kind as the embedding reader read it, for a task the keyword
+   * rules cannot read; it can only raise the role's task type.
+   */
+  kindHint?: Dimension;
 }
 
 export interface RoleRoutingSnapshot {
@@ -297,11 +302,12 @@ function excludedCandidate(
   return isBlacklisted(stripThinkingSuffix(id));
 }
 
-function targetDimensionForTask(role: Role, task?: string): Dimension {
+function targetDimensionForTask(role: Role, task?: string, kindHint?: Dimension): Dimension {
   const baseline = ROLE_DIMENSIONS[role];
   if (typeof task !== 'string' || task.trim() === '') return baseline;
-  const assessed = assessTerminal(task).kind;
-  return DIMENSION_STRENGTH[assessed] > DIMENSION_STRENGTH[baseline] ? assessed : baseline;
+  const stronger = (a: Dimension, b: Dimension): Dimension => (DIMENSION_STRENGTH[a] > DIMENSION_STRENGTH[b] ? a : b);
+  const assessed = kindHint ? stronger(kindHint, assessTerminal(task).kind) : assessTerminal(task).kind;
+  return stronger(assessed, baseline);
 }
 
 /**
@@ -387,7 +393,7 @@ export function selectTaskAwareRoleChildren(
         : undefined;
     }
 
-    const dimension = targetDimensionForTask(request.role, request.task);
+    const dimension = targetDimensionForTask(request.role, request.task, request.kindHint);
     const decision = pickBest(
       unrestricted,
       dimension,
@@ -675,7 +681,7 @@ export function isRole(value: unknown): value is Role {
 }
 
 /** Collect visible structured role/task pairs without parsing workflowScript. */
-function collectSubagentTaskRequests(
+export function collectSubagentTaskRequests(
   input: unknown,
   roleModels: ReadonlyMap<Role, string>,
 ): SubagentTaskRequest[] {

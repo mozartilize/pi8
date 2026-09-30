@@ -40,10 +40,9 @@ export const DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.15;
 /** Reported confidence never drops below this floor, so a caller threshold
  * below it cannot silently change the routed dimension. */
 export const CONFIDENCE_FLOOR = 0.1;
+
 /**
- * Minimum embedding-classifier confidence (the margin between the top two
- * prototype scores) for the blend to apply. Below it the embedding layer
- * abstains and the keyword result stands unchanged — abstention never routes
- * cheaper (R3). Default 0.15.
+ * Budget for loading the embedding model and reading one prompt. Past it the
+ * keyword result stands; a cold load keeps going in the background.
  */
-export const DEFAULT_EMBEDDING_MIN_CONFIDENCE = 0.15;
+export const DEFAULT_EMBEDDING_DEADLINE_MS = 5000;

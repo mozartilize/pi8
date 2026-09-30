@@ -6,19 +6,23 @@ import { join } from 'node:path';
 import {
   isEmbeddingAvailable,
   getEmbeddingError,
-  embedAndClassify,
+  readPrompt,
   ensureEmbeddingEngine,
   resetEmbeddingEngine,
   setEmbeddingTestOverrides,
 } from './embedding.js';
+import { referenceTexts } from './embedding-head.js';
 import type { Dimension } from '../types.js';
 
 // ─── Fake engine dependencies ─────────────────────────────────────────
 // The fake maps text → a one-hot 384-dim vector whose band is chosen by the
 // first marker found (greeting→lightweight, find→gather, plan→plan,
-// write→implement, review→review). The real prototype texts each hit their
-// own marker, so classification is exact while the full tokenize → tensor →
+// write→implement, review→review). The real kind descriptions each hit their
+// own marker, so the kind reading is exact while the full tokenize → tensor →
 // run → mean-pool → L2-normalize → cosine pipeline runs for real.
+
+/** Inference runs spent embedding the heads' references at load. */
+const REFERENCE_RUNS = referenceTexts().length;
 
 const MARKERS: Array<[string, Dimension]> = [
   ['greeting', 'lightweight'],
@@ -133,10 +137,10 @@ describe('embedding engine', () => {
     expect(getEmbeddingError()).toBeUndefined();
   });
 
-  it('returns undefined from embedAndClassify when not loaded', async () => {
+  it('returns undefined from readPrompt when not loaded', async () => {
     // No fake deps: the real dynamic import fails fast in this environment,
     // so the engine reports unavailable rather than throwing (R2).
-    const result = await embedAndClassify('hello', { deadlineMs: 500 });
+    const result = await readPrompt('hello', { deadlineMs: 500 });
     expect(result).toBeUndefined();
     expect(isEmbeddingAvailable()).toBe(false);
   });
@@ -170,22 +174,22 @@ describe('embedding engine', () => {
     expect(isEmbeddingAvailable()).toBe(false);
   });
 
-  it('embedAndClassify times out when inference hangs', async () => {
-    // The 5 prototype embeds succeed during init; the 6th run (the query)
+  it('readPrompt times out when inference hangs', async () => {
+    // The reference embeds succeed during init; the next run (the query)
     // hangs, so the call must degrade within the deadline (R5: a silent
     // hang is not a thrown error — it must not block the turn).
-    setEmbeddingTestOverrides(makeFakeDeps({ hangRunAfter: 5 }));
+    setEmbeddingTestOverrides(makeFakeDeps({ hangRunAfter: REFERENCE_RUNS }));
     expect(await ensureEmbeddingEngine({ deadlineMs: 1000 })).toBe(true);
     const started = Date.now();
-    const result = await embedAndClassify('please write a script', { deadlineMs: 80 });
+    const result = await readPrompt('please write a script', { deadlineMs: 80 });
     expect(result).toBeUndefined();
     expect(Date.now() - started).toBeGreaterThanOrEqual(70);
   });
 
-  it('embedAndClassify degrades when inference throws', async () => {
-    setEmbeddingTestOverrides(makeFakeDeps({ failRunAfter: 5 }));
+  it('readPrompt degrades when inference throws', async () => {
+    setEmbeddingTestOverrides(makeFakeDeps({ failRunAfter: REFERENCE_RUNS }));
     expect(await ensureEmbeddingEngine({ deadlineMs: 1000 })).toBe(true);
-    const result = await embedAndClassify('please write a script', { deadlineMs: 500 });
+    const result = await readPrompt('please write a script', { deadlineMs: 500 });
     expect(result).toBeUndefined();
     // The engine itself stays loaded — only this inference failed.
     expect(isEmbeddingAvailable()).toBe(true);
@@ -193,7 +197,7 @@ describe('embedding engine', () => {
 
   // ─── Success path (fake deps) ──────────────────────────────────
 
-  it('loads the engine end to end (init → prototypes → ready)', async () => {
+  it('loads the engine end to end (init → references → ready)', async () => {
     setEmbeddingTestOverrides(makeFakeDeps());
     const ok = await ensureEmbeddingEngine({ deadlineMs: 1000 });
     expect(ok).toBe(true);
@@ -201,7 +205,7 @@ describe('embedding engine', () => {
     expect(getEmbeddingError()).toBeUndefined();
   });
 
-  it('classifies query text into the marker-matched dimension', async () => {
+  it('reads the kind of the marker-matched description', async () => {
     setEmbeddingTestOverrides(makeFakeDeps());
     await ensureEmbeddingEngine({ deadlineMs: 1000 });
     const cases: Array<[string, Dimension]> = [
@@ -209,12 +213,12 @@ describe('embedding engine', () => {
       ['review this pull request', 'review'],
       ['find where the bug is', 'gather'],
       ['plan the migration', 'plan'],
-      ['hi', 'lightweight'],
+      ['a greeting', 'lightweight'],
     ];
     for (const [text, dim] of cases) {
-      const result = await embedAndClassify(text, { deadlineMs: 1000 });
-      expect(result?.dimension).toBe(dim);
-      expect(result?.confidence).toBeGreaterThan(0.99);
+      const result = await readPrompt(text, { deadlineMs: 1000 });
+      expect(result).toMatchObject({ kind: dim, kindDecided: true });
+      expect(result?.kindMargin).toBeGreaterThan(0.99);
     }
   });
 
@@ -247,10 +251,10 @@ describe('embedding engine', () => {
     });
     setEmbeddingTestOverrides(deps);
     expect(await ensureEmbeddingEngine({ deadlineMs: 1000 })).toBe(true);
-    const result = await embedAndClassify('review this pull request', { deadlineMs: 1000 });
-    expect(result?.dimension).toBe('review');
-    // 5 prototype embeds + 1 query run — none may feed an undeclared input.
-    expect(deps._feedsLog.length).toBe(6);
+    const result = await readPrompt('review this pull request', { deadlineMs: 1000 });
+    expect(result?.kind).toBe('review');
+    // Reference embeds + 1 query run — none may feed an undeclared input.
+    expect(deps._feedsLog.length).toBe(REFERENCE_RUNS + 1);
     for (const feeds of deps._feedsLog) {
       expect(feeds.input_ids).toBeDefined();
       expect(feeds.attention_mask).toBeDefined();
@@ -262,7 +266,7 @@ describe('embedding engine', () => {
     const deps = makeFakeDeps({ captureFeeds: true });
     setEmbeddingTestOverrides(deps);
     expect(await ensureEmbeddingEngine({ deadlineMs: 1000 })).toBe(true);
-    await embedAndClassify('hello', { deadlineMs: 1000 });
+    await readPrompt('hello', { deadlineMs: 1000 });
     for (const feeds of deps._feedsLog) {
       expect(feeds.token_type_ids).toBeDefined();
     }

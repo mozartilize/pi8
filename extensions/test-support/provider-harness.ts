@@ -128,7 +128,6 @@ export interface ProviderStateSnapshot {
   lastDecision: RoutingDecision | undefined;
   lastServed: ServedInfo | undefined;
   accumulatedCost: number;
-  embeddingStats: import('../serve/router-session-state.js').EmbeddingStats;
   blacklistedModels: string[];
   blacklistedProviders: string[];
   workPhaseState: WorkPhaseState | undefined;

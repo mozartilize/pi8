@@ -87,7 +87,6 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   'manual-override': 'manual pin',
   resume: 'reused the route from before the pin',
   'semi-hold': 'kept the current model (semi mode)',
-  'embedding-classify': 'local multilingual embedding classifier',
   'work-context': 'a follow-up that carries on its resolved work item\'s task type',
 };
 
@@ -179,9 +178,8 @@ function embeddingLines(embedding: EmbeddingMeta | undefined): string[] {
 }
 
 /** One-line embedding-reader tally for `/router-status`. */
-export function formatEmbeddingStats(s: EmbeddingStats): string {
-  const kept = s.fired - s.promoted - s.abstainedLowConf;
-  return `embedding classifier: ran ${s.fired} (raised ${s.promoted}, unchanged ${kept}, too unsure ${s.abstainedLowConf}), failed ${s.degraded}`;
+export function formatEmbeddingStats(stats: EmbeddingStats): string {
+  return `embedding reader: read ${stats.read} prompts the keywords could not (short follow-ups ${stats.thin}, final step raised ${stats.kindRaised}), failed ${stats.failed}`;
 }
 
 const CONTRACT_BREAK_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['breakReason']>, string>> = {

@@ -45,19 +45,17 @@ export interface CachedRoutingIntent {
   embedding?: EmbeddingMeta;
 }
 
-/** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */
+/** Embedding-reader tallies for `/router-status`. */
 export interface EmbeddingStats {
-  /** Inference returned a verdict (a vector was classified). */
-  fired: number;
-  /** Verdict was confident and stronger than keyword → dimension raised. */
-  promoted: number;
-  /** Verdict below the confidence floor → abstained, keyword stood (R3). */
-  abstainedLowConf: number;
-  /** No verdict: timeout, unavailable, or inference error → keyword stood (R2). */
-  degraded: number;
+  /** Prompts the reader read. */
+  read: number;
+  /** Of those, entries treated as thin on the reading. */
+  thin: number;
+  /** Of those, entries whose terminal kind the reading raised. */
+  kindRaised: number;
+  /** Reads that failed or ran out of time; the keyword result stood. */
+  failed: number;
 }
-
-type EmbeddingOutcome = keyof EmbeddingStats;
 
 /**
  * Domain object for per-turn intent caching and per-entry work-phase state.
@@ -321,13 +319,7 @@ export class RouterSession {
   private resolvedThinkingLevel: string | undefined;
   private syncedThinkingLevel: string | undefined;
   private activeSkills: readonly string[] = [];
-  private readonly embedStats: EmbeddingStats = {
-    fired: 0,
-    promoted: 0,
-    abstainedLowConf: 0,
-    degraded: 0,
-  };
-
+  private embeddingStats: EmbeddingStats = { read: 0, thin: 0, kindRaised: 0, failed: 0 };
   private memoizedCandidateExpansion: { key: string; candidates: Candidate[] } | undefined;
 
   constructor(
@@ -508,11 +500,11 @@ export class RouterSession {
   }
 
   getEmbeddingStats(): EmbeddingStats {
-    return { ...this.embedStats };
+    return { ...this.embeddingStats };
   }
 
-  recordEmbedding(outcome: EmbeddingOutcome): void {
-    this.embedStats[outcome] += 1;
+  recordEmbedding(outcome: keyof EmbeddingStats): void {
+    this.embeddingStats = { ...this.embeddingStats, [outcome]: this.embeddingStats[outcome] + 1 };
   }
 
   getCandidateExpansion(): { key: string; candidates: Candidate[] } | undefined {
@@ -689,11 +681,7 @@ export class RouterSession {
     this.resolvedThinkingLevel = undefined;
     this.syncedThinkingLevel = undefined;
     this.activeSkills = [];
-    this.embedStats.fired = 0;
-    this.embedStats.promoted = 0;
-    this.embedStats.abstainedLowConf = 0;
-    this.embedStats.degraded = 0;
-
+    this.embeddingStats = { read: 0, thin: 0, kindRaised: 0, failed: 0 };
     this.memoizedCandidateExpansion = undefined;
 
     this.intent.reset();

@@ -1,8 +1,8 @@
 /**
  * Embedding engine — lazy singleton for E5-small inference.
  *
- * Loads the ONNX model and tokenizer once, then provides `embed(text)` for
- * the lifetime of the process. Every public method degrades to `undefined`
+ * Loads the ONNX model and tokenizer once, embeds the heads' reference texts,
+ * then reads prompts (`readPrompt`) for the lifetime of the process. Every public method degrades to `undefined`
  * on any failure or deadline expiry (R2: the router must never block or
  * fail a turn because of its own bugs). Not a hard dependency: onnxruntime-
  * node and the tokenizer package are dynamically imported and absent
@@ -32,11 +32,15 @@ import {
   getEmbeddingDir,
   getEmbeddingModelPath,
 } from './embedding-provision.js';
-import type { Dimension } from '../types.js';
-import { classifyEmbedding, getPrototypeText } from './embedding-head.js';
-import type { EmbeddingResult } from './embedding-head.js';
+import {
+  readEmbedding,
+  referenceTexts,
+  referenceVectors,
+  type EmbeddingReading,
+  type ReferenceVectors,
+} from './embedding-head.js';
 
-export type { EmbeddingResult } from './embedding-head.js';
+export type { EmbeddingReading } from './embedding-head.js';
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -83,8 +87,6 @@ const E5_QUERY_PREFIX = 'query: ';
 /** E5-small fixed hidden dimension. */
 const HIDDEN_SIZE = 384;
 
-const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
-
 // ─── Lazy singleton state ─────────────────────────────────────────────
 
 let engineState: {
@@ -92,7 +94,7 @@ let engineState: {
   session: Session;
   tokenizer: TokenizerFn;
   hiddenSize: number;
-  prototypes: Record<Dimension, Float32Array>;
+  references: ReferenceVectors;
 } | undefined;
 
 /**
@@ -109,7 +111,7 @@ let testOverrides: { ort?: OrtModule; tokenizer?: TokenizerFn } | undefined;
 /**
  * Inject fake engine dependencies (tests only). Overrides the dynamic
  * imports and the model-file existence check so the full init → embed →
- * classify pipeline runs without native packages or a downloaded model.
+ * read pipeline runs without native packages or a downloaded model.
  */
 export function setEmbeddingTestOverrides(
   overrides: { ort?: OrtModule; tokenizer?: TokenizerFn } | undefined,
@@ -193,7 +195,7 @@ async function embedFromSession(
   const maskData = encoded.attention_mask.data;
 
   // Construct ONNX tensors. `ort` is passed in because during init the
-  // prototypes are embedded before `engineState` exists.
+  // reference texts are embedded before `engineState` exists.
   const { Tensor } = ort;
   const inputTensor = new Tensor('int64', idData, [1, seqLen]);
   const maskTensor = new Tensor('int64', maskData, [1, seqLen]);
@@ -258,17 +260,20 @@ async function initEngine(opts: EmbeddingOptions): Promise<boolean> {
       return;
     }
 
-    const tokenizer = testOverrides?.tokenizer ?? (await tryImportTokenizer());
-    if (!tokenizer) {
-      // Retryable: a missing package fails fast, a failed tokenizer fetch
-      // is transient. Neither needs a latch.
-      return;
-    }
-
+    // A missing model needs the user to provision it, so it latches; it is
+    // checked before the tokenizer, whose files ship with the model and would
+    // otherwise fail first as a retryable error that names nothing to do.
     const modelPath =
       opts.modelPath ?? getEmbeddingModelPath();
     if (!testOverrides && !existsSync(modelPath)) {
       loadError = `embedding model not found at ${modelPath} — run /router-sync embedding`;
+      return;
+    }
+
+    const tokenizer = testOverrides?.tokenizer ?? (await tryImportTokenizer());
+    if (!tokenizer) {
+      // Retryable: a missing package fails fast, a failed tokenizer load
+      // is transient. Neither needs a latch.
       return;
     }
 
@@ -278,19 +283,14 @@ async function initEngine(opts: EmbeddingOptions): Promise<boolean> {
         graphOptimizationLevel: 'all',
       });
 
-      // Pre-embed all five dimension prototypes (one-time, cheap)
-      const prototypes = {} as Record<Dimension, Float32Array>;
-      for (const dim of DIMENSIONS) {
-        prototypes[dim] = await embedFromSession(
-          ort,
-          session,
-          tokenizer,
-          getPrototypeText(dim),
-          HIDDEN_SIZE,
-        );
+      // Embed the heads' reference texts once, at load, off the turn path
+      // when session_start pre-warms the engine.
+      const vectors: Float32Array[] = [];
+      for (const text of referenceTexts()) {
+        vectors.push(await embedFromSession(ort, session, tokenizer, text, HIDDEN_SIZE));
       }
 
-      engineState = { ort, session, tokenizer, hiddenSize: HIDDEN_SIZE, prototypes };
+      engineState = { ort, session, tokenizer, hiddenSize: HIDDEN_SIZE, references: referenceVectors(vectors) };
     } catch {
       // Retryable load failure (corrupt model, transient session error).
       // Leave loadError unset so a later call attempts a fresh load.
@@ -330,16 +330,16 @@ export async function ensureEmbeddingEngine(opts: EmbeddingOptions = {}): Promis
 }
 
 /**
- * Embed a text and classify into a routing dimension, bounded by
- * `deadlineMs` (default 5000) across engine load + inference.
+ * Embed a prompt and read it with every head, bounded by `deadlineMs`
+ * (default 5000) across engine load + inference.
  *
- * Returns `undefined` on any failure or timeout — the caller MUST use the
- * keyword result as fallback (R2). Never throws.
+ * Returns `undefined` on any failure or timeout — the caller keeps the
+ * keyword result (R2). Never throws.
  */
-export async function embedAndClassify(
+export async function readPrompt(
   text: string,
   opts: { deadlineMs?: number } = {},
-): Promise<EmbeddingResult | undefined> {
+): Promise<EmbeddingReading | undefined> {
   const deadline = opts.deadlineMs ?? DEFAULT_DEADLINE_MS;
   if (!engineState) {
     const ready = await raceDeadline(initEngine({}), deadline);
@@ -356,7 +356,7 @@ export async function embedAndClassify(
     deadline,
   );
   if (!vec) return undefined;
-  return classifyEmbedding(vec, engineState.prototypes);
+  return readEmbedding(vec, engineState.references);
 }
 
 /**

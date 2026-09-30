@@ -373,6 +373,15 @@ describe('routing context state', () => {
     }
   });
 
+  it('keeps the fast path closed across a branch restore and opens it on reset', () => {
+    const session = new RouterSession();
+    session.context.setFastPathBlocked(true);
+    session.context.restore([]);
+    expect(session.context.isFastPathBlocked()).toBe(true);
+    session.reset();
+    expect(session.context.isFastPathBlocked()).toBe(false);
+  });
+
   it('forgets the ledger on reset but keeps writing to the bound branch', () => {
     const tree = new SessionTree();
     const session = new RouterSession();

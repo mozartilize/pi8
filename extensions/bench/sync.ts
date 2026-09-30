@@ -120,10 +120,8 @@ export async function syncBenchmarks(
   };
   saveStore(nextStore);
 
-  // ─── Embedding model provision ──────────────────────────────────────
-  // Non-fatal: provisioning failure does not block benchmark sync.
-  const cfg = loadConfig();
-  if (cfg.embeddingClassifier) {
+  // Non-fatal: a failed model download does not fail the benchmark sync.
+  if (loadConfig().embeddingClassifier) {
     const provResult = await provisionEmbedding({
       onProgress: (status) => opts.onProgress?.({ source: 'embedding', ok: true, fetched: 0, matched: 0, unresolved: 0, error: status }),
     });

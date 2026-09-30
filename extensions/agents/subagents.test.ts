@@ -129,6 +129,25 @@ describe('spawn-time task-aware role selection', () => {
     expect(selected.get('$.tasks[1]')?.dimension).toBe('implement');
   });
 
+  it('raises a child to the embedding reader\'s kind, never below the role or the keyword kind', () => {
+    const { roleModels, roleFallbacks } = baselineRouting();
+    const selected = selectTaskAwareRoleChildren(
+      [
+        { path: '$.tasks[0]', role: 'worker', task: 'thiết kế kiến trúc cho dịch vụ đồng bộ', kindHint: 'plan' },
+        { path: '$.tasks[1]', role: 'worker', task: 'đổi tên biến', kindHint: 'lightweight' },
+        { path: '$.tasks[2]', role: 'reviewer', task: 'review the diff', kindHint: 'implement' },
+      ],
+      roleModels,
+      roleFallbacks,
+      { candidates: candidatesFor(), weights: {} },
+      () => false,
+      100,
+    );
+    expect(selected.get('$.tasks[0]')?.dimension).toBe('plan');
+    expect(selected.get('$.tasks[1]')?.dimension).toBe('implement');
+    expect(selected.get('$.tasks[2]')?.dimension).toBe('review');
+  });
+
   it('preserves the baseline pick when a child has no task', () => {
     const { roleModels, roleFallbacks } = baselineRouting();
     const selected = selectTaskAwareRoleChildren(

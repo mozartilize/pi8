@@ -7,7 +7,7 @@ import type { AutoRouterConfig, Dimension, ScoreWeights } from './types.js';
 import {
   CONFIG_FILE,
   DEFAULT_DIMENSION_WEIGHTS,
-  DEFAULT_EMBEDDING_MIN_CONFIDENCE,
+  DEFAULT_EMBEDDING_DEADLINE_MS,
   DEFAULT_LOW_CONFIDENCE_THRESHOLD,
   DEFAULT_SWITCH_MARGIN,
 } from './constants.js';
@@ -78,19 +78,14 @@ export interface PersistedConfig {
    */
   collectTools?: string[];
   /**
-   * Enable the local multilingual embedding classifier for prompts where the
-   * keyword classifier has no categorical evidence (non-English, ambiguous).
-   * Blends up only; never overrides keyword downward. Default false.
+   * Read prompts the English keyword rules cannot read with the local
+   * multilingual embedding model (E5-small). Its readings only ever raise
+   * routing. Needs the optional onnxruntime-node and @xenova/transformers
+   * packages and `/router-sync embedding`. Default false.
    */
   embeddingClassifier?: boolean;
   /** Max ms for model load + inference. Default 5000. */
   embeddingDeadlineMs?: number;
-  /**
-   * Minimum embedding-classifier confidence (top-two margin) for its verdict
-   * to influence routing. Below it the embedding abstains and the keyword
-   * result stands. Default 0.15.
-   */
-  embeddingMinConfidence?: number;
 }
 
 const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
@@ -194,17 +189,8 @@ export function loadConfig(): AutoRouterConfig {
     collectTools: stringList(persisted.collectTools)?.filter(
       (name) => name.length <= 64 && !COLLECT_EXTRA_DENIED.has(name),
     ) ?? [],
-    embeddingClassifier:
-      typeof persisted.embeddingClassifier === 'boolean'
-        ? persisted.embeddingClassifier
-        : false,
-    embeddingDeadlineMs: positiveInteger(persisted.embeddingDeadlineMs, 5000),
-    embeddingMinConfidence: finiteInRange(
-      persisted.embeddingMinConfidence,
-      DEFAULT_EMBEDDING_MIN_CONFIDENCE,
-      0,
-      1,
-    ),
+    embeddingClassifier: persisted.embeddingClassifier === true,
+    embeddingDeadlineMs: positiveInteger(persisted.embeddingDeadlineMs, DEFAULT_EMBEDDING_DEADLINE_MS),
   };
 }
 
@@ -218,6 +204,7 @@ const REMOVED_CONFIG_KEYS = [
   'escalationTtlTurns',
   'assessmentMode',
   'assessmentShadowDeadlineMs',
+  'embeddingMinConfidence',
   'consultRouter',
   'consultRouterAgent',
   'consultModel',

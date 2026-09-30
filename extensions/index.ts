@@ -39,6 +39,7 @@ import { registerAutoRouterProvider, buildSubagentProviderAuthFilter } from './s
 
 import {
   computeRoleModels,
+  collectSubagentTaskRequests,
   injectSubagentRoutingWithMetadata,
   pickSubagentDefaultModel,
   stripThinkingSuffix,
@@ -56,10 +57,11 @@ import { computeSubagentSpend } from './agents/subagent-spend.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './routing/policy/allowlist.js';
 import { loadConfig } from './config.js';
 import { ensureEmbeddingEngine } from './embed/embedding.js';
+import { readSubagentTaskKinds, withKindHints } from './serve/embedding-reading.js';
 import { setSessionFile } from './sessionpaths.js';
 import { debugLog, setConfigDebug } from './host/debuglog.js';
 import type { RegistryModelInfo } from './routing/score/scorer.js';
-import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
+import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role, type TaskKind } from './types.js';
 import {
   appendSubagentGapSignal,
   appendSubagentSpend,
@@ -429,29 +431,46 @@ function handleTurnStart(
  * injected into a spawn. A usage-limit-blacklisted provider excludes every
  * model on it the same way.
  */
+function liveRoleRouting(session: RouterSession, routingState: SubagentRoutingState) {
+  const blacklisted = session.getBlacklistedModels();
+  const blacklistedProviders = session.getBlacklistedProviders();
+  const isExcluded = (id: string): boolean => {
+    const slash = id.indexOf('/');
+    return (
+      blacklisted.has(id) ||
+      (slash > 0 ? blacklistedProviders.has(id.slice(0, slash)) : false)
+    );
+  };
+  return { isExcluded, live: routingState.resolveLive(isExcluded) };
+}
+
+/**
+ * The embedding reader's kinds for the spawn's tasks the keyword rules
+ * cannot read. Never fails: a spawn routes on keywords alone without them.
+ */
+async function readSubagentKinds(
+  event: ToolCallEvent,
+  session: RouterSession,
+  routingState: SubagentRoutingState,
+): Promise<ReadonlyMap<string, TaskKind>> {
+  try {
+    const { live } = liveRoleRouting(session, routingState);
+    return await readSubagentTaskKinds(collectSubagentTaskRequests(event.input, live.roleModels), loadConfig(), session);
+  } catch {
+    return new Map();
+  }
+}
+
 function handleSubagentToolCall(
   event: ToolCallEvent,
   ctx: ExtensionContext,
   session: RouterSession,
   routingState: SubagentRoutingState,
   subagentCalls: Map<string, SubagentCallObservation>,
+  kinds: ReadonlyMap<string, TaskKind> = new Map(),
 ): void {
   try {
-    // Resolve each role's model against the LIVE session blacklist: a model
-    // assigned at session_start may have since failed and been blacklisted
-    // by a main-session turn, and must not be injected into a spawn. A
-    // usage-limit-blacklisted provider excludes every model on it the same
-    // way.
-    const blacklisted = session.getBlacklistedModels();
-    const blacklistedProviders = session.getBlacklistedProviders();
-    const isExcluded = (id: string): boolean => {
-      const slash = id.indexOf('/');
-      return (
-        blacklisted.has(id) ||
-        (slash > 0 ? blacklistedProviders.has(id.slice(0, slash)) : false)
-      );
-    };
-    const live = routingState.resolveLive(isExcluded);
+    const { isExcluded, live } = liveRoleRouting(session, routingState);
     const usage = (ctx as ExtensionContext & {
       getContextUsage?: () => { tokens?: number } | undefined;
     }).getContextUsage?.();
@@ -459,7 +478,7 @@ function handleSubagentToolCall(
       ? usage.tokens
       : 0;
     const traversal = injectSubagentRoutingWithMetadata(event.input, live.roleModels, {
-      selectChildren: (requests) => routingState.selectChildren(requests, isExcluded, currentTokens),
+      selectChildren: (requests) => routingState.selectChildren(withKindHints(requests, kinds), isExcluded, currentTokens),
       defaultModel: pickSubagentDefaultModel(live.roleModels),
     });
     subagentCalls.set(event.toolCallId, {
@@ -694,7 +713,17 @@ export default async function autoModelRouterExtension(
     const restricted = gateContextToolCall(event, session);
     if (restricted) return restricted;
     if (event.toolName === SUBAGENT_TOOL) {
-      handleSubagentToolCall(event, ctx, session, routingState, subagentCalls);
+      // Tasks the keyword rules cannot read are read by the embedding model
+      // before routing, when it is on; its kind can only raise a child's
+      // task type. With it off, routing stays synchronous.
+      if (!loadConfig().embeddingClassifier) {
+        handleSubagentToolCall(event, ctx, session, routingState, subagentCalls);
+        return;
+      }
+      return readSubagentKinds(event, session, routingState).then((kinds) => {
+        handleSubagentToolCall(event, ctx, session, routingState, subagentCalls, kinds);
+        return undefined;
+      });
     }
     try {
       // A change stopped for an owed plan never runs: it is not counted,

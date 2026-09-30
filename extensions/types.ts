@@ -16,14 +16,6 @@ export type Dimension =
   | 'implement'
   | 'review';
 
-export const ROUTER_DIMENSIONS: Dimension[] = [
-  'lightweight',
-  'gather',
-  'plan',
-  'implement',
-  'review',
-];
-
 /** One normalized benchmark row after adapter + registry intersection. */
 export interface BenchModel {
   /** Canonical "provider/id" that EXISTS in Pi's model registry. */
@@ -326,7 +318,6 @@ export type DecisionCause =
   | 'execution-contract'
   | 'investigation'
   | 'investigation-handoff'
-  | 'embedding-classify'
   | 'error-fallback'
   | 'no-data'
   | 'capability-escalation'
@@ -382,8 +373,6 @@ export interface RoutingDecision {
   reasoningHandoff?: ReasoningHandoffMeta;
   /** Handoff of the previous entry, on the first decision of the entry after it. */
   previousHandoffId?: string;
-  /** A new entry reset the incumbent minimums as off-topic. */
-  offTopicReset?: boolean;
   /** Message-origin census for this turn's context. */
   provenanceCounts?: Record<MessageProvenance, number>;
   /** The entry's work-context resolution. */
@@ -541,20 +530,13 @@ export interface AutoRouterConfig {
    */
   collectTools: string[];
   /**
-   * If true, uses a local multilingual embedding classifier (E5-small) when
-   * the keyword classifier has no categorical evidence — i.e. non-English
-   * prompts and ambiguous English prompts. Blends up only; never overrides
-   * a keyword verdict downward. Default false.
+   * Read prompts the English keyword rules cannot read with the local
+   * multilingual embedding model (E5-small); its readings only ever raise
+   * routing. Default false.
    */
-  embeddingClassifier?: boolean;
-  /** Maximum ms the embedding model load + inference may take. Default 5000. */
-  embeddingDeadlineMs?: number;
-  /**
-   * Minimum embedding-classifier confidence (top-two margin, [0,1]) for its
-   * verdict to influence routing. Below it the embedding abstains and the
-   * keyword result stands unchanged. Default 0.15.
-   */
-  embeddingMinConfidence?: number;
+  embeddingClassifier: boolean;
+  /** Maximum ms the embedding model load + one reading may take. Default 5000. */
+  embeddingDeadlineMs: number;
 }
 
 export interface SyncResult {

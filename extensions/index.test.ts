@@ -389,6 +389,30 @@ describe('registry-only role routing', () => {
     expect(input.model).toMatch(/^(alpha|beta)\//);
   });
 
+  it('waits for the embedding reader before routing a spawn, and routes on keywords when it cannot read', async () => {
+    const { loadConfig } = await import('./config.js');
+    vi.mocked(loadConfig).mockReturnValue({ debug: false, embeddingClassifier: true, embeddingDeadlineMs: 200 } as never);
+    try {
+      const handlers = new Map<string, (...args: any[]) => unknown>();
+      const pi = {
+        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+        registerTool: vi.fn(),
+      } as unknown as ExtensionAPI;
+      await autoModelRouterExtension(pi);
+      const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
+      const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
+      await handlers.get('session_start')!({ reason: 'new' }, ctx);
+
+      const input: { agent: string; task: string; model?: string } = { agent: 'worker', task: 'thiết kế lại lớp cache' };
+      const pending = handlers.get('tool_call')!({ toolName: 'subagent', toolCallId: 'call-embed', input }, ctx);
+      expect(pending).toBeInstanceOf(Promise);
+      await pending;
+      expect(input.model).toMatch(/^(alpha|beta)\//);
+    } finally {
+      vi.mocked(loadConfig).mockReturnValue({ debug: false } as never);
+    }
+  });
+
   it('leaves an explicit child model unchanged when the parent session is not router/auto', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {

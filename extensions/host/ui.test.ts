@@ -440,7 +440,7 @@ describe('work context in /router-why', () => {
       embedding: { thinMargin: 0.034, thin: true, kind: 'implement', kindMargin: 0.015, kindRaised: true },
     }, undefined).join('\n');
     expect(lines).toContain('embedding:  a short follow-up (lead 0.034), so it carries on the earlier work; looks like implement (lead 0.015), raised the final step');
-    expect(formatEmbeddingStats({ fired: 4, promoted: 1, abstainedLowConf: 1, degraded: 1 }))
-      .toBe('embedding classifier: ran 4 (raised 1, unchanged 2, too unsure 1), failed 1');
+    expect(formatEmbeddingStats({ read: 4, thin: 2, kindRaised: 1, failed: 1 }))
+      .toBe('embedding reader: read 4 prompts the keywords could not (short follow-ups 2, final step raised 1), failed 1');
   });
 });

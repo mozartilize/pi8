@@ -235,11 +235,10 @@ async function handleSyncCommand(
 ): Promise<void> {
   const [sourceOrKey, subArg] = splitArgs(args);
 
-  // `/router-sync embedding` — download embedding model only.
+  // `/router-sync embedding` — download the embedding model only.
   if (sourceOrKey === 'embedding') {
-    const force = subArg === '--force';
     const result = await provisionEmbedding({
-      force,
+      force: subArg === '--force',
       onProgress: (status) => ctx.ui.notify(status, 'info'),
     });
     ctx.ui.notify(result.status, result.ok ? 'info' : 'error');
@@ -310,11 +309,9 @@ async function handleStatusCommand(
     lines.push('', 'No registry model matched a benchmark row — routing is price-only.');
     lines.push('Map one manually with `/router-fix <bench-slug> <provider/id>`.');
   }
-  lines.push('', ...formatDecisionDetail(lastDecision, lastServed));
-  const embStats = session.getEmbeddingStats();
-  if (embStats.fired + embStats.degraded > 0) {
-    lines.push(formatEmbeddingStats(embStats));
-  }
+    lines.push('', ...formatDecisionDetail(lastDecision, lastServed));
+  const embeddingStats = session.getEmbeddingStats();
+  if (embeddingStats.read + embeddingStats.failed > 0) lines.push(formatEmbeddingStats(embeddingStats));
   // M4: show recent routing history, surfacing any real fallbacks.
   // Only actual routing decisions belong here: secondary records join
   // decisions by intentKey offline, and letting them through would push real

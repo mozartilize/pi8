@@ -112,7 +112,6 @@ it('drops malformed values and clamps routing policy to documented defaults', ()
       sources: ['artificial-analysis', 7, ''],
       switchMargin: 'large',
       lowConfidenceThreshold: -1,
-      escalationTtlTurns: 'infinite',
       models: ['alpha/*', 9, '  '],
       blacklist: [null, '*/broken'],
       dimensionWeights: {
@@ -240,40 +239,6 @@ describe('syntheticPrefixes', () => {
   });
 });
 
-describe('removed config migration', () => {
-  it('exposes no escalationToken for a legacy config', () => {
-    writeFileSync(
-      getConfigPath(),
-      JSON.stringify({ escalationToken: '!up', models: ['alpha/*'] }),
-      'utf8',
-    );
-
-    expect('escalationToken' in loadConfig()).toBe(false);
-  });
-
-  it('strips removed keys on the next config write and preserves unrelated keys', () => {
-    writeFileSync(
-      getConfigPath(),
-      JSON.stringify({
-        escalationToken: '!up',
-        assessmentMode: 'shadow',
-        assessmentShadowDeadlineMs: 12000,
-        models: ['alpha/*'],
-      }),
-      'utf8',
-    );
-
-    saveBlacklist(['*/broken']);
-
-    const raw = JSON.parse(readFileSync(getConfigPath(), 'utf8')) as Record<string, unknown>;
-    expect(raw.escalationToken).toBeUndefined();
-    expect(raw.assessmentMode).toBeUndefined();
-    expect(raw.assessmentShadowDeadlineMs).toBeUndefined();
-    expect(raw.models).toEqual(['alpha/*']);
-    expect(raw.blacklist).toEqual(['*/broken']);
-  });
-});
-
 describe('collectTools', () => {
   it('defaults to an empty array when absent', () => {
     writeFileSync(getConfigPath(), JSON.stringify({}), 'utf8');
@@ -290,3 +255,18 @@ describe('collectTools', () => {
   });
 });
 
+describe('embeddingClassifier', () => {
+  it('reads the switch and deadline', () => {
+    writeFileSync(
+      getConfigPath(),
+      JSON.stringify({ embeddingClassifier: true, embeddingDeadlineMs: 4000, semi: true }),
+      'utf8',
+    );
+    expect(loadConfig()).toMatchObject({ semi: true, embeddingClassifier: true, embeddingDeadlineMs: 4000 });
+  });
+
+  it('leaves the embedding reader off unless enabled', () => {
+    writeFileSync(getConfigPath(), JSON.stringify({ embeddingClassifier: 'yes', embeddingDeadlineMs: -1 }), 'utf8');
+    expect(loadConfig()).toMatchObject({ embeddingClassifier: false, embeddingDeadlineMs: 5000 });
+  });
+});

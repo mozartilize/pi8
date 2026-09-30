@@ -1,150 +1,93 @@
 import { describe, it, expect } from 'vitest';
-import { classifyEmbedding, getPrototypeText, EMBEDDING_HEAD_VERSION } from './embedding-head.js';
-import type { Dimension } from '../types.js';
+import {
+  KIND_DESCRIPTIONS,
+  KIND_MIN_MARGIN,
+  SUBSTANTIVE_EXAMPLES,
+  THIN_EXAMPLES,
+  THIN_MIN_MARGIN,
+  readEmbedding,
+  referenceTexts,
+  referenceVectors,
+  type ReferenceVectors,
+} from './embedding-head.js';
+import type { TaskKind } from '../types.js';
 
-describe('embedding-head', () => {
-  // ─── Prototype texts ──────────────────────────────────────────
+/** A unit vector at `angle` radians in the first plane. */
+const at = (angle: number): Float32Array => Float32Array.from([Math.cos(angle), Math.sin(angle), 0, 0]);
+const axis = (index: number): Float32Array => {
+  const v = new Float32Array(4);
+  v[index] = 1;
+  return v;
+};
 
-  it('has distinct prototype text for every dimension', () => {
-    const dims: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
-    const texts = new Set(dims.map((d) => getPrototypeText(d)));
-    expect(texts.size).toBe(5);
-  });
+function refs(over: Partial<ReferenceVectors> = {}): ReferenceVectors {
+  const kinds = {
+    lightweight: axis(3), gather: axis(3), plan: axis(3), implement: axis(3), review: axis(3),
+  } as Record<TaskKind, Float32Array>;
+  return { thin: [at(0), at(0), at(0)], substantive: [at(1), at(1), at(1)], kinds, ...over };
+}
 
-  it('prototypes are non-empty', () => {
-    const dims: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
-    for (const d of dims) {
-      expect(getPrototypeText(d).length).toBeGreaterThan(10);
+describe('reference texts', () => {
+  it('lists thin examples, substantive examples, then one description per kind', () => {
+    const texts = referenceTexts();
+    expect(texts).toHaveLength(THIN_EXAMPLES.length + SUBSTANTIVE_EXAMPLES.length + 5);
+    const vectors = texts.map((_, index) => Float32Array.from([index]));
+    const split = referenceVectors(vectors);
+    expect(split.thin.map((v) => v[0])).toEqual(THIN_EXAMPLES.map((_, i) => i));
+    expect(split.substantive).toHaveLength(SUBSTANTIVE_EXAMPLES.length);
+    for (const kind of Object.keys(KIND_DESCRIPTIONS) as TaskKind[]) {
+      expect(texts[split.kinds[kind]![0]!]).toBe(KIND_DESCRIPTIONS[kind]);
     }
   });
 
-  it('has a positive EMBEDDING_HEAD_VERSION', () => {
-    expect(EMBEDDING_HEAD_VERSION).toBeGreaterThan(0);
-  });
-
-  // ─── Classification ───────────────────────────────────────────
-
-  it('returns the dimension with the highest cosine', () => {
-    // Create synthetic prototypes biased toward implement
-    const prototypes = makeBiasPrototypes('implement');
-
-    // Embedding close to implement prototype (slice 3 in dim order)
-    const emb = makeBiasedVector(384, 3, 0.99);
-    const result = classifyEmbedding(emb, prototypes);
-    expect(result.dimension).toBe('implement');
-  });
-
-  it('returns high confidence when one prototype dominates', () => {
-    const prototypes = makeBiasPrototypes('implement');
-    const emb = makeBiasedVector(384, 3, 0.99);
-    const result = classifyEmbedding(emb, prototypes);
-    expect(result.confidence).toBeGreaterThan(0.5);
-    expect(result.scores.implement).toBeGreaterThan(result.scores.gather);
-    expect(result.scores.implement).toBeGreaterThan(result.scores.plan);
-  });
-
-  it('returns low confidence when all prototypes are similar', () => {
-    // All prototypes identical → all scores equal → confidence near 0
-    const prototypes: Record<Dimension, Float32Array> = {
-      lightweight: makeBiasedVector(384, 0, 1.0),
-      gather: makeBiasedVector(384, 0, 1.0),
-      plan: makeBiasedVector(384, 0, 1.0),
-      implement: makeBiasedVector(384, 0, 1.0),
-      review: makeBiasedVector(384, 0, 1.0),
-    };
-    const emb = makeBiasedVector(384, 0, 1.0);
-    const result = classifyEmbedding(emb, prototypes);
-    expect(result.confidence).toBeLessThanOrEqual(0.5);
-  });
-
-  it('tie-breaks toward stronger dimension', () => {
-    // Two dimensions tied: implement (strength 3) vs gather (strength 1)
-    const prototypes: Record<Dimension, Float32Array> = {
-      lightweight: makeBiasedVector(384, 0, 1.0),
-      gather: makeBiasedVector(384, 1, 1.0),
-      plan: makeBiasedVector(384, 0, 1.0),
-      implement: makeBiasedVector(384, 1, 1.0),
-      review: makeBiasedVector(384, 0, 1.0),
-    };
-    // Embedding equally close to implement and gather
-    const emb = makeBiasedVector(384, 1, 1.0);
-    const result = classifyEmbedding(emb, prototypes);
-    // implement is stronger than gather
-    expect(result.dimension).toBe('implement');
-  });
-
-  it('returns scores for all five dimensions', () => {
-    const prototypes = makeBiasPrototypes('plan');
-    const emb = makeBiasedVector(384, 0, 1.0);
-    const result = classifyEmbedding(emb, prototypes);
-    const dims: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
-    for (const d of dims) {
-      expect(typeof result.scores[d]).toBe('number');
-      expect(Number.isFinite(result.scores[d])).toBe(true);
-    }
-  });
-
-  it('confidence is always in [0, 1]', () => {
-    const prototypes = makeBiasPrototypes('gather');
-    // Try a few different biased vectors
-    for (const bias of [0, 1, 2, 3, 4]) {
-      for (const strength of [0.5, 0.9, 1.0]) {
-        const emb = makeBiasedVector(384, bias, strength);
-        const result = classifyEmbedding(emb, prototypes);
-        expect(result.confidence).toBeGreaterThanOrEqual(0);
-        expect(result.confidence).toBeLessThanOrEqual(1);
-      }
-    }
-  });
-
-  // ─── Degrade safety ───────────────────────────────────────────
-
-  it('does not throw on any Float32Array input', () => {
-    const prototypes = makeBiasPrototypes('implement');
-
-    // Zero vector
-    expect(() => classifyEmbedding(new Float32Array(384), prototypes)).not.toThrow();
-
-    // All ones
-    expect(() => classifyEmbedding(new Float32Array(384).fill(0.1), prototypes)).not.toThrow();
-
-    // Mixed signs
-    const mixed = new Float32Array(384);
-    for (let i = 0; i < 384; i++) mixed[i] = (i % 2 === 0 ? 1 : -1) * 0.05;
-    expect(() => classifyEmbedding(mixed, prototypes)).not.toThrow();
+  it('never labels one text both thin and substantive', () => {
+    const thin = new Set(THIN_EXAMPLES);
+    expect(SUBSTANTIVE_EXAMPLES.filter((text) => thin.has(text))).toEqual([]);
   });
 });
 
-// ─── Test helpers ────────────────────────────────────────────────────
+describe('thin reading', () => {
+  it('reads a prompt nearer the thin examples as thin', () => {
+    const reading = readEmbedding(at(0.05), refs());
+    expect(reading.thinMargin).toBeGreaterThan(THIN_MIN_MARGIN);
+    expect(reading.thin).toBe(true);
+  });
 
-/** Create prototype vectors where one dimension is uniquely biased. */
-function makeBiasPrototypes(_winner: Dimension): Record<Dimension, Float32Array> {
-  const dims: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
-  const result = {} as Record<Dimension, Float32Array>;
-  for (let i = 0; i < dims.length; i++) {
-    result[dims[i]] = makeBiasedVector(384, i, 1.0);
-  }
-  return result;
-}
+  it('reads a prompt nearer the substantive examples as not thin', () => {
+    const reading = readEmbedding(at(0.95), refs());
+    expect(reading.thinMargin).toBeLessThan(0);
+    expect(reading.thin).toBe(false);
+  });
 
-/** Create a 384-dim L2-normalized vector biased at a specific slice. */
-function makeBiasedVector(dim: number, sliceIndex: number, magnitude: number): Float32Array {
-  const vec = new Float32Array(dim);
+  it('needs the thin lead to clear the margin, not merely be positive', () => {
+    // Halfway between the two sets, nudged toward thin by less than the margin.
+    const reading = readEmbedding(at(0.49), refs());
+    expect(reading.thinMargin).toBeGreaterThan(0);
+    expect(reading.thinMargin).toBeLessThan(THIN_MIN_MARGIN);
+    expect(reading.thin).toBe(false);
+  });
 
-  // Distribute bias across a unique 76-element slice per index
-  const sliceSize = Math.floor(dim / 5);
-  const start = (sliceIndex % 5) * sliceSize;
-  const biasPerElement = magnitude / Math.sqrt(sliceSize);
-  for (let i = start; i < start + sliceSize && i < dim; i++) {
-    vec[i] = biasPerElement;
-  }
+  it('compares against the nearest examples, so one close example is not enough', () => {
+    const reading = readEmbedding(at(0), refs({ thin: [at(0), at(1.4), at(1.4)] }));
+    expect(reading.thin).toBe(false);
+  });
+});
 
-  // L2 normalize
-  let norm = 0;
-  for (let i = 0; i < dim; i++) norm += vec[i] * vec[i];
-  norm = Math.sqrt(norm);
-  if (norm > 0) {
-    for (let i = 0; i < dim; i++) vec[i] /= norm;
-  }
-  return vec;
-}
+describe('kind reading', () => {
+  const kinds = {
+    lightweight: axis(3), gather: at(1.5), plan: at(0.9), implement: at(0), review: axis(2),
+  } as Record<TaskKind, Float32Array>;
+
+  it('reads the nearest description and its lead over the next one', () => {
+    const reading = readEmbedding(at(0.1), refs({ kinds }));
+    expect(reading.kind).toBe('implement');
+    expect(reading.kindMargin).toBeCloseTo(Math.cos(0.1) - Math.cos(0.8), 5);
+    expect(reading.kindDecided).toBe(true);
+  });
+
+  it('leaves the kind undecided when two descriptions are about as near', () => {
+    const reading = readEmbedding(at(0.45), refs({ kinds }));
+    expect(reading.kindMargin).toBeLessThan(KIND_MIN_MARGIN);
+    expect(reading.kindDecided).toBe(false);
+  });
+});

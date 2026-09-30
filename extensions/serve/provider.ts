@@ -111,9 +111,7 @@ import {
   waiveMissedInvestigation,
   withInvestigationNote,
 } from './context-handoff-tool.js';
-import { DIMENSION_STRENGTH } from '../routing/classify/classifier.js';
-import { DEFAULT_EMBEDDING_MIN_CONFIDENCE } from '../constants.js';
-import { embedAndClassify } from '../embed/embedding.js';
+import { readEntryPrompt, type EntryReading } from './embedding-reading.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -391,7 +389,7 @@ function measureTurnInput(context: Context, config: AutoRouterConfig) {
  * invocation of the same entry. Escalation is not resolved here — it must
  * not be cached.
  */
-async function resolveBaseIntent(
+function resolveBaseIntent(
   args: {
     turnInput: ReturnType<typeof getTurnClassificationInput>;
     systemPrompt: string | undefined;
@@ -407,42 +405,10 @@ async function resolveBaseIntent(
     : classify(turnInput.promptText, systemPrompt, {
         lowConfidenceThreshold: config.lowConfidenceThreshold,
       });
-  let baseDimension: Dimension = cacheHit
+  const baseDimension: Dimension = cacheHit
     ? cachedIntent.dimension
     : classifyResult.dimension;
-  let baseCause: DecisionCause = cacheHit ? cachedIntent.cause : 'heuristic';
-
-  if (
-    !classifyResult.hasCategoricalEvidence &&
-    config.embeddingClassifier &&
-    !cacheHit
-  ) {
-    try {
-      const embeddingResult = await embedAndClassify(turnInput.promptText, {
-        deadlineMs: config.embeddingDeadlineMs,
-      });
-      if (embeddingResult) {
-        session.recordEmbedding('fired');
-        const minConfidence =
-          config.embeddingMinConfidence ?? DEFAULT_EMBEDDING_MIN_CONFIDENCE;
-        if (embeddingResult.confidence >= minConfidence) {
-          const keywordStrength = DIMENSION_STRENGTH[baseDimension];
-          const embeddingStrength = DIMENSION_STRENGTH[embeddingResult.dimension];
-          if (embeddingStrength > keywordStrength) {
-            baseDimension = embeddingResult.dimension;
-            baseCause = 'embedding-classify';
-            session.recordEmbedding('promoted');
-          }
-        } else {
-          session.recordEmbedding('abstainedLowConf');
-        }
-      } else {
-        session.recordEmbedding('degraded');
-      }
-    } catch {
-      session.recordEmbedding('degraded');
-    }
-  }
+  const baseCause: DecisionCause = cacheHit ? cachedIntent.cause : 'heuristic';
 
   return {
     cacheHit,
@@ -763,7 +729,14 @@ interface PreparedTurn {
   extensionContext: ExtensionContext | undefined;
   config: AutoRouterConfig;
   measured: ReturnType<typeof measureTurnInput>;
-  intent: Awaited<ReturnType<typeof resolveBaseIntent>>;
+  intent: ReturnType<typeof resolveBaseIntent>;
+  /** The embedding reader's reading of the entry's prompt, when it read one. */
+  embedding?: import('../types.js').EmbeddingMeta;
+  /**
+   * A new entry's embedding reading, still in flight. `measured`, `intent`,
+   * and `embedding` hold the keyword reading until settleEntryReading().
+   */
+  pendingReading?: Promise<EntryReading>;
   trajectoryEscalation: ReturnType<RouterSession['peekPendingTrajectoryEscalation']>;
   /**
    * Pre-exclusion pool. Scoring re-filters this rather than the snapshot so
@@ -795,6 +768,20 @@ interface ScoredTurn {
   releasesContract?: boolean;
 }
 
+/**
+ * Fold a new entry's embedding reading into `prepared` once it arrives. Every
+ * path that uses the entry's thinness or final step settles it first.
+ */
+async function settleEntryReading(prepared: PreparedTurn): Promise<void> {
+  const pending = prepared.pendingReading;
+  if (!pending) return;
+  const read = await pending;
+  delete prepared.pendingReading;
+  prepared.measured = { ...prepared.measured, turnInput: read.turnInput };
+  prepared.intent = { ...prepared.intent, classifyResult: read.classifyResult };
+  if (read.embedding) prepared.embedding = read.embedding;
+}
+
 /** Resolve the registry, this turn's input identity, and the candidate pool. */
 async function prepareRouterTurn(args: {
   context: Context;
@@ -814,10 +801,18 @@ async function prepareRouterTurn(args: {
   const config = loadConfig();
   const measured = measureTurnInput(context, config);
   session.noteRequest(measured.estContextTokens, promptHeadIdentity(context));
-  const intent = await resolveBaseIntent(
+  const intent = resolveBaseIntent(
     { turnInput: measured.turnInput, systemPrompt: measured.systemPrompt, config },
     session,
   );
+  // A new entry the keyword rules cannot read is read once by the embedding
+  // model, in flight while the entry resolves; later invocations of the
+  // entry reuse that reading. The reading never changes the intent key.
+  const unread: EntryReading = { turnInput: measured.turnInput, classifyResult: intent.classifyResult };
+  const pendingReading = intent.cacheHit
+    ? undefined
+    : readEntryPrompt(measured.turnInput, intent.classifyResult, config, session).catch(() => unread);
+  const cachedEmbedding = intent.cacheHit ? intent.cachedIntent?.embedding : undefined;
 
   session.bindTrajectoryIntent(measured.turnInput.key);
   // Blocked preflights never emit tool_result. Finalize that batch
@@ -844,6 +839,8 @@ async function prepareRouterTurn(args: {
       config,
       measured,
       intent,
+      ...(cachedEmbedding ? { embedding: cachedEmbedding } : {}),
+      ...(pendingReading ? { pendingReading } : {}),
       trajectoryEscalation,
       candidates,
       routableCandidates,
@@ -871,7 +868,7 @@ async function resolveRouterTurn(args: {
     cacheHit,
     dimension: prepared.intent.baseDimension,
     cause: prepared.intent.baseCause,
-    turn: { ...turnInput, thin: turnInput.thin },
+    turn: { ...turnInput, thin: prepared.pendingReading?.then((read) => read.turnInput.thin) ?? turnInput.thin },
     ...(cachedIntent?.context && cacheHit ? { context: cachedIntent.context } : {}),
     extensionContext: prepared.extensionContext,
     syntheticPrefixes: prepared.config.syntheticPrefixes,
@@ -879,7 +876,7 @@ async function resolveRouterTurn(args: {
   if (entry.aborted) return SESSION_CHANGED;
   const baseDimension = entry.dimension;
   const baseCause = entry.cause;
-  
+  await settleEntryReading(prepared);
   const settled = prepared.measured.turnInput;
 
   if (!cacheHit) {
@@ -890,6 +887,7 @@ async function resolveRouterTurn(args: {
       cause: baseCause,
       thin: settled.thin,
       ...(entry.context ? { context: entry.context } : {}),
+      ...(prepared.embedding ? { embedding: prepared.embedding } : {}),
     });
   }
   debugLog('classify.context', {
@@ -1132,7 +1130,7 @@ function scoreRouterTurn(args: {
     if (meta) decision.executionContract = meta;
   }
   if (resolved.context) decision.workContext = workContextMeta(resolved.context);
-  
+  if (prepared.embedding) decision.embedding = prepared.embedding;
   decision.intentKey = turnInput.key;
   decision.provenanceCounts = turnInput.provenanceCounts;
   try {
@@ -1680,7 +1678,7 @@ async function resolvePinnedEntryContext(
 ): Promise<ResolvedEntryContext | PendingIdentity | undefined | 'aborted'> {
   if (prepared.intent.cacheHit) return prepared.intent.cachedIntent?.context
     ?? session.getWorkPhaseState()?.pendingIdentity;
-  
+  await settleEntryReading(prepared);
   const generation = session.getSessionGeneration();
   const resolved = await failOpen(() => resolveEntryContext({
     session,
@@ -1727,6 +1725,7 @@ async function runManualTurn(args: {
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
       ...(resolvedContext ? { context: resolvedContext } : {}),
+      ...(prepared.embedding ? { embedding: prepared.embedding } : {}),
     });
   }
   const candidates = manualCandidates(prepared, manualModel);
@@ -1836,6 +1835,7 @@ async function runResumeTurn(args: {
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
       ...(entryContext ? { context: entryContext } : {}),
+      ...(prepared.embedding ? { embedding: prepared.embedding } : {}),
     });
   }
 
