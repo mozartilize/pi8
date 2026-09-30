@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -874,6 +874,31 @@ describe('work ledger lifecycle', () => {
 
     await handlers.get('session_compact')!({}, ctxFor(tree));
     expect(defaultRouterSession.context.getLedger().items.has('w_1')).toBe(true);
+  });
+
+  it('grounds an anchored file from a read result, only while router/auto serves', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'pi8-index-ground-'));
+    try {
+      writeFileSync(join(cwd, 'req.md'), 'spec\n');
+      const tree = new SessionTree();
+      const u = tree.user('@req.md implement this');
+      tree.event(createEvent(workItem('w_1', 't_1', { anchors: [{ kind: 'path', value: 'req.md', source: 'user' }] }), u));
+      tree.event(activateEvent('w_1', u));
+      const { handlers, pi } = makePi(tree);
+      await autoModelRouterExtension(pi);
+      const base = { ...ctxFor(tree), cwd } as ExtensionContext;
+      await handlers.get('session_start')!({ reason: 'resume' }, base);
+      const read = { toolName: 'read', toolCallId: 'r1', input: { path: 'req.md' }, content: [{ type: 'text', text: 'spec\n' }] };
+
+      await handlers.get('tool_result')!(read, { ...base, model: { provider: 'openai', id: 'gpt' } });
+      expect(defaultRouterSession.context.getLedger().items.get('w_1')!.grounding).toEqual([]);
+
+      await handlers.get('tool_result')!(read, { ...base, model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } });
+      expect(defaultRouterSession.context.getLedger().items.get('w_1')!.grounding).toHaveLength(1);
+      expect(tree.getBranch().at(-1)).toMatchObject({ customType: CONTEXT_ENTRY_TYPE, data: { op: 'grounding-upsert' } });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it('writes appended events to the session branch as custom entries', async () => {

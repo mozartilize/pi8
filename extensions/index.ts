@@ -79,6 +79,7 @@ import {
   defaultRuntimeBindings,
 } from './serve/router-session-state.js';
 import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
+import { observeContextGrounding } from './serve/context-grounding.js';
 import { classifyMutationCall } from './routing/policy/mutation-detector.js';
 import {
   closeInvestigationOnSettle,
@@ -702,7 +703,7 @@ export default async function autoModelRouterExtension(
     return undefined;
   });
 
-  pi.on('tool_result', (event, ctx) => {
+  pi.on('tool_result', async (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
     if (event.toolName === SUBAGENT_TOOL) {
       handleSubagentToolResult(event, ctx, session, routingState, subagentCalls, refreshRoleModels);
@@ -722,6 +723,8 @@ export default async function autoModelRouterExtension(
       ctx,
       session,
     );
-    return nudgeContractOnEdit(event, session) ?? nudgeInvestigation(event, session);
+    const nudge = nudgeContractOnEdit(event, session) ?? nudgeInvestigation(event, session);
+    await observeContextGrounding(event, ctx, session);
+    return nudge;
   });
 }

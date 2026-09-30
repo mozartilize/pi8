@@ -22,6 +22,7 @@ import { servedKey, type ServedInfo } from '../host/ui.js';
 import { debugLog } from '../host/debuglog.js';
 import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/ledger.js';
 import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
+import { ReadCoverage, type LineRange } from '../routing/context/grounding.js';
 import type { LegacyIndex } from '../routing/context/legacy.js';
 import type { BranchState, RoutingContextEvent } from '../routing/context/types.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
@@ -92,6 +93,8 @@ export class RoutingContextState {
   private ledger: TopicLedger = emptyLedger();
   private branchState: BranchState = 'native-empty';
   private persist: ((event: RoutingContextEvent) => void) | undefined;
+  /** Lines of anchored files read so far, until they cover the whole file; runtime-only. */
+  private readCoverage = new Map<string, ReadCoverage>();
   /**
    * The index of the history before tracking started, for the boundary it
    * was built at. The path to an entry never changes, so it holds across
@@ -115,11 +118,28 @@ export class RoutingContextState {
   restore(branch: readonly unknown[] | undefined): void {
     this.ledger = rebuildLedger(branch);
     this.branchState = classifyBranch(branch, this.ledger);
+    this.readCoverage.clear();
   }
 
   /** Re-read an untracked branch's state; a tracked branch keeps its ledger's. */
   refreshBranchState(branch: readonly unknown[] | undefined): void {
     if (this.ledger.events === 0) this.branchState = classifyBranch(branch, this.ledger);
+  }
+
+  /**
+   * Record lines of an anchored file the model read for a work item; true
+   * once the reads of this version of the file cover every line.
+   */
+  noteRead(workItemId: string, path: string, file: { sha256: string; lineCount: number }, range: LineRange): boolean {
+    const key = `${workItemId}\0${path}`;
+    let coverage = this.readCoverage.get(key);
+    if (!coverage || coverage.sha256 !== file.sha256) {
+      coverage = new ReadCoverage(file.sha256, file.lineCount);
+      this.readCoverage.set(key, coverage);
+    }
+    const complete = coverage.add(range);
+    if (complete) this.readCoverage.delete(key);
+    return complete;
   }
 
   /**
@@ -150,6 +170,7 @@ export class RoutingContextState {
   reset(): void {
     this.ledger = emptyLedger();
     this.branchState = 'native-empty';
+    this.readCoverage.clear();
     this.legacyIndex = undefined;
   }
 }
