@@ -22,6 +22,7 @@ import { servedKey, type ServedInfo } from '../host/ui.js';
 import { debugLog } from '../host/debuglog.js';
 import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/ledger.js';
 import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
+import type { LegacyIndex } from '../routing/context/legacy.js';
 import type { BranchState, RoutingContextEvent } from '../routing/context/types.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
@@ -91,6 +92,12 @@ export class RoutingContextState {
   private ledger: TopicLedger = emptyLedger();
   private branchState: BranchState = 'native-empty';
   private persist: ((event: RoutingContextEvent) => void) | undefined;
+  /**
+   * The index of the history before tracking started, for the boundary it
+   * was built at. The path to an entry never changes, so it holds across
+   * `/tree` and is dropped only on reset.
+   */
+  private legacyIndex: LegacyIndex | undefined;
 
   bindPersistence(persist: ((event: RoutingContextEvent) => void) | undefined): void {
     this.persist = persist;
@@ -134,9 +141,16 @@ export class RoutingContextState {
     return true;
   }
 
+  /** The index for `headEntryId`, built at most once per boundary. */
+  legacyIndexFor(headEntryId: string, build: () => LegacyIndex): LegacyIndex {
+    if (this.legacyIndex?.headEntryId !== headEntryId) this.legacyIndex = build();
+    return this.legacyIndex;
+  }
+
   reset(): void {
     this.ledger = emptyLedger();
     this.branchState = 'native-empty';
+    this.legacyIndex = undefined;
   }
 }
 
