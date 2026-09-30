@@ -608,7 +608,7 @@ export function investigationNote(state: WorkPhaseState): string {
   return `Router: ${owedNote(state)}${choices} Until you call ${CONTEXT_HANDOFF_TOOL}, only these tools run: ${ALLOWED_TOOLS}, ` +
     `and routing_context updates; other calls are refused. When you have what the next step needs, call ` +
     `${CONTEXT_HANDOFF_TOOL} with outcome "ready", deliverable, complexity, and scope. To answer directly without a plan, review, or change, ` +
-    'call it with outcome "answer", deliverable "gather" or "lightweight", complexity, and scope. If the request is unclear or what it rests on cannot be read, ' +
+    'call it with outcome "answer", deliverable "gather" or "lightweight", complexity, and scope before giving a text answer. An undeclared text-only answer is held and retried once. If the request is unclear or what it rests on cannot be read, ' +
     `call it with outcome "needs-user" and your question. You may send at most ${ACQUISITION_REQUEST_LIMIT} ` +
     'model requests. Do not write the plan, review, or change yourself.';
 }

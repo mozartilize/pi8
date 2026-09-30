@@ -119,6 +119,8 @@ export interface DelegationHarnessOptions {
   beforeFallback?: (candidateId: string, previousId: string) => Promise<FallbackPlan>;
   /** Delegated conversation; defaults to a single user message. */
   context?: Context;
+  requireAnswerDeclaration?: boolean;
+  onUndeclaredAnswer?: DelegationOptions['onUndeclaredAnswer'];
 }
 
 export interface DelegationHarness {
@@ -279,6 +281,8 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
         session,
         candidates,
         beforeFallback,
+        requireAnswerDeclaration: options.requireAnswerDeclaration,
+        onUndeclaredAnswer: options.onUndeclaredAnswer,
       };
       const result = await runDelegationLoop(
         delegationOptions,

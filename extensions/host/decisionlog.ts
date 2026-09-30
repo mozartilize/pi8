@@ -229,7 +229,7 @@ export interface InvestigationHandoffSignal {
    * handoff and `no-handoff` owed context that was never handed off.
    */
   action:
-    | 'accept' | 'answer' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
+    | 'accept' | 'answer' | 'answer-retry' | 'undeclared-answer' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
     | 'served' | 'phase-end' | 'no-handoff';
   rejectReason?: string;
   handoff?: ReasoningHandoffMeta;

@@ -1157,7 +1157,17 @@ async function delegateRouterTurn(args: {
     registry: registry!,
     context: delegatedContext,
     options: clarifying ? { ...delegatedOptions, toolChoice: 'none' } : delegatedOptions,
-    ...(acquiring ? { onRequest: () => countAcquisitionRequest(session, intentKey) } : {}),
+    ...(acquiring ? {
+      onRequest: () => countAcquisitionRequest(session, intentKey),
+      requireAnswerDeclaration: !entry?.contextAnswer,
+      onUndeclaredAnswer: (outcome: 'retry' | 'released', served: string) => {
+        appendInvestigationHandoffSignal({
+          intentKey, action: outcome === 'retry' ? 'answer-retry' : 'undeclared-answer',
+          deliverable: entry?.deliverable ?? 'gather', served,
+          contextReasons: owedContext(entry),
+        });
+      },
+    } : {}),
     candidates: routableCandidates,
     reasoning: explicitThinking ?? resolvedReasoning,
     userReasoningOverride: explicitThinking != null || (!inheritedReasoning && requestedReasoning != null),

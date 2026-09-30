@@ -52,6 +52,185 @@ afterAll(() => {
   rmSync(decisionLogTestDir, { recursive: true, force: true });
 });
 
+describe('gathering answer declaration', () => {
+  const text = (delta: string) => ({ type: 'text_delta', delta });
+  const done = { type: 'done', message: { stopReason: 'stop' } };
+
+  it('holds an undeclared message, discards it, and retries with an instruction', async () => {
+    const first = {
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'start' };
+        yield { type: 'thinking_delta', delta: 'private reasoning' };
+        yield text('private answer');
+        expect(h.output).toEqual([]);
+        expect(h.session.getLastServed()).toBeUndefined();
+        yield done;
+      },
+    };
+    const h = createDelegationHarness({
+      chain: ['a/model'], requireAnswerDeclaration: true,
+      scripts: { 'a/model': [first, [text('I will declare it'), { type: 'toolcall_start' }, done]] },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.attempts).toEqual(['a/model', 'a/model']);
+    expect(h.output).toEqual([text('I will declare it'), { type: 'toolcall_start' }, done]);
+    expect(h.systemPrompts[1]).toContain('Before a direct answer, call hand_off_context');
+    expect(h.sourceContext?.systemPrompt).toBeUndefined();
+    expect(h.contexts[1]?.messages).toEqual(h.sourceContext?.messages);
+    expect(h.blacklist).toEqual([]);
+  });
+
+  it('holds the second answer to message end, then fails open without another retry', async () => {
+    const outcomes: string[] = [];
+    const second = {
+      async *[Symbol.asyncIterator]() {
+        yield text('second answer');
+        expect(h.output).toEqual([]);
+        yield done;
+      },
+    };
+    const h = createDelegationHarness({
+      chain: ['a/model', 'b/fallback'], requireAnswerDeclaration: true,
+      onUndeclaredAnswer: (outcome) => { outcomes.push(outcome); },
+      scripts: { 'a/model': [[text('first answer'), done], second] },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.attempts).toEqual(['a/model', 'a/model']);
+    expect(h.output).toEqual([text('second answer'), done]);
+    expect(outcomes).toEqual(['retry', 'released']);
+    expect(h.blacklist).toEqual([]);
+    expect(h.blacklistedProviders).toEqual([]);
+  });
+
+  it('releases narration with a tool call and never replays a later error', async () => {
+    const script = {
+      async *[Symbol.asyncIterator]() {
+        yield text('reading first');
+        expect(h.output).toEqual([]);
+        yield { type: 'toolcall_start' };
+        expect(h.output).toEqual([text('reading first'), { type: 'toolcall_start' }]);
+        yield { type: 'error', error: { errorMessage: '421' } };
+      },
+    };
+    const h = createDelegationHarness({
+      chain: ['a/model', 'b/fallback'], requireAnswerDeclaration: true,
+      scripts: { 'a/model': [script] },
+    });
+    await h.run();
+    expect(h.attempts).toEqual(['a/model']);
+    expect(h.output.filter((e) => (e as { type: string }).type === 'toolcall_start')).toHaveLength(1);
+  });
+
+  it('streams immediately when no declaration is required', async () => {
+    const script = {
+      async *[Symbol.asyncIterator]() {
+        yield text('declared answer');
+        expect(h.output).toEqual([text('declared answer')]);
+        yield done;
+      },
+    };
+    const h = createDelegationHarness({ chain: ['a/model'], scripts: { 'a/model': [script] } });
+    expect((await h.run()).success).toBe(true);
+    expect(h.attempts).toEqual(['a/model']);
+  });
+
+  it('discards held text on cancellation without retrying or recording a serve', async () => {
+    const abort = new AbortController();
+    const script = {
+      async *[Symbol.asyncIterator]() {
+        yield text('held answer');
+        abort.abort();
+        yield done;
+      },
+    };
+    const h = createDelegationHarness({
+      chain: ['a/model', 'b/fallback'], signal: abort.signal, requireAnswerDeclaration: true,
+      scripts: { 'a/model': [script] },
+    });
+    expect((await h.run()).success).toBe(false);
+    expect(h.attempts).toEqual(['a/model']);
+    expect(h.output.filter((e) => (e as { type: string }).type === 'text_delta')).toEqual([]);
+    expect(h.session.getLastServed()).toBeUndefined();
+    expect(h.blacklist).toEqual([]);
+  });
+
+  it('drops a superseded held answer without starting a retry', async () => {
+    const script = {
+      async *[Symbol.asyncIterator]() {
+        yield text('stale answer');
+        h.session.reset();
+        yield done;
+      },
+    };
+    const h = createDelegationHarness({
+      chain: ['a/model'], requireAnswerDeclaration: true,
+      scripts: { 'a/model': [script] },
+    });
+    expect((await h.run()).success).toBe(false);
+    expect(h.attempts).toEqual(['a/model']);
+    expect(h.output.filter((e) => (e as { type: string }).type === 'text_delta')).toEqual([]);
+    expect(h.session.getLastServed()).toBeUndefined();
+  });
+
+  it('uses at most one declaration retry across fallback candidates', async () => {
+    const h = createDelegationHarness({
+      chain: ['a/model', 'b/fallback'], requireAnswerDeclaration: true,
+      scripts: {
+        'a/model': [[text('first answer'), done], [{ type: 'error', error: { errorMessage: '421' } }], [{ type: 'error', error: { errorMessage: '421' } }]],
+        'b/fallback': [[text('fallback answer'), done]],
+      },
+    });
+    expect((await h.run()).lastServed?.registryId).toBe('b/fallback');
+    expect(h.attempts.filter((id) => id === 'b/fallback')).toHaveLength(1);
+    expect(h.output).toEqual([text('fallback answer'), done]);
+  });
+
+  it('drops held output on a provider error before falling back', async () => {
+    const h = createDelegationHarness({
+      chain: ['a/model', 'b/fallback'], requireAnswerDeclaration: true,
+      scripts: {
+        'a/model': [[text('private text'), { type: 'error', error: { errorMessage: '421' } }], [{ type: 'error', error: { errorMessage: '421' } }]],
+        'b/fallback': [[{ type: 'toolcall_start' }, done]],
+      },
+    });
+    expect((await h.run()).lastServed?.registryId).toBe('b/fallback');
+    expect(h.output).toEqual([{ type: 'toolcall_start' }, done]);
+  });
+
+  it.each(['text', 'thinking'] as const)('never replays after %s buffer overflow commits', async (kind) => {
+    const overflow = kind === 'text'
+      ? [text('x'.repeat(1_000_001))]
+      : [{ type: 'thinking_delta', delta: 'thinking' }, { type: 'thinking_delta', delta: 'x'.repeat(1_000_001) }, text('answer')];
+    const h = createDelegationHarness({
+      chain: ['a/model', 'b/fallback'], requireAnswerDeclaration: true,
+      scripts: { 'a/model': [[...overflow, done]] },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.attempts).toEqual(['a/model']);
+    expect(h.output).toEqual([...overflow, done]);
+  });
+
+  it('checks declaration at iterator end even when the provider omits done', async () => {
+    const h = createDelegationHarness({
+      chain: ['a/model'], requireAnswerDeclaration: true,
+      scripts: { 'a/model': [[text('first')], [text('second')]] },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.attempts).toHaveLength(2);
+    expect(h.output).toEqual([text('second')]);
+  });
+
+  it('keeps telemetry failures out of the answer path', async () => {
+    const h = createDelegationHarness({
+      chain: ['a/model'], requireAnswerDeclaration: true,
+      onUndeclaredAnswer: () => { throw new Error('logging failed'); },
+      scripts: { 'a/model': [[text('first'), done], [text('second'), done]] },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.output).toEqual([text('second'), done]);
+  });
+});
+
 describe('runDelegationLoop contracts', () => {
   it('falls back when an iterator rejects with a falsey error before any output', async () => {
     const rejectUndefined: AsyncIterable<unknown> = {

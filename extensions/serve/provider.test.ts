@@ -576,7 +576,7 @@ describe('provider orchestration', () => {
     expect(decision?.cause).toBe('manual-override');
     expect(decision?.fallbackChain).toEqual(['alpha/first']);
     expect(harness.session.getCachedIntent()).toBeDefined();
-    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
   });
 
   it('names failed models, not the allowlist, when every candidate is excluded', async () => {
@@ -601,7 +601,7 @@ describe('provider orchestration', () => {
 
     await harness.serve(context);
 
-    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
     expect(harness.outStream.events.some((e) => e.type === 'error')).toBe(false);
   });
 
@@ -634,7 +634,7 @@ describe('provider orchestration', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.chosen).toBe('alpha/first');
     expect(decision?.cause).toBe('manual-override');
-    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
   });
 
   it('resume does not reuse a route from unresolved work for a distinct request', async () => {
@@ -858,7 +858,7 @@ describe('provider orchestration', () => {
 
     await harness.serve(context, undefined, { id: 'reviewer' } as Model<Api>);
 
-    expect(call).toBe(2);
+    expect(call).toBe(3);
     expect(harness.outStream.events.filter((e) => e.type === 'error')).toHaveLength(0);
     expect(
       harness.outStream.events.some((e) => e.type === 'text_delta' && e.delta === 'review ok'),
@@ -976,7 +976,7 @@ describe('semi-automatic confirmation gate', () => {
 
     expect(ui.select).toHaveBeenCalledTimes(1);
     expect(ui.input).not.toHaveBeenCalled();
-    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
     // "Use" keeps the router's own cause; it is not a hold or a pin.
     expect(harness.getProviderState().lastDecision?.cause).not.toBe('semi-hold');
     expect(harness.getProviderState().lastDecision?.cause).not.toBe('manual-override');
@@ -994,7 +994,7 @@ describe('semi-automatic confirmation gate', () => {
     expect(decision?.cause).toBe('semi-hold');
     expect(decision?.chosen).toBe('beta/second');
     expect(decision?.fallbackChain).toEqual(['beta/second']);
-    expect(harness.streamedModels()).toEqual(['beta/second']);
+    expect(harness.streamedModels()).toEqual(['beta/second', 'beta/second']);
     // A hold is transient: it must not create a persistent manual pin.
     expect(harness.session.getManualModel()).toBeUndefined();
   });
@@ -1013,7 +1013,7 @@ describe('semi-automatic confirmation gate', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.cause).toBe('manual-override');
     expect(decision?.chosen).toBe('beta/second');
-    expect(harness.streamedModels()).toEqual(['beta/second']);
+    expect(harness.streamedModels()).toEqual(['beta/second', 'beta/second']);
     // The pin persists so subsequent turns take the manual path.
     expect(harness.session.getManualModel()).toBe('beta/second');
   });
@@ -1026,7 +1026,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     expect(ui.select).not.toHaveBeenCalled();
-    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
   });
 
   it('does not prompt when the routed pick equals the incumbent', async () => {
@@ -1038,7 +1038,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     expect(ui.select).not.toHaveBeenCalled();
-    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
   });
 
   it('is a no-op without an interactive UI', async () => {
@@ -1049,7 +1049,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     // Semi cannot ask, so it must degrade to the router's pick, never block.
-    expect(harness.streamedModels()).toEqual(['alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
     expect(harness.getProviderState().lastDecision?.cause).not.toBe('semi-hold');
   });
 
@@ -1079,7 +1079,7 @@ describe('semi-automatic confirmation gate', () => {
 
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
     expect(harness.session.getManualModel()).toBe('beta/second:high');
-    expect(harness.streamedModels()).toEqual(['beta/second']);
+    expect(harness.streamedModels()).toEqual(['beta/second', 'beta/second']);
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
 
@@ -1096,7 +1096,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     expect(ui.select).toHaveBeenCalledTimes(1);
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second', 'beta/second']);
   });
 
   it('keeps manual-override cause when a specific fallback model serves', async () => {
@@ -1115,7 +1115,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     expect(ui.input).toHaveBeenCalledTimes(1);
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second', 'beta/second']);
     expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second');
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
   });
@@ -1135,7 +1135,7 @@ describe('semi-automatic confirmation gate', () => {
 
     await harness.serve(implementTurn);
 
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second', 'beta/second']);
     expect(harness.delegatedCall(1).options?.reasoning).toBe('high');
     expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second:high');
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
@@ -1196,7 +1196,7 @@ describe('a thinking-level change the router did not write pins the served model
     await harness.serve(implement, piReasoning());
 
     expect(harness.session.getManualModel()).toBe(`${served}:${target}`);
-    expect(harness.streamedModels()).toEqual([served]);
+    expect(harness.streamedModels()).toEqual([served, served]);
     expect(harness.delegatedCall().options?.reasoning).toBe(target);
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
   });
@@ -1452,8 +1452,8 @@ describe('provider auth filtering', () => {
     const handles = await fetchDecisionContractHandles(temp.path);
     expectDecisionContract({ ...handles, match: { chosen: 'beta/second', cause: 'error-fallback' } });
 
-    // Credential failures are handled before streamSimple; the served fallback streams.
-    expect(harness.streamedModels()).toEqual(['beta/second']);
+    // Credential failures spend no provider requests; the fallback also retries its undeclared answer.
+    expect(harness.streamedModels()).toEqual(['beta/second', 'beta/second']);
   });
 
   it('reports exhausted fallbacks when no provider is authenticated', async () => {
@@ -2172,7 +2172,7 @@ describe('context acquisition', () => {
       const actions = records
         .map((r) => (r.investigationHandoff as { action?: string } | undefined)?.action)
         .filter(Boolean);
-      expect(actions).toEqual(['accept', 'served', 'phase-end']);
+      expect(actions).toEqual(['answer-retry', 'undeclared-answer', 'accept', 'served', 'phase-end']);
       expect(JSON.stringify(records)).not.toContain('swallows timeouts');
     });
 
@@ -2856,7 +2856,7 @@ describe('no-stronger escalation gate', () => {
     await harness.serve(context);
 
     expect(ui.select).toHaveBeenCalledTimes(1);
-    expect(harness.streamedModels()).toEqual(['alpha/solo']);
+    expect(harness.streamedModels()).toEqual(['alpha/solo', 'alpha/solo']);
   });
 
   it('semi off: warns and continues without a blocking prompt', async () => {
@@ -2874,7 +2874,7 @@ describe('no-stronger escalation gate', () => {
     const warnings = ui.notify.mock.calls.filter((c) => c[1] === 'warning');
     expect(warnings).toHaveLength(1);
     expect(String(warnings[0]?.[0])).toContain('no stronger model');
-    expect(harness.streamedModels()).toEqual(['alpha/solo']);
+    expect(harness.streamedModels()).toEqual(['alpha/solo', 'alpha/solo']);
   });
 });
 
@@ -3034,6 +3034,60 @@ describe('an entry without an incumbent', () => {
   });
 });
 
+describe('gathering answer hold', () => {
+  const context = { messages: [{ role: 'user', content: 'hello', timestamp: 1 }] } as unknown as Context;
+  const records = async (): Promise<Array<Record<string, unknown>>> => {
+    const { readFileSync } = await import('node:fs');
+    const { DECISION_LOG_FILE } = await import('../host/decisionlog.js');
+    return readFileSync(join(temp.path, DECISION_LOG_FILE), 'utf8').trim().split('\n')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  };
+  const actions = (rows: Array<Record<string, unknown>>) => rows
+    .map((r) => (r.investigationHandoff as { action?: string } | undefined)?.action).filter(Boolean);
+
+  it('discards the first answer and logs a bounded fail-open without creating an incumbent', async () => {
+    const harness = await setupProviderTest({ dir: temp.path, models: [registryModel('a/model')] });
+    let attempts = 0;
+    harness.scriptReply(() => asStream([
+      { type: 'text_delta', delta: attempts++ === 0 ? 'private-sensitive-answer' : 'visible answer' },
+      { type: 'done' },
+    ]));
+    await harness.serve(context);
+    expect(harness.streamedModels()).toEqual(['a/model', 'a/model']);
+    expect(harness.outStream.events.filter((e) => e.type === 'text_delta').map((e) => (e as { delta: string }).delta))
+      .toEqual(['visible answer']);
+    expect(harness.outStream.events.filter((e) => e.type === 'done')).toHaveLength(1);
+    expect(harness.session.context.getIncumbent()).toBeUndefined();
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+    const logged = await records();
+    expect(actions(logged)).toEqual(['answer-retry', 'undeclared-answer']);
+    expect(JSON.stringify(logged)).not.toContain('private-sensitive-answer');
+  });
+
+  it('serves a declared direct answer once and remains gathering on the next entry', async () => {
+    const harness = await setupProviderTest({ dir: temp.path, models: [registryModel('a/model')] });
+    harness.scriptReply([{ type: 'toolcall_start' }, { type: 'done' }]);
+    await harness.serve(context);
+    const { submitContextHandoff } = await import('./context-handoff-tool.js');
+    expect(submitContextHandoff({
+      outcome: 'answer', deliverable: 'lightweight', complexity: 'trivial', scope: 'bounded',
+    }, { model: { provider: 'router', id: 'auto' } } as unknown as ExtensionContext, harness.session).accepted).toBe(true);
+    harness.resetEventStream();
+    harness.scriptReply([{ type: 'text_delta', delta: 'declared answer' }, { type: 'done' }]);
+    await harness.serve(context);
+    expect(harness.streamedModels()).toEqual(['a/model', 'a/model']);
+    expect(harness.outStream.events.filter((e) => e.type === 'text_delta')).toHaveLength(1);
+    expect(harness.session.context.getIncumbent()).toBeUndefined();
+    expect(actions(await records())).toContain('answer');
+    harness.resetEventStream();
+    harness.scriptReply([{ type: 'text_delta', delta: 'another entry' }, { type: 'done' }]);
+    await harness.serve({ messages: [...context.messages, { role: 'user', content: 'next', timestamp: 2 }] } as unknown as Context);
+    expect(harness.streamedModels()).toHaveLength(4);
+    expect(harness.session.getWorkPhaseState()?.contextAnswer).toBeUndefined();
+    expect(harness.session.context.getIncumbent()).toBeUndefined();
+  });
+});
+
 describe('router-report counterfactual baseline', () => {
   const benchmarks: BenchModel[] = [
     {
@@ -3126,7 +3180,8 @@ describe('router-report counterfactual baseline', () => {
     expect(entry?.baselineModel).toBe('alpha/strong');
     expect(entry?.baselineSource).toBe('config');
     expect(typeof entry?.routedCost).toBe('number');
-    // Registry rates are USD per 1M tokens, so priced spend divides by 1e6.
-    expect(entry?.baselineCost).toBe((10 * 100 + 50 * 20) / 1_000_000);
+    // Both the discarded answer and its retry spent tokens, priced on the same registry basis.
+    expect(harness.streamedModels()).toHaveLength(2);
+    expect(entry?.baselineCost).toBe((10 * 200 + 50 * 40) / 1_000_000);
   });
 });

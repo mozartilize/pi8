@@ -64,6 +64,7 @@ const MAX_BUFFERED_EVENTS = 10_000;
  * transcript.
  */
 const TOOL_LOOP_HANDOFF_PROMPT = 'Continue the task from the tool results above.';
+const ANSWER_DECLARATION_PROMPT = 'Before a direct answer, call hand_off_context with outcome "answer", deliverable "gather" or "lightweight", complexity, and scope. For a plan, review, or implementation, use outcome "ready" instead. Do not repeat the undeclared answer.';
 const MAX_PREOUTPUT_BUFFER_CHARS = 1_000_000;
 
 /** Conservative payload accounting without serializing provider-controlled data. */
@@ -199,6 +200,10 @@ export interface DelegationOptions {
   settleServed?: (lastServed: ServedInfo, decision: RoutingDecision) => RoutingDecision;
   /** Called before each provider request: retries and fallback attempts included. */
   onRequest?: () => void;
+  /** Gathering has no accepted direct-answer declaration: hold text to message end. */
+  requireAnswerDeclaration?: boolean;
+  /** Category-only telemetry; callback failures must not block an answer. */
+  onUndeclaredAnswer?: (outcome: 'retry' | 'released', candidateId: string) => void;
 }
 
 export interface DelegationResult {
@@ -252,22 +257,26 @@ function resolveAttemptEffort(
  * on the first terminal `done` it sees, so an answerless `done` would persist
  * an empty assistant message and drop the fallback. Once meaningful output
  * has streamed, forwarding is live — partial output is never replayed.
+ * Gathering text stays private until message end unless a tool call releases
+ * its narration; a direct answer without a declaration is discarded once.
  *
  * `isServedOutputEvent` is checked before the cap: a candidate whose first
  * answer arrives exactly at the boundary must serve, never fail. Overflow
- * with thinking already in the buffer commits to live streaming; overflow
- * of pure lifecycle spam fails the candidate. The overflowing event itself
+ * with thinking or held text commits to live streaming; overflow of pure
+ * lifecycle spam fails the candidate. The overflowing event itself
  * does not count as buffered thinking — `bufferHasThinking` is set after
  * the cap check.
  */
 function createAttemptBuffer(
   stream: AssistantMessageEventStream,
   candidateId: string,
+  holdText = false,
 ) {
   const attemptBuffer: unknown[] = [];
   let bufferedChars = 0;
   let passthrough = false;
   let bufferHasThinking = false;
+  let bufferHasText = false;
   let committedToStream = false;
 
   const flush = (): void => {
@@ -279,12 +288,17 @@ function createAttemptBuffer(
     attemptBuffer.length = 0;
     bufferedChars = 0;
   };
+  const release = (): void => {
+    passthrough = true;
+    flush();
+  };
   const forward = (ev: unknown): void => {
     if (passthrough) {
       stream.push(ev as never);
       return;
     }
-    if (isServedOutputEvent((ev as { type: string }).type)) {
+    const type = (ev as { type: string }).type;
+    if (isServedOutputEvent(type) && (!holdText || isToolCallEvent(type))) {
       passthrough = true;
       flush();
       stream.push(ev as never);
@@ -292,7 +306,8 @@ function createAttemptBuffer(
     }
     const size = bufferedEventSize(ev, MAX_PREOUTPUT_BUFFER_CHARS - bufferedChars);
     if (attemptBuffer.length >= MAX_BUFFERED_EVENTS || size > MAX_PREOUTPUT_BUFFER_CHARS - bufferedChars) {
-      if (bufferHasThinking) {
+      // A bounded hold fails open on buffered output, never replays it.
+      if (bufferHasThinking || (holdText && (bufferHasText || type === 'text_delta'))) {
         passthrough = true;
         committedToStream = true;
         flush();
@@ -303,7 +318,8 @@ function createAttemptBuffer(
         `candidate exceeded pre-output buffer limit (${MAX_BUFFERED_EVENTS} events / ${MAX_PREOUTPUT_BUFFER_CHARS} chars): ${candidateId}`,
       );
     }
-    if ((ev as { type: string }).type === 'thinking_delta') bufferHasThinking = true;
+    if (type === 'thinking_delta') bufferHasThinking = true;
+    if (type === 'text_delta') bufferHasText = true;
     bufferedChars += size;
     attemptBuffer.push(ev);
   };
@@ -312,6 +328,10 @@ function createAttemptBuffer(
     forward,
     flush,
     discard,
+    release,
+    get released(): boolean {
+      return passthrough;
+    },
     get committedToStream(): boolean {
       return committedToStream;
     },
@@ -597,6 +617,7 @@ type AttemptEventDisposition =
   | { kind: 'continue' }
   | { kind: 'trajectory' }
   | { kind: 'output-limit'; message: string }
+  | { kind: 'undeclared-answer'; message: string }
   | {
       kind: 'provider-error';
       message: string;
@@ -612,6 +633,7 @@ type CandidateAttemptResult =
     }
   | { kind: 'trajectory'; message: string; effectiveSource: string; usageObserved: boolean }
   | { kind: 'aborted'; message: string }
+  | { kind: 'undeclared-answer'; message: string }
   | { kind: 'finalize'; message: string }
   | { kind: 'provider-dead'; message: string }
   | { kind: 'retry'; message: string; transient: boolean; outputLimitExhausted: boolean }
@@ -656,6 +678,8 @@ interface DelegationContext {
   turnSpend: TurnSpend;
   session: RouterSession;
   stillCurrent: () => boolean;
+  /** Shared across the fallback walk: at most one declaration retry per invocation. */
+  declarationRetried: boolean;
 }
 
 /**
@@ -702,6 +726,8 @@ class AttemptController {
   lastServed: ServedInfo | undefined;
   finalDecision: RoutingDecision;
 
+  private textReceived = false;
+  private answerChecked = false;
   private servedTracked = false;
   private usageCommitted = false;
   private readonly reasoningLoop = new ReasoningLoopDetector();
@@ -712,7 +738,7 @@ class AttemptController {
     private readonly candidate: PreparedCandidate,
   ) {
     this.finalDecision = ctx.decision;
-    this.attemptBuffer = createAttemptBuffer(ctx.stream, candidate.candidateId);
+    this.attemptBuffer = createAttemptBuffer(ctx.stream, candidate.candidateId, ctx.opts.requireAnswerDeclaration);
   }
 
   get committedToStream(): boolean {
@@ -727,7 +753,7 @@ class AttemptController {
     }
 
     if (isServedOutputEvent(event.type)) this.meaningfulOutputReceived = true;
-    if (event.type === 'text_delta') this.visibleTextReceived = true;
+    if (event.type === 'text_delta') this.textReceived = true;
     if (event.type === 'thinking_delta') {
       this.thinkingReceived = true;
       const rec = event as { delta?: unknown; text?: unknown; content?: unknown };
@@ -756,7 +782,7 @@ class AttemptController {
 
     const classified = classifyTerminalEvent(
       event,
-      this.visibleTextReceived,
+      event.type === 'done' ? this.textReceived : this.visibleTextReceived,
       this.toolCallReceived,
       this.candidate.candidateId,
     );
@@ -772,14 +798,49 @@ class AttemptController {
       return { kind: 'provider-error', message: classified.message, error: classified.error };
     }
 
-    if (!this.servedTracked && isServedOutputEvent(event.type)) {
+    if (event.type === 'done') {
+      const disposition = this.finish();
+      if (disposition.kind !== 'continue') return disposition;
+    }
+    // Publish serving state before tool-call narration reaches the consumer.
+    if (isToolCallEvent(event.type) || (!this.ctx.opts.requireAnswerDeclaration && event.type === 'text_delta')) {
+      this.recordReleasedOutput(true);
+    }
+    this.attemptBuffer.forward(event);
+    this.recordReleasedOutput();
+    return { kind: 'continue' };
+  }
+
+  /** A completed message can be retried only while all its text is still private. */
+  finish(): AttemptEventDisposition {
+    if (this.ctx.opts.options?.signal?.aborted || this.answerChecked || !this.textReceived || this.toolCallReceived || !this.ctx.opts.requireAnswerDeclaration) {
+      return { kind: 'continue' };
+    }
+    this.answerChecked = true;
+    const retry = !this.attemptBuffer.released && !this.ctx.declarationRetried;
+    try {
+      if (this.ctx.stillCurrent()) this.ctx.opts.onUndeclaredAnswer?.(retry ? 'retry' : 'released', this.candidate.candidateId);
+    } catch {
+      // Telemetry cannot block a turn.
+    }
+    if (retry) {
+      this.attemptBuffer.discard();
+      return { kind: 'undeclared-answer', message: 'direct answer requires hand_off_context declaration' };
+    }
+    this.attemptBuffer.release();
+    this.recordReleasedOutput();
+    return { kind: 'continue' };
+  }
+
+  private recordReleasedOutput(willRelease = false): void {
+    if (!willRelease && !this.attemptBuffer.released) return;
+    this.visibleTextReceived = this.textReceived;
+    if (!this.servedTracked && (this.textReceived || this.toolCallReceived)) {
       this.servedTracked = true;
       const recorded = recordServedAttempt(this.ctx, this.candidate);
       this.lastServed = recorded.lastServed;
       this.finalDecision = recorded.finalDecision;
     }
-    this.attemptBuffer.forward(event);
-    return { kind: 'continue' };
   }
 
   commitUsage(providerAttempted: boolean): void {
@@ -806,7 +867,7 @@ class AttemptController {
 
 type AttemptFailure =
   | { kind: 'caught'; error: unknown }
-  | { kind: 'trajectory' | 'output-limit' | 'declined'; message: string }
+  | { kind: 'trajectory' | 'output-limit' | 'declined' | 'undeclared-answer'; message: string }
   | { kind: 'provider-error'; message: string; error: { stopReason?: string; errorMessage?: string } | undefined };
 
 interface AttemptObservation {
@@ -843,6 +904,7 @@ function settleAttempt(
   }
   const message = failureMessage(failure);
   if (observation.userAborted) return { kind: 'aborted', message: 'aborted' };
+  if (failure.kind === 'undeclared-answer') return { kind: 'undeclared-answer', message };
   // Setup failures spent no provider tokens and cannot be retried as stream errors.
   if (!observation.requestReady) {
     return { kind: 'next-candidate', message, transient: false, outputLimitExhausted: false };
@@ -957,6 +1019,10 @@ async function runCandidateAttempt(
           : disposition;
         break;
       }
+      if (!failure) {
+        const disposition = controller.finish();
+        if (disposition.kind === 'undeclared-answer') failure = disposition;
+      }
       if (!failure && !controller.meaningfulOutputReceived) {
         // Severe pre-output loop with no reachable stronger target is a
         // capability struggle, not a model defect.
@@ -1014,7 +1080,7 @@ async function runCandidateAttempt(
   }
 }
 
-type SettledAttempt = Exclude<CandidateAttemptResult, RetryAttempt>;
+type SettledAttempt = Exclude<CandidateAttemptResult, RetryAttempt | { kind: 'undeclared-answer' }>;
 
 /**
  * Attempt one candidate, retrying in place while the failure policy asks for
@@ -1056,6 +1122,16 @@ async function runWithRetries(
       debugLog('attempt.handoff', { candidate: candidate.candidateId });
       attempt = await runCandidateAttempt(ctx, candidate, tries, context);
     }
+    if (attempt.kind === 'undeclared-answer') {
+      if (!ctx.stillCurrent()) return { attempt: { kind: 'aborted', message: 'superseded' }, lastRetry };
+      ctx.declarationRetried = true;
+      context = {
+        ...context,
+        systemPrompt: [context.systemPrompt, ANSWER_DECLARATION_PROMPT].filter(Boolean).join('\n\n'),
+      };
+      continue;
+    }
+    // The shared flag makes a second undeclared answer fail open, not retry.
     if (attempt.kind !== 'retry') return { attempt, lastRetry };
     lastRetry = attempt;
   }
@@ -1145,7 +1221,7 @@ export async function runDelegationLoop(
 
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
-  const ctx: DelegationContext = { opts, stream, decision, turnSpend, session, stillCurrent };
+  const ctx: DelegationContext = { opts, stream, decision, turnSpend, session, stillCurrent, declarationRetried: false };
   // Not-yet-attempted, still-reachable candidates after `index` in the live
   // chain. Anything at or before `index` was already tried, and a dead
   // provider cannot serve a hop, so both the early-abort probe and the hop
@@ -1416,8 +1492,8 @@ export async function runDelegationLoop(
 /**
  * Events that prove the candidate actually produced this turn's answer, as
  * opposed to lifecycle-only `start`/`done` or pre-answer `thinking_delta`.
- * Reaching one flips passthrough (flushing the pre-output buffer) and locks
- * out replay. Tool calls count: an "implement" turn can be pure tool-call
+ * Reaching one stops the meaningful-output timeout. Released output locks
+ * out replay; gathering text can remain held until message end. Tool calls count: an "implement" turn can be pure tool-call
  * output with no text deltas at all. Thinking is deliberately excluded: it is
  * the model's own reasoning, and streaming a failed candidate's reasoning
  * before its answer arrives would leak it into the fallback model's response.
