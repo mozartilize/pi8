@@ -74,20 +74,6 @@ describe('saveBlacklist', () => {
   });
 });
 
-describe('consult router option', () => {
-  it('defaults consultRouter to true when absent', () => {
-    expect(loadConfig().consultRouter).toBe(true);
-  });
-
-  it.each(['consultRouter', 'consultRouterAgent'] as const)(
-    'respects an explicit false for %s (legacy input alias still works)',
-    (key) => {
-      writeFileSync(getConfigPath(), JSON.stringify({ [key]: false }), 'utf8');
-      expect(loadConfig().consultRouter).toBe(false);
-    },
-  );
-});
-
 describe('prompt option', () => {
   it('defaults to true when absent', () => {
     expect(loadConfig().prompt).toBe(true);
@@ -187,26 +173,6 @@ describe('malformed config values are normalized to defaults', () => {
     expect(config.lowConfidenceThreshold).toBe(DEFAULT_LOW_CONFIDENCE_THRESHOLD);
   });
 
-  it('drops a non-string consultModel', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ consultModel: 123 }), 'utf8');
-    expect(loadConfig().consultModel).toBeUndefined();
-  });
-
-  it('drops an empty-string consultModel', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ consultModel: '' }), 'utf8');
-    expect(loadConfig().consultModel).toBeUndefined();
-  });
-
-  it('drops a whitespace-only consultModel', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ consultModel: '   ' }), 'utf8');
-    expect(loadConfig().consultModel).toBeUndefined();
-  });
-
-  it('drops an object consultModel', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ consultModel: { provider: 'x', id: 'y' } }), 'utf8');
-    expect(loadConfig().consultModel).toBeUndefined();
-  });
-
   it('coerces a non-boolean prompt to true (default on)', () => {
     writeFileSync(getConfigPath(), JSON.stringify({ prompt: { enabled: false } }), 'utf8');
     expect(loadConfig().prompt).toBe(true);
@@ -235,34 +201,6 @@ describe('malformed config values are normalized to defaults', () => {
   it('preserves a valid artificialAnalysisApiKey', () => {
     writeFileSync(getConfigPath(), JSON.stringify({ artificialAnalysisApiKey: 'sk-abc123' }), 'utf8');
     expect(loadConfig().artificialAnalysisApiKey).toBe('sk-abc123');
-  });
-});
-
-describe('assessment config', () => {
-  it('defaults the assessment deadline, input cap and assessor floor', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({}), 'utf8');
-    const config = loadConfig();
-    expect(config.assessmentDeadlineMs).toBe(1500);
-    expect(config.assessmentMaxInputChars).toBe(6000);
-    expect(config.assessorQualityRatio).toBe(0.5);
-  });
-
-  it('ignores removed assessment mode fields', () => {
-    writeFileSync(
-      getConfigPath(),
-      JSON.stringify({ assessmentMode: 'shadow', assessmentShadowDeadlineMs: 8000 }),
-      'utf8',
-    );
-    const loaded = loadConfig();
-    const config = loaded as unknown as Record<string, unknown>;
-    expect(loaded.consultRouter).toBe(true);
-    expect(config.assessmentMode).toBeUndefined();
-    expect(config.assessmentShadowDeadlineMs).toBeUndefined();
-  });
-
-  it('clamps a nonsense assessor ratio back to the default', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ assessorQualityRatio: 4 }), 'utf8');
-    expect(loadConfig().assessorQualityRatio).toBe(0.5);
   });
 });
 

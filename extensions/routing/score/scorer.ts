@@ -376,9 +376,7 @@ export function inputOutputPricePer1M(
 export function blendedPricePer1M(c: Candidate): number | undefined {
   const complete = inputOutputPricePer1M(c);
   if (complete) return blend(complete.input, complete.output);
-  // Preserve partial benchmark fallback for generic serving economics. The
-  // assessor-shaped formula requires both prices and therefore uses only the
-  // complete helper above.
+  // Preserve partial benchmark fallback for generic serving economics.
   const partialInput = c.bench?.priceInputPer1M;
   const partialOutput = c.bench?.priceOutputPer1M;
   if (partialInput != null && !isNonNegativeFinite(partialInput)) return undefined;

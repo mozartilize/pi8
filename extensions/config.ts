@@ -6,9 +6,6 @@ import { join } from 'node:path';
 import type { AutoRouterConfig, Dimension, ScoreWeights } from './types.js';
 import {
   CONFIG_FILE,
-  DEFAULT_ASSESSMENT_DEADLINE_MS,
-  DEFAULT_ASSESSMENT_MAX_INPUT_CHARS,
-  DEFAULT_ASSESSOR_QUALITY_RATIO,
   DEFAULT_DIMENSION_WEIGHTS,
   DEFAULT_EMBEDDING_MIN_CONFIDENCE,
   DEFAULT_LOW_CONFIDENCE_THRESHOLD,
@@ -39,15 +36,6 @@ export interface PersistedConfig {
    */
   routerContextWindow?: number;
   lowConfidenceThreshold?: number;
-  consultRouter?: boolean;
-  consultRouterAgent?: boolean;
-  consultModel?: string;
-  /** End-to-end assessment budget in ms (default 1500). */
-  assessmentDeadlineMs?: number;
-  /** Assembled assessment input cap in characters (default 6000). */
-  assessmentMaxInputChars?: number;
-  /** Assessor intelligence floor as a ratio of the best routable (default 0.5). */
-  assessorQualityRatio?: number;
   /**
    * Show a TUI notification when the router picks a model for a turn or
    * switches models between turns. Default true. Set false to route silently
@@ -154,13 +142,6 @@ function readPersisted(path: string): PersistedConfig {
 export function loadConfig(): AutoRouterConfig {
   const persisted = readPersisted(getConfigPath());
 
-  const consultRouter =
-    typeof persisted.consultRouter === 'boolean'
-      ? persisted.consultRouter
-      : typeof persisted.consultRouterAgent === 'boolean'
-        ? persisted.consultRouterAgent
-        : true;
-
   return {
     artificialAnalysisApiKey:
       typeof persisted.artificialAnalysisApiKey === 'string'
@@ -182,25 +163,6 @@ export function loadConfig(): AutoRouterConfig {
     lowConfidenceThreshold: finiteInRange(
       persisted.lowConfidenceThreshold,
       DEFAULT_LOW_CONFIDENCE_THRESHOLD,
-      0,
-      1,
-    ),
-    consultRouter,
-    consultModel:
-      typeof persisted.consultModel === 'string' && persisted.consultModel.trim()
-        ? persisted.consultModel
-        : undefined,
-    assessmentDeadlineMs: positiveInteger(
-      persisted.assessmentDeadlineMs,
-      DEFAULT_ASSESSMENT_DEADLINE_MS,
-    ),
-    assessmentMaxInputChars: positiveInteger(
-      persisted.assessmentMaxInputChars,
-      DEFAULT_ASSESSMENT_MAX_INPUT_CHARS,
-    ),
-    assessorQualityRatio: finiteInRange(
-      persisted.assessorQualityRatio,
-      DEFAULT_ASSESSOR_QUALITY_RATIO,
       0,
       1,
     ),
@@ -241,6 +203,12 @@ const REMOVED_CONFIG_KEYS = [
   'escalationTtlTurns',
   'assessmentMode',
   'assessmentShadowDeadlineMs',
+  'consultRouter',
+  'consultRouterAgent',
+  'consultModel',
+  'assessmentDeadlineMs',
+  'assessmentMaxInputChars',
+  'assessorQualityRatio',
 ] as const;
 
 function withoutRemovedKeys(persisted: PersistedConfig): PersistedConfig {

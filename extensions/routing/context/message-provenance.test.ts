@@ -7,7 +7,7 @@ import {
   BRANCH_SUMMARY_SUFFIX,
 } from '@earendil-works/pi-agent-core';
 import type { Message } from '@earendil-works/pi-ai';
-import { classifyProvenance, latestSummaryText, countToolActivity } from './message-provenance.js';
+import { classifyProvenance } from './message-provenance.js';
 
 const user = (text: string): Message =>
   ({ role: 'user', content: [{ type: 'text', text }], timestamp: 1 }) as unknown as Message;
@@ -80,43 +80,5 @@ describe('message-provenance', () => {
   it('fails open to user on a malformed message', () => {
     expect(classifyProvenance({} as unknown as Message)).toBe('user');
     expect(classifyProvenance(undefined as unknown as Message)).toBe('user');
-  });
-});
-
-describe('latestSummaryText', () => {
-  it('returns the summary body without the marker', () => {
-    const msg = user(`${COMPACTION_SUMMARY_PREFIX}we refactored the scorer${COMPACTION_SUMMARY_SUFFIX}`);
-    expect(latestSummaryText([msg])).toBe('we refactored the scorer');
-  });
-
-  it('returns the newest summary when several exist', () => {
-    const older = user(`${COMPACTION_SUMMARY_PREFIX}older${COMPACTION_SUMMARY_SUFFIX}`);
-    const newer = user(`${COMPACTION_SUMMARY_PREFIX}newer${COMPACTION_SUMMARY_SUFFIX}`);
-    expect(latestSummaryText([older, newer])).toBe('newer');
-  });
-
-  it('returns undefined when no summary is present', () => {
-    expect(latestSummaryText([user('hello')])).toBeUndefined();
-  });
-});
-
-describe('countToolActivity', () => {
-  it('counts tool names without exposing arguments or results', () => {
-    const messages = [
-      { role: 'assistant', content: [{ type: 'toolCall', name: 'read', arguments: { path: '/etc/passwd' } }] },
-      { role: 'assistant', content: [{ type: 'toolCall', name: 'read', arguments: { path: '/tmp/x' } }] },
-      { role: 'assistant', content: [{ type: 'toolCall', name: 'bash', arguments: { cmd: 'ls' } }] },
-    ] as never[];
-
-    const activity = countToolActivity(messages);
-    expect(activity).toEqual([
-      { name: 'read', count: 2 },
-      { name: 'bash', count: 1 },
-    ]);
-    expect(JSON.stringify(activity)).not.toContain('passwd');
-  });
-
-  it('returns an empty list for a conversation with no tool calls', () => {
-    expect(countToolActivity([user('hi')])).toEqual([]);
   });
 });

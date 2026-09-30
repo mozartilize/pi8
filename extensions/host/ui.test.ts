@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearRouterStatus, formatStatus, formatDecisionDetail, formatAssessmentSpend, formatEmbeddingStats, servedKey } from './ui.js';
+import { clearRouterStatus, formatStatus, formatDecisionDetail, formatEmbeddingStats, servedKey } from './ui.js';
 import { candidateKey } from '../routing/score/scorer.js';
 import type { RoutingDecision } from '../types.js';
 
@@ -287,7 +287,7 @@ describe('notifyRouting', () => {
   });
 });
 
-describe('assessment in /router-why', () => {
+describe('direction notes in /router-why', () => {
   const decisionWith = (over: Partial<RoutingDecision> = {}): RoutingDecision => ({
     ...decision,
     ...over,
@@ -300,45 +300,18 @@ describe('assessment in /router-why', () => {
     accumulatedCost: 0.0123,
   });
 
-  const validAssessment = () => ({
-    kind: 'lightweight' as const,
-    complexity: 'trivial' as const,
-    scope: 'bounded' as const,
-    compound: false,
-    confidence: 'high' as const,
-    reasoning: 'a bounded extraction from one named file',
-    model: 'test/assessor',
-    ms: 380,
-    usage: { input: 800, output: 24 },
-    costUsd: 0.0003,
-  });
-
-  it('renders a direction change with the assessment verdict', () => {
+  it('renders a downward route with the handoff cause', () => {
     const lines = formatDecisionDetail(
       decisionWith({
         dimension: 'lightweight',
         routedDown: true,
         routedPickChanged: true,
         cause: 'router-consult',
-        assessment: validAssessment(),
       }),
       served(),
     );
 
-    expect(lines.join('\n')).toContain(
-      'assessment: lightweight, trivial complexity, limited scope, single step, high confidence',
-    );
-    expect(lines.join('\n')).toContain('a bounded extraction from one named file');
-    expect(lines.join('\n')).toContain('task type lowered by the assessment, so a cheaper model served');
-  });
-
-  it('reports why the assessment was unavailable', () => {
-    const lines = formatDecisionDetail(decisionWith({ fallbackReason: 'no-assessor' }), served());
-    expect(lines.join('\n')).toContain('assessment unavailable (no model available to assess)');
-  });
-
-  it('shows assessment spend beside routed spend', () => {
-    expect(formatAssessmentSpend(0.0123)).toContain('0.0123');
+    expect(lines.join('\n')).toContain('task type lowered by a later reading of the request, so a cheaper model served');
   });
 
   it('marks a downward route in the status widget', () => {

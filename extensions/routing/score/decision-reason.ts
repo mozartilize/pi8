@@ -16,8 +16,7 @@ export type ReasonDetail =
   | { kind: 'incumbent-effort' }
   | { kind: 'context-pressure' }
   | { kind: 'no-data' }
-  | { kind: 'trajectory'; fromModel: string }
-  | { kind: 'assessment'; task: string; scope: 'bounded' | 'open-ended'; confidence: string };
+  | { kind: 'trajectory'; fromModel: string };
 
 function renderDetail(detail: ReasonDetail): string {
   switch (detail.kind) {
@@ -27,7 +26,6 @@ function renderDetail(detail: ReasonDetail): string {
     case 'context-pressure': return 'context nearly full: prefer a fresh planner subagent';
     case 'no-data': return 'no benchmark quality data';
     case 'trajectory': return `${detail.fromModel} struggled: stronger model`;
-    case 'assessment': return `assessment: ${detail.task}, ${detail.scope === 'bounded' ? 'limited' : 'open-ended'} scope, ${detail.confidence} confidence`;
   }
 }
 

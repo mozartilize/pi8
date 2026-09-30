@@ -32,8 +32,8 @@ import { scriptedRegistryStream } from './registry-stream.js';
 
 /**
  * Mirror of pi's `ResolvedRequestAuth` registry contract: the mock
- * `getApiKeyAndHeaders` returns this shape for assessment. The scripted
- * registry stream also uses it to simulate request-time credential failures.
+ * `getApiKeyAndHeaders` returns this shape. The scripted registry stream
+ * also uses it to simulate request-time credential failures.
  */
 export type ResolvedRequestAuth =
   | { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
@@ -320,9 +320,8 @@ export function expectDecisionContract(opts: {
 }): void {
   expect(opts.state.lastDecision).toMatchObject(opts.match);
 
-  // Assessment metrics may trail the decision line; find the newest real
-  // decision entry.
-  const entry = [...opts.log].reverse().find((e) => e.kind !== 'assessment-metric');
+  // Sidecar records (spend, contracts, handoffs) may trail the decision line.
+  const entry = [...opts.log].reverse().find((e) => e.kind === undefined || e.kind === 'decision');
   expect(entry).toBeDefined();
   if (entry) {
     for (const field of ['dimension', 'cause', 'chosen'] as const) {

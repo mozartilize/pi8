@@ -11,13 +11,15 @@ import { tmpdir } from 'node:os';
 
 import {
   appendDecision,
-  appendAssessmentMetric,
   appendSubagentGapSignal,
+  appendSubagentSpend,
+  appendExecutionContractSignal,
+  appendInvestigationHandoffSignal,
   readRecentEntries,
   setDecisionLogBase,
   DECISION_LOG_FILE,
+  DECISION_LOG_SCHEMA_VERSION,
 } from './decisionlog.js';
-import { ASSESSMENT_PROMPT_VERSION } from '../routing/consult/assessment-prompt.js';
 import { setSessionFile } from '../sessionpaths.js';
 import type { RoutingDecision } from '../types.js';
 
@@ -88,7 +90,6 @@ describe('decision log', () => {
     expect(entry.cause).toBe('trajectory-escalation');
     expect(entry.trajectoryFriction.fromModel).toBe('test/weak:low');
     expect(entry.spendIncomplete).toBe(true);
-    expect(entry.escalation).toBeUndefined();
   });
 
   it('appends a JSONL line with the served model and no fallback', () => {
@@ -191,12 +192,49 @@ describe('decision log', () => {
       dir,
     );
     const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.escalation).toBeUndefined();
     expect(entry.contextPressure.usageRatio).toBe(0.71);
     expect(entry.candidateDiagnostics).toEqual([
       { candidateKey: 'cheap/model', excludedReason: 'promoted' },
       { candidateKey: 'weak/model', excludedReason: 'below-task-floor' },
     ]);
+  });
+
+  it('stamps every record kind with the schema version it was written under', () => {
+    appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
+    appendSubagentGapSignal({ tool: 'bash' }, dir);
+    appendSubagentSpend({
+      model: 'a/b',
+      routerOwned: true,
+      usage: { inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheWrite: 0 },
+    }, dir);
+    appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+    appendInvestigationHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+
+    const records = readRecentEntries(10, dir);
+    expect(records).toHaveLength(5);
+    expect(records.every((record) => record.schemaVersion === DECISION_LOG_SCHEMA_VERSION)).toBe(true);
+  });
+
+  it('carries the classifier confidence on routing decisions only', () => {
+    appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
+    appendSubagentGapSignal({ tool: 'bash' }, dir);
+    appendSubagentSpend({
+      model: 'a/b',
+      routerOwned: true,
+      usage: { inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheWrite: 0 },
+    }, dir);
+    appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+    appendInvestigationHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+
+    const [decision, ...others] = readRecentEntries(10, dir);
+    expect(decision!.confidence).toBe(DECISION.confidence);
+    expect(others).toHaveLength(4);
+    expect(others.every((record) => !('confidence' in record))).toBe(true);
+  });
+
+  it('reads an unversioned record as written', () => {
+    writeFileSync(join(dir, DECISION_LOG_FILE), JSON.stringify({ ts: 1, dimension: 'plan', chosen: 'a/b' }) + '\n');
+    expect(readRecentEntries(10, dir)[0]).toEqual({ ts: 1, dimension: 'plan', chosen: 'a/b' });
   });
 
   it('appends dedicated subagent tool-gap events', () => {
@@ -209,7 +247,7 @@ describe('decision log', () => {
   });
 });
 
-describe('assessment telemetry', () => {
+describe('decision log provenance', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -239,11 +277,10 @@ describe('assessment telemetry', () => {
     return JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>;
   };
 
-  it('writes routedDown, fallbackReason and provenance counts additively', () => {
+  it('writes routedDown and provenance counts additively', () => {
     appendDecision(
       decision({
         routedDown: true,
-        fallbackReason: 'expiry',
         provenanceCounts: {
           user: 3,
           'compaction-summary': 1,
@@ -259,7 +296,6 @@ describe('assessment telemetry', () => {
 
     const entry = readLastEntry(dir);
     expect(entry.routedDown).toBe(true);
-    expect(entry.fallbackReason).toBe('expiry');
     expect(entry.provenance).toEqual({
       user: 3,
       'compaction-summary': 1,
@@ -268,135 +304,8 @@ describe('assessment telemetry', () => {
       assistant: 4,
       'tool-result': 7,
     });
-    // Nothing pre-existing changed meaning.
     expect(entry.cause).toBe('heuristic');
     expect(entry.routedUp).toBe(false);
-  });
-
-  it('stamps the prompt version when an assessment ran', () => {
-    appendDecision(
-      decision({
-        assessment: {
-          kind: 'lightweight',
-          complexity: 'trivial',
-          scope: 'bounded',
-          compound: false,
-          confidence: 'high',
-          reasoning: 'bounded extraction',
-          model: 'test/assessor',
-          ms: 420,
-          usage: { input: 900, output: 30 },
-          costUsd: 0.00042,
-        },
-      }),
-      served(),
-      dir,
-    );
-
-    const entry = readLastEntry(dir);
-    expect(entry.assessmentPromptVersion).toBe(ASSESSMENT_PROMPT_VERSION);
-    expect((entry.assessment as { confidence?: string })?.confidence).toBe('high');
-    expect((entry.assessment as { costUsd?: number })?.costUsd).toBeCloseTo(0.00042, 8);
-  });
-
-  it('omits assessment fields entirely when none ran', () => {
-    appendDecision(decision({}), served(), dir);
-    const entry = readLastEntry(dir);
-    expect(entry.assessment).toBeUndefined();
-    expect(entry.assessmentPromptVersion).toBeUndefined();
-  });
-});
-
-describe('appendAssessmentMetric', () => {
-  let dir: string;
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'ar-decisionlog-'));
-  });
-  afterEach(() => {
-    setSessionFile(undefined);
-    setDecisionLogBase(undefined);
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('writes a joinable counterfactual record without touching decisions', () => {
-    appendAssessmentMetric(
-      {
-        intentKey: '3:1717:abc12345:0',
-        heuristicDimension: 'gather',
-        counterfactualDimension: 'lightweight',
-        assessment: {
-          kind: 'lightweight',
-          complexity: 'trivial',
-          scope: 'bounded',
-          compound: false,
-          confidence: 'high',
-          reasoning: 'bounded extraction',
-          model: 'test/assessor',
-          ms: 380,
-          usage: { input: 800, output: 24 },
-          costUsd: 0.0003,
-        },
-      },
-      dir,
-    );
-
-    const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.kind).toBe('assessment-metric');
-    expect(entry.intentKey).toBe('3:1717:abc12345:0');
-    expect(entry.heuristicDimension).toBe('gather');
-    expect(entry.counterfactualDimension).toBe('lightweight');
-    expect(entry.dimensionDelta).toBe(-1);
-    expect(entry.assessmentPromptVersion).toBe(ASSESSMENT_PROMPT_VERSION);
-  });
-
-  it('records a positive delta for an upward counterfactual', () => {
-    appendAssessmentMetric(
-      {
-        intentKey: 'k2',
-        heuristicDimension: 'lightweight',
-        counterfactualDimension: 'gather',
-        assessment: {
-          kind: 'gather',
-          complexity: 'routine',
-          scope: 'open-ended',
-          compound: false,
-          confidence: 'high',
-          reasoning: 'broader scope',
-          model: 'test/assessor',
-          ms: 300,
-          usage: { input: 500, output: 10 },
-          costUsd: 0.0001,
-        },
-      },
-      dir,
-    );
-    const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.dimensionDelta).toBe(1);
-  });
-
-  it('records an unavailable assessment with its fallbackReason', () => {
-    appendAssessmentMetric(
-      { intentKey: 'k', heuristicDimension: 'gather', fallbackReason: 'expiry' },
-      dir,
-    );
-    const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.kind).toBe('assessment-metric');
-    expect(entry.fallbackReason).toBe('expiry');
-    expect(entry.assessment).toBeUndefined();
-    // The version stamp is written regardless of verdict availability.
-    expect(entry.assessmentPromptVersion).toBe(ASSESSMENT_PROMPT_VERSION);
-  });
-
-  it('never throws when the log path is unwritable', () => {
-    // A regular file in place of a directory fails with ENOTDIR immediately;
-    // /proc/nonexistent is avoided because filesystem calls under /proc can
-    // block indefinitely on some kernels.
-    const blocker = join(dir, 'blocker.txt');
-    writeFileSync(blocker, 'x', 'utf8');
-    expect(() =>
-      appendAssessmentMetric({ intentKey: 'k', heuristicDimension: 'gather' }, join(blocker, 'sub')),
-    ).not.toThrow();
   });
 });
 

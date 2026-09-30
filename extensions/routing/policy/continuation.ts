@@ -5,7 +5,7 @@ import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
 } from '@earendil-works/pi-agent-core';
-import { classifyProvenance } from '../consult/message-provenance.js';
+import { classifyProvenance } from '../context/message-provenance.js';
 import type { MessageProvenance } from '../../types.js';
 
 export interface TurnClassificationInput {

@@ -13,22 +13,24 @@ import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type {
-  AssessmentFallbackReason,
   ContractOutcome,
   ExecutionContractMeta,
   CandidateDiagnostic,
   Dimension,
   ReasoningHandoffMeta,
-  RoutingAssessment,
   RoutingDecision,
 } from '../types.js';
 import { resolveStoragePath } from '../bench/store.js';
 import { servedKey } from './ui.js';
 import { sessionSidecarPath } from '../sessionpaths.js';
-import { ASSESSMENT_PROMPT_VERSION } from '../routing/consult/assessment-prompt.js';
-import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
 
 export const DECISION_LOG_FILE = 'decisions.jsonl';
+/**
+ * Schema version stamped on every record. Records without one predate
+ * versioning; readers treat their fields as they were written and never
+ * reinterpret them under a later schema.
+ */
+export const DECISION_LOG_SCHEMA_VERSION = 4;
 /** Sidecar suffix used when writing next to a persisted session file. */
 export const DECISION_SIDECAR_SUFFIX = 'router-decisions.jsonl';
 
@@ -56,8 +58,10 @@ function decisionLogPath(storageBase?: string): string {
 
 export interface DecisionLogEntry {
   ts: number;
+  /** {@link DECISION_LOG_SCHEMA_VERSION} at write time; absent on unversioned records. */
+  schemaVersion?: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'assessment-metric' | 'subagent-spend' | 'execution-contract' | 'investigation-handoff';
+  kind?: 'decision' | 'subagent-spend' | 'execution-contract' | 'investigation-handoff';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -67,7 +71,8 @@ export interface DecisionLogEntry {
   viaFallback: boolean;
   /** 1-based rank of the served candidate in the chain (undefined if top pick). */
   fallbackRank?: number;
-  confidence: number;
+  /** The keyword classifier's confidence; routing decisions only. */
+  confidence?: number;
   routedUp: boolean;
   routedDown?: boolean;
   cause: string;
@@ -99,7 +104,7 @@ export interface DecisionLogEntry {
     routerOwned: boolean;
     reportedCost?: number;
   };
-  /** Intent cache key joining assessment telemetry to routing decisions. */
+  /** Intent cache key joining this entry's classification to later log records. */
   intentKey?: string;
   /** Set on `kind: 'investigation-handoff'` records only. */
   investigationHandoff?: {
@@ -124,43 +129,8 @@ export interface DecisionLogEntry {
     outcome?: ContractOutcome;
     meta?: ExecutionContractMeta;
   };
-  assessmentPromptVersion?: string;
-  /** Why the assessment was unavailable. Never changes `cause`. */
-  fallbackReason?: string;
   /** Message-origin census; a spike in compaction-summary explains drift. */
   provenance?: Record<string, number>;
-  /** Verdict metadata when an assessment ran for this intent, adopted or not. */
-  assessment?: {
-    kind: string;
-    complexity: string;
-    scope: string;
-    compound: boolean;
-    confidence: string;
-    reasoning: string;
-    model: string;
-    ms: number;
-    costUsd: number;
-  };
-  /** Assessment-metric fields: the heuristic the verdict is measured against. */
-  heuristicDimension?: string;
-  /** Assessment-adopted dimension before later routing precedence. */
-  counterfactualDimension?: string;
-  /** Strength difference assessment − heuristic. */
-  dimensionDelta?: number;
-  /** Populated when an inline LLM consultation ran (adopted or not). */
-  consult?: {
-    model: string;
-    ms: number;
-    heuristicDimension: string;
-    verdict?: string;
-    adopted?: boolean;
-  };
-  /** Historical route_up records only; live decisions no longer write this. */
-  escalation?: {
-    requestedDimension: string;
-    heuristicDimension: string;
-    reason: string;
-  };
   /** Populated when high parent-context pressure is detected. */
   contextPressure?: {
     usageRatio: number;
@@ -180,21 +150,9 @@ export interface DecisionLogEntry {
   };
 }
 
-function serializeAssessment(
-  assessment: RoutingAssessment | undefined,
-): DecisionLogEntry['assessment'] {
-  if (!assessment) return undefined;
-  return {
-    kind: assessment.kind,
-    complexity: assessment.complexity,
-    scope: assessment.scope,
-    compound: assessment.compound,
-    confidence: assessment.confidence,
-    reasoning: assessment.reasoning,
-    model: assessment.model,
-    ms: assessment.ms,
-    costUsd: assessment.costUsd,
-  };
+/** One JSONL line, stamped with the schema version it was written under. */
+function serializeRecord(entry: DecisionLogEntry): string {
+  return JSON.stringify({ schemaVersion: DECISION_LOG_SCHEMA_VERSION, ...entry }) + '\n';
 }
 
 /** One execution-contract transition. Rubric levels, counts, and model keys
@@ -232,7 +190,6 @@ export function appendExecutionContractSignal(
       chosen: signal.served,
       served: signal.served,
       viaFallback: false,
-      confidence: 1,
       routedUp: false,
       cause: 'execution-contract',
       reason: `execution contract ${signal.action}`,
@@ -245,7 +202,7 @@ export function appendExecutionContractSignal(
         ...(signal.meta ? { meta: signal.meta } : {}),
       },
     };
-    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+    appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {
     // A logging failure must never fail the user's turn.
   }
@@ -286,7 +243,6 @@ export function appendInvestigationHandoffSignal(
       chosen: signal.served,
       served: signal.served,
       viaFallback: false,
-      confidence: 1,
       routedUp: false,
       cause: 'investigation-handoff',
       reason: `investigation handoff ${signal.action}`,
@@ -299,7 +255,7 @@ export function appendInvestigationHandoffSignal(
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
       },
     };
-    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+    appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {
     // A logging failure must never fail the user's turn.
   }
@@ -339,11 +295,8 @@ export function appendDecision(
       routedCost: decision.spend?.routedCost,
       baselineCost: decision.spend?.baselineCost,
       spendIncomplete: decision.spend?.incomplete,
-      intentKey: decision.intentKey,
-      fallbackReason: decision.fallbackReason,
-      provenance: decision.provenanceCounts,
-      assessment: serializeAssessment(decision.assessment),
-      assessmentPromptVersion: decision.assessment ? ASSESSMENT_PROMPT_VERSION : undefined,
+        intentKey: decision.intentKey,
+        provenance: decision.provenanceCounts,
       trajectoryFriction: decision.trajectoryFriction,
       contextPressure: decision.contextPressure,
       candidateDiagnostics: decision.candidateDiagnostics,
@@ -356,7 +309,7 @@ export function appendDecision(
         ? { previousHandoffId: decision.previousHandoffId, offTopicReset: decision.offTopicReset === true }
         : {}),
     };
-    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+    appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {
     // Logging is best-effort.
   }
@@ -385,7 +338,6 @@ export function appendSubagentGapSignal(
       chosen: model,
       served: model,
       viaFallback: false,
-      confidence: 1,
       routedUp: false,
       cause: 'self-healing-gap',
       reason: `subagent tool gap: ${event.tool}`,
@@ -399,7 +351,7 @@ export function appendSubagentGapSignal(
         workaroundTool: event.workaroundTool,
       },
     };
-    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+    appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {
     // Best-effort logging only.
   }
@@ -439,7 +391,6 @@ export function appendSubagentSpend(
       chosen: record.model,
       served: record.model,
       viaFallback: false,
-      confidence: 1,
       routedUp: false,
       cause: 'heuristic',
       reason: `subagent spend (${record.routerOwned ? 'router-owned' : 'explicit model'})`,
@@ -455,64 +406,10 @@ export function appendSubagentSpend(
         reportedCost: record.reportedCost,
       },
     };
-    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
+    appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {
     // Best-effort logging only.
   }
-}
-
-/**
- * Write a separate, joinable assessment record so heuristic-vs-assessment
- * deltas remain queryable without overloading the routing decision entry.
- */
-export function appendAssessmentMetric(
-  record: AssessmentMetricRecord,
-  storageBase?: string,
-): void {
-  try {
-    const path = decisionLogPath(storageBase);
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const delta =
-      record.counterfactualDimension === undefined
-        ? undefined
-        : DIMENSION_STRENGTH[record.counterfactualDimension] -
-          DIMENSION_STRENGTH[record.heuristicDimension];
-    const entry: DecisionLogEntry = {
-      ts: Date.now(),
-      kind: 'assessment-metric',
-      dimension: record.heuristicDimension,
-      chosen: record.assessment?.model ?? 'unknown/unknown',
-      served: record.assessment?.model ?? 'unknown/unknown',
-      viaFallback: false,
-      confidence: 1,
-      routedUp: false,
-      cause: 'heuristic',
-      reason: 'assessment metric',
-      chain: [],
-      intentKey: record.intentKey,
-      heuristicDimension: record.heuristicDimension,
-      counterfactualDimension: record.counterfactualDimension,
-      dimensionDelta: delta,
-      assessment: serializeAssessment(record.assessment),
-      assessmentPromptVersion: ASSESSMENT_PROMPT_VERSION,
-      fallbackReason: record.fallbackReason,
-    };
-    appendFileSync(path, JSON.stringify(entry) + '\n', 'utf8');
-  } catch {
-    // A logging failure must never fail the user's turn.
-  }
-}
-
-/** Assessment telemetry joined to decisions by `intentKey`. */
-export interface AssessmentMetricRecord {
-  /** Joins this assessment to the decisions taken for the same intent. */
-  intentKey: string;
-  heuristicDimension: Dimension;
-  /** Dimension produced by assessment adoption before later precedence. */
-  counterfactualDimension?: Dimension;
-  assessment?: RoutingAssessment;
-  fallbackReason?: AssessmentFallbackReason;
 }
 
 /** Read the most recent N entries (for /router-status history). */

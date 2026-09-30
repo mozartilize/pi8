@@ -281,35 +281,6 @@ export interface ExecutionContractMeta {
   handoffId?: string;
 }
 
-export type AssessmentFallbackReason =
-  | 'expiry'
-  | 'auth'
-  | 'parse'
-  | 'error'
-  | 'no-assessor'
-  | 'disabled';
-
-/** Expected assessor request shape used only for model-selection economics. */
-export interface AssessorTokenEstimate {
-  input: number;
-  output: number;
-}
-
-export interface RoutingAssessment {
-  kind: TaskKind;
-  complexity: ComplexityBand;
-  scope: TaskScope;
-  compound: boolean;
-  confidence: AssessmentConfidence;
-  reasoning: string;
-  /** Canonical `provider/id` of the model that answered. */
-  model: string;
-  /** Wall-clock milliseconds, end to end. */
-  ms: number;
-  usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
-  costUsd: number;
-}
-
 export type DecisionCause =
   | 'heuristic'
   | 'continuation-context'
@@ -360,11 +331,7 @@ export interface RoutingDecision {
    * keep their dimension-level meaning for the decision log and `cause`.
    */
   routedPickChanged?: boolean;
-  /** Present when an assessment ran for this intent, adopted or not. */
-  assessment?: RoutingAssessment;
-  /** Why the assessment was unavailable. Never changes `cause`. */
-  fallbackReason?: AssessmentFallbackReason;
-  /** Intent cache key joining assessment metrics to this routing decision. */
+  /** Intent cache key joining this routing decision to later records. */
   intentKey?: string;
   /** A mutation tool call was observed; the task type may still be plan/review. */
   mutationObserved?: boolean;
@@ -485,19 +452,6 @@ export interface AutoRouterConfig {
   routerContextWindow?: number;
   /** Threshold for classifier low-confidence route-up. */
   lowConfidenceThreshold: number;
-  /**
-   * If true (default), await one bounded semantic assessment per real user
-   * entry and adopt its verdict under the assessment safety caps.
-   */
-  consultRouter: boolean;
-  /** One end-to-end budget: selection + auth + startup + stream + parse. */
-  assessmentDeadlineMs: number;
-  /** Hard cap on assembled assessment input, in characters. */
-  assessmentMaxInputChars: number;
-  /** Assessor must reach this share of the strongest routable intelligence. */
-  assessorQualityRatio: number;
-  /** Optional "provider/id" override for the consultation model. */
-  consultModel?: string;
   /**
    * Show a TUI notification when the router picks/switches the model for a
    * turn (default true). The footer status widget updates regardless.

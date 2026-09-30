@@ -39,8 +39,8 @@ function firstText(message: unknown): string | undefined {
 
 /**
  * @param syntheticPrefixes Opt-in list of literal prefixes belonging to known
- *  integrations. Never inferred — an unmarked user message is `user`, which is
- *  today's behavior and the only safe default.
+ *  integrations. Never inferred — an unmarked user message is `user`, the
+ *  only safe default.
  */
 export function classifyProvenance(
   message: Message,
@@ -66,49 +66,3 @@ export function classifyProvenance(
   }
 }
 
-/**
- * The body of the newest compaction or branch summary, marker stripped.
- * The assessor sees this explicitly labelled as a summary, never attributed
- * to the user, because summary prose reads like a request.
- */
-export function latestSummaryText(
-  messages: readonly Message[] | undefined,
-  syntheticPrefixes: readonly string[] = [],
-): string | undefined {
-  const source = messages ?? [];
-  for (let i = source.length - 1; i >= 0; i -= 1) {
-    const message = source[i];
-    if (!message) continue;
-    const provenance = classifyProvenance(message, syntheticPrefixes);
-    if (provenance !== 'compaction-summary' && provenance !== 'branch-summary') continue;
-    const text = firstText(message) ?? '';
-    const prefix =
-      provenance === 'compaction-summary' ? COMPACTION_SUMMARY_PREFIX : BRANCH_SUMMARY_PREFIX;
-    const body = text.slice(prefix.length);
-    const close = body.lastIndexOf('</summary>');
-    return (close >= 0 ? body.slice(0, close) : body).trim() || undefined;
-  }
-  return undefined;
-}
-
-/**
- * Tool activity as names and counts only. Arguments and results are never
- * assembled, so they cannot leak to a different provider even by accident.
- */
-export function countToolActivity(
-  messages: readonly Message[] | undefined,
-): Array<{ name: string; count: number }> {
-  const counts = new Map<string, number>();
-  for (const message of messages ?? []) {
-    const content = (message as { content?: unknown } | undefined)?.content;
-    if (!Array.isArray(content)) continue;
-    for (const block of content) {
-      if (!block || typeof block !== 'object') continue;
-      if ((block as { type?: unknown }).type !== 'toolCall') continue;
-      const name = (block as { name?: unknown }).name;
-      if (typeof name !== 'string' || !name) continue;
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()].map(([name, count]) => ({ name, count }));
-}

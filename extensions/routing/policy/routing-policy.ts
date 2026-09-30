@@ -320,13 +320,6 @@ function annotateDecision(
   }
   if (cause === 'trajectory-escalation') {
     addReasonDetail(decision, { kind: 'trajectory', fromModel: decision.trajectoryFriction?.fromModel ?? 'previous model' });
-  } else if (cause === 'router-consult' && decision.assessment) {
-    addReasonDetail(decision, {
-      kind: 'assessment',
-      task: decision.assessment.kind,
-      scope: decision.assessment.scope,
-      confidence: decision.assessment.confidence,
-    });
   }
 
   decision.switched = incumbentRegistryId != null && incumbentRegistryId !== decision.chosen;
@@ -403,25 +396,20 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   // The floor stands down for the sanctioned downward moves, never widening
   // them (R3): an applied trajectory handoff owns the model (its repick
   // deliberately excludes the source model, so the floor must not restore
-  // it); a consult that actually lowered the dimension; and a genuine new-entry,
-  // high-confidence trivial classification (an off-topic follow-up that
-  // resets to a cheap model); and a handoff boundary until a model serves the
-  // new phase. Same-intent re-invocations never reset, so the stickiness
-  // holds across a whole tool loop.
-  const consultLoweredDimension =
-    cause === 'router-consult' &&
-    DIMENSION_STRENGTH[baseDimension] < DIMENSION_STRENGTH[classifyResult.dimension];
+  // it); a genuine new-entry, high-confidence trivial classification (an
+  // off-topic follow-up that resets to a cheap model); and a handoff boundary
+  // until a model serves the new phase. Same-intent re-invocations never
+  // reset, so the stickiness holds across a whole tool loop.
   // Reset keys on the entry's FINAL resolved deliverable, not the heuristic
   // or a temporary investigation phase: a fresh entry whose heuristic gather
-  // was raised to an involved dimension (adopted consult, embedding) is not
-  // off-topic, so the floor must still hold.
+  // was raised to an involved dimension (embedding) is not off-topic, so the
+  // floor must still hold.
   const offTopicReset =
     !sameIntentAsLast &&
     classifyResult.confidence >= config.lowConfidenceThreshold &&
     DIMENSION_STRENGTH[deliverable] <= DIMENSION_STRENGTH['gather'];
   const incumbentFloorStandsDown =
     trajectory.applied ||
-    consultLoweredDimension ||
     offTopicReset ||
     handoffPending === true;
 

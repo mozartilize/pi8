@@ -540,7 +540,7 @@ describe('provider orchestration', () => {
     expect(state.lastDecision?.fallbackChain[0]).toBe(state.lastDecision?.chosen);
   });
 
-  it('serves a manual pin without assessment or fallback candidates', async () => {
+  it('serves a manual pin without fallback candidates', async () => {
     harness.session.setManualModel('alpha/first');
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
@@ -553,7 +553,6 @@ describe('provider orchestration', () => {
     expect(decision?.cause).toBe('manual-override');
     expect(decision?.fallbackChain).toEqual(['alpha/first']);
     expect(harness.session.getCachedIntent()).toBeDefined();
-    // One call proves the assessment dispatch was skipped; the only call served the pin.
     expect(harness.streamedModels()).toEqual(['alpha/first']);
   });
 
@@ -599,7 +598,7 @@ describe('provider orchestration', () => {
     // still expand and serve alpha/first — the picker offers it like /model.
     writeFileSync(
       join(temp.path, 'config.json'),
-      JSON.stringify({ models: ['beta/*'], consultRouter: false }),
+      JSON.stringify({ models: ['beta/*'] }),
       'utf8',
     );
     harness.session.setManualModel('alpha/first');
@@ -663,7 +662,6 @@ describe('provider orchestration', () => {
 
   it('uses JSON-configured dimension weights when serving a turn', async () => {
     writeFileSync(join(temp.path, 'config.json'), JSON.stringify({
-      consultRouter: false,
       dimensionWeights: {
         implement: { quality: 1, cost: 0, speed: 0 },
       },
@@ -703,7 +701,6 @@ describe('provider orchestration', () => {
   // ─── concrete subagent model delegation ─────────────────────────────
 
   it('uses the served effort, not the scored key, for the incumbent capability floor', async () => {
-    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ consultRouter: false }));
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
       version: 2, syncedAt: Date.now(), aliases: {}, models: [
         { registryId: 'alpha/first', benchSlug: 'first-low', effort: 'low', active: true, source: 'test', quality: { intelligence: 75, coding: 75, agenticCoding: 38.8 } },
@@ -721,9 +718,6 @@ describe('provider orchestration', () => {
   });
 
   it('serves the winning candidate at its measured effort', async () => {
-    // This test counts streamSimple calls for the delegation walk; disable the
-    // assessment so its provider call is not included.
-    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ consultRouter: false }), 'utf8');
     // The store binds alpha/first to one effort-labelled row; expansion
     // produces the alpha/first:high candidate, and implement's floor
     // (medium) lets the measured high win — the effort must reach
@@ -748,7 +742,6 @@ describe('provider orchestration', () => {
   });
 
   it('raises a measured low effort to the dimension minimum before serving', async () => {
-    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ consultRouter: false }), 'utf8');
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
       version: 2,
       syncedAt: Date.now(),
@@ -769,7 +762,6 @@ describe('provider orchestration', () => {
   });
 
   it('lets an explicit user reasoning level suppress the router effort choice', async () => {
-    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ consultRouter: false }), 'utf8');
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
       version: 2,
       syncedAt: Date.now(),
@@ -935,7 +927,6 @@ describe('semi-automatic confirmation gate', () => {
   // quality), so the "keep" path has something to serve.
   const semiConfig = {
     semi: true,
-    consultRouter: false,
     dimensionWeights: { implement: { quality: 1, cost: 0, speed: 0 } },
   };
   // Both measured (no unknown-quality upgrade): quality weight 1 then makes
@@ -1189,7 +1180,6 @@ describe('a thinking-level change the router did not write pins the served model
     level = 'off';
     harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false },
       pi: {
         setThinkingLevel: (next: string) => { level = next; },
         getThinkingLevel: () => level,
@@ -1261,7 +1251,7 @@ describe('incumbent effort floor carries across invocations', () => {
       // A high threshold keeps every cheap-phrased follow-up below it, so the
       // incumbent capability floor holds across turns regardless of the real
       // classifier's confidence output for short prompts.
-      config: { consultRouter: false, lowConfidenceThreshold: 0.99 },
+      config: { lowConfidenceThreshold: 0.99 },
       benchmarks: [
         {
           registryId: 'alpha/strong',
@@ -1461,9 +1451,6 @@ describe('provider auth filtering', () => {
 
   it('keeps an auth-failing top candidate in the chain and lets delegation serve fallback', async () => {
     await setup(['beta']);
-    // This test counts streamSimple calls for the delegation walk; disable the
-    // assessment so its provider call is not included.
-    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ consultRouter: false }), 'utf8');
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
       version: 2,
       syncedAt: Date.now(),
@@ -1627,7 +1614,7 @@ describe('provider status reporting', () => {
   });
 });
 
-describe('M4/M4b — consult and model escalation on first prompt', () => {
+describe('thin continuation and deep context', () => {
   let harness: ProviderTestHarness;
 
   async function setupWithConfig(config: Record<string, unknown>) {
@@ -1642,7 +1629,7 @@ describe('M4/M4b — consult and model escalation on first prompt', () => {
   }
 
   it('routes a thin continuation from prior context and keeps it stable through tool turns', async () => {
-    await setupWithConfig({ consultRouter: true });
+    await setupWithConfig({});
     const baseMessages = [
       { role: 'user', content: 'Prepare the pending API authentication changes.', timestamp: 1 },
       {
@@ -1699,7 +1686,7 @@ describe('M4/M4b — consult and model escalation on first prompt', () => {
   });
 
   it('never raises a gather entry on a deep context', async () => {
-    await setupWithConfig({ consultRouter: false });
+    await setupWithConfig({});
 
     // No keyword evidence → gather heuristic fallback, however long the prompt.
     const prompt = 'lorem ipsum dolor sit amet '.repeat(20_000);
@@ -1716,16 +1703,11 @@ describe('M4/M4b — consult and model escalation on first prompt', () => {
   });
 });
 
-describe('assessment orchestration', () => {
+describe('entry phases', () => {
   let harness: ProviderTestHarness;
 
   interface RouteTurnOpts {
     estimatedContextTokens?: number;
-    assessorReply?: string;
-    assessorNeverResponds?: boolean;
-    assessorUsageLimit?: boolean;
-    assessorDelayMs?: number;
-    assessorGate?: Promise<void>;
     /** Every serving model fails before any output. */
     serveFails?: boolean;
     /** These serving models (`provider/id`) fail before any output. */
@@ -1735,12 +1717,8 @@ describe('assessment orchestration', () => {
   interface Session {
     routeTurn(prompt: string, opts?: RouteTurnOpts): Promise<RoutingDecision | undefined>;
     routeTurnAgainWithSameUserEntry(opts?: RouteTurnOpts): Promise<RoutingDecision | undefined>;
-    assessmentDispatchCount: number;
-    lastMetricRecord: Record<string, unknown> | undefined;
-    metricRecordCount: number;
-    readAssessmentMetrics(): Promise<void>;
     readDecisionRecords(): Promise<Array<Record<string, unknown>>>;
-    /** Context of the last serving (non-assessor) request, as delegated. */
+    /** Context of the last serving request, as delegated. */
     servedContext: Context | undefined;
     /** Context Pi passed to the router for the last invocation. */
     piContext: Context | undefined;
@@ -1753,18 +1731,15 @@ describe('assessment orchestration', () => {
     fallbackChain: string[];
     routedUp?: boolean;
     routedDown?: boolean;
-    fallbackReason?: string;
-    assessment?: unknown;
     reasoningHandoff?: { minimum: number; pending: boolean; id: string; owner?: string; trajectoryFired?: boolean };
     executionContract?: { handoffId?: string };
     previousHandoffId?: string;
     deliverable?: string;
   }
 
-  async function newSession(config: Record<string, unknown>): Promise<Session> {
+  async function newSession(): Promise<Session> {
     harness = await setupProviderTest({
       dir: temp.path,
-      config,
       // Seed benchmark rows so the no-data cause does not mask heuristic causes.
       benchmarks: [
         {
@@ -1804,11 +1779,8 @@ describe('assessment orchestration', () => {
     let lastCtx: Context | undefined;
 
     const session: Session = {
-      assessmentDispatchCount: 0,
       servedContext: undefined,
       piContext: undefined,
-      lastMetricRecord: undefined,
-      metricRecordCount: 0,
       async routeTurn(prompt, opts = {}) {
         turnCounter += 1;
         const messages: Array<Record<string, unknown>> = [
@@ -1832,28 +1804,6 @@ describe('assessment orchestration', () => {
         return readFileSync(join(temp.path, DECISION_LOG_FILE), 'utf8').trim().split('\n')
           .map((line) => JSON.parse(line) as Record<string, unknown>);
       },
-      async readAssessmentMetrics() {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        try {
-          const { readFileSync } = await import('node:fs');
-          const { DECISION_LOG_FILE } = await import('../host/decisionlog.js');
-          const raw = readFileSync(join(temp.path, DECISION_LOG_FILE), 'utf8').trim();
-          const records = raw
-            .split('\n')
-            .map((line) => {
-              try {
-                return JSON.parse(line) as Record<string, unknown>;
-              } catch {
-                return undefined;
-              }
-            })
-            .filter((e): e is Record<string, unknown> => e?.kind === 'assessment-metric');
-          session.lastMetricRecord = records.at(-1);
-          session.metricRecordCount = records.length;
-        } catch {
-          session.lastMetricRecord = undefined;
-        }
-      },
     };
     return session;
   }
@@ -1865,52 +1815,6 @@ describe('assessment orchestration', () => {
   ): Promise<RoutingDecision | undefined> {
     harness.resetEventStream();
     harness.scriptReply((model: Model<Api>, callContext: Context) => {
-      const userText =
-        typeof callContext.messages[0]?.content === 'string'
-          ? callContext.messages[0].content
-          : '';
-      if (userText.includes('You are a routing assessor')) {
-        session.assessmentDispatchCount += 1;
-        if (opts.assessorNeverResponds) {
-          return {
-            [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
-          } as never;
-        }
-        if (opts.assessorUsageLimit) {
-          return asStream([
-            {
-              type: 'error',
-              error: {
-                stopReason: 'error',
-                errorMessage:
-                  '429: {"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 5 days."}',
-              },
-            },
-          ]);
-        }
-        const reply = opts.assessorReply
-          ?? 'Kind: gather\nComplexity: routine\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: ok';
-        // The terminal message carries the full answer, as a Pi provider's does.
-        const answer = [
-          { type: 'text_delta', delta: reply },
-          {
-            type: 'done',
-            message: {
-              stopReason: 'stop',
-              content: [{ type: 'text', text: reply }],
-              usage: { input: 120, output: 30, cacheRead: 0 },
-            },
-          },
-        ];
-        if (opts.assessorDelayMs != null || opts.assessorGate) {
-          return (async function* () {
-            if (opts.assessorGate) await opts.assessorGate;
-            else await new Promise((resolve) => setTimeout(resolve, opts.assessorDelayMs));
-            yield* answer;
-          })() as never;
-        }
-        return asStream(answer);
-      }
       session.servedContext = callContext;
       if (opts.serveFails || opts.failModels?.includes(`${model.provider}/${model.id}`)) {
         return asStream([{ type: 'error', error: { errorMessage: 'manual failure' } }]);
@@ -1924,97 +1828,6 @@ describe('assessment orchestration', () => {
     return state.lastDecision as unknown as RoutingDecision | undefined;
   }
 
-  it('dispatches at most one assessment per user entry across the tool loop', async () => {
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('investigate the flaky test');
-    await session.routeTurnAgainWithSameUserEntry();
-    await session.routeTurnAgainWithSameUserEntry();
-
-    expect(session.assessmentDispatchCount).toBe(1);
-  });
-
-  it('dispatches a new assessment when a new user entry arrives', async () => {
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('first request');
-    await session.routeTurn('second request');
-    expect(session.assessmentDispatchCount).toBe(2);
-  });
-
-  it('records the adopted entry assessment as a joinable metric', async () => {
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('investigate the flaky test');
-    await session.readAssessmentMetrics();
-
-    expect(session.metricRecordCount).toBe(1);
-    expect(session.lastMetricRecord).toMatchObject({
-      kind: 'assessment-metric',
-      heuristicDimension: 'gather',
-      counterfactualDimension: 'gather',
-    });
-    expect(session.lastMetricRecord?.intentKey).toEqual(expect.any(String));
-  });
-
-  it('updates assessor economics from successful reported usage', async () => {
-    const session = await newSession({ consultRouter: true });
-    await session.routeTurn('investigate the flaky test');
-    expect(harness.session.getAssessorTokenEstimate({ input: 1_000, output: 80 })).toEqual({
-      input: 120,
-      output: 30,
-    });
-  });
-
-  it('aborts an awaited assessment after the session resets', async () => {
-    const session = await newSession({ consultRouter: true });
-    let release!: () => void;
-    const assessorGate = new Promise<void>((resolve) => { release = resolve; });
-    const pendingTurn = session.routeTurn('old assessment request', { assessorGate });
-    while (session.assessmentDispatchCount === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-    const { defaultRouterSession: state } = await import('./router-session-state.js');
-    state.reset();
-    release();
-    await pendingTurn;
-
-    expect(state.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
-      input: 1_000,
-      output: 80,
-    });
-    expect(state.intent.getCachedIntent()).toBeUndefined();
-  });
-
-  it('blacklists the assessor provider before scoring the turn', async () => {
-    const session = await newSession({ consultRouter: true });
-    const decision = await session.routeTurn('investigate the flaky test', { assessorUsageLimit: true });
-
-    const { defaultBlacklistState } = await import('./blacklist.js');
-    expect([...defaultBlacklistState.getBlacklistedProviders()]).toEqual(['alpha']);
-    expect(decision?.fallbackChain.some((id) => id.startsWith('alpha/'))).toBe(false);
-  });
-
-  it('adopts a high-confidence bounded downward verdict', async () => {
-    const session = await newSession({ consultRouter: true });
-    const decision = await session.routeTurn('list the main features of docs/plan.md', {
-      assessorReply:
-        'Kind: lightweight\nComplexity: trivial\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded extraction',
-    });
-    expect(decision?.dimension).toBe('lightweight');
-    expect(decision?.cause).toBe('router-consult');
-    expect(decision?.routedDown).toBe(true);
-  });
-
-  it('keeps the heuristic and sets fallbackReason when unavailable', async () => {
-    const session = await newSession({
-      consultRouter: true,
-      assessmentDeadlineMs: 60,
-    });
-    const decision = await session.routeTurn('investigate the flaky test', {
-      assessorNeverResponds: true,
-    });
-    expect(decision?.cause).toBe('heuristic');
-    expect(decision?.fallbackReason).toBe('expiry');
-  });
-
   describe('investigation handoff', () => {
     const PLAN_PROMPT = 'design the architecture and plan the migration roadmap for this system';
     const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
@@ -2025,7 +1838,7 @@ describe('assessment orchestration', () => {
     });
 
     it('keeps a gather entry an investigation, with no handoff owed', async () => {
-      const session = await newSession({ consultRouter: true });
+      const session = await newSession();
       const first = await session.routeTurn('investigate the flaky test');
       expect(first?.dimension).toBe('gather');
       expect(first?.cause).toBe('heuristic');
@@ -2033,7 +1846,7 @@ describe('assessment orchestration', () => {
     });
 
     it('investigates a plan request until the handoff, then plans at the handoff minimum', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       const first = await session.routeTurn(PLAN_PROMPT);
       expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'plan' });
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
@@ -2056,14 +1869,14 @@ describe('assessment orchestration', () => {
     });
 
     it('picks a stronger planner for a harder handoff', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       expect(submitInvestigationHandoff(handoff(5), routerCtx, harness.session).accepted).toBe(true);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
     });
 
     it('releases the incumbent once: the planner that served keeps the phase', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
       const planner = (await session.routeTurnAgainWithSameUserEntry())?.chosen;
@@ -2074,7 +1887,7 @@ describe('assessment orchestration', () => {
     });
 
     it('keeps the boundary pending when only a fallback below the minimum serves', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
       await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
@@ -2098,7 +1911,7 @@ describe('assessment orchestration', () => {
         .filter((c) => c != null);
 
       it('rejects a plan from a fallback below the planning minimum and keeps the step owed', async () => {
-        const session = await newSession({ consultRouter: false });
+        const session = await newSession();
         await session.routeTurn(COMPOUND);
         submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
         await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
@@ -2120,7 +1933,7 @@ describe('assessment orchestration', () => {
       });
 
       it('accepts a plan from a qualifying planner before its serve settles the step', async () => {
-        const session = await newSession({ consultRouter: false });
+        const session = await newSession();
         await session.routeTurn(COMPOUND);
         submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
         await session.routeTurnAgainWithSameUserEntry();
@@ -2136,7 +1949,7 @@ describe('assessment orchestration', () => {
     });
 
     it('keeps the boundary pending when no candidate serves it', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       submitInvestigationHandoff(handoff(5), routerCtx, harness.session);
       await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
@@ -2144,7 +1957,7 @@ describe('assessment orchestration', () => {
     });
 
     it('routes a review deliverable through its investigation to review', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       const first = await session.routeTurn('please review this pull request for security issues');
       expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'review' });
       submitInvestigationHandoff(handoff(2), routerCtx, harness.session);
@@ -2152,7 +1965,7 @@ describe('assessment orchestration', () => {
     });
 
     it('investigates a confident compound implementation, then plans it and hands it to an executor', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       const first = await session.routeTurn(
         'Trace the race condition across the codebase from scratch, then fix it, refactor it, and implement the corrected logic.',
       );
@@ -2177,16 +1990,13 @@ describe('assessment orchestration', () => {
     });
 
     it('joins a plan accepted in the entry after the handoff to that handoff', async () => {
-      const session = await newSession({ consultRouter: true });
+      const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       submitInvestigationHandoff(handoff(1), routerCtx, harness.session);
       await session.routeTurnAgainWithSameUserEntry();
       const handoffId = harness.session.getWorkPhaseState()!.reasoningHandoff!.id;
 
-      await session.routeTurn('go with item 1 first', {
-        assessorReply:
-          'Kind: implement\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: implement item 1',
-      });
+      await session.routeTurn('implement item 1 first');
       expect(harness.session.getWorkPhaseState()?.previousHandoffId).toBe(handoffId);
       const plan = {
         steps: [{ kind: 'edit', path: 'src/a.ts', change: 'retry the flaky call' }],
@@ -2199,7 +2009,7 @@ describe('assessment orchestration', () => {
     });
 
     it('repicks a struggling planner within the reasoning phase and logs it at phase end', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       submitInvestigationHandoff(handoff(1), routerCtx, harness.session);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
@@ -2222,7 +2032,7 @@ describe('assessment orchestration', () => {
     });
 
     it('carries the investigation note on the entry message, byte-identical, only while investigating', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       const userBlocks = () => {
         const messages = session.servedContext!.messages;
@@ -2244,7 +2054,7 @@ describe('assessment orchestration', () => {
     });
 
     it('lets a pinned model serve the deliverable without an investigation', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       harness.session.setManualModel('beta/strong');
       const first = await session.routeTurn(PLAN_PROMPT);
       expect(first?.dimension).toBe('plan');
@@ -2252,7 +2062,7 @@ describe('assessment orchestration', () => {
     });
 
     it('logs the handoff lifecycle and joins the next entry to it, never logging findings', async () => {
-      const session = await newSession({ consultRouter: false });
+      const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       submitInvestigationHandoff(handoff(3), routerCtx, harness.session);
       await session.routeTurnAgainWithSameUserEntry();
@@ -2269,8 +2079,6 @@ describe('assessment orchestration', () => {
 
   describe('execution contract handoff', () => {
     const PLAN_PROMPT = 'design the architecture and plan the migration roadmap for this system';
-    const IMPLEMENT_VERDICT =
-      'Kind: implement\nComplexity: moderate\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: implement deliverable';
     const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
     const EASY = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
     // A real design decision: its minimum is the frontier ratio.
@@ -2288,8 +2096,8 @@ describe('assessment orchestration', () => {
     };
 
     async function planned(): Promise<Session> {
-      const session = await newSession({ consultRouter: true });
-      const first = await session.routeTurn(PLAN_PROMPT, { assessorReply: IMPLEMENT_VERDICT });
+      const session = await newSession();
+      const first = await session.routeTurn(PLAN_PROMPT);
       expect(first?.dimension).toBe('gather');
       expect(first?.cause).toBe('investigation');
       expect(submitInvestigationHandoff(DESIGN_HANDOFF, routerCtx, harness.session).accepted).toBe(true);
@@ -2338,9 +2146,7 @@ describe('assessment orchestration', () => {
 
     it('hands a plan off from an implement entry, and returns a break to implementation', async () => {
       const session = await planned();
-      const implementing = await session.routeTurn('implement a function to parse the pending adjustment payload', {
-        assessorReply: IMPLEMENT_VERDICT,
-      });
+      const implementing = await session.routeTurn('implement a function to parse the pending adjustment payload');
       expect(implementing?.dimension).toBe('implement');
       expect(implementing?.chosen).toBe('beta/strong');
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
@@ -2605,22 +2411,9 @@ describe('assessment orchestration', () => {
       expect(next?.cause).toBe('execution-contract');
     });
 
-    it('rejects a plan for a plan or review deliverable', async () => {
-      const session = await newSession({ consultRouter: true });
-      await session.routeTurn(PLAN_PROMPT, {
-        assessorReply: 'Kind: plan\nComplexity: moderate\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: plan deliverable',
-      });
-      submitInvestigationHandoff(DESIGN_HANDOFF, routerCtx, harness.session);
-      await session.routeTurnAgainWithSameUserEntry();
-      const result = submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-      expect(result.accepted).toBe(false);
-      expect(result.text).toContain('asks for a plan');
-      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
-    });
-
-    it('accepts a plan when the assessment is unavailable', async () => {
-      const session = await newSession({ consultRouter: true });
-      await session.routeTurn(PLAN_PROMPT, { assessorUsageLimit: true });
+    it('accepts a plan from a planning entry', async () => {
+      const session = await newSession();
+      await session.routeTurn(PLAN_PROMPT);
       submitInvestigationHandoff(DESIGN_HANDOFF, routerCtx, harness.session);
       await session.routeTurnAgainWithSameUserEntry();
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
@@ -2628,7 +2421,7 @@ describe('assessment orchestration', () => {
     });
 
     it('rejects a handoff during an investigation and outside router/auto', async () => {
-      const session = await newSession({ consultRouter: true });
+      const session = await newSession();
       await session.routeTurn('investigate the flaky test');
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).text)
         .toContain('only to planning, review, or implementation');
@@ -2637,54 +2430,17 @@ describe('assessment orchestration', () => {
     });
   });
 
-  it('reuses the verdict on later tool-loop turns of the same entry', async () => {
-    const session = await newSession({ consultRouter: true });
-    const first = await session.routeTurn('list the main features of docs/plan.md', {
-      assessorReply:
-        'Kind: lightweight\nComplexity: trivial\nScope: bounded\nCompound: no\nConfidence: high\nReasoning: bounded extraction',
-    });
-    const second = await session.routeTurnAgainWithSameUserEntry();
-
-    expect(first?.dimension).toBe('lightweight');
-    expect(second?.dimension).toBe('lightweight');
-    // The cached verdict is reused: no second assessment dispatch.
-    expect(session.assessmentDispatchCount).toBe(1);
-  });
-
-  it('reuses the fallbackReason on later tool-loop turns of the same entry', async () => {
-    const session = await newSession({
-      consultRouter: true,
-      assessmentDeadlineMs: 60,
-    });
-    await session.routeTurn('investigate the flaky test', { assessorNeverResponds: true });
-    const second = await session.routeTurnAgainWithSameUserEntry();
-
-    expect(second?.fallbackReason).toBe('expiry');
-    expect(session.assessmentDispatchCount).toBe(1);
-  });
-
-  it('does not dispatch when consultRouter is false', async () => {
-    const session = await newSession({ consultRouter: false });
-    const decision = await session.routeTurn('investigate the flaky test');
-    expect(session.assessmentDispatchCount).toBe(0);
-    expect(decision?.cause).toBe('heuristic');
-  });
 
 describe('deep context', () => {
-  it('never changes the routed task type and spends one assessment per entry', async () => {
-    const session = await newSession({ consultRouter: true });
+  it('never changes the routed task type at a large context size', async () => {
+    const session = await newSession();
     const first = await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 150_000,
-      assessorReply:
-        'Kind: gather\nComplexity: routine\nScope: open-ended\nCompound: no\nConfidence: high\nReasoning: broad',
     });
     const after = await session.routeTurnAgainWithSameUserEntry();
     expect(first?.dimension).toBe('gather');
     expect(after?.dimension).toBe('gather');
     expect(after?.cause).toBe(first?.cause);
-    expect(session.assessmentDispatchCount).toBe(1);
-    await session.readAssessmentMetrics();
-    expect(session.metricRecordCount).toBe(1);
   });
 
 });
@@ -2695,7 +2451,7 @@ describe('trajectory capability escalation', () => {
   it('repicks a strictly stronger model on the next invocation', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false, switchMargin: 0.15 },
+      config: { switchMargin: 0.15 },
       benchmarks: [
         {
           registryId: 'alpha/source',
@@ -2760,7 +2516,7 @@ describe('trajectory capability escalation', () => {
   it('does not consume pending evidence when a weaker recovery candidate serves', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false, switchMargin: 0.15 },
+      config: { switchMargin: 0.15 },
       credentials: { 'gamma/strong': { ok: false, error: 'denied' } },
       benchmarks: [
         {
@@ -2845,7 +2601,7 @@ describe('no-stronger escalation gate', () => {
   ): Promise<Awaited<ReturnType<typeof setupProviderTest>>> {
     return setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false, ...cfg },
+      config: { ...cfg },
       benchmarks: [{
         registryId: 'alpha/solo',
         benchSlug: 'solo',
@@ -3084,7 +2840,7 @@ function embeddingResult(overrides: { dimension: Dimension; confidence: number }
 function enableEmbeddingClassifier(extra: Record<string, unknown> = {}): void {
   writeFileSync(
     join(temp.path, 'config.json'),
-    JSON.stringify({ consultRouter: false, embeddingClassifier: true, ...extra }),
+    JSON.stringify({ embeddingClassifier: true, ...extra }),
     'utf8',
   );
   writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify(SEEDED_BENCHMARKS), 'utf8');
@@ -3188,7 +2944,6 @@ describe('router-report counterfactual baseline', () => {
   it('auto-picks the highest measured-capability routable candidate when no baselineModel is pinned', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false },
       benchmarks,
       models,
       pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
@@ -3205,7 +2960,7 @@ describe('router-report counterfactual baseline', () => {
   it('uses config.baselineModel when it is still in the routable pool', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false, baselineModel: 'beta/cheap' },
+      config: { baselineModel: 'beta/cheap' },
       benchmarks,
       models,
       pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
@@ -3222,7 +2977,7 @@ describe('router-report counterfactual baseline', () => {
   it('falls back to auto-pick when config.baselineModel is not in the routable pool', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false, baselineModel: 'nonexistent/model' },
+      config: { baselineModel: 'nonexistent/model' },
       benchmarks,
       models,
       pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,
@@ -3239,7 +2994,7 @@ describe('router-report counterfactual baseline', () => {
   it('prices routedCost and baselineCost from the same observed tokens onto the decision log', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
-      config: { consultRouter: false, baselineModel: 'alpha/strong' },
+      config: { baselineModel: 'alpha/strong' },
       benchmarks,
       models,
       pi: { setThinkingLevel: vi.fn() } as unknown as ExtensionAPI,

@@ -19,7 +19,7 @@ import {
   getProviderState,
   buildSubagentProviderAuthFilter,
 } from '../serve/provider.js';
-import { formatDecisionDetail, formatAssessmentSpend, formatEmbeddingStats } from './ui.js';
+import { formatDecisionDetail, formatEmbeddingStats } from './ui.js';
 import {
   computeRoleModels,
   readExistingOverrides,
@@ -308,7 +308,6 @@ async function handleStatusCommand(
     lines.push('Map one manually with `/router-fix <bench-slug> <provider/id>`.');
   }
   lines.push('', ...formatDecisionDetail(lastDecision, lastServed));
-  lines.push(formatAssessmentSpend(session.getAssessmentCost()));
   const embStats = session.getEmbeddingStats();
   if (embStats.fired + embStats.degraded > 0) {
     lines.push(formatEmbeddingStats(embStats));

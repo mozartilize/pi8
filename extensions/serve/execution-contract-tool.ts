@@ -155,14 +155,6 @@ function handoffInapplicable(
       reason: 'a handoff applies only to planning, review, or implementation',
     };
   }
-  const assessment = last.assessment;
-  if (assessment?.confidence === 'high' && (assessment.kind === 'plan' || assessment.kind === 'review')) {
-    return {
-      ok: false,
-      code: `${assessment.kind}-deliverable`,
-      reason: `the request asks for a ${assessment.kind}, not an implementation`,
-    };
-  }
   // A plan written by a fallback below the planning step's minimum must not
   // end that step: the step stays owed to a model that clears it. The test is
   // on the serving model, not on the step's pending flag, which is settled

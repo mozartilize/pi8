@@ -145,7 +145,7 @@ describe('candidate expansion memo', () => {
   });
 });
 
-describe('assessment session state', () => {
+describe('session generation and reset', () => {
   beforeEach(() => defaultRouterSession.reset());
 
   it('advances the session generation on every reset', () => {
@@ -154,50 +154,9 @@ describe('assessment session state', () => {
     expect(defaultRouterSession.getSessionGeneration()).toBe(before + 1);
   });
 
-  it('accumulates assessment cost separately from routed cost', () => {
-    defaultRouterSession.assessment.addCost(0.0004);
-    defaultRouterSession.assessment.addCost(0.0006);
-    expect(defaultRouterSession.assessment.getCost()).toBeCloseTo(0.001, 6);
-    expect(defaultRouterSession.getAccumulatedCost()).toBe(0);
-  });
-
-  it('updates the assessor usage estimate and ignores missing usage', () => {
-    // With no recorded usage the caller's own estimate passes through.
-    expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
-      input: 1_000,
-      output: 80,
-    });
-    // The first recorded usage replaces the estimate outright.
-    defaultRouterSession.assessment.recordSuccessfulUsage({ input: 500, output: 100 });
-    expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
-      input: 500,
-      output: 100,
-    });
-    // A later record blends the estimate toward the new observation. The
-    // exact blend weight is internal economics, so pin the property: the
-    // smoothed value stays strictly between the previous estimate and the
-    // new usage on both axes.
-    defaultRouterSession.assessment.recordSuccessfulUsage({ input: 1_000, output: 50 });
-    const blended = defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 });
-    expect(blended!.input).toBeGreaterThan(500);
-    expect(blended!.input).toBeLessThan(1_000);
-    expect(blended!.output).toBeGreaterThan(50);
-    expect(blended!.output).toBeLessThan(100);
-    // A zero/missing record is ignored: the estimate does not collapse.
-    defaultRouterSession.assessment.recordSuccessfulUsage({ input: 0, output: 0 });
-    expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual(blended);
-  });
-
-  it('clears assessment cost and assessor EMA on session reset', () => {
-    defaultRouterSession.assessment.addCost(0.01);
-    defaultRouterSession.assessment.recordSuccessfulUsage({ input: 500, output: 100 });
+  it('clears skill names on session reset', () => {
     defaultRouterSession.setActiveSkillNames(['systematic-debugging', 'writing-plans']);
     defaultRouterSession.reset();
-    expect(defaultRouterSession.assessment.getCost()).toBe(0);
-    expect(defaultRouterSession.assessment.getTokenEstimate({ input: 1_000, output: 80 })).toEqual({
-      input: 1_000,
-      output: 80,
-    });
     expect(defaultRouterSession.getActiveSkillNames()).toEqual([]);
   });
 
@@ -222,13 +181,10 @@ describe('RouterSession independent instances', () => {
     const s1 = new RouterSession();
     const s2 = new RouterSession();
 
-    s1.addAssessmentCost(0.05);
     s1.blacklistModel('model-1');
 
-    expect(s1.getAssessmentCost()).toBe(0.05);
     expect(s1.getBlacklistedModels().has('model-1')).toBe(true);
 
-    expect(s2.getAssessmentCost()).toBe(0);
     expect(s2.getBlacklistedModels().has('model-1')).toBe(false);
   });
 

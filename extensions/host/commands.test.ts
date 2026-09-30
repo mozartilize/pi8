@@ -17,7 +17,6 @@ import { getProviderState } from '../serve/provider.js';
 import { defaultBlacklistState } from '../serve/blacklist.js';
 import {
   appendDecision,
-  appendAssessmentMetric,
   appendSubagentGapSignal,
   appendSubagentSpend,
 } from './decisionlog.js';
@@ -581,54 +580,6 @@ describe('/router-status history filtering', () => {
     expect(msg).toContain('→ beta/second');
     expect(msg).toContain('Subagent roles that tried to use a tool they do not have');
     expect(msg).not.toContain('→ unknown/unknown');
-  });
-
-  it('excludes assessment metrics from routing history', async () => {
-    const { pi, handlers } = fakePi();
-    registerCommands(pi);
-    const registryModel = { provider: 'beta', id: 'second' };
-    const { ctx, messages } = fakeCtx([registryModel]);
-
-    const store: BenchmarkStore = {
-      version: 2,
-      syncedAt: Date.now(),
-      aliases: {},
-      models: [
-        {
-          registryId: 'beta/second',
-          benchSlug: 'beta-second',
-          active: true,
-          quality: { coding: 80 },
-          source: 'test',
-        },
-      ],
-    };
-    saveStore(store);
-
-    const decision: RoutingDecision = {
-      dimension: 'implement',
-      chosen: 'beta/second',
-      reason: 'scored',
-      confidence: 0.7,
-      routedUp: false,
-      routedDown: false,
-      cause: 'heuristic',
-      fallbackChain: ['beta/second'],
-    };
-    appendDecision(decision, { registryId: 'beta/second', viaFallback: false, accumulatedCost: 0.01 });
-    appendAssessmentMetric({
-      intentKey: '3:1:abc:0',
-      heuristicDimension: 'gather',
-      counterfactualDimension: 'lightweight',
-    });
-
-    await handlers.get('router-status')!('', ctx);
-
-    const msg = messages[messages.length - 1] ?? '';
-    expect(msg).toContain('→ beta/second');
-    // Assessment telemetry must never appear as a routing decision.
-    expect(msg).not.toContain('gather →');
-    expect(msg).not.toContain('unknown/unknown');
   });
 });
 

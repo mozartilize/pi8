@@ -4,9 +4,7 @@
  * Pattern: register a synthetic model with Pi (`pi.registerProvider`) that
  * classifies each turn locally, scores candidates from the live model
  * registry, and delegates the stream to the best match with a fallback
- * chain. One bounded, cancellable assessment per real user entry answers
- * what kind of work this is and may adjust the routed dimension under the
- * assessment safety caps.
+ * chain.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -28,16 +26,12 @@ import { classify, estimateTokenCount } from '../routing/classify/classifier.js'
 import { DIMENSION_STRENGTH } from '../routing/classify/classifier.js';
 import { DEFAULT_EMBEDDING_MIN_CONFIDENCE } from '../constants.js';
 import { embedAndClassify } from '../embed/embedding.js';
-import { getTurnClassificationInput, buildRoleLabelledContext } from '../routing/policy/continuation.js';
+import { getTurnClassificationInput } from '../routing/policy/continuation.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter, loadConfigBlacklistFilter } from '../routing/policy/allowlist.js';
 import { loadConfig } from '../config.js';
-import { runAssessment, type AssessmentConfig } from '../routing/consult/consult.js';
-import { adoptAssessment } from '../routing/consult/assessment-adoption.js';
-import { latestSummaryText, countToolActivity } from '../routing/consult/message-provenance.js';
 
 import {
   appendDecision,
-  appendAssessmentMetric,
   appendExecutionContractSignal,
   appendInvestigationHandoffSignal,
 } from '../host/decisionlog.js';
@@ -235,62 +229,6 @@ function extractSystemPrompt(context: Context): string | undefined {
     }
   }
   return undefined;
-}
-
-function evidenceForAssessment(
-  context: Context,
-  config: AutoRouterConfig,
-  pi: ExtensionAPI,
-  session: RouterSession = defaultRouterSession,
-): Parameters<typeof runAssessment>[3] {
-  let toolNames: string[] = [];
-  try {
-    toolNames = pi.getActiveTools() ?? [];
-  } catch {
-    toolNames = [];
-  }
-  return {
-    conversation: buildRoleLabelledContext(
-      context.messages ?? [],
-      (context.messages?.length ?? 1) - 1,
-      config.assessmentMaxInputChars,
-      config.syntheticPrefixes,
-    ),
-    summary: latestSummaryText(context.messages),
-    toolNames,
-    skillNames: session.getActiveSkillNames(),
-    toolActivity: countToolActivity(context.messages),
-  };
-}
-
-/**
- * Update per-session assessor strikes from one attempt. A successful verdict
- * clears the chosen model's strikes (self-heal); a failure that produced NO
- * output before an `expiry`/`error` deadline strikes it, so `selectAssessor`
- * stops repicking a model that structurally cannot deliver a verdict here.
- * auth/parse/no-assessor/disabled are not slowness signals and never strike.
- */
-function recordAssessorOutcome(
-  attempt: Awaited<ReturnType<typeof runAssessment>>,
-  session: RouterSession = defaultRouterSession,
-): void {
-  if (attempt.ok) {
-    session.recordSuccessfulAssessorUsage(attempt.assessment.usage);
-    session.clearAssessorStrikes(attempt.assessment.model);
-    return;
-  }
-  // The assessor hit the same shared usage cap the serving path would:
-  // exclude the whole provider so later turns fail fast there too.
-  if (attempt.usageLimitProvider) {
-    session.blacklistProvider(attempt.usageLimitProvider);
-  }
-  if (
-    attempt.model &&
-    attempt.producedOutput === false &&
-    (attempt.fallbackReason === 'expiry' || attempt.fallbackReason === 'error')
-  ) {
-    session.strikeAssessor(attempt.model);
-  }
 }
 
 // ─── Candidate expansion ───────────────────────────────────────────────
@@ -578,127 +516,11 @@ function buildRoutableCandidates(args: {
   );
 }
 
-/**
- * Everything an assessment dispatch needs that is constant for the whole
- * turn, so the dispatch cannot disagree with the turn about the assessor, the
- * routable pool, or which session generation is current.
- */
-interface AssessmentEnv {
-  assessmentConfig: AssessmentConfig;
-  stillCurrent: () => boolean;
-  turnInputKey: string;
-  context: Context;
-  config: AutoRouterConfig;
-  pi: ExtensionAPI;
-  registry: ModelRegistry;
-  routableCandidates: Candidate[];
-  session: RouterSession;
-}
-
-/** The entry's assessment verdict so far, mutated in place by the dispatch below. */
-interface AssessmentState {
-  assessment: import('../types.js').RoutingAssessment | undefined;
-  fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
-}
-
-type AssessmentDispatch =
-  | { kind: 'aborted' }
-  | { kind: 'verdict'; assessment: import('../types.js').RoutingAssessment }
-  | { kind: 'fallback' };
-
-/**
- * Spend the entry's one assessment dispatch and fold the outcome into
- * `state`. A session change during the await yields `aborted` with `state`
- * untouched.
- */
-async function dispatchAssessment(
-  env: AssessmentEnv,
-  state: AssessmentState,
-): Promise<AssessmentDispatch> {
-  const attempt = await runAssessment(
-    env.assessmentConfig,
-    env.registry,
-    env.routableCandidates,
-    evidenceForAssessment(env.context, env.config, env.pi, env.session),
-    env.session.getAssessorStrikes(),
-    (fb) => env.session.getAssessorTokenEstimate(fb),
-  );
-  if (!env.stillCurrent()) return { kind: 'aborted' };
-  recordAssessorOutcome(attempt, env.session);
-  if (attempt.ok) {
-    env.session.addAssessmentCost(attempt.assessment.costUsd);
-    return { kind: 'verdict', assessment: attempt.assessment };
-  }
-  env.session.addAssessmentCost(attempt.costUsd);
-  state.fallbackReason = attempt.fallbackReason;
-  return { kind: 'fallback' };
-}
-
-/** Dispatch + adopt only. Does not write the intent cache or touch the stream. */
-async function runEntryAssessment(
-  env: AssessmentEnv,
-  state: AssessmentState,
-  entry: {
-    cacheHit: boolean;
-    classifyResult: ReturnType<typeof classify>;
-    dimension: Dimension;
-    cause: DecisionCause;
-  },
-): Promise<{ dimension: Dimension; cause: DecisionCause; aborted: boolean }> {
-  let { dimension, cause } = entry;
-  const { classifyResult } = entry;
-
-  if (!entry.cacheHit && env.assessmentConfig.enabled) {
-    const heuristicDimension = classifyResult.dimension;
-    const dispatched = await dispatchAssessment(env, state);
-    if (dispatched.kind === 'aborted') return { dimension, cause, aborted: true };
-    if (dispatched.kind === 'verdict') {
-      state.assessment = dispatched.assessment;
-      const assessed = adoptAssessment({
-        heuristic: heuristicDimension,
-        rawHeuristic: classifyResult.rawDimension,
-        ambiguityBumped: classifyResult.ambiguityBumped,
-        assessment: dispatched.assessment,
-      });
-      appendAssessmentMetric({
-        intentKey: env.turnInputKey,
-        heuristicDimension,
-        counterfactualDimension: assessed.dimension,
-        assessment: dispatched.assessment,
-      });
-    } else {
-      appendAssessmentMetric({
-        intentKey: env.turnInputKey,
-        heuristicDimension,
-        fallbackReason: state.fallbackReason,
-      });
-    }
-  }
-
-  // On cache hit, dimension and cause were already adopted on the first invocation.
-  // Re-running adoptAssessment on later tool-loop turns would allow downward adoption
-  // to cascade across multiple turns for the same user entry.
-  if (!entry.cacheHit && state.assessment) {
-    const adoption = adoptAssessment({
-      heuristic: dimension,
-      rawHeuristic: classifyResult.rawDimension,
-      ambiguityBumped: classifyResult.ambiguityBumped,
-      assessment: state.assessment,
-    });
-    if (adoption.changed) {
-      dimension = adoption.dimension;
-      cause = 'router-consult';
-    }
-  }
-
-  return { dimension, cause, aborted: false };
-}
-
 function advanceWorkPhase(args: {
   cacheHit: boolean;
   turnInput: ReturnType<typeof getTurnClassificationInput>;
   classifyResult: ReturnType<typeof classify>;
-  /** The entry's task type after assessment adoption: what it owes the user. */
+  /** The entry's task type: what it owes the user. */
   deliverable: Dimension;
   session: RouterSession;
 }): void {
@@ -797,12 +619,6 @@ type RouterTurnOutcome =
   | { kind: 'terminal'; reason: 'error' | 'aborted'; message: string }
   | { kind: 'done' };
 
-const ASSESSMENT_ABORTED: RouterTurnOutcome = {
-  kind: 'terminal',
-  reason: 'aborted',
-  message: 'Router session changed during assessment.',
-};
-
 function noRoutableCandidates(session: RouterSession): RouterTurnOutcome {
   const excludedProviders = session.getBlacklistedProviders();
   const excludedModels = session.getBlacklistedModels();
@@ -826,19 +642,18 @@ interface PreparedTurn {
   intent: Awaited<ReturnType<typeof resolveBaseIntent>>;
   trajectoryEscalation: ReturnType<RouterSession['peekPendingTrajectoryEscalation']>;
   /**
-   * Pre-exclusion pool. Kept because an awaited assessment can blacklist a
-   * provider mid-turn, so scoring re-filters this rather than the snapshot.
+   * Pre-exclusion pool. Scoring re-filters this rather than the snapshot so
+   * a mid-turn usage-limit exclusion cannot immediately re-hit the same
+   * provider as the serving model.
    */
   candidates: Candidate[];
   routableCandidates: Candidate[];
 }
 
-interface AssessedTurn {
-  assessment: import('../types.js').RoutingAssessment | undefined;
-  fallbackReason: import('../types.js').AssessmentFallbackReason | undefined;
+interface ResolvedTurn {
   baseDimension: Dimension;
   baseCause: DecisionCause;
-  assessmentStillCurrent: () => boolean;
+  stillCurrent: () => boolean;
 }
 
 interface ScoredTurn {
@@ -909,54 +724,17 @@ async function prepareRouterTurn(args: {
   };
 }
 
-/** Spend this entry's one bounded assessment. */
-async function assessRouterTurn(args: {
+/** Settle this entry's task type and cache it for the entry's later invocations. */
+function resolveRouterTurn(args: {
   prepared: PreparedTurn;
-  context: Context;
-  pi: ExtensionAPI;
   session: RouterSession;
-}): Promise<{ kind: 'ready'; assessed: AssessedTurn } | RouterTurnOutcome> {
-  const { prepared, context, pi, session } = args;
-  const { config, measured, intent, registry, routableCandidates } = prepared;
-  const { turnInput } = measured;
-  const { cacheHit, cachedIntent, classifyResult } = intent;
+}): ResolvedTurn {
+  const { prepared, session } = args;
+  const { turnInput } = prepared.measured;
+  const { cacheHit, classifyResult, baseDimension, baseCause } = prepared.intent;
 
-  const assessmentSessionGeneration = session.getSessionGeneration();
-  const assessmentStillCurrent = (): boolean =>
-    session.getSessionGeneration() === assessmentSessionGeneration;
-  const env: AssessmentEnv = {
-    assessmentConfig: {
-      enabled: config.consultRouter,
-      modelRef: config.consultModel,
-      deadlineMs: config.assessmentDeadlineMs,
-      maxInputChars: config.assessmentMaxInputChars,
-      assessorQualityRatio: config.assessorQualityRatio,
-    },
-    stillCurrent: assessmentStillCurrent,
-    turnInputKey: turnInput.key,
-    context,
-    config,
-    pi,
-    registry,
-    routableCandidates,
-    session,
-  };
-  // A cache hit means the entry already spent its one dispatch, successful or
-  // not, so the budget starts closed and the cached verdict carries forward.
-  const state: AssessmentState = {
-    assessment: cacheHit ? cachedIntent?.assessment : undefined,
-    fallbackReason: cacheHit ? cachedIntent?.fallbackReason : undefined,
-  };
-
-  const entry = await runEntryAssessment(env, state, {
-    cacheHit,
-    classifyResult,
-    dimension: intent.baseDimension,
-    cause: intent.baseCause,
-  });
-  if (entry.aborted) return ASSESSMENT_ABORTED;
-  const baseDimension = entry.dimension;
-  const baseCause = entry.cause;
+  const sessionGeneration = session.getSessionGeneration();
+  const stillCurrent = (): boolean => session.getSessionGeneration() === sessionGeneration;
 
   if (!cacheHit) {
     session.setCachedIntent({
@@ -966,8 +744,6 @@ async function assessRouterTurn(args: {
       cause: baseCause,
       thin: turnInput.thin,
       contextChars: turnInput.contextChars,
-      assessment: state.assessment,
-      fallbackReason: state.fallbackReason,
     });
   }
   debugLog('classify.context', {
@@ -977,16 +753,7 @@ async function assessRouterTurn(args: {
     key: turnInput.key,
   });
 
-  return {
-    kind: 'ready',
-    assessed: {
-      assessment: state.assessment,
-      fallbackReason: state.fallbackReason,
-      baseDimension,
-      baseCause,
-      assessmentStillCurrent,
-    },
-  };
+  return { baseDimension, baseCause, stillCurrent };
 }
 
 /**
@@ -1072,23 +839,20 @@ function executorPool(
 /** Advance the work phase, score the live pool, and record the decision. */
 function scoreRouterTurn(args: {
   prepared: PreparedTurn;
-  assessed: AssessedTurn;
+  resolved: ResolvedTurn;
   options: SimpleStreamOptions | undefined;
   session: RouterSession;
   /** An explicit user pin is served even if it failed earlier this session. */
   pinned?: boolean;
 }): { kind: 'ready'; scored: ScoredTurn } | RouterTurnOutcome {
-  const { prepared, assessed, options, session, pinned } = args;
+  const { prepared, resolved, options, session, pinned } = args;
   const { config, measured, intent, candidates, trajectoryEscalation } = prepared;
   const { turnInput, needsVision, estContextTokens } = measured;
   const { classifyResult, cacheHit, confidence } = intent;
-  const { baseDimension, baseCause } = assessed;
+  const { baseDimension, baseCause } = resolved;
 
-  // An awaited assessment can add a provider-wide usage-limit
-  // exclusion after this turn's initial candidate snapshot. Apply
-  // live runtime exclusions again before scoring/delegation so the
-  // assessor failure cannot immediately re-hit the same provider as
-  // the serving model in this turn.
+  // Re-filter live runtime exclusions before scoring so a mid-turn
+  // usage-limit exclusion cannot immediately re-hit the same provider.
   const routableCandidates = pinned ? candidates : applyRuntimeExclusions(candidates, session);
   if (routableCandidates.length === 0) return noRoutableCandidates(session);
 
@@ -1181,8 +945,6 @@ function scoreRouterTurn(args: {
     const meta = current && contractMeta(current);
     if (meta) decision.executionContract = meta;
   }
-  if (assessed.assessment) decision.assessment = assessed.assessment;
-  if (assessed.fallbackReason) decision.fallbackReason = assessed.fallbackReason;
   decision.intentKey = turnInput.key;
   decision.provenanceCounts = turnInput.provenanceCounts;
   try {
@@ -1224,7 +986,7 @@ function scoreRouterTurn(args: {
 /** Resolve the served effort, run the fallback walk, and settle the handoff. */
 async function delegateRouterTurn(args: {
   prepared: PreparedTurn;
-  assessed: AssessedTurn;
+  resolved: ResolvedTurn;
   scored: ScoredTurn;
   context: Context;
   options: SimpleStreamOptions | undefined;
@@ -1233,7 +995,7 @@ async function delegateRouterTurn(args: {
   turnTimer: () => number;
   stream: AssistantMessageEventStream;
 }): Promise<RouterTurnOutcome> {
-  const { prepared, assessed, scored, context, options, pi, session, turnTimer, stream } = args;
+  const { prepared, resolved, scored, context, options, pi, session, turnTimer, stream } = args;
   const { config, extensionContext, registry } = prepared;
   const { decision, routableCandidates, requestedReasoning } = scored;
   const pin = session.getManualModel() ?? session.getSemiHold(prepared.measured.turnInput.key);
@@ -1373,7 +1135,7 @@ async function delegateRouterTurn(args: {
     && result.capabilityHandoff.fromModel === pendingTrajectory.fromModel
     && session.peekPendingTrajectoryEscalation() === pendingTrajectory
     && session.getSessionGeneration() === delegationSessionGeneration
-    && assessed.assessmentStillCurrent()
+    && resolved.stillCurrent()
   ) {
     session.consumePendingTrajectoryEscalation();
   }
@@ -1708,8 +1470,6 @@ async function runManualTurn(args: {
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
       contextChars: turnInput.contextChars,
-      assessment: undefined,
-      fallbackReason: undefined,
     });
   }
   const candidates = manualCandidates(prepared, manualModel);
@@ -1727,16 +1487,14 @@ async function runManualTurn(args: {
     routableCandidates: candidates,
     trajectoryEscalation: undefined,
   };
-  const assessed: AssessedTurn = {
-    assessment: undefined,
-    fallbackReason: undefined,
+  const resolved: ResolvedTurn = {
     baseDimension: prepared.intent.baseDimension,
     baseCause: cause,
-    assessmentStillCurrent: () => true,
+    stillCurrent: () => true,
   };
   const scoring = scoreRouterTurn({
     prepared: manualPrepared,
-    assessed,
+    resolved,
     options,
     session,
     pinned: cause === 'manual-override',
@@ -1766,7 +1524,7 @@ async function runManualTurn(args: {
 
   return delegateRouterTurn({
     prepared: manualPrepared,
-    assessed,
+    resolved,
     scored: scoring.scored,
     context,
     options,
@@ -1813,8 +1571,6 @@ async function runResumeTurn(args: {
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
       contextChars: turnInput.contextChars,
-      assessment: undefined,
-      fallbackReason: undefined,
     });
   }
 
@@ -1840,12 +1596,10 @@ async function runResumeTurn(args: {
   }
   session.setLastDecision(decision);
 
-  const assessed: AssessedTurn = {
-    assessment: undefined,
-    fallbackReason: undefined,
+  const resolved: ResolvedTurn = {
     baseDimension: decision.dimension,
     baseCause: 'resume',
-    assessmentStillCurrent: () => true,
+    stillCurrent: () => true,
   };
   const scored: ScoredTurn = {
     decision,
@@ -1854,7 +1608,7 @@ async function runResumeTurn(args: {
   };
   return delegateRouterTurn({
     prepared,
-    assessed,
+    resolved,
     scored,
     context,
     options,
@@ -1866,10 +1620,9 @@ async function runResumeTurn(args: {
 }
 
 /**
- * Ordered phases for one router turn. The order is a real dependency chain:
- * an awaited assessment can exclude a provider, so scoring must re-filter
- * after it, and the trajectory handoff is acknowledged only once a stronger
- * model has actually served.
+ * Ordered phases for one router turn. Scoring re-filters the candidate pool,
+ * and the trajectory handoff is acknowledged only once a stronger model has
+ * actually served.
  */
 async function runRouterTurn(args: {
   context: Context;
@@ -1921,11 +1674,9 @@ async function runRouterTurn(args: {
     if (outcome.kind !== 'recompute') return outcome;
   }
 
-  const assessment = await assessRouterTurn({ prepared, context, pi, session });
-  if (assessment.kind !== 'ready') return assessment;
-  const { assessed } = assessment;
+  const resolved = resolveRouterTurn({ prepared, session });
 
-  const scoring = scoreRouterTurn({ prepared, assessed, options, session });
+  const scoring = scoreRouterTurn({ prepared, resolved, options, session });
   if (scoring.kind !== 'ready') return scoring;
 
   const semi = await resolveSemiGate({ prepared, scored: scoring.scored, options, session });
@@ -1934,7 +1685,7 @@ async function runRouterTurn(args: {
 
   return delegateRouterTurn({
     prepared,
-    assessed,
+    resolved,
     scored,
     context,
     options,

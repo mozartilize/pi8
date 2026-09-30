@@ -7,7 +7,6 @@
  */
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type {
-  AssessmentFallbackReason,
   DecisionCause,
   ExecutionContractMeta,
   QualityExclusionReason,
@@ -95,15 +94,6 @@ const EXCLUSION_LABELS: Readonly<Record<QualityExclusionReason, [label: string, 
   promoted: ['promoted', 'much cheaper and strong enough'],
 };
 
-const ASSESSMENT_FALLBACK_LABELS: Readonly<Record<AssessmentFallbackReason, string>> = {
-  expiry: 'timed out',
-  auth: 'no credentials',
-  parse: 'unreadable reply',
-  error: 'provider error',
-  'no-assessor': 'no model available to assess',
-  disabled: 'turned off',
-};
-
 /** Multi-line detail for `/router-status`. */
 export function formatDecisionDetail(
   decision: RoutingDecision | undefined,
@@ -123,7 +113,6 @@ export function formatDecisionDetail(
     `  reason:     ${decision.reason}`,
     ...(decision.mutationObserved && decision.dimension !== 'implement' ? ['  phase:      editing'] : []),
     ...routingNotes(decision, served),
-    ...assessmentLines(decision),
     ...decision.candidateDiagnostics?.flatMap((diagnostic) => {
       if (!diagnostic.excludedReason) return [];
       const [label, text] = EXCLUSION_LABELS[diagnostic.excludedReason];
@@ -210,30 +199,12 @@ function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined)
   if (decision.routedDown) {
     const lowerer = decision.cause === 'execution-contract'
       ? 'the accepted execution plan'
-      : decision.cause === 'investigation' ? 'an investigation before it' : 'the assessment';
+      : decision.cause === 'investigation' ? 'an investigation before it' : 'a later reading of the request';
     lines.push(
       decision.routedPickChanged
         ? `  note:       task type lowered by ${lowerer}, so a cheaper model served`
         : `  note:       task type lowered by ${lowerer}; the served model did not change`,
     );
-  }
-  return lines;
-}
-
-function assessmentLines(decision: RoutingDecision): string[] {
-  const lines: string[] = [];
-  const a = decision.assessment;
-  if (a) {
-    const scope = a.scope === 'bounded' ? 'limited scope' : 'open-ended scope';
-    lines.push(
-      `  assessment: ${a.kind}, ${a.complexity} complexity, ${scope}, ${a.compound ? 'multi-step' : 'single step'}, ` +
-      `${a.confidence} confidence (${a.model}, ${a.ms} ms, $${a.costUsd.toFixed(5)})`,
-      `  rationale:  ${a.reasoning}`,
-    );
-  }
-  if (decision.fallbackReason) {
-    const why = ASSESSMENT_FALLBACK_LABELS[decision.fallbackReason] ?? decision.fallbackReason;
-    lines.push(`  note:       assessment unavailable (${why}); kept the keyword result`);
   }
   return lines;
 }
@@ -250,13 +221,6 @@ function contextPressureLines(pressure: NonNullable<RoutingDecision['contextPres
     `  note:       context ${pct}% full (advice starts at ${(pressure.threshold * 100).toFixed(0)}%)`,
     `  advice:     ${pressure.suggestion}`,
   ];
-}
-
-/**
- * Assessment spend, shown next to routed spend so the routing tax is visible.
- */
-export function formatAssessmentSpend(costUsd: number): string {
-  return `assessment spend: $${costUsd.toFixed(4)}`;
 }
 
 /** One-line embedding-classifier tally for `/router-status`. */

@@ -47,23 +47,3 @@ export const CONFIDENCE_FLOOR = 0.1;
  * cheaper (R3). Default 0.15.
  */
 export const DEFAULT_EMBEDDING_MIN_CONFIDENCE = 0.15;
-
-/**
- * One end-to-end assessment budget. It bounds selection, auth, startup,
- * streaming, and parsing so semantic routing cannot stall the turn.
- */
-export const DEFAULT_ASSESSMENT_DEADLINE_MS = 1500;
-
-/**
- * Total assembled assessment input cap. The assessor sees bounded, redacted,
- * role-labelled prose — never tool arguments, tool results, file contents or
- * environment values.
- */
-export const DEFAULT_ASSESSMENT_MAX_INPUT_CHARS = 6000;
-
-/**
- * Minimum share of the strongest routable candidate's intelligence index an
- * assessor must reach. A weak assessor produces expensive downstream
- * mistakes, so cheapest-and-fastest is not a sufficient rule.
- */
-export const DEFAULT_ASSESSOR_QUALITY_RATIO = 0.5;

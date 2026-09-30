@@ -2,7 +2,6 @@
  * Mutable per-session routing state for provider.ts and its sub-domains.
  *
  * Encapsulated domain aggregates:
- * - `AssessmentState`: Assessment spend, EMA usage calculation, and strikes.
  * - `IntentState`: Cached routing intent and per-entry work-phase state.
  * - `RuntimeBindings`: Pi extension runtime context & model registry (survives session reset).
  * - `RouterSession`: Unified session aggregate owning the lifecycle and domain objects.
@@ -13,12 +12,9 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ClassifyResult } from '../routing/classify/classifier.js';
 import type {
-  AssessmentFallbackReason,
-  AssessorTokenEstimate,
   Candidate,
   DecisionCause,
   Dimension,
-  RoutingAssessment,
   RoutingDecision,
 } from '../types.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
@@ -35,10 +31,6 @@ export interface CachedRoutingIntent {
   cause: DecisionCause;
   thin: boolean;
   contextChars: number;
-  /** Verdict for this intent; reused for the whole tool loop, free. */
-  assessment?: RoutingAssessment;
-  /** Why no verdict exists, so the tool loop does not retry a dead path. */
-  fallbackReason?: AssessmentFallbackReason;
 }
 
 /** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */
@@ -54,70 +46,6 @@ export interface EmbeddingStats {
 }
 
 type EmbeddingOutcome = keyof EmbeddingStats;
-
-export const ASSESSOR_USAGE_EMA_ALPHA = 0.2;
-
-/**
- * Domain object for assessment spend, EMA usage, and assessor strikes.
- */
-export class AssessmentState {
-  private cost = 0;
-  private tokenEma: AssessorTokenEstimate | undefined;
-  private readonly strikes = new Map<string, number>();
-
-  getCost(): number {
-    return this.cost;
-  }
-
-  addCost(delta: number): void {
-    if (!Number.isFinite(delta) || delta <= 0) return;
-    this.cost += delta;
-  }
-
-  getTokenEstimate(fallback: AssessorTokenEstimate): AssessorTokenEstimate {
-    return this.tokenEma ? { ...this.tokenEma } : { ...fallback };
-  }
-
-  recordSuccessfulUsage(observed: AssessorTokenEstimate): void {
-    if (
-      !Number.isFinite(observed.input)
-      || observed.input <= 0
-      || !Number.isFinite(observed.output)
-      || observed.output < 0
-    ) {
-      return;
-    }
-    const previous = this.tokenEma;
-    this.tokenEma = previous
-      ? {
-          input:
-            ASSESSOR_USAGE_EMA_ALPHA * observed.input
-            + (1 - ASSESSOR_USAGE_EMA_ALPHA) * previous.input,
-          output:
-            ASSESSOR_USAGE_EMA_ALPHA * observed.output
-            + (1 - ASSESSOR_USAGE_EMA_ALPHA) * previous.output,
-        }
-      : { input: observed.input, output: observed.output };
-  }
-
-  getStrikes(): ReadonlyMap<string, number> {
-    return this.strikes;
-  }
-
-  strike(registryId: string): void {
-    this.strikes.set(registryId, (this.strikes.get(registryId) ?? 0) + 1);
-  }
-
-  clearStrikes(registryId: string): void {
-    this.strikes.delete(registryId);
-  }
-
-  reset(): void {
-    this.cost = 0;
-    this.tokenEma = undefined;
-    this.strikes.clear();
-  }
-}
 
 /**
  * Domain object for per-turn intent caching and per-entry work-phase state.
@@ -192,7 +120,6 @@ export class RuntimeBindings {
  */
 export class RouterSession {
   public readonly blacklist: BlacklistState;
-  public readonly assessment: AssessmentState;
   public readonly intent: IntentState;
   private readonly trajectory = new TrajectoryState();
 
@@ -212,7 +139,7 @@ export class RouterSession {
   private notifiedModel: string | undefined;
   /**
    * Session-scoped manual model pin (`provider/id`) set via `/router-manual`.
-   * When present the turn skips assessment, restricts scoring to this model,
+   * When present the turn restricts scoring to this model,
    * and serves it with no fallback tail (pinned-only). Cleared on every
    * `session_start` reset, so a new session always starts on the auto router.
    */
@@ -241,11 +168,9 @@ export class RouterSession {
 
   constructor(
     blacklist: BlacklistState = new BlacklistState(),
-    assessment: AssessmentState = new AssessmentState(),
     intent: IntentState = new IntentState(),
   ) {
     this.blacklist = blacklist;
-    this.assessment = assessment;
     this.intent = intent;
   }
 
@@ -484,36 +409,6 @@ export class RouterSession {
     this.blacklist.clearSessionBlacklist();
   }
 
-  // ─── Direct Assessment Facade ────────────────────────────────────────
-
-  getAssessmentCost(): number {
-    return this.assessment.getCost();
-  }
-
-  addAssessmentCost(delta: number): void {
-    this.assessment.addCost(delta);
-  }
-
-  getAssessorTokenEstimate(fallback: AssessorTokenEstimate): AssessorTokenEstimate {
-    return this.assessment.getTokenEstimate(fallback);
-  }
-
-  recordSuccessfulAssessorUsage(observed: AssessorTokenEstimate): void {
-    this.assessment.recordSuccessfulUsage(observed);
-  }
-
-  getAssessorStrikes(): ReadonlyMap<string, number> {
-    return this.assessment.getStrikes();
-  }
-
-  strikeAssessor(registryId: string): void {
-    this.assessment.strike(registryId);
-  }
-
-  clearAssessorStrikes(registryId: string): void {
-    this.assessment.clearStrikes(registryId);
-  }
-
   // ─── Direct Intent & Work-Phase Facade ────────────────────────────────
 
   getCachedIntent(): CachedRoutingIntent | undefined {
@@ -636,7 +531,6 @@ export class RouterSession {
     this.embedStats.degraded = 0;
     this.memoizedCandidateExpansion = undefined;
 
-    this.assessment.reset();
     this.intent.reset();
     this.trajectory.reset();
     // Note: blacklist exclusions are cleared independently via blacklist.clearSessionBlacklist()

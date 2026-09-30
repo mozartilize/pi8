@@ -689,7 +689,7 @@ describe('region-restricted parallel reviewers', () => {
 
 });
 
-describe('assessment lifecycle resets', () => {
+describe('session lifecycle resets', () => {
   function makePi() {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
@@ -704,11 +704,10 @@ describe('assessment lifecycle resets', () => {
   });
 
   for (const reason of ['startup', 'resume', 'fork', 'new'] as const) {
-    it(`clears assessment state on session_start(${reason})`, async () => {
+    it(`clears session-scoped routing state on session_start(${reason})`, async () => {
       const { handlers, pi } = makePi();
       await autoModelRouterExtension(pi);
 
-      defaultRouterSession.assessment.addCost(0.05);
       defaultRouterSession.setActiveSkillNames(['writing-plans']);
       defaultRouterSession.intent.setCachedIntent({
         key: 'k',
@@ -734,7 +733,7 @@ describe('assessment lifecycle resets', () => {
         } as unknown as ExtensionContext,
       );
 
-      expect(defaultRouterSession.assessment.getCost()).toBe(0);
+      expect(defaultRouterSession.getActiveSkillNames()).toEqual([]);
       expect(defaultRouterSession.intent.getCachedIntent()).toBeUndefined();
     });
   }
@@ -1127,19 +1126,13 @@ describe('mutation observation hooks', () => {
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, concreteCtx)).toBeUndefined();
   });
 
-  it('does not remind outside plan/review or for a plan-only deliverable', async () => {
+  it('does not remind outside plan/review', async () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;
     const content = [{ type: 'text', text: 'edited' }];
     defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/impl']), dimension: 'implement' as const, intentKey: 'intent-a' });
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx)).toBeUndefined();
-
-    defaultRouterSession.setLastDecision({
-      ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a',
-      assessment: { kind: 'plan', complexity: 'moderate', scope: 'bounded', compound: false, confidence: 'high', reasoning: 'plan', model: 'a/b', ms: 1, costUsd: 0, usage: { input: 0, output: 0 } },
-    });
-    expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
   });
 
   it('reminds an implement entry only when the incumbent minimums raised its pick', async () => {

@@ -847,24 +847,6 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).toContain('[kept current model: stronger for this task]');
   });
 
-  it('stands down when a consult actually lowered the dimension', () => {
-    // A bounded high-confidence assessment lowering implement→gather is a
-    // sanctioned downgrade; the floor must not fight it.
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        candidates: benchmarkCandidates,
-        classifyDimension: 'implement',
-        baseDimension: 'gather',
-        baseCause: 'router-consult',
-        confidence: 0.9,
-        incumbentRegistryId: 'bench/strong',
-        sameIntentAsLast: true,
-        estimatedContextTokens: 1_000,
-      }),
-    );
-    expect(result.decision.reason).not.toContain('incumbent-floor');
-  });
-
   it('never reintroduces an incumbent the scorer filtered out of the chain', () => {
     // The incumbent is present in `candidates` but its context window is too
     // small for the estimate, so the long-context guard drops it from the
