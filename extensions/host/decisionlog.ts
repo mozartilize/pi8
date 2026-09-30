@@ -20,6 +20,7 @@ import type {
   ReasoningHandoffMeta,
   RoutingDecision,
 } from '../types.js';
+import type { ContextReason } from '../routing/context/types.js';
 import { resolveStoragePath } from '../bench/store.js';
 import { servedKey } from './ui.js';
 import { sessionSidecarPath } from '../sessionpaths.js';
@@ -113,6 +114,8 @@ export interface DecisionLogEntry {
     rejectReason?: string;
     handoff?: ReasoningHandoffMeta;
     deliverable?: Dimension;
+    /** Why the entry owed context, as categories. */
+    contextReasons?: ContextReason[];
   };
   /** Routed phase records: the deliverable behind an investigation, and the join to the previous entry's handoff. */
   deliverable?: string;
@@ -165,7 +168,7 @@ export interface ExecutionContractSignal {
    */
   served: string;
   /**
-   * `nudge` marks a plan/review edit made without a plan: a missed handoff.
+   * `nudge` marks a plan/review change attempted without a plan: a missed handoff.
    * `outcome` closes a contract with the label its features are fitted against.
    */
   action: 'accept' | 'reject' | 'break' | 'nudge' | 'execute' | 'outcome';
@@ -217,14 +220,20 @@ export interface InvestigationHandoffSignal {
   /** Model that handed off, was declined, was reminded, or owns the phase. */
   served: string;
   /**
-   * `nudge` marks a reminder to hand off. `served` marks the first invocation
-   * that served the reasoning phase. At entry end, `phase-end` closes an
-   * accepted handoff and `no-handoff` an owed investigation that never handed off.
+   * `nudge` marks a reminder to hand off; `deny` a call refused while
+   * collecting context. `needs-user` and `budget-exhausted` mark collecting
+   * context ending in a question to the user: the model asked for it, or the
+   * entry spent its requests or refusals. `served` marks the first invocation
+   * that served the next phase. At entry end, `phase-end` closes an accepted
+   * handoff and `no-handoff` owed context that was never handed off.
    */
-  action: 'accept' | 'reject' | 'nudge' | 'served' | 'phase-end' | 'no-handoff';
+  action:
+    | 'accept' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
+    | 'served' | 'phase-end' | 'no-handoff';
   rejectReason?: string;
   handoff?: ReasoningHandoffMeta;
   deliverable?: Dimension;
+  contextReasons?: ContextReason[];
 }
 
 /** Append an investigation handoff transition. Best-effort; never throws into the tool path. */
@@ -253,6 +262,7 @@ export function appendInvestigationHandoffSignal(
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
         ...(signal.handoff ? { handoff: signal.handoff } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
+        ...(signal.contextReasons?.length ? { contextReasons: signal.contextReasons } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

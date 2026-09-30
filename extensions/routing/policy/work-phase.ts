@@ -1,5 +1,6 @@
 import type { CapabilityBand, Dimension, ReasoningHandoffMeta, TerminalAssessment } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
+import type { ContextStatus } from './context-acquisition.js';
 import { MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
@@ -24,18 +25,28 @@ export interface WorkPhaseState {
   excludedExecutors?: string[];
   /** The one handoff reminder for this entry was already appended. */
   contractNudged?: boolean;
-  /** Paths the entry read with native `read`, most recent first; router-observed, never inherited. */
+  /** Files the entry's tools looked at, most recent first; router-observed, never inherited. */
   readPaths?: string[];
-  /** Investigation → planning/review handoff for this entry; never inherited. */
+  /** Context → planning/review handoff for this entry; never inherited. */
   reasoningHandoff?: ReasoningHandoffMeta;
   /** Handoff of the entry before this one, joined to this entry's records. */
   previousHandoffId?: string;
-  /** The one investigation reminder for this entry was already appended. */
-  investigationNudged?: boolean;
-  /** An invocation of this entry was routed as its investigation. */
-  investigated?: boolean;
-  /** The entry's investigation outcome (`no-handoff` or `phase-end`) was logged. */
-  investigationClosed?: boolean;
+  /** Where collecting context stands for the entry; absent until an invocation routes it. */
+  contextStatus?: ContextStatus;
+  /** Collect provider requests so far, fallback attempts included. */
+  contextRequests?: number;
+  /** Rejected handoffs and refused calls, counted once per provider invocation. */
+  contextDenials?: number;
+  /** Provider invocation whose refusal was last counted. */
+  deniedAtInvocation?: number;
+  /** The entry's one clarification request was dispatched. */
+  clarificationDispatched?: boolean;
+  /** Normalized payload of the accepted handoff; the same payload again is idempotent. */
+  handoffKey?: string;
+  /** The one acquisition reminder for this entry was already appended. */
+  contextNudged?: boolean;
+  /** The entry's acquisition outcome was logged. */
+  contextClosed?: boolean;
 }
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
@@ -59,6 +70,14 @@ export function floorForBand(band: CapabilityBand): number | undefined {
   return FLOOR[band];
 }
 
+/** `state` with `terminal` as its final step when that one asks for more. */
+export function withStrongerTerminal(state: WorkPhaseState, terminal: TerminalAssessment): WorkPhaseState {
+  const requirement = terminalRequirement(terminal);
+  return requirement > terminalRequirement(state.terminal)
+    ? { ...state, terminal, terminalBand: capabilityBandFor(requirement) }
+    : state;
+}
+
 export function nextProviderInvocation(state: WorkPhaseState): WorkPhaseState {
   return { ...state, providerInvocation: state.providerInvocation + 1 };
 }
@@ -79,9 +98,14 @@ export function inheritThinContinuation(
     readPaths: undefined,
     reasoningHandoff: undefined,
     previousHandoffId: prior.reasoningHandoff?.id,
-    investigationNudged: undefined,
-    investigated: undefined,
-    investigationClosed: undefined,
+    contextStatus: undefined,
+    contextRequests: undefined,
+    contextDenials: undefined,
+    deniedAtInvocation: undefined,
+    clarificationDispatched: undefined,
+    handoffKey: undefined,
+    contextNudged: undefined,
+    contextClosed: undefined,
   };
 }
 

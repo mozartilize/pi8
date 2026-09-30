@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -7,7 +7,7 @@ import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role, type RoutingDecision } from './types.js';
 
 import { CONTRACT_GATE, CONTRACT_NUDGE } from './serve/execution-contract-tool.js';
-import { INVESTIGATION_NUDGE } from './serve/investigation-handoff-tool.js';
+import { INVESTIGATION_NUDGE } from './serve/context-handoff-tool.js';
 import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
@@ -1046,7 +1046,7 @@ describe('mutation observation hooks', () => {
     } as unknown as ExtensionAPI);
     // Both handoff tools are registered once, up front, so the tool list never changes mid-session.
     expect(registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name))
-      .toEqual(['commit_execution', 'hand_off_investigation', 'routing_context']);
+      .toEqual(['commit_execution', 'hand_off_context', 'routing_context']);
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
 
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
@@ -1131,21 +1131,24 @@ describe('mutation observation hooks', () => {
     return tool;
   }
 
+  const READY = { outcome: 'ready', deliverable: 'plan', findings: 'f', question: 'q', difficulty: DIFFICULTY };
+
   function investigating(over: Partial<WorkPhaseState> = {}) {
-    defaultRouterSession.intent.commitWorkPhaseState(entryState({ deliverable: 'plan', ...over }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState({ deliverable: 'plan', contextStatus: 'acquiring', ...over }));
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
   }
 
-  it('hands an investigation off through hand_off_investigation, logging codes and levels but never findings or paths', async () => {
+  it('hands context off through hand_off_context, logging codes and levels but never findings or paths', async () => {
     const registerTool = vi.fn();
     const exec = vi.fn(async () => ({ stdout: 'fix: secret subject\n', stderr: '', code: 0, killed: false }));
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec } as unknown as ExtensionAPI);
     const tool = handoffTool(registerTool);
-    expect(tool.name).toBe('hand_off_investigation');
+    expect(tool.name).toBe('hand_off_context');
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
     investigating({ readPaths: ['/repo/secret-read.ts'] });
     const request = {
+      outcome: 'ready', deliverable: 'plan',
       findings: 'secret-finding', question: 'secret-question', files: ['secret-dir/a.ts'], difficulty: DIFFICULTY,
     };
 
@@ -1159,15 +1162,21 @@ describe('mutation observation hooks', () => {
     expect(handoff?.evidence.existingLines).toBeUndefined();
     expect((exec.mock.calls[0] as unknown[])[1]).toEqual(expect.arrayContaining(['/repo/secret-dir/a.ts', '/repo/secret-read.ts']));
 
-    expect((await tool.execute('p2', request, undefined, undefined, ctx)).details.accepted).toBe(false);
+    // The same handoff again is idempotent; a different one is declined.
+    expect((await tool.execute('p2', request, undefined, undefined, ctx)).details.accepted).toBe(true);
+    expect((await tool.execute('p3', { ...request, deliverable: 'review' }, undefined, undefined, ctx)).details.accepted).toBe(false);
 
     const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8');
-    const records = raw.trim().split('\n').map((line) => JSON.parse(line) as { investigationHandoff: { action: string; rejectReason?: string } });
+    const records = raw.trim().split('\n').map((line) => JSON.parse(line) as {
+      investigationHandoff: { action: string; rejectReason?: string; contextReasons?: string[] };
+    });
     expect(records.map((record) => [record.investigationHandoff.action, record.investigationHandoff.rejectReason])).toEqual([
       ['reject', 'missing-findings'],
       ['accept', undefined],
       ['reject', 'already-handed-off'],
     ]);
+    // Transitions carry why context was owed, as categories only.
+    expect(records[1]?.investigationHandoff.contextReasons).toEqual(['reasoning-prep']);
     expect(raw).not.toContain('secret');
   });
 
@@ -1177,25 +1186,88 @@ describe('mutation observation hooks', () => {
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec } as unknown as ExtensionAPI);
     investigating({ deliverable: 'review' });
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
-    const request = { findings: 'f', question: 'q', files: [], difficulty: DIFFICULTY };
+    const request = { ...READY, deliverable: 'review', files: [] };
     expect((await handoffTool(registerTool).execute('p1', request, undefined, undefined, ctx)).details.accepted).toBe(true);
     expect(exec).not.toHaveBeenCalled();
     expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff)
       .toMatchObject({ target: 'review', evidence: { applicable: false } });
   });
 
-  it('declines hand_off_investigation for a pinned model or outside an investigation', async () => {
+  it('takes a pinned model\'s handoff, and declines one outside collecting context', async () => {
     const registerTool = vi.fn();
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
     const tool = handoffTool(registerTool);
-    const request = { findings: 'f', question: 'q', difficulty: DIFFICULTY };
+    investigating({ contextStatus: undefined });
+    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
+    expect((await tool.execute('p1', READY, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
+    expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
+
     investigating();
     defaultRouterSession.setManualModel('test/cheap');
-    expect((await tool.execute('p1', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
+    expect((await tool.execute('p2', READY, undefined, undefined, routerAutoCtx)).details.accepted).toBe(true);
     defaultRouterSession.resumeManual();
-    defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
-    expect((await tool.execute('p2', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
-    expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('ready-pending');
+  });
+
+  it('adopts the reported task type only within the bounded adoption rules', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = handoffTool(registerTool);
+    const hand = async (over: Partial<WorkPhaseState>, request: Record<string, unknown>) => {
+      investigating(over);
+      await tool.execute('p', { ...READY, ...request }, undefined, undefined, routerAutoCtx);
+      return defaultRouterSession.getWorkPhaseState()!;
+    };
+    // An implementation never becomes cheaper; a bounded plan can drop one step to review.
+    const change = { deliverable: 'implement' as const };
+    expect((await hand(change, { deliverable: 'gather', scope: 'bounded' })).deliverable).toBe('implement');
+    expect((await hand(change, { deliverable: 'implement' })).reasoningHandoff).toBeUndefined();
+    expect((await hand(change, { deliverable: 'plan' })).reasoningHandoff).toMatchObject({ target: 'plan' });
+    expect((await hand({}, { deliverable: 'review', scope: 'bounded' })).deliverable).toBe('review');
+    // A missing scope counts as open-ended, so it cannot lower the entry.
+    expect((await hand({}, { deliverable: 'review' })).deliverable).toBe('plan');
+  });
+
+  it('raises a planning minimum to the band of the final step, never lowers it', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = handoffTool(registerTool);
+    const easy = { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 };
+    const minimum = async (over: Partial<WorkPhaseState>, request: Record<string, unknown>) => {
+      investigating(over);
+      await tool.execute('p', { ...READY, difficulty: easy, ...request }, undefined, undefined, routerAutoCtx);
+      return defaultRouterSession.getWorkPhaseState()!.reasoningHandoff!.minimum;
+    };
+    const economy = { terminal: terminalAssessment({ kind: 'lightweight', complexity: 'trivial', scope: 'bounded' }), terminalBand: 'economy' as const };
+    const strong = { terminal: terminalAssessment({ kind: 'plan', complexity: 'moderate', scope: 'open-ended' }), terminalBand: 'strong' as const };
+    expect(await minimum(economy, {})).toBeCloseTo(0.4);
+    expect(await minimum(strong, {})).toBeCloseTo(0.7);
+    // The handoff's own reading of the final step can only raise it.
+    expect(await minimum(economy, { complexity: 'hard', scope: 'open-ended' })).toBeCloseTo(0.85);
+    expect(await minimum(strong, { complexity: 'trivial', scope: 'bounded' })).toBeCloseTo(0.7);
+  });
+
+  it('hands the entry back to the user and then refuses every call', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool,
+      exec: vi.fn(),
+    } as unknown as ExtensionAPI);
+    const tool = handoffTool(registerTool);
+    investigating();
+    expect((await tool.execute('p0', { outcome: 'needs-user', question: ' ' }, undefined, undefined, routerAutoCtx)).details.accepted)
+      .toBe(false);
+    const asked = await tool.execute('p1', { outcome: 'needs-user', reason: 'ambiguous-request', question: 'which exporter?' }, undefined, undefined, routerAutoCtx);
+    expect(asked.details.accepted).toBe(true);
+    expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+    for (const toolName of ['read', 'ask_user_question', 'hand_off_context', 'edit']) {
+      expect(await handlers.get('tool_call')!({ toolName, toolCallId: toolName, input: {} }, routerAutoCtx)).toMatchObject({ block: true });
+    }
+    expect((await tool.execute('p2', READY, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
+    expect(gateRecords('investigationHandoff').map((r) => (r as { action: string }).action))
+      .toEqual(['reject', 'needs-user', 'deny', 'deny', 'deny', 'deny', 'reject']);
   });
 
   it('never hangs measuring a declared file that is a device', async () => {
@@ -1204,25 +1276,58 @@ describe('mutation observation hooks', () => {
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec } as unknown as ExtensionAPI);
     investigating();
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
-    const request = { findings: 'f', question: 'q', files: ['/dev/zero'], difficulty: DIFFICULTY };
+    const request = { ...READY, files: ['/dev/zero'] };
     expect((await handoffTool(registerTool).execute('p1', request, undefined, undefined, ctx)).details.accepted).toBe(true);
     expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff?.evidence.existingLines).toBeUndefined();
   });
 
-  it('records successful reads inside the working directory for the handoff evidence', async () => {
+  it('records existing files inside the working directory that successful reads name, for the handoff evidence', async () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;
     const content = [{ type: 'text', text: 'read' }];
     investigating();
-    const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
-    const read = (id: string, path: string, isError = false) =>
-      toolResult({ toolName: 'read', toolCallId: id, input: { path }, content, isError }, ctx);
-    await read('r1', 'src/a.ts');
-    await read('r2', 'src/missing.ts', true);
-    await read('r3', '/home/user/.pi/agent/skills/x/SKILL.md');
-    await read('r4', '../sibling/c.ts');
-    await read('r5', '/repo/src/b.ts');
-    expect(defaultRouterSession.getWorkPhaseState()?.readPaths).toEqual(['/repo/src/b.ts', '/repo/src/a.ts']);
+    const repo = mkdtempSync(join(tmpdir(), 'ar-read-paths-'));
+    mkdirSync(join(repo, 'src'));
+    for (const file of ['a.ts', 'b.ts']) writeFileSync(join(repo, 'src', file), 'x\n');
+    try {
+      const ctx = { ...routerAutoCtx, cwd: repo } as unknown as ExtensionContext;
+      const read = (id: string, path: string, isError = false) =>
+        toolResult({ toolName: 'read', toolCallId: id, input: { path }, content, isError }, ctx);
+      await read('r1', 'src/a.ts');
+      await read('r2', 'src/missing.ts', true);
+      await read('r3', '/home/user/.pi/agent/skills/x/SKILL.md');
+      await read('r4', '../sibling/c.ts');
+      await read('r5', join(repo, 'src/b.ts'));
+      expect(defaultRouterSession.getWorkPhaseState()?.readPaths).toEqual([join(repo, 'src/b.ts'), join(repo, 'src/a.ts')]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('records files any reading tool names, and none a write, a directory, or the router\'s own tools name', async () => {
+    const handlers = await makeToolHandlers();
+    const toolResult = handlers.get('tool_result')!;
+    const content = [{ type: 'text', text: 'out' }];
+    investigating();
+    const repo = mkdtempSync(join(tmpdir(), 'ar-read-paths-'));
+    mkdirSync(join(repo, 'src'));
+    for (const file of ['a.ts', 'b.ts', 'c.ts', 'd.ts']) writeFileSync(join(repo, 'src', file), 'x\n');
+    try {
+      const ctx = { ...routerAutoCtx, cwd: repo } as unknown as ExtensionContext;
+      const call = (toolName: string, input: unknown) =>
+        toolResult({ toolName, toolCallId: toolName, input, content, isError: false }, ctx);
+      await call('tilth_read', { path: 'src/a.ts', mode: 'full' });
+      await call('ctx_execute_file', { path: join(repo, 'src/b.ts'), language: 'python', code: 'print(1)' });
+      await call('tilth_read', { paths: ['src/c.ts', 'src'] });
+      await call('write', { path: 'src/d.ts', content: 'y' });
+      await call('bash', { command: 'echo y > src/d.ts' });
+      await call('hand_off_context', { files: ['src/d.ts'] });
+      expect(defaultRouterSession.getWorkPhaseState()?.readPaths).toEqual(
+        ['src/c.ts', 'src/b.ts', 'src/a.ts'].map((path) => join(repo, path)),
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it('does not record a read before its result', async () => {
@@ -1240,7 +1345,7 @@ describe('mutation observation hooks', () => {
     investigating({ deliverable: 'review' });
     const first = await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
     expect(first.content[1]!.text).toContain('needs a review');
-    expect(first.content[1]!.text).toContain('hand_off_investigation');
+    expect(first.content[1]!.text).toContain('hand_off_context');
     expect(await toolResult({ toolName: 'read', toolCallId: 'r2', content }, routerAutoCtx)).toBeUndefined();
   });
 
@@ -1248,7 +1353,7 @@ describe('mutation observation hooks', () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;
     const content = [{ type: 'text', text: 'edited' }];
-    investigating({ deliverable: 'gather', terminalBand: 'standard' });
+    investigating({ deliverable: 'gather', terminalBand: 'standard', contextStatus: undefined });
 
     expect(await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx)).toBeUndefined();
     expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, routerAutoCtx))
@@ -1257,7 +1362,7 @@ describe('mutation observation hooks', () => {
     expect(first.content.map((c) => c.text)).toEqual(['edited', INVESTIGATION_NUDGE]);
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
 
-    investigating({ deliverable: 'plan' });
+    investigating({ deliverable: 'plan', contextStatus: 'served' });
     const state = defaultRouterSession.getWorkPhaseState()!;
     defaultRouterSession.commitWorkPhaseState({
       ...state,
@@ -1271,12 +1376,12 @@ describe('mutation observation hooks', () => {
 
   it('logs no-handoff when an owed investigation ends without handing off', async () => {
     const handlers = await makeToolHandlers();
-    investigating({ investigated: true });
+    investigating();
     await handlers.get('agent_settled')!({ type: 'agent_settled' }, routerAutoCtx);
     await handlers.get('agent_settled')!({ type: 'agent_settled' }, routerAutoCtx);
     const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8').trim().split('\n');
     expect(raw.map((line) => (JSON.parse(line) as { investigationHandoff: unknown }).investigationHandoff)).toEqual([
-      { action: 'no-handoff', deliverable: 'plan' },
+      { action: 'no-handoff', deliverable: 'plan', contextReasons: ['reasoning-prep'] },
     ]);
   });
 
@@ -1295,13 +1400,19 @@ describe('mutation observation hooks', () => {
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, concreteCtx)).toBeUndefined();
   });
 
-  it('does not remind outside plan/review', async () => {
+  it('does not remind outside plan/review or for a plan-only deliverable', async () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;
     const content = [{ type: 'text', text: 'edited' }];
     defaultRouterSession.intent.commitWorkPhaseState(entryState());
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/impl']), dimension: 'implement' as const, intentKey: 'intent-a' });
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx)).toBeUndefined();
+
+    defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, deliverable: 'plan' });
+    defaultRouterSession.setLastDecision({
+      ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a',
+    });
+    expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
   });
 
   it('reminds an implement entry only when the incumbent minimums raised its pick', async () => {
@@ -1388,6 +1499,105 @@ describe('mutation observation hooks', () => {
     planEntry();
     expect(await toolCall({ toolName: 'edit', toolCallId: 'e5', input: { path: 'src/a.ts' } }, concreteCtx)).toBeUndefined();
     expect(defaultRouterSession.getWorkPhaseState()?.contractNudged).toBeUndefined();
+  });
+
+  it('refuses every call outside the allowed tools until the handoff, and ends acquisition at the second refusal', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    const toolResult = handlers.get('tool_result')!;
+    const call = (toolName: string, input: unknown = { path: 'src/a.ts' }) =>
+      toolCall({ toolName, toolCallId: toolName, input }, routerAutoCtx) as Promise<{ block: boolean; reason: string } | undefined>;
+    investigating({ deliverable: 'review' });
+
+    // The note on the first tool result does not use up a refusal.
+    await toolResult({ toolName: 'read', toolCallId: 'r1', content: [{ type: 'text', text: 'read' }] }, routerAutoCtx);
+    expect(await call('read')).toBeUndefined();
+    expect(await call('tilth_search', { query: 'x' })).toBeUndefined();
+    expect(await call('routing_context', { op: 'update', summary: 's' })).toBeUndefined();
+    const stopped = await call('write');
+    expect(stopped?.block).toBe(true);
+    expect(stopped?.reason).toContain('needs a review');
+    expect(stopped?.reason).toContain('hand_off_context');
+    // A runner and a read-only shell are refused and do not count; a write in
+    // the same invocation already used the one counted refusal.
+    expect(await call('ctx_execute_file', { path: 'src/a.ts', code: 'print(1)' })).toMatchObject({ block: true });
+    expect(await call('bash', { command: 'rg foo' })).toMatchObject({ block: true });
+    expect(defaultRouterSession.getWorkPhaseState()).toMatchObject({ contextDenials: 1, contextStatus: 'acquiring' });
+    expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
+
+    defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, providerInvocation: 2 });
+    expect(await call('bash', { command: 'rg bar' })).toMatchObject({ block: true });
+    expect(defaultRouterSession.getWorkPhaseState()).toMatchObject({ contextDenials: 1, contextStatus: 'acquiring' });
+    defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, providerInvocation: 3 });
+    expect((await call('edit'))?.reason).toContain('Reply to the user now');
+    expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+    expect(await call('read')).toMatchObject({ block: true });
+    expect(defaultRouterSession.getLastDecision()?.dimension).toBe('gather');
+
+    // A pinned model is held to the same phase.
+    investigating({ deliverable: 'implement' });
+    defaultRouterSession.setManualModel('test/cheap');
+    expect(await call('write')).toMatchObject({ block: true });
+    defaultRouterSession.resumeManual();
+
+    // A ready handoff still refuses changes until the next phase serves, without counting them.
+    investigating({ contextStatus: 'ready-pending' });
+    expect(await call('write')).toMatchObject({ block: true });
+    expect(defaultRouterSession.getWorkPhaseState()?.contextDenials).toBeUndefined();
+    investigating({ contextStatus: 'served' });
+    expect(await call('write')).toBeUndefined();
+  });
+
+  it('lets a configured extra reader run while collecting context, and still refuses a listed writer', async () => {
+    const { loadConfig } = await import('./config.js');
+    vi.mocked(loadConfig).mockReturnValue({ debug: false, collectTools: ['ffgrep'] } as never);
+    try {
+      const handlers = await makeToolHandlers();
+      const toolCall = handlers.get('tool_call')!;
+      investigating();
+      expect(await toolCall({ toolName: 'ffgrep', toolCallId: 'g1', input: { pattern: 'x' } }, routerAutoCtx)).toBeUndefined();
+      expect(await toolCall({ toolName: 'bash', toolCallId: 'b1', input: { command: 'rg x' } }, routerAutoCtx))
+        .toMatchObject({ block: true });
+    } finally {
+      vi.mocked(loadConfig).mockReturnValue({ debug: false } as never);
+    }
+  });
+
+  it('lets a gather entry hand off to implement, review, or plan, and declines a handoff with no next step', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = handoffTool(registerTool);
+    const hand = async (deliverable: string) => {
+      investigating({ deliverable: 'gather', contextStatus: undefined });
+      await tool.execute('p', { ...READY, deliverable }, undefined, undefined, routerAutoCtx);
+      return defaultRouterSession.getWorkPhaseState()!;
+    };
+    expect((await hand('implement')).deliverable).toBe('implement');
+    expect((await hand('implement')).reasoningHandoff).toBeUndefined();
+    expect((await hand('review')).reasoningHandoff).toMatchObject({ target: 'review' });
+    expect((await hand('plan')).reasoningHandoff).toMatchObject({ target: 'plan' });
+    expect((await hand('gather')).contextStatus).toBeUndefined();
+    expect((await hand('lightweight')).contextStatus).toBeUndefined();
+  });
+
+  it('refuses a subagent spawn while collecting context', async () => {
+    const handlers = await makeToolHandlers();
+    investigating();
+    expect(await handlers.get('tool_call')!({ toolName: 'subagent', toolCallId: 's1', input: { agent: 'worker' } }, routerAutoCtx))
+      .toMatchObject({ block: true });
+    expect(defaultRouterSession.getWorkPhaseState()?.contextDenials).toBe(1);
+  });
+
+  it('refuses a call it cannot check while collecting context, and never one outside the phase', async () => {
+    const handlers = await makeToolHandlers();
+    investigating();
+    const spy = vi.spyOn(defaultRouterSession, 'getLastServed').mockImplementation(() => { throw new Error('boom'); });
+    expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx))
+      .toMatchObject({ block: true });
+    investigating({ contextStatus: 'served' });
+    expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e2', input: {} }, routerAutoCtx))
+      .toBeUndefined();
+    spy.mockRestore();
   });
 
   it('counts a high-confidence mutating bash call without blocking it', async () => {

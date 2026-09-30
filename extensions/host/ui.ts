@@ -55,7 +55,7 @@ export function formatStatus(
       : 'auto → waiting';
   }
   const label = decision.cause === 'investigation'
-    ? `auto:${decision.dimension} · investigating`
+    ? `auto:${decision.dimension} · collecting context`
     : decision.mutationObserved && decision.dimension !== 'implement'
       ? `auto:${decision.dimension} · editing` : `auto:${decision.dimension}`;
   const parts = [label, '→', servedKey(served)];
@@ -73,10 +73,10 @@ export function formatStatus(
 const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   heuristic: 'keyword classifier',
   'continuation-context': 'keyword classifier, using earlier messages for a short follow-up',
-  'router-consult': 'LLM assessment',
+  'router-consult': 'task type adopted from a context handoff',
   'execution-contract': 'routed by an accepted execution plan',
-  investigation: 'investigating before the plan or review',
-  'investigation-handoff': 'the investigation handed off to planning or review',
+  investigation: 'collecting context, read-only, before the deliverable',
+  'investigation-handoff': 'the next step started after collecting context',
   'embedding-classify': 'multilingual embedding classifier',
   'error-fallback': 'a fallback model served after the top pick failed',
   'no-data': 'no benchmark data; ranked by price and context window',
@@ -170,12 +170,12 @@ function contractPlanLine(contract: ExecutionContractMeta): string {
   }
 }
 
-/** The `/router-why` line for an investigation and its handoff. */
+/** The `/router-why` line for collecting context and its handoff. */
 function handoffLine(decision: RoutingDecision): string[] {
   const handoff = decision.reasoningHandoff;
   if (!handoff) {
     return decision.cause === 'investigation' && decision.deliverable
-      ? [`  handoff:    investigating (deliverable ${decision.deliverable})`]
+      ? [`  handoff:    collecting context (deliverable ${decision.deliverable})`]
       : [];
   }
   const role = handoff.target === 'plan' ? 'planning' : 'reviewing';
@@ -209,7 +209,7 @@ function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined)
   if (decision.routedDown) {
     const lowerer = decision.cause === 'execution-contract'
       ? 'the accepted execution plan'
-      : decision.cause === 'investigation' ? 'an investigation before it' : 'a later reading of the request';
+      : decision.cause === 'investigation' ? 'collecting context before it' : 'a later reading of the request';
     lines.push(
       decision.routedPickChanged
         ? `  note:       task type lowered by ${lowerer}, so a cheaper model served`

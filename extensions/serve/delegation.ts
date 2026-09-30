@@ -197,6 +197,8 @@ export interface DelegationOptions {
    * recorded; returns the decision to record.
    */
   settleServed?: (lastServed: ServedInfo, decision: RoutingDecision) => RoutingDecision;
+  /** Called before each provider request: retries and fallback attempts included. */
+  onRequest?: () => void;
 }
 
 export interface DelegationResult {
@@ -908,6 +910,7 @@ async function runCandidateAttempt(
   try {
     try {
       attemptAbort.signal.throwIfAborted();
+      ctx.opts.onRequest?.();
       armDeadline(authResolveTimeoutMs, `credential lookup timed out: ${candidate.candidateId}`);
       const delegatedStream = ctx.opts.registry.streamSimple(
         candidate.chosen,

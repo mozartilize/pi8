@@ -85,10 +85,11 @@ import { registerRoutingContextTool } from './serve/routing-context-tool.js';
 import { isMutationCall } from './routing/policy/mutation-detector.js';
 import {
   closeInvestigationOnSettle,
+  gateContextToolCall,
   nudgeInvestigation,
   observeInvestigationRead,
-  registerInvestigationHandoffTool,
-} from './serve/investigation-handoff-tool.js';
+  registerContextHandoffTool,
+} from './serve/context-handoff-tool.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
 const SUBAGENT_TOOL = 'subagent';
@@ -626,7 +627,7 @@ export default async function autoModelRouterExtension(
   // provider (e.g. github-copilot/gpt-5.4), so routing never happens.
   registerAutoRouterProvider(pi, undefined, session, runtime);
   registerExecutionContractTool(pi, session);
-  registerInvestigationHandoffTool(pi, session);
+  registerContextHandoffTool(pi, session);
   registerRoutingContextTool(pi, session);
   session.context.bindPersistence((event) => {
     if (typeof pi.appendEntry === 'function') pi.appendEntry(CONTEXT_ENTRY_TYPE, event);
@@ -681,6 +682,10 @@ export default async function autoModelRouterExtension(
 
   pi.on('tool_call', (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
+    // Collecting context runs only its allowed tools, delegation included:
+    // a refused call never runs, is not counted, attributed, or observed.
+    const restricted = gateContextToolCall(event, session);
+    if (restricted) return restricted;
     if (event.toolName === SUBAGENT_TOOL) {
       handleSubagentToolCall(event, ctx, session, routingState, subagentCalls);
       return;
@@ -714,7 +719,7 @@ export default async function autoModelRouterExtension(
       return;
     }
     handleTrajectoryToolResult(event, session);
-    observeInvestigationRead(event, ctx, session);
+    await observeInvestigationRead(event, ctx, session);
     trackContractToolResult(
       {
         toolName: event.toolName,

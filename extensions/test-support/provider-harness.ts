@@ -23,7 +23,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 
 import type { BenchModel, RoutingDecision } from '../types.js';
 import type { ServedInfo } from '../host/ui.js';
-import { RouterSession, RuntimeBindings, type EmbeddingStats } from '../serve/router-session-state.js';
+import { RouterSession, RuntimeBindings } from '../serve/router-session-state.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { registryModel } from './router-fixtures.js';
 import { scriptedRegistryStream } from './registry-stream.js';
@@ -128,7 +128,7 @@ export interface ProviderStateSnapshot {
   lastDecision: RoutingDecision | undefined;
   lastServed: ServedInfo | undefined;
   accumulatedCost: number;
-  embeddingStats: EmbeddingStats;
+  embeddingStats: import('../serve/router-session-state.js').EmbeddingStats;
   blacklistedModels: string[];
   blacklistedProviders: string[];
   workPhaseState: WorkPhaseState | undefined;
@@ -177,7 +177,7 @@ export interface ProviderTestHarness {
   resetEventStream(): void;
   /** Script every delegation call to yield `events` (or a custom impl). */
   scriptReply(
-    events: readonly MockEvent[] | ((model: Model<Api>, context: Context) => AsyncIterable<unknown>),
+    events: readonly MockEvent[] | ((model: Model<Api>, context: Context, options?: unknown) => AsyncIterable<unknown>),
   ): void;
   /** `provider/id` streamed in call order (credential failures never call). */
   streamedModels(): string[];
@@ -281,13 +281,14 @@ export async function setupProviderTest(options: ProviderHarnessOptions): Promis
       );
     },
     scriptReply(
-      events: readonly MockEvent[] | ((model: Model<Api>, context: Context) => AsyncIterable<unknown>),
+      events: readonly MockEvent[] | ((model: Model<Api>, context: Context, options?: unknown) => AsyncIterable<unknown>),
     ) {
       vi.mocked(streamSimple).mockImplementation(((
         model: Model<Api>,
         context: Context,
+        options?: unknown,
       ): AsyncIterable<unknown> => {
-        if (typeof events === 'function') return events(model, context);
+        if (typeof events === 'function') return events(model, context, options);
         return asStream(events);
       }) as never);
     },
@@ -360,3 +361,5 @@ export async function fetchDecisionContractHandles(dir: string, session?: Router
     ui: formatDecisionDetail(state.lastDecision ?? undefined, state.lastServed),
   };
 }
+
+

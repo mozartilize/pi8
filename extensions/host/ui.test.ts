@@ -71,8 +71,8 @@ describe('formatStatus', () => {
     const investigating = {
       ...decision, dimension: 'gather' as const, cause: 'investigation' as const, deliverable: 'plan' as const,
     };
-    expect(formatStatus(investigating, served)).toContain('auto:gather · investigating');
-    expect(formatDecisionDetail(investigating, served)).toContain('  handoff:    investigating (deliverable plan)');
+    expect(formatStatus(investigating, served)).toContain('auto:gather · collecting context');
+    expect(formatDecisionDetail(investigating, served)).toContain('  handoff:    collecting context (deliverable plan)');
     const handoff = {
       id: 'k', requester: 'alpha/model', target: 'plan' as const, minimum: 0.62, requirement: 0.62,
       rubric: { alternatives: 3, stakes: 2, spread: 1, knowledge: 1, uncertainty: 1 },
@@ -196,7 +196,7 @@ describe('formatDecisionDetail', () => {
 
   it('explains the decision cause without changing its stored value', () => {
     const causes = [
-      ['router-consult', 'LLM assessment'],
+      ['router-consult', 'task type adopted from a context handoff'],
       ['manual-override', 'manual pin'],
       ['trajectory-escalation', 'stronger model, because the previous one struggled'],
     ] as const;

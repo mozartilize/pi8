@@ -73,6 +73,11 @@ export interface PersistedConfig {
    */
   syntheticPrefixes?: string[];
   /**
+   * Extra exact tool names allowed while collecting context. Writers,
+   * shells, and code runners are dropped. Default `[]`.
+   */
+  collectTools?: string[];
+  /**
    * Enable the local multilingual embedding classifier for prompts where the
    * keyword classifier has no categorical evidence (non-English, ambiguous).
    * Blends up only; never overrides keyword downward. Default false.
@@ -89,6 +94,13 @@ export interface PersistedConfig {
 }
 
 const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
+
+/** Names that cannot be granted as extra collect readers. */
+const COLLECT_EXTRA_DENIED = new Set([
+  'edit', 'write', 'bash', 'subagent',
+  'ctx_execute', 'ctx_execute_file',
+  'commit_execution',
+]);
 
 const finiteInRange = (
   value: unknown,
@@ -178,6 +190,9 @@ export function loadConfig(): AutoRouterConfig {
         : undefined,
     syntheticPrefixes: stringList(persisted.syntheticPrefixes)?.filter(
       (p) => p.length <= 200,
+    ) ?? [],
+    collectTools: stringList(persisted.collectTools)?.filter(
+      (name) => name.length <= 64 && !COLLECT_EXTRA_DENIED.has(name),
     ) ?? [],
     embeddingClassifier:
       typeof persisted.embeddingClassifier === 'boolean'

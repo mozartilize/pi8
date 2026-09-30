@@ -178,6 +178,14 @@ function handoffInapplicable(
       };
     }
   }
+  // The entry's final task type is settled by context resolution and its handoff.
+  if (state.deliverable === 'plan' || state.deliverable === 'review') {
+    return {
+      ok: false,
+      code: `${state.deliverable}-deliverable`,
+      reason: `the request asks for a ${state.deliverable}, not an implementation`,
+    };
+  }
   return undefined;
 }
 

@@ -87,8 +87,18 @@ import {
   type ExecutionContract,
 } from '../routing/policy/execution-contract.js';
 import { appendContractOutcome, closeContractEntry } from './execution-contract-tool.js';
-import { entryPhase, serveReasoningHandoff } from '../routing/policy/investigation-handoff.js';
-import { closeInvestigationEntry, investigationNote, withInvestigationNote } from './investigation-handoff-tool.js';
+import {
+  ACQUISITION_REQUEST_LIMIT,
+  entryPhase,
+  owedContext,
+  serveContextHandoff,
+} from '../routing/policy/context-acquisition.js';
+import {
+  CLARIFICATION_NOTE,
+  closeInvestigationEntry,
+  investigationNote,
+  withInvestigationNote,
+} from './context-handoff-tool.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -654,8 +664,8 @@ interface ScoredTurn {
   requestedReasoning: string | undefined;
   /** A broken contract this invocation hands back; consumed only once it serves. */
   restoredContract?: ExecutionContract;
-  /** A reasoning handoff this invocation releases; its boundary is consumed only once it serves. */
-  pendingHandoff?: import('../types.js').ReasoningHandoffMeta;
+  /** This invocation serves an accepted context handoff's next phase; consumed only once it serves. */
+  pendingBoundary?: boolean;
   /** This invocation releases an accepted plan's incumbent minimums; consumed only once it serves. */
   releasesContract?: boolean;
 }
@@ -879,23 +889,41 @@ function scoreRouterTurn(args: {
   const restore = contract?.status === 'broken' ? contract : undefined;
   const handBack = restore ?? (reviewing ? contract : undefined);
   advanceWorkPhase({ cacheHit, turnInput, classifyResult, deliverable: baseDimension, session });
-  // An entry that owes a plan or review investigates first; an accepted
-  // investigation handoff routes the rest of the entry as that plan or
-  // review, including when a broken plan hands back to its submitter. A
-  // pinned or held model serves the deliverable directly.
-  const bypassPhases = baseCause === 'manual-override' || baseCause === 'semi-hold';
+  // An entry that owes context acquires it first, read-only; an accepted
+  // context handoff routes the rest of the entry as its next phase, including
+  // when a broken plan hands back to its submitter. A pinned or held model
+  // serves every phase: a pin chooses the model, not what the request owes.
   let entry = session.getWorkPhaseState();
-  const phase = entryPhase(entry, baseDimension, bypassPhases);
-  if (phase.cause === 'investigation' && entry && !entry.investigated) {
-    entry = { ...entry, investigated: true };
-    session.commitWorkPhaseState(entry);
+  const phase = entryPhase(entry, baseDimension);
+  if (phase.cause === 'investigation' && entry) {
+    let next = entry.contextStatus == null ? { ...entry, contextStatus: 'acquiring' as const, contextRequests: 0 } : entry;
+    if (next.contextStatus === 'acquiring' && (next.contextRequests ?? 0) >= ACQUISITION_REQUEST_LIMIT) {
+      next = { ...next, contextStatus: 'clarification-only' };
+      appendInvestigationHandoffSignal({
+        intentKey: next.intentKey,
+        served: session.getPreviousServed() ? servedKey(session.getPreviousServed()!) : 'unknown/unknown',
+        action: 'budget-exhausted',
+        contextReasons: owedContext(entry),
+      });
+    }
+    if (next !== entry) session.commitWorkPhaseState(next);
+    entry = next;
+    // The entry's one clarification request has been sent: nothing more is dispatched.
+    if (entry.contextStatus === 'clarification-only' && entry.clarificationDispatched) {
+      return {
+        kind: 'terminal',
+        reason: 'error',
+        message: 'Collecting context for this request has ended. Reply with the missing information to continue.',
+      };
+    }
   }
   const routedDimension = reviewing ? 'review' : implementing ? 'implement' : phase.dimension;
   const routedCause = reviewing || implementing ? 'execution-contract' : phase.cause ?? baseCause;
   // The reasoning phase is scored at its handoff's minimum; its incumbent
   // minimums stand down once, until a model serves the phase.
   const reasoning = routedDimension === entry?.reasoningHandoff?.target ? entry.reasoningHandoff : undefined;
-  const reasoningPending = reasoning?.pending === true && !handBack;
+  const pendingBoundary = entry?.contextStatus === 'ready-pending' && !handBack;
+  const reasoningPending = pendingBoundary && reasoning?.pending === true;
 
   // Pi clears lastServed at stream start; the rotated value is the model and
   // effort that actually served, including an effort-floor bump or fallback.
@@ -934,12 +962,9 @@ function scoreRouterTurn(args: {
     config,
   });
   const decision = policy.decision;
-  let servedHandoff = reasoningPending ? reasoning : undefined;
   if (reasoning && policy.trajectoryApplied && !reasoning.trajectoryFired) {
     const current = session.getWorkPhaseState()!;
-    const marked = { ...reasoning, trajectoryFired: true };
-    session.commitWorkPhaseState({ ...current, reasoningHandoff: marked });
-    if (servedHandoff) servedHandoff = marked;
+    session.commitWorkPhaseState({ ...current, reasoningHandoff: { ...reasoning, trajectoryFired: true } });
   }
   if (entry?.deliverable && (phase.cause != null || reasoning)) decision.deliverable = entry.deliverable;
   if (reasoning) decision.reasoningHandoff = session.getWorkPhaseState()?.reasoningHandoff ?? reasoning;
@@ -985,10 +1010,21 @@ function scoreRouterTurn(args: {
       routableCandidates,
       requestedReasoning,
       ...(restore ? { restoredContract: restore } : {}),
-      ...(servedHandoff ? { pendingHandoff: servedHandoff } : {}),
+      ...(pendingBoundary ? { pendingBoundary: true } : {}),
       ...(execution && contract?.releasePending ? { releasesContract: true } : {}),
     },
   };
+}
+
+/**
+ * Count one provider request of an entry collecting context, fallbacks and
+ * retries included. The limit is checked when an invocation is scored, so
+ * the fallback walk of the invocation that reaches it may still finish.
+ */
+function countAcquisitionRequest(session: RouterSession, intentKey: string): void {
+  const state = session.getWorkPhaseState();
+  if (!state || state.intentKey !== intentKey || state.contextStatus !== 'acquiring') return;
+  session.commitWorkPhaseState({ ...state, contextRequests: (state.contextRequests ?? 0) + 1 });
 }
 
 /** Resolve the served effort, run the fallback walk, and settle the handoff. */
@@ -1055,17 +1091,29 @@ async function delegateRouterTurn(args: {
 
   const pendingTrajectory = session.peekPendingTrajectoryEscalation();
   const delegationSessionGeneration = session.getSessionGeneration();
-  // An investigation that owes a plan or review carries the router's standing
-  // instruction to hand off rather than write it; see withInvestigationNote.
-  const entry = session.getWorkPhaseState();
-  const delegatedContext = decision.cause === 'investigation' && entry
-    ? withInvestigationNote(context, investigationNote(entry))
+  // An entry collecting context carries the router's standing instruction to
+  // hand off rather than act; see withInvestigationNote. The status, not the
+  // decision's cause, decides it: a pinned model acquires under its own cause.
+  const intentKey = prepared.measured.turnInput.key;
+  const current = session.getWorkPhaseState();
+  const entry = current?.intentKey === intentKey ? current : undefined;
+  const acquiring = entry?.contextStatus === 'acquiring';
+  const clarifying = entry?.contextStatus === 'clarification-only';
+  let delegatedContext = entry && (acquiring || clarifying)
+    ? withInvestigationNote(context, investigationNote(entry, config.collectTools))
     : context;
+  // The one clarification request: tools stay defined, so a history with
+  // tool calls remains valid, but none may be called, and no fallback follows.
+  if (clarifying) {
+    delegatedContext = withInvestigationNote(delegatedContext, CLARIFICATION_NOTE);
+    decision.fallbackChain = [decision.chosen];
+  }
   const delegationOptions: DelegationOptions = {
     decision,
     registry: registry!,
     context: delegatedContext,
-    options: delegatedOptions,
+    options: clarifying ? { ...delegatedOptions, toolChoice: 'none' } : delegatedOptions,
+    ...(acquiring ? { onRequest: () => countAcquisitionRequest(session, intentKey) } : {}),
     candidates: routableCandidates,
     reasoning: explicitThinking ?? resolvedReasoning,
     userReasoningOverride: explicitThinking != null || (!inheritedReasoning && requestedReasoning != null),
@@ -1101,6 +1149,11 @@ async function delegateRouterTurn(args: {
   // `/router-why` show the boundary's owner for the invocation that took it.
   delegationOptions.settleServed = (lastServed, finalDecision) => {
     const served = servedKey(lastServed);
+    const settling = session.getWorkPhaseState();
+    // Marked only after a model served: a failed clarification request can retry.
+    if (settling?.intentKey === intentKey && settling.contextStatus === 'clarification-only' && !settling.clarificationDispatched) {
+      session.commitWorkPhaseState({ ...settling, clarificationDispatched: true });
+    }
     // Like the trajectory handoff, a broken contract's handback is consumed only
     // by an invocation its submitter served: a failed one, or a fallback to
     // another model, leaves the next invocation bound to the submitter too.
@@ -1120,20 +1173,20 @@ async function delegateRouterTurn(args: {
     if (scored.releasesContract && releasing?.contract?.status === 'active') {
       session.commitWorkPhaseState(serveContractRelease(releasing));
     }
-    const pendingHandoff = scored.pendingHandoff;
     const current = session.getWorkPhaseState();
-    if (!pendingHandoff || current?.reasoningHandoff?.id !== pendingHandoff.id || !current.reasoningHandoff.pending) {
+    if (!scored.pendingBoundary || current?.intentKey !== intentKey || current.contextStatus !== 'ready-pending') {
       return finalDecision;
     }
-    const owned = serveReasoningHandoff(current, served);
+    const owned = serveContextHandoff(current, served);
     session.commitWorkPhaseState(owned);
+    const handoff = owned.reasoningHandoff;
     appendInvestigationHandoffSignal({
       intentKey: owned.intentKey,
-      served: owned.reasoningHandoff!.owner!,
+      served: handoff?.owner ?? served,
       action: 'served',
-      handoff: owned.reasoningHandoff!,
+      ...(handoff ? { handoff } : { deliverable: owned.deliverable }),
     });
-    return { ...finalDecision, reasoningHandoff: owned.reasoningHandoff! };
+    return handoff ? { ...finalDecision, reasoningHandoff: handoff } : finalDecision;
   };
   const result = await runDelegationLoop(delegationOptions, stream);
 

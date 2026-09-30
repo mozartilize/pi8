@@ -7,6 +7,7 @@ import {
   nextProviderInvocation,
   servesBoundary,
   terminalRequirement,
+  withStrongerTerminal,
 } from './work-phase.js';
 import type { TerminalAssessment } from '../../types.js';
 import type { WorkPhaseState } from './work-phase.js';
@@ -49,6 +50,15 @@ describe('nextProviderInvocation', () => {
   });
 });
 
+describe('withStrongerTerminal', () => {
+  it('takes the final step that asks for more, and never one that asks for less', () => {
+    const prior = entryState({ terminal: terminal({ complexity: 'trivial', scope: 'bounded' }), terminalBand: 'economy' });
+    const raised = withStrongerTerminal(prior, terminal({ complexity: 'moderate' }));
+    expect(raised).toMatchObject({ terminal: { complexity: 'moderate' }, terminalBand: 'strong' });
+    expect(withStrongerTerminal(raised, terminal({ complexity: 'trivial', scope: 'bounded' }))).toBe(raised);
+  });
+});
+
 describe('inheritThinContinuation', () => {
   it('retains terminal and band while resetting per-entry counters and handoffs', () => {
     const handoff = {
@@ -62,9 +72,14 @@ describe('inheritThinContinuation', () => {
       contractNudged: true,
       readPaths: ['/repo/a.ts'],
       reasoningHandoff: handoff,
-      investigationNudged: true,
-      investigated: true,
-      investigationClosed: true,
+      contextStatus: 'served',
+      contextRequests: 4,
+      contextDenials: 1,
+      deniedAtInvocation: 2,
+      clarificationDispatched: true,
+      handoffKey: 'k',
+      contextNudged: true,
+      contextClosed: true,
       contractStrikes: { 'beta/strong': 1 },
     });
     const next = inheritThinContinuation('intent-b', prior, 'implement');
@@ -82,9 +97,12 @@ describe('inheritThinContinuation', () => {
     expect(next.contractNudged).toBeUndefined();
     expect(next.readPaths).toBeUndefined();
     expect(next.reasoningHandoff).toBeUndefined();
-    expect(next.investigationNudged).toBeUndefined();
-    expect(next.investigated).toBeUndefined();
-    expect(next.investigationClosed).toBeUndefined();
+    for (const field of [
+      'contextStatus', 'contextRequests', 'contextDenials', 'deniedAtInvocation', 'clarificationDispatched',
+      'handoffKey', 'contextNudged', 'contextClosed',
+    ] as const) {
+      expect(next[field]).toBeUndefined();
+    }
   });
 });
 

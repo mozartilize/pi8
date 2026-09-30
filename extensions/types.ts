@@ -277,7 +277,7 @@ export interface ExecutionContractMeta {
   breaker?: string;
   /** Executor models excluded for this task after repeated breaks. */
   excludedExecutors?: string[];
-  /** Investigation handoff this plan followed, in the same entry or the one before. */
+  /** Context handoff this plan followed, in the same entry or the one before. */
   handoffId?: string;
 }
 
@@ -343,7 +343,7 @@ export interface RoutingDecision {
   mutationObserved?: boolean;
   /** Execution contract that shaped this invocation, active or just broken. */
   executionContract?: ExecutionContractMeta;
-  /** The task type the entry owes when the routed phase is an investigation before it. */
+  /** The task type the entry owes when the routed phase is collecting context before it. */
   deliverable?: Dimension;
   /** Investigation handoff that shaped this invocation. */
   reasoningHandoff?: ReasoningHandoffMeta;
@@ -496,6 +496,13 @@ export interface AutoRouterConfig {
    * impersonate the request. Never inferred — the list is explicit config.
    */
   syntheticPrefixes: string[];
+  /**
+   * Extra tool names that may run while collecting context, by exact
+   * registered name. Use this for read-only tools the host did not ship in
+   * the built-in list (`ffgrep`, `ctx_search`). Writers, shells, and code
+   * runners listed here are ignored. Default `[]`.
+   */
+  collectTools: string[];
   /**
    * If true, uses a local multilingual embedding classifier (E5-small) when
    * the keyword classifier has no categorical evidence — i.e. non-English

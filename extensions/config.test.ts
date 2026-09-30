@@ -273,3 +273,20 @@ describe('removed config migration', () => {
     expect(raw.blacklist).toEqual(['*/broken']);
   });
 });
+
+describe('collectTools', () => {
+  it('defaults to an empty array when absent', () => {
+    writeFileSync(getConfigPath(), JSON.stringify({}), 'utf8');
+    expect(loadConfig().collectTools).toEqual([]);
+  });
+
+  it('keeps extra reader names and drops writers, shells, runners, and overlong names', () => {
+    writeFileSync(
+      getConfigPath(),
+      JSON.stringify({ collectTools: ['ffgrep', 'bash', 'edit', 'ctx_execute', 42, '', 'x'.repeat(65), 'ctx_search'] }),
+      'utf8',
+    );
+    expect(loadConfig().collectTools).toEqual(['ffgrep', 'ctx_search']);
+  });
+});
+
