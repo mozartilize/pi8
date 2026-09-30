@@ -156,20 +156,17 @@ export type MessageProvenance =
   | 'assistant'
   | 'tool-result';
 
-export type AssessmentConfidence = 'high' | 'medium' | 'low';
-
 /** Terminal-axis kind is the same vocabulary as routing dimensions. */
 export type TaskKind = Dimension;
 export type TaskScope = 'bounded' | 'open-ended';
 export type ComplexityBand = 'trivial' | 'routine' | 'moderate' | 'hard' | 'frontier';
 export type CapabilityBand = 'economy' | 'standard' | 'strong' | 'frontier';
 
+/** The final step of a request, from keywords: what it is, how hard, how wide. */
 export interface TerminalAssessment {
   kind: TaskKind;
   complexity: ComplexityBand;
   scope: TaskScope;
-  compound: boolean;
-  confidence: AssessmentConfidence;
 }
 
 export type RubricCriterion = 'openDecisions' | 'spread' | 'verification' | 'knowledge' | 'coupling';

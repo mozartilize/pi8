@@ -71,7 +71,7 @@ const CORPUS: Array<{ prompt: string; expected: Dimension | Dimension[] }> = [
   // ─── honest duals: leading verb + design noun ──────────────
   // The opening verb (analyze/investigate/research/compare) is genuinely
   // ambiguous between exploration and design/critique. Either verdict is
-  // acceptable; the assessment layer resolves the deliverable. Pinned as a
+  // acceptable; a later handoff picks the deliverable. Pinned as a
   // set so a future tuning pass cannot silently collapse the ambiguity to
   // the WRONG single answer.
   { prompt: 'analyze the tradeoffs between kafka and rabbitmq', expected: ['plan', 'gather'] },
@@ -82,18 +82,15 @@ const CORPUS: Array<{ prompt: string; expected: Dimension | Dimension[] }> = [
 ];
 
 const TERMINAL_CASES = [
-  { prompt: 'investigate the cache miss, then fix it', kind: 'implement', compound: true },
-  { prompt: 'review and improve this', kind: 'review', compound: false },
-  { prompt: 'research the API, then add webhook support', kind: 'implement', compound: true },
+  { prompt: 'investigate the cache miss, then fix it', kind: 'implement' },
+  { prompt: 'review and improve this', kind: 'review' },
+  { prompt: 'research the API, then add webhook support', kind: 'implement' },
 ] as const;
 
 describe('terminal corpus', () => {
-  for (const { prompt, kind, compound } of TERMINAL_CASES) {
+  for (const { prompt, kind } of TERMINAL_CASES) {
     it(`reads "${prompt.slice(0, 50)}" as terminal ${kind}`, () => {
-      const terminal = classify(prompt).terminal;
-      expect(terminal.kind).toBe(kind);
-      expect(terminal.compound).toBe(compound);
-      expect(terminal.confidence === 'high').toBe(compound);
+      expect(classify(prompt).terminal.kind).toBe(kind);
     });
   }
 });

@@ -18,7 +18,7 @@ import type { WorkPhaseState } from './work-phase.js';
 import type { TerminalAssessment } from '../../types.js';
 
 const terminal = (over: Partial<TerminalAssessment> = {}): TerminalAssessment => ({
-  kind: 'gather', complexity: 'routine', scope: 'bounded', compound: false, confidence: 'high', ...over,
+  kind: 'gather', complexity: 'routine', scope: 'bounded', ...over,
 });
 
 const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({

@@ -23,7 +23,7 @@ import { inheritWorkContinuation, type WorkPhaseState } from './work-phase.js';
 const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
   intentKey: 'intent-a',
   terminal: {
-    kind: 'plan', complexity: 'moderate', scope: 'bounded', compound: false, confidence: 'high',
+    kind: 'plan', complexity: 'moderate', scope: 'bounded',
   },
   terminalBand: 'strong',
   providerInvocation: 3,

@@ -338,7 +338,7 @@ export function submitContextHandoff(
   if (selection && session.getSessionGeneration() !== selection.generation) {
     return reject(session, 'stale-entry', state, served);
   }
-  const terminal = complexity && scope ? withStrongerTerminal(state, { kind: deliverable, complexity, scope, compound: false, confidence: 'high' }) : state;
+  const terminal = complexity && scope ? withStrongerTerminal(state, { kind: deliverable, complexity, scope }) : state;
 
   let reasoning;
   if (deliverable === 'plan' || deliverable === 'review') {

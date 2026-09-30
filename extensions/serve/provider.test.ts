@@ -1848,7 +1848,7 @@ describe('context acquisition', () => {
     function easyFinalStep(): void {
       const state = harness.session.getWorkPhaseState()!;
       harness.session.commitWorkPhaseState({
-        ...state, terminal: { kind: 'plan', complexity: 'trivial', scope: 'bounded', compound: false, confidence: 'high' }, terminalBand: 'standard',
+        ...state, terminal: { kind: 'plan', complexity: 'trivial', scope: 'bounded' }, terminalBand: 'standard',
       });
     }
 

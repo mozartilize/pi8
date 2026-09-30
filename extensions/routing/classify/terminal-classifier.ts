@@ -1,13 +1,10 @@
 import type { ComplexityBand, TaskKind, TaskScope, TerminalAssessment } from '../../types.js';
 
-// Every compound signal here is deliberately narrow: only an explicit
-// prerequisite -> sequence -> mutation structure counts, and any evidence we
-// had to default withholds high confidence.
+// The final step's kind, complexity, and scope, from keywords alone. It says
+// nothing about what must happen before that step: whether a request owes
+// an investigation first is the entry's prerequisite, which the work-context
+// resolver decides.
 
-const PREREQUISITE = [
-  'investigate', 'research', 'find', 'trace', 'inspect', 'look into',
-] as const;
-const SEQUENCE = ['then', 'and then', 'before', 'followed by'] as const;
 const MUTATION = [
   'fix', 'implement', 'add', 'update', 'change', 'refactor', 'write', 'modify',
 ] as const;
@@ -55,8 +52,6 @@ const compile = (cues: readonly string[]): RegExp[] => cues.map((cue) => {
   return new RegExp(`(?<!\\p{L})${stem}(?:e|es|ed|ing|s)?(?!\\p{L})`, 'iu');
 });
 
-const PREREQUISITE_RE = compile(PREREQUISITE);
-const SEQUENCE_RE = compile(SEQUENCE);
 const MUTATION_RE = compile(MUTATION);
 const REVIEW_RE = compile(REVIEW);
 const PLAN_RE = compile(PLAN);
@@ -74,13 +69,6 @@ const firstIndex = (text: string, cues: readonly RegExp[]): number => {
     if (match && (earliest === -1 || match.index < earliest)) earliest = match.index;
   }
   return earliest;
-};
-
-const indexAfter = (text: string, cues: readonly RegExp[], from: number): number => {
-  if (from < 0) return -1;
-  const tail = text.slice(from);
-  const found = firstIndex(tail, cues);
-  return found === -1 ? -1 : from + found;
 };
 
 const lastIndex = (text: string, cues: readonly RegExp[]): number => {
@@ -102,26 +90,15 @@ export function assessTerminal(prompt: string): TerminalAssessment {
   const text = raw.replace(QUOTED, ' ');
   const negated = NEGATION.test(text);
 
-  const prerequisiteAt = firstIndex(text, PREREQUISITE_RE);
-  const sequenceAt = indexAfter(text, SEQUENCE_RE, prerequisiteAt === -1 ? -1 : prerequisiteAt + 1);
-  const mutationAfterSequenceAt = indexAfter(text, MUTATION_RE, sequenceAt === -1 ? -1 : sequenceAt + 1);
-  const compound = !negated && prerequisiteAt !== -1 && sequenceAt !== -1 && mutationAfterSequenceAt !== -1;
-
   const mutates = !negated && matches(text, MUTATION_RE);
-  const kind = terminalKind(text, compound, mutates);
+  const kind = terminalKind(text, mutates);
 
-  let complexityDefaulted = false;
   let complexity: ComplexityBand;
   if (matches(text, FRONTIER_RE)) complexity = 'frontier';
   else if (matches(text, HARD_RE)) complexity = 'hard';
-  else if (compound) complexity = 'moderate';
   else if (matches(text, TRIVIAL_RE)) complexity = 'trivial';
-  else {
-    complexity = 'moderate';
-    complexityDefaulted = true;
-  }
+  else complexity = 'moderate';
 
-  let scopeDefaulted = false;
   let scope: TaskScope;
   if (matches(text, OPEN_RE)) scope = 'open-ended';
   // Detect file paths on the pre-strip text: developers most often name a file
@@ -130,31 +107,15 @@ export function assessTerminal(prompt: string): TerminalAssessment {
   // signal. Cue matching still runs on the stripped `text` so quoted prose
   // can't be read as instructions.
   else if (matches(text, BOUNDED_RE) || PATH_LIKE.test(raw)) scope = 'bounded';
-  else if (compound) scope = 'open-ended';
-  else {
-    // Unknown scope raises the requirement rather than lowering it.
-    scope = 'open-ended';
-    scopeDefaulted = true;
-  }
+  // Unknown scope raises the requirement rather than lowering it.
+  else scope = 'open-ended';
 
-  const confidence = compound && !complexityDefaulted && !scopeDefaulted
-    ? 'high'
-    : kind === 'lightweight' ? 'low' : 'medium';
-
-  return {
-    kind,
-    complexity,
-    scope,
-    compound,
-    confidence,
-  };
+  return { kind, complexity, scope };
 }
 
-function terminalKind(text: string, compound: boolean, mutates: boolean): TaskKind {
-  if (compound) return 'implement';
-  // The terminal deliverable is the last one stated: "review the auth flow,
+function terminalKind(text: string, mutates: boolean): TaskKind {
+  // The final deliverable is the last one stated: "review the auth flow,
   // then fix it" ends in a mutation even though it opens with a review cue.
-  // This decides `kind` only — `compound` stays narrow.
   if (mutates && lastIndex(text, MUTATION_RE) > Math.max(lastIndex(text, REVIEW_RE), lastIndex(text, PLAN_RE))) {
     return 'implement';
   }

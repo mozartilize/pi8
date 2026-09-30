@@ -17,8 +17,6 @@ const terminal = (over: Partial<TerminalAssessment> = {}): TerminalAssessment =>
   kind: 'implement',
   complexity: 'hard',
   scope: 'open-ended',
-  compound: false,
-  confidence: 'high',
   ...over,
 });
 

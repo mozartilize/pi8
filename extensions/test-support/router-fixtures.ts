@@ -29,7 +29,7 @@ export function routingDecision(chain: string[]): RoutingDecision {
   };
 }
 
-/** Default terminal assessment matching the canonical compound work fixture. */
+/** Default terminal assessment: a hard, open-ended change. */
 export function terminalAssessment(
   overrides: Partial<TerminalAssessment> = {},
 ): TerminalAssessment {
@@ -37,8 +37,6 @@ export function terminalAssessment(
     kind: 'implement',
     complexity: 'hard',
     scope: 'open-ended',
-    compound: true,
-    confidence: 'high',
     ...overrides,
   };
 }
