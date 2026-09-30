@@ -33,7 +33,7 @@ import { ROLE_DIMENSIONS } from '../types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../constants.js';
 import { activeModels, loadStore } from '../bench/store.js';
 import { pickBest, candidateKey, type RegistryModelInfo } from '../routing/score/scorer.js';
-import { estimateTokenCount } from '../routing/classify/classifier.js';
+import { estimateTokenCount } from '../routing/token-estimate.js';
 import { expandModelCandidates } from '../serve/provider.js';
 import { effortDropsPerStep } from '../routing/score/effort-estimate.js';
 import { loadModelFilter } from '../routing/policy/allowlist.js';

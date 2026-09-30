@@ -27,7 +27,7 @@ const MODEL = registryModel('alpha/cheap', {
   cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
 });
 const READY = {
-  outcome: 'ready', deliverable: 'implement', findings: 'checked the request', question: 'implement the change',
+  outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded', findings: 'checked the request', question: 'implement the change',
 };
 
 describe('entry-scoped work choice at the context handoff', () => {
@@ -227,10 +227,10 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(harness.session.context.getLedger().items.size).toBe(3);
   });
 
-  it('accepts NONE only for a lightweight side question', async () => {
+  it('declares a lightweight answer without selecting or creating work', async () => {
     await entry('hello');
     expect((await handoff({ ...READY, workItemId: 'NONE' })).accepted).toBe(false);
-    expect((await handoff({ ...READY, deliverable: 'lightweight', scope: 'bounded', workItemId: 'NONE' })).accepted).toBe(true);
+    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'lightweight', workItemId: 'NONE' })).accepted).toBe(true);
     expect(harness.session.context.getLedger().items.size).toBe(0);
     expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeUndefined();
   });

@@ -20,10 +20,11 @@ export interface PriorWork {
 /** Per-entry routing state: the entry's final step and its explicit handoffs. */
 export interface WorkPhaseState {
   intentKey: string;
-  /** Task type the entry owes the user: its classification after assessment adoption. */
+  /** Task type declared at the handoff, or the incumbent's last served task type. */
   deliverable?: Dimension;
-  terminal: TerminalAssessment;
-  terminalBand: CapabilityBand;
+  /** The handoff's task shape; absent until a handoff declares it. */
+  terminal?: TerminalAssessment;
+  terminalBand?: CapabilityBand;
   providerInvocation: number;
   /** Mutation calls observed in this entry; drives the `editing` status only. */
   observedMutationTools: number;
@@ -45,6 +46,8 @@ export interface WorkPhaseState {
   previousHandoffId?: string;
   /** Where collecting context stands for the entry; absent until an invocation routes it. */
   contextStatus?: ContextStatus;
+  /** A gathering model declared the type of its direct answer; it remains in gathering. */
+  contextAnswer?: 'gather' | 'lightweight';
   /** An incumbent was serving when this entry arrived: it serves the entry, which collects no context. */
   incumbentServes?: boolean;
   /** Bounded choice set while this entry's work identity is not yet known. */
@@ -92,14 +95,14 @@ export function capabilityBandFor(requirement: number): CapabilityBand {
   return 'frontier';
 }
 
-export function floorForBand(band: CapabilityBand): number | undefined {
-  return FLOOR[band];
+export function floorForBand(band: CapabilityBand | undefined): number | undefined {
+  return band == null ? undefined : FLOOR[band];
 }
 
 /** `state` with `terminal` as its final step when that one asks for more. */
 export function withStrongerTerminal(state: WorkPhaseState, terminal: TerminalAssessment): WorkPhaseState {
   const requirement = terminalRequirement(terminal);
-  return requirement > terminalRequirement(state.terminal)
+  return !state.terminal || requirement > terminalRequirement(state.terminal)
     ? { ...state, terminal, terminalBand: capabilityBandFor(requirement) }
     : state;
 }

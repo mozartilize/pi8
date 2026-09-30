@@ -444,7 +444,7 @@ async function prepareSelectedWork(harness: ProviderTestHarness, tree: SessionTr
   const context = { messages: tree.getBranch().filter((e) => e.type === 'message')
     .map((e) => ({ role: e.message!.role, content: e.message!.content, timestamp: e.message!.timestamp })) } as unknown as Context;
   await harness.serve(context);
-  const params = { outcome: 'ready', deliverable: 'implement', findings: 'request examined',
+  const params = { outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded', findings: 'request examined',
     question: 'implement the selected work', workItemId: 'NEW_WORK_ITEM', topicTitle: 'Parser', workItemTitle: 'Parser change' };
   const ctx = contextForTree(tree);
   const facts = await prepareHandoffFacts(params, ctx as never, harness.session,
@@ -1284,11 +1284,11 @@ describe('incumbent effort floor carries across invocations', () => {
     }
     // The incumbent serves each later entry, at its task type's effort minimum.
     const turn2 = await nextEntry('give me today’s weather forecast');
-    expect(turn2?.effortFloorDimension).toBe('implement');
+    expect(turn2?.dimension).toBe('implement');
     expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
 
     const turn3 = await nextEntry('what is a good pancake topping?');
-    expect(turn3?.effortFloorDimension).toBe('implement');
+    expect(turn3?.dimension).toBe('implement');
     expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
   });
 });
@@ -1665,7 +1665,7 @@ describe('incumbent continuation and deep context', () => {
     await harness.serve(ctx);
 
     const decision = harness.getProviderState().lastDecision;
-    expect(decision?.routedUp).toBe(false);
+    expect(decision).not.toHaveProperty('routedUp');
     const handles = await fetchDecisionContractHandles(temp.path);
     expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'investigation' } });
   });
@@ -1833,6 +1833,7 @@ describe('context acquisition', () => {
     const handoff = (alternatives: number, deliverable = 'plan') => ({
       outcome: 'ready',
       deliverable,
+      complexity: 'trivial', scope: 'bounded',
       findings: 'the retry wrapper swallows timeouts',
       question: 'where should the timeout surface',
       difficulty: { alternatives, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 },
@@ -1862,20 +1863,21 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
     });
 
-    it('can finish collecting identity with a gather deliverable', async () => {
+    it('declares a gather answer without creating work or an incumbent', async () => {
       const session = await newSession();
       const first = await session.routeTurn('investigate the flaky test');
       expect(first?.dimension).toBe('gather');
-      expect((await submitPrepared({ ...handoff(1), deliverable: 'gather' })).accepted).toBe(true);
-      expect(harness.session.context.getLedger().items.size).toBe(1);
-      const next = await session.routeTurnAgainWithSameUserEntry();
-      expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation-handoff' });
+      expect((await submitPrepared({ ...handoff(1), outcome: 'answer', deliverable: 'gather' })).accepted).toBe(true);
+      expect(harness.session.context.getLedger().items.size).toBe(0);
+      expect(harness.session.context.getIncumbent()).toBeUndefined();
+      expect(harness.session.getWorkPhaseState()?.contextAnswer).toBe('gather');
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
     });
 
     it('investigates a plan request until the handoff, then plans at the handoff minimum', async () => {
       const session = await newSession();
       const first = await session.routeTurn(PLAN_PROMPT);
-      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'plan' });
+      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'gather' });
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
 
       easyFinalStep();
@@ -1896,10 +1898,10 @@ describe('context acquisition', () => {
       expect((await submitPrepared(handoff(2))).accepted).toBe(false);
     });
 
-    it('keeps an obvious plan of a hard request at the minimum of its final step', async () => {
+    it('raises the planning minimum from the task shape declared at the handoff', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
-      expect((await submitPrepared(handoff(1))).accepted).toBe(true);
+      expect((await submitPrepared({ ...handoff(1), complexity: 'moderate', scope: 'open-ended' })).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
       expect(planning).toMatchObject({ dimension: 'plan', chosen: 'beta/strong' });
       expect(planning?.reasoningHandoff?.minimum).toBeGreaterThanOrEqual(0.7);
@@ -1999,7 +2001,7 @@ describe('context acquisition', () => {
     it('routes a review deliverable through its investigation to review', async () => {
       const session = await newSession();
       const first = await session.routeTurn('please review this pull request for security issues');
-      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'review' });
+      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'gather' });
       await submitPrepared(handoff(2, 'review'));
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('review');
     });
@@ -2225,7 +2227,7 @@ describe('context acquisition', () => {
     // A real design decision: its minimum is the frontier ratio.
     const DESIGN_HANDOFF = {
       outcome: 'ready',
-      deliverable: 'plan',
+      deliverable: 'plan', complexity: 'hard', scope: 'open-ended',
       findings: 'the migration touches every service',
       question: 'which migration order keeps the system up',
       difficulty: { alternatives: 5, stakes: 5, spread: 5, knowledge: 5, uncertainty: 5 },
@@ -2265,7 +2267,7 @@ describe('context acquisition', () => {
       // With no incumbent the entry collects context; an incumbent serves it and hands off.
       if (incumbent) expect(first?.chosen.startsWith(incumbent.registryId)).toBe(true);
       else expect(first?.dimension).toBe('gather');
-      const params = { outcome: 'ready', deliverable: 'implement', workItemId: 'NEW_WORK_ITEM',
+      const params = { outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded', workItemId: 'NEW_WORK_ITEM',
         topicId: 'NEW_TOPIC', topicTitle: 'Implementation', workItemTitle: 'Requested change',
         findings: 'read the request', question: 'implement the change' };
       const facts = await prepareHandoffFacts(params, routerCtx, harness.session,
@@ -3014,17 +3016,21 @@ const SEEDED_BENCHMARKS = {
   ],
 };
 
-describe('a prompt with no keyword evidence', () => {
-  it('collects context for a prompt the keyword rules cannot read', async () => {
+describe('an entry without an incumbent', () => {
+  it.each(['спроектируй систему', 'implement the retry loop', 'review the diff', 'hello'])(
+    'gathers without classifying %s', async (prompt) => {
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify(SEEDED_BENCHMARKS), 'utf8');
     const harness = await setupProviderTest({ dir: temp.path });
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
-    await harness.serve({ messages: [{ role: 'user', content: 'спроектируй систему' }] } as unknown as Context);
+    await harness.serve({ messages: [{ role: 'user', content: prompt }] } as unknown as Context);
 
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.dimension).toBe('gather');
     expect(decision?.cause).toBe('investigation');
+    expect(harness.session.getWorkPhaseState()?.terminal).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.terminalBand).toBeUndefined();
+    for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
   });
 });
 

@@ -4,11 +4,11 @@ import {
   POLICY_PASSIVE_CAUSES,
   type RoutingPolicyInput,
 } from './routing-policy.js';
-import type { Candidate, Dimension } from '../../types.js';
+import type { Candidate } from '../../types.js';
 import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../../constants.js';
 import { renderScoredReason } from '../score/decision-reason.js';
-import { candidate, terminalAssessment, benchRow } from '../../test-support/router-fixtures.js';
+import { candidate, benchRow } from '../../test-support/router-fixtures.js';
 
 // ─── Fixtures ───────────────────────────────────────────────────────
 
@@ -97,35 +97,19 @@ function makePolicyConfig(
   return {
     dimensionWeights: DEFAULT_DIMENSION_WEIGHTS,
     switchMargin: 0.15,
-    lowConfidenceThreshold: 0.15,
     ...overrides,
   };
 }
 
-type PolicyInputOverrides = Partial<RoutingPolicyInput> & {
-  /** Shorthand for `classifyResult.dimension`. */
-  classifyDimension?: Dimension;
-  /** Shorthand for `classifyResult.confidence`. */
-  confidence?: number;
-};
-
-function makePolicyInput(overrides: PolicyInputOverrides = {}): RoutingPolicyInput {
-  const { classifyDimension, confidence, ...rest } = overrides;
+function makePolicyInput(overrides: Partial<RoutingPolicyInput> = {}): RoutingPolicyInput {
   return {
     candidates: registryOnlyCandidates,
-    classifyResult: {
-      dimension: classifyDimension ?? 'gather',
-      confidence: confidence ?? 0.8,
-      signals: [],
-      terminal: terminalAssessment(),
-      hasCategoricalEvidence: false,
-    },
     baseDimension: 'gather',
     baseCause: 'heuristic',
     estimatedContextTokens: 1_000,
     needsVision: false,
     config: makePolicyConfig(),
-    ...rest,
+    ...overrides,
   };
 }
 
@@ -135,7 +119,6 @@ describe('resolveRoutingDecision', () => {
   it('renders typed policy details without changing the logged reason format', () => {
     const { decision } = resolveRoutingDecision(makePolicyInput({
       estimatedContextTokens: 150_000,
-      confidence: 0.05,
     }));
     expect(decision.contextPressure).toBeDefined();
     expect(decision.scoredReason?.details.map((detail) => detail.kind)).toEqual([
@@ -214,13 +197,6 @@ describe('resolveRoutingDecision', () => {
   it('uses configured weights for the active dimension', () => {
     const qualityFirst = resolveRoutingDecision(makePolicyInput({
       baseDimension: 'implement',
-      classifyResult: {
-        dimension: 'implement',
-        confidence: 0.8,
-        signals: [],
-        terminal: terminalAssessment(),
-      hasCategoricalEvidence: true,
-      },
       candidates: [strongPaid, adequateFree],
       config: makePolicyConfig({
         dimensionWeights: {
@@ -231,13 +207,6 @@ describe('resolveRoutingDecision', () => {
     }));
     const costFirst = resolveRoutingDecision(makePolicyInput({
       baseDimension: 'implement',
-      classifyResult: {
-        dimension: 'implement',
-        confidence: 0.8,
-        signals: [],
-        terminal: terminalAssessment(),
-      hasCategoricalEvidence: true,
-      },
       candidates: [strongPaid, adequateFree],
       config: makePolicyConfig({
         dimensionWeights: {
@@ -253,20 +222,12 @@ describe('resolveRoutingDecision', () => {
 
   describe('context pressure is advisory only', () => {
     it('attaches contextPressure metadata without changing cause', () => {
-      // Large context, low confidence, routedUp → triggers undercertainty check
       const result = resolveRoutingDecision(
         makePolicyInput({
           baseDimension: 'implement',
           baseCause: 'heuristic',
           estimatedContextTokens: 150_000,
-          // low confidence ensures undercertainty
-          classifyResult: {
-            dimension: 'gather',
-            confidence: 0.05,
-            signals: [],
-            terminal: terminalAssessment(),
-      hasCategoricalEvidence: false,
-          },
+
           candidates: [makeCandidate({ registryId: 'test/alpha', contextWindow: 200_000 })],
         }),
       );
@@ -301,7 +262,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           candidates: [weak, strong, cheap],
           trajectoryEscalation: pending('test/weak'),
         }),
@@ -322,7 +282,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           candidates: [unsuffixed, strong],
           trajectoryEscalation: pending('test/mid:medium'),
         }),
@@ -337,7 +296,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           candidates: [strong],
           trajectoryEscalation: pending('test/missing:medium'),
         }),
@@ -361,7 +319,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           candidates: [weak, estimated],
           trajectoryEscalation: pending('test/weak'),
         }),
@@ -371,7 +328,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           candidates: [weak, weaker],
           trajectoryEscalation: pending('test/weak'),
         }),
@@ -392,7 +348,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           candidates: [medium, high],
           trajectoryEscalation: pending('test/model:medium'),
         }),
@@ -404,7 +359,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           candidates: [medium],
           trajectoryEscalation: pending('test/model:medium'),
         }),
@@ -427,7 +381,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           needsVision: true,
           estimatedContextTokens: 1_000,
           candidates: [visionSource, strongerBlind],
@@ -441,7 +394,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           needsVision: false,
           estimatedContextTokens: 100_000,
           candidates: [visionSource, strongerBlind],
@@ -467,7 +419,6 @@ describe('resolveRoutingDecision', () => {
         makePolicyInput({
           baseCause: 'heuristic',
           baseDimension: 'implement',
-          classifyDimension: 'implement',
           candidates: [medium, high],
           trajectoryEscalation: pending('test/model:medium'),
           userReasoning: 'medium',
@@ -503,83 +454,31 @@ describe('resolveRoutingDecision', () => {
   });
 });
 
-describe('routing direction', () => {
-  it('sets routedUp when the routed dimension is stronger than the heuristic', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({ classifyDimension: 'gather', baseDimension: 'implement' }),
-    );
-    expect(result.decision.routedUp).toBe(true);
-    expect(result.decision.routedDown).toBe(false);
-  });
+describe('declared task types', () => {
+  it.each(['lightweight', 'gather', 'implement', 'review', 'plan'] as const)(
+    'uses %s without classification metadata', (baseDimension) => {
+      const { decision } = resolveRoutingDecision(makePolicyInput({ baseDimension }));
+      expect(decision.dimension).toBe(baseDimension);
+      for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
+    },
+  );
 
-  it('sets routedDown when the routed dimension is weaker than the heuristic', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({ classifyDimension: 'gather', baseDimension: 'lightweight' }),
-    );
-    expect(result.decision.routedUp).toBe(false);
-    expect(result.decision.routedDown).toBe(true);
-  });
-
-  it('sets neither when the dimension is unchanged', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({ classifyDimension: 'gather', baseDimension: 'gather' }),
-    );
-    expect(result.decision.routedUp).toBe(false);
-    expect(result.decision.routedDown).toBe(false);
-  });
-
-  it('leaves routedPickChanged false when a raise re-selects the same model', () => {
-    // The reported case: dimension raised (gather→implement) but the heuristic
-    // dimension would have picked the same model, so nothing stronger was
-    // served. routedUp stays true (dimension-level truth for the log/cause),
-    // but the pick did not move — the UI must not claim "routed-up".
-    const result = resolveRoutingDecision(
-      makePolicyInput({ classifyDimension: 'gather', baseDimension: 'implement' }),
-    );
-    expect(result.decision.routedUp).toBe(true);
-    expect(result.decision.routedPickChanged).toBe(false);
-  });
-
-  it('does not attach context-pressure advice to a downward route', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        classifyDimension: 'gather',
-        baseDimension: 'lightweight',
-        // High enough to clear CONTEXT_PRESSURE_THRESHOLD against the pick.
-        estimatedContextTokens: 180_000,
-        confidence: 0.9,
-      }),
-    );
-    expect(result.decision.routedDown).toBe(true);
-    expect(result.decision.contextPressure).toBeUndefined();
-  });
-
-  it('still attaches context-pressure advice to an upward route', () => {
-    const result = resolveRoutingDecision(
-      makePolicyInput({
-        classifyDimension: 'gather',
-        baseDimension: 'implement',
-        estimatedContextTokens: 180_000,
-        confidence: 0.9,
-      }),
-    );
-    expect(result.decision.contextPressure).toBeDefined();
+  it('attaches context-pressure advice without changing a declared task type', () => {
+    const { decision } = resolveRoutingDecision(makePolicyInput({ baseDimension: 'lightweight', estimatedContextTokens: 180_000 }));
+    expect(decision.dimension).toBe('lightweight');
+    expect(decision.contextPressure).toBeDefined();
   });
 });
 
 describe('incumbent capability floor', () => {
-  // Contract: within one work item the served model stays at or above the
-  // incumbent's measured capability. Uncertainty holds the floor; only a
-  // recorded move to other work at entry start resets to a cheaper model.
-  // Sanctioned downward moves (trajectory escalation, a consult that lowered
-  // the dimension, an unserved handoff boundary) stand the floor down.
+  // Within one work item, retain the incumbent capability and thinking
+  // minimums. Accepted work changes and unserved handoff boundaries release
+  // both; applied trajectory evidence must not restore an excluded source.
   it('baseline (no incumbent) picks the cheap model at gather', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
         baseDimension: 'gather',
-        confidence: 0.1,
         estimatedContextTokens: 1_000,
       }),
     );
@@ -590,11 +489,7 @@ describe('incumbent capability floor', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
         baseDimension: 'gather',
-        // Below lowConfidenceThreshold (0.15): not an off-topic reset, so the
-        // floor stands.
-        confidence: 0.1,
         incumbentRegistryId: 'bench/strong',
         estimatedContextTokens: 1_000,
       }),
@@ -623,8 +518,8 @@ describe('incumbent capability floor', () => {
       }),
     ];
     const result = resolveRoutingDecision(makePolicyInput({
-      candidates, classifyDimension: 'implement', baseDimension: 'implement',
-      confidence: 0.1, incumbentRegistryId: 'bench/incumbent',
+      candidates, baseDimension: 'implement',
+      incumbentRegistryId: 'bench/incumbent',
       sameIntentAsLast: true,
     }));
     expect(result.decision.chosen).toBe('bench/better');
@@ -633,14 +528,11 @@ describe('incumbent capability floor', () => {
   });
 
   it('carries the incumbent resolved dimension as an up-only effort floor', () => {
-    // A cheap-phrased same-task follow-up classifies gather but keeps the
-    // strong incumbent; its served effort floor must not drop to gather's.
+    // Serving a less demanding task must not lower the incumbent's thinking minimum.
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
         baseDimension: 'gather',
-        confidence: 0.1,
         incumbentRegistryId: 'bench/strong',
         incumbentResolvedDimension: 'implement',
         estimatedContextTokens: 1_000,
@@ -653,8 +545,8 @@ describe('incumbent capability floor', () => {
   it('keeps both incumbent protections for a contract that keeps its submitter', () => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
-      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
-      confidence: 0.1, incumbentRegistryId: 'bench/strong',
+      baseDimension: 'implement', baseCause: 'execution-contract',
+      incumbentRegistryId: 'bench/strong',
       incumbentResolvedDimension: 'plan', sameIntentAsLast: true,
     }));
     expect(result.decision.dimension).toBe('implement');
@@ -665,8 +557,8 @@ describe('incumbent capability floor', () => {
   it('lets a released contract pick a cheaper executor at its implement minimum', () => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
-      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
-      confidence: 0.1, incumbentRegistryId: 'bench/strong',
+      baseDimension: 'implement', baseCause: 'execution-contract',
+      incumbentRegistryId: 'bench/strong',
       incumbentResolvedDimension: 'plan', sameIntentAsLast: true,
       handoffMinimum: 0.45, handoffPending: true,
     }));
@@ -678,8 +570,8 @@ describe('incumbent capability floor', () => {
   it('keeps the incumbent once a handoff boundary has served', () => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
-      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
-      confidence: 0.1, incumbentRegistryId: 'bench/strong', sameIntentAsLast: true,
+      baseDimension: 'implement', baseCause: 'execution-contract',
+      incumbentRegistryId: 'bench/strong', sameIntentAsLast: true,
       handoffMinimum: 0.45,
     }));
     expect(result.decision.chosen).toBe('bench/strong');
@@ -688,8 +580,8 @@ describe('incumbent capability floor', () => {
   it.each(['new', 'resume', 'switch'] as const)('releases both minimums for recorded %s work', (workRelation) => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
-      classifyDimension: 'gather', baseDimension: 'gather', baseCause: 'heuristic',
-      confidence: 0.01, incumbentRegistryId: 'bench/strong',
+      baseDimension: 'gather', baseCause: 'heuristic',
+      incumbentRegistryId: 'bench/strong',
       incumbentResolvedDimension: 'plan', sameIntentAsLast: false,
       workRelation,
     }));
@@ -697,11 +589,11 @@ describe('incumbent capability floor', () => {
     expect(result.decision.effortFloorDimension).toBeUndefined();
   });
 
-  it.each(['continue', 'unknown', undefined] as const)('keeps both minimums for %s work despite confident cheap wording', (workRelation) => {
+  it.each(['continue', 'unknown', undefined] as const)('keeps both minimums for %s work', (workRelation) => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
-      classifyDimension: 'gather', baseDimension: 'gather', baseCause: 'heuristic',
-      confidence: 1, incumbentRegistryId: 'bench/strong',
+      baseDimension: 'gather', baseCause: 'heuristic',
+      incumbentRegistryId: 'bench/strong',
       incumbentResolvedDimension: 'plan', sameIntentAsLast: false,
       workRelation,
     }));
@@ -712,8 +604,8 @@ describe('incumbent capability floor', () => {
   it('keeps the minimums on post-tool invocations of an entry that began new work', () => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
-      classifyDimension: 'gather', baseDimension: 'gather',
-      confidence: 1, incumbentRegistryId: 'bench/strong',
+      baseDimension: 'gather',
+      incumbentRegistryId: 'bench/strong',
       sameIntentAsLast: true, workRelation: 'new',
     }));
     expect(result.decision.chosen).toBe('bench/strong');
@@ -722,8 +614,8 @@ describe('incumbent capability floor', () => {
   it('still demotes an executor below the contract minimum', () => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
-      classifyDimension: 'plan', baseDimension: 'implement', baseCause: 'execution-contract',
-      confidence: 0.1, incumbentRegistryId: 'bench/strong', sameIntentAsLast: true,
+      baseDimension: 'implement', baseCause: 'execution-contract',
+      incumbentRegistryId: 'bench/strong', sameIntentAsLast: true,
       handoffMinimum: 0.70, handoffPending: true,
     }));
     expect(result.decision.chosen).toBe('bench/strong');
@@ -733,9 +625,7 @@ describe('incumbent capability floor', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'plan',
         baseDimension: 'plan',
-        confidence: 0.1,
         incumbentRegistryId: 'bench/strong',
         incumbentResolvedDimension: 'gather',
         estimatedContextTokens: 1_000,
@@ -748,9 +638,7 @@ describe('incumbent capability floor', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
         baseDimension: 'gather',
-        confidence: 0.9,
         incumbentRegistryId: 'bench/strong',
         incumbentResolvedDimension: 'implement',
         workRelation: 'new',
@@ -764,10 +652,8 @@ describe('incumbent capability floor', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
         baseDimension: 'gather',
         workRelation: 'switch',
-        confidence: 0.9,
         incumbentRegistryId: 'bench/strong',
         estimatedContextTokens: 1_000,
       }),
@@ -779,10 +665,8 @@ describe('incumbent capability floor', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
         baseDimension: 'gather',
-        confidence: 0.1,
-        // Incumbent is the cheap model; the floor is a floor, never a ceiling.
+        // The incumbent minimum must not limit a stronger fresh pick.
         incumbentRegistryId: 'bench/cheap',
         estimatedContextTokens: 1_000,
       }),
@@ -791,15 +675,12 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).not.toContain('incumbent-floor');
   });
 
-  it('holds the floor within the same intent even at high-confidence gather', () => {
-    // A cached high-confidence gather intent must not reset on every post-tool
-    // re-invocation: sameIntentAsLast keeps the stickiness across the loop.
+  it('keeps the incumbent minimum within the same intent at gather', () => {
+    // Post-tool invocations retain the same intent's serving minimum.
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'gather',
         baseDimension: 'gather',
-        confidence: 0.9,
         incumbentRegistryId: 'bench/strong',
         sameIntentAsLast: true,
         estimatedContextTokens: 1_000,
@@ -813,9 +694,7 @@ describe('incumbent capability floor', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
-        classifyDimension: 'implement',
         baseDimension: 'implement',
-        confidence: 0.1,
         incumbentRegistryId: 'bench/cheap',
         trajectoryEscalation: {
           fromModel: 'bench/cheap',
@@ -831,10 +710,8 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).not.toContain('incumbent-floor');
   });
 
-  it('holds on a fresh entry whose heuristic gather was raised to an involved dimension', () => {
-    // A fresh, high-confidence gather entry raised to implement is involved
-    // work on unchanged identity, so a measurably weaker economic pick must
-    // not stand the floor down.
+  it('keeps the incumbent capability minimum for implementation on unresolved work', () => {
+    // Unresolved work identity does not authorize a weaker economic pick.
     const close: Candidate[] = [
       makeCandidate({
         registryId: 'bench/near', provider: 'bench', id: 'near',
@@ -856,10 +733,8 @@ describe('incumbent capability floor', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: close,
-        classifyDimension: 'gather',
         baseDimension: 'implement',
         baseCause: 'work-context',
-        confidence: 0.9,
         incumbentRegistryId: 'bench/top',
         estimatedContextTokens: 1_000,
       }),
@@ -881,9 +756,7 @@ describe('incumbent capability floor', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates,
-        classifyDimension: 'gather',
         baseDimension: 'gather',
-        confidence: 0.1,
         incumbentRegistryId: 'bench/strong',
         // Above bench/strong's 1k window * 1.2; bench/cheap keeps its 200k.
         estimatedContextTokens: 2_000,

@@ -117,7 +117,7 @@ export function formatDecisionDetail(
   const chain = decision.fallbackChain.slice(0, 5).join(' → ');
   return [
     `Last turn served by: ${servedModel}`,
-    `  task type:  ${decision.dimension} (confidence ${decision.confidence.toFixed(2)})`,
+    `  task type:  ${decision.dimension}`,
     `  top pick:   ${decision.chosen}`,
     `  thinking:   ${served?.thinkingLevel ?? 'off'}`,
     `  cause:      ${CAUSE_LABELS[decision.cause] ?? decision.cause}`,

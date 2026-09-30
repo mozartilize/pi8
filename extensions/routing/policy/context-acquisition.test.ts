@@ -46,11 +46,11 @@ describe('entry phase', () => {
     ['review', {}, 'gather', 'investigation'],
     ['implement', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', 'investigation'],
     ['implement', { contextReasons: ['carried-open-context'], contextSatisfied: false }, 'gather', 'investigation'],
-    ['implement', { contextReasons: ['referenced-artifact'], contextSatisfied: true }, 'implement', undefined],
-    ['implement', { contextReasons: [], contextSatisfied: true }, 'implement', undefined],
-    ['implement', {}, 'implement', undefined],
-    ['gather', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', undefined],
-    ['lightweight', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'lightweight', undefined],
+    ['implement', { contextReasons: ['referenced-artifact'], contextSatisfied: true }, 'gather', 'investigation'],
+    ['implement', { contextReasons: [], contextSatisfied: true }, 'gather', 'investigation'],
+    ['implement', {}, 'gather', 'investigation'],
+    ['gather', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', 'investigation'],
+    ['lightweight', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', 'investigation'],
   ] as const)('a %s deliverable with %j routes as its acquisition until handoff', (deliverable, over, dimension, cause) => {
     const entry = state({ deliverable, ...over } as Partial<WorkPhaseState>);
     expect(entryPhase(entry, deliverable)).toEqual({ dimension, ...(cause ? { cause } : {}) });

@@ -2,7 +2,7 @@
  * Provider registration for the `router/auto` model.
  *
  * Pattern: register a synthetic model with Pi (`pi.registerProvider`) that
- * classifies each turn locally, scores candidates from the live model
+ * uses declared task types, scores candidates from the live model
  * registry, and delegates the stream to the best match with a fallback
  * chain. Each real user entry first resolves which work it continues or
  * starts (see context-resolution.ts): deterministically when it can, else
@@ -25,7 +25,7 @@ import type { ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
 import type { BenchModel, Candidate, Dimension, DecisionCause, AutoRouterConfig, RoutingDecision } from '../types.js';
 import { ROUTER_PROVIDER_ID, AUTO_MODEL_ID } from '../types.js';
 import { loadStore, activeModels } from '../bench/store.js';
-import { classify, estimateTokenCount } from '../routing/classify/classifier.js';
+import { estimateTokenCount } from '../routing/token-estimate.js';
 import { getTurnClassificationInput } from '../routing/policy/continuation.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter, loadConfigBlacklistFilter } from '../routing/policy/allowlist.js';
 import { loadConfig } from '../config.js';
@@ -67,10 +67,8 @@ import { runDelegationLoop, type DelegationOptions } from './delegation.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import { resolveRoutingDecision } from '../routing/policy/routing-policy.js';
 import {
-  capabilityBandFor,
   penaltiesOf,
   nextProviderInvocation,
-  terminalRequirement,
   boundaryQualifiers,
   servesBoundary,
   type WorkPhaseState,
@@ -378,39 +376,15 @@ function measureTurnInput(context: Context, config: AutoRouterConfig) {
   return { turnInput, systemPrompt, needsVision, estContextTokens };
 }
 
-/**
- * The entry's keyword classification, or the cached one for a later
- * invocation of the same entry. Escalation is not resolved here — it must
- * not be cached.
- */
-function resolveBaseIntent(
-  args: {
-    turnInput: ReturnType<typeof getTurnClassificationInput>;
-    systemPrompt: string | undefined;
-    config: AutoRouterConfig;
-  },
-  session: RouterSession,
-) {
-  const { turnInput, systemPrompt, config } = args;
+/** The handoff owns the task type; without an incumbent, start by gathering. */
+function resolveBaseIntent(turnInput: ReturnType<typeof getTurnClassificationInput>, session: RouterSession) {
   const cachedIntent = session.getCachedIntent();
   const cacheHit = cachedIntent?.key === turnInput.key;
-  const classifyResult = cacheHit
-    ? cachedIntent.classifyResult
-    : classify(turnInput.promptText, systemPrompt, {
-        lowConfidenceThreshold: config.lowConfidenceThreshold,
-      });
-  const baseDimension: Dimension = cacheHit
-    ? cachedIntent.dimension
-    : classifyResult.dimension;
-  const baseCause: DecisionCause = cacheHit ? cachedIntent.cause : 'heuristic';
-
   return {
     cacheHit,
     cachedIntent,
-    classifyResult,
-    baseDimension,
-    baseCause,
-    confidence: classifyResult.confidence,
+    baseDimension: cacheHit ? cachedIntent.dimension : session.context.getIncumbent()?.dimension ?? 'gather',
+    baseCause: cacheHit ? cachedIntent.cause : session.context.getIncumbent() ? 'incumbent' as DecisionCause : 'investigation' as DecisionCause,
   };
 }
 
@@ -538,7 +512,6 @@ async function resolveEntrySemantics(entry: {
 function advanceWorkPhase(args: {
   cacheHit: boolean;
   turnInput: ReturnType<typeof getTurnClassificationInput>;
-  classifyResult: ReturnType<typeof classify>;
   /** The entry's task type: what it owes the user. */
   deliverable: Dimension;
   pendingIdentity?: PendingIdentity;
@@ -553,15 +526,12 @@ function advanceWorkPhase(args: {
       workPhaseState = closeInvestigationEntry(workPhaseState, served);
       if (workPhaseState.contract) workPhaseState = closeContractEntry(workPhaseState, served);
     }
-    const terminal = args.classifyResult.terminal;
     // The work this entry is on is known only at its handoff, which applies
     // the previous work item's penalties when it continues that item.
     const priorWork = workPhaseState && penaltiesOf(workPhaseState);
     workPhaseState = {
       intentKey: args.turnInput.key,
       deliverable: args.deliverable,
-      terminal,
-      terminalBand: capabilityBandFor(terminalRequirement(terminal)),
       providerInvocation: 1,
       observedMutationTools: 0,
       ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
@@ -719,10 +689,7 @@ async function prepareRouterTurn(args: {
   const config = loadConfig();
   const measured = measureTurnInput(context, config);
   session.noteRequest(measured.estContextTokens, promptHeadIdentity(context));
-  const intent = resolveBaseIntent(
-    { turnInput: measured.turnInput, systemPrompt: measured.systemPrompt, config },
-    session,
-  );
+  const intent = resolveBaseIntent(measured.turnInput, session);
 
   session.bindTrajectoryIntent(measured.turnInput.key);
   // Blocked preflights never emit tool_result. Finalize that batch
@@ -787,13 +754,12 @@ async function resolveRouterTurn(args: {
   if (!cacheHit) {
     session.setCachedIntent({
       key: settled.key,
-      classifyResult: prepared.intent.classifyResult,
       dimension: baseDimension,
       cause: baseCause,
       ...(entry.context ? { context: entry.context } : {}),
     });
   }
-  debugLog('classify.context', {
+  debugLog('entry.context', {
     cacheHit,
     key: settled.key,
   });
@@ -902,7 +868,7 @@ function scoreRouterTurn(args: {
   const { prepared, resolved, options, session, pinned } = args;
   const { config, measured, intent, candidates, trajectoryEscalation } = prepared;
   const { turnInput, needsVision, estContextTokens } = measured;
-  const { classifyResult, cacheHit, confidence } = intent;
+  const { cacheHit } = intent;
   const { baseDimension, baseCause } = resolved;
 
   // Re-filter live runtime exclusions before scoring so a mid-turn
@@ -927,7 +893,6 @@ function scoreRouterTurn(args: {
   advanceWorkPhase({
     cacheHit,
     turnInput,
-    classifyResult,
     deliverable: baseDimension,
     ...(resolved.pendingIdentity ? { pendingIdentity: resolved.pendingIdentity } : {}),
     session,
@@ -986,7 +951,6 @@ function scoreRouterTurn(args: {
     : undefined;
   const policy = resolveRoutingDecision({
     candidates: execution?.pool ?? routableCandidates,
-    classifyResult,
     baseDimension: routedDimension,
     baseCause: routedCause,
     trajectoryEscalation,
@@ -1046,7 +1010,6 @@ function scoreRouterTurn(args: {
 
   debugLog('decision', {
     dimension: decision.dimension,
-    confidence: Number(confidence.toFixed(3)),
     candidates: candidates.length,
     routable: routableCandidates.length,
     chosen: decision.chosen,
@@ -1409,8 +1372,6 @@ function pinnedScored(args: {
     fallbackChain: [key],
     cause,
     reason,
-    routedUp: false,
-    routedDown: false,
   };
   // These annotations belonged to the auto pick this override replaces.
   delete decision.scoredReason;
@@ -1659,7 +1620,6 @@ async function runManualTurn(args: {
     const { turnInput } = prepared.measured;
     session.setCachedIntent({
       key: turnInput.key,
-      classifyResult: prepared.intent.classifyResult,
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
       ...(resolvedContext ? { context: resolvedContext } : {}),
@@ -1700,8 +1660,9 @@ async function runManualTurn(args: {
   decision.cause = cause;
   decision.reason = cause === 'semi-hold' ? `Semi mode: kept ${manualModel} for this turn` : `Manual model pin: ${manualModel}`;
   delete decision.scoredReason;
-  decision.routedUp = false;
-  decision.routedDown = false;
+  delete decision.routedUp;
+  delete decision.routedDown;
+  delete decision.confidence;
   delete decision.routedPickChanged;
   delete decision.trajectoryFriction;
   // The scorer may rank several measured effort variants of the same model.
@@ -1767,7 +1728,6 @@ async function runResumeTurn(args: {
   if (!prepared.intent.cacheHit) {
     session.setCachedIntent({
       key: turnInput.key,
-      classifyResult: prepared.intent.classifyResult,
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
       ...(entryContext ? { context: entryContext } : {}),
@@ -1780,8 +1740,6 @@ async function runResumeTurn(args: {
     fallbackChain: chain,
     cause: 'resume',
     reason: `Resumed prior route: ${chain[0]}`,
-    routedUp: false,
-    routedDown: false,
     intentKey: turnInput.key,
     provenanceCounts: turnInput.provenanceCounts,
     ...(entryContext ? { workContext: workContextMeta(entryContext) } : {}),
@@ -1789,6 +1747,9 @@ async function runResumeTurn(args: {
   // Drop annotations that belonged to the snapshot's own turn: this turn did
   // not re-derive friction, a pick change, or its work context.
   delete decision.trajectoryFriction;
+  delete decision.confidence;
+  delete decision.routedUp;
+  delete decision.routedDown;
   if (!entryContext) delete decision.workContext;
   delete decision.routedPickChanged;
   try {

@@ -7,7 +7,6 @@ import type { AutoRouterConfig, Dimension, ScoreWeights } from './types.js';
 import {
   CONFIG_FILE,
   DEFAULT_DIMENSION_WEIGHTS,
-  DEFAULT_LOW_CONFIDENCE_THRESHOLD,
   DEFAULT_SWITCH_MARGIN,
 } from './constants.js';
 import { resolveStoragePath } from './bench/store.js';
@@ -34,7 +33,6 @@ export interface PersistedConfig {
    * largest routable window.
    */
   routerContextWindow?: number;
-  lowConfidenceThreshold?: number;
   /**
    * Show a TUI notification when the router picks a model for a turn or
    * switches models between turns. Default true. Set false to route silently
@@ -142,12 +140,6 @@ export function loadConfig(): AutoRouterConfig {
       persisted.routerContextWindow > 0
         ? Math.floor(persisted.routerContextWindow)
         : undefined,
-    lowConfidenceThreshold: finiteInRange(
-      persisted.lowConfidenceThreshold,
-      DEFAULT_LOW_CONFIDENCE_THRESHOLD,
-      0,
-      1,
-    ),
     prompt: typeof persisted.prompt === 'boolean' ? persisted.prompt : true,
     semi: typeof persisted.semi === 'boolean' ? persisted.semi : false,
     models: stringList(persisted.models),
@@ -178,6 +170,7 @@ const REMOVED_CONFIG_KEYS = [
   'embeddingClassifier',
   'embeddingDeadlineMs',
   'collectTools',
+  'lowConfidenceThreshold',
   'consultRouter',
   'consultRouterAgent',
   'consultModel',

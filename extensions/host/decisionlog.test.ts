@@ -215,7 +215,7 @@ describe('decision log', () => {
     expect(records.every((record) => record.schemaVersion === DECISION_LOG_SCHEMA_VERSION)).toBe(true);
   });
 
-  it('carries the classifier confidence on routing decisions only', () => {
+  it('omits classifier metadata from every new record kind', () => {
     appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
     appendSubagentGapSignal({ tool: 'bash' }, dir);
     appendSubagentSpend({
@@ -227,7 +227,7 @@ describe('decision log', () => {
     appendInvestigationHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
 
     const [decision, ...others] = readRecentEntries(10, dir);
-    expect(decision!.confidence).toBe(DECISION.confidence);
+    for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
     expect(others).toHaveLength(4);
     expect(others.every((record) => !('confidence' in record))).toBe(true);
   });
@@ -277,7 +277,7 @@ describe('decision log provenance', () => {
     return JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>;
   };
 
-  it('writes routedDown and provenance counts additively', () => {
+  it('writes provenance counts without classifier metadata', () => {
     appendDecision(
       decision({
         routedDown: true,
@@ -295,7 +295,7 @@ describe('decision log provenance', () => {
     );
 
     const entry = readLastEntry(dir);
-    expect(entry.routedDown).toBe(true);
+    expect(entry).not.toHaveProperty('routedDown');
     expect(entry.provenance).toEqual({
       user: 3,
       'compaction-summary': 1,
@@ -305,7 +305,7 @@ describe('decision log provenance', () => {
       'tool-result': 7,
     });
     expect(entry.cause).toBe('heuristic');
-    expect(entry.routedUp).toBe(false);
+    expect(entry).not.toHaveProperty('routedUp');
   });
 });
 

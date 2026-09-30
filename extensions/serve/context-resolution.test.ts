@@ -34,7 +34,7 @@ const MODELS = [
   registryModel('beta/strong', { contextWindow: 200000, maxTokens: 8192,
     cost: { input: 2, output: 8, cacheRead: 0, cacheWrite: 0 } }),
 ];
-const READY = { outcome: 'ready', deliverable: 'implement', findings: 'checked the request', question: 'implement the change' };
+const READY = { outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded', findings: 'checked the request', question: 'implement the change' };
 
 describe('work-context resolution through the provider', () => {
   let temp: ReturnType<typeof createTempRouterDir>;
@@ -94,7 +94,7 @@ describe('work-context resolution through the provider', () => {
   it('collects an unresolved request until a handoff selects work', async () => {
     await setup();
     const first = await entry('@requirements/foo.md implement this');
-    expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'implement' });
+    expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'gather' });
     expect(first.workContext).toBeUndefined();
     expect(ledgerEvents()).toEqual([]);
   });
@@ -273,7 +273,7 @@ describe('work-context resolution through the provider', () => {
     tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
     await setup();
     await entry('hi');
-    expect((await handoff({ ...READY, deliverable: 'lightweight', scope: 'bounded', workItemId: 'NONE' })).accepted).toBe(true);
+    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'lightweight', workItemId: 'NONE' })).accepted).toBe(true);
     expect(ledgerEvents()).toEqual([]);
     await createItem();
     expect(ledgerEvents()).not.toContain('migration-init');

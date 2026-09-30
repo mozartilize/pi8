@@ -12,9 +12,8 @@
  */
 import type { Candidate, DecisionCause, Dimension, RoutingDecision } from '../../types.js';
 import { addReasonDetail } from '../score/decision-reason.js';
-import type { ClassifyResult } from '../classify/classifier.js';
 import type { AutoRouterConfig } from '../../types.js';
-import { DIMENSION_STRENGTH } from '../classify/classifier-keywords.js';
+import { DIMENSION_STRENGTH } from '../dimensions.js';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 import {
   pickBest,
@@ -31,7 +30,6 @@ import type { EntryResolution } from '../context/types.js';
 
 export interface RoutingPolicyInput {
   candidates: Candidate[];
-  classifyResult: ClassifyResult;
   baseDimension: Dimension;
   baseCause: DecisionCause;
   /** Same-dimension quality-first repick from objective trajectory friction. */
@@ -85,7 +83,6 @@ export interface RoutingPolicyInput {
     AutoRouterConfig,
     | 'dimensionWeights'
     | 'switchMargin'
-    | 'lowConfidenceThreshold'
   >;
 }
 
@@ -256,49 +253,20 @@ function annotateDecision(
   decision: RoutingDecision,
   dimension: Dimension,
   cause: DecisionCause,
-  classifyResult: ClassifyResult,
   candidates: Candidate[],
   estimatedContextTokens: number,
   incumbentRegistryId: string | undefined,
-  config: RoutingPolicyInput['config'],
-  baseOpts: ScoreOpts,
 ): void {
   decision.dimension = dimension;
-  decision.confidence = classifyResult.confidence;
   // Cause names the mechanism that changed the task type; model preferences
   // and context-pressure advice belong in metadata, not a replacement cause.
   decision.cause = cause;
-  // "Changed" is not "stronger". Direction has to come from the strength
-  // ordering, because the downstream consumers — context-pressure advice, the
-  // status widget, `/router-why` — mean different things for each direction.
-  decision.routedUp =
-    DIMENSION_STRENGTH[dimension] > DIMENSION_STRENGTH[classifyResult.dimension];
-  decision.routedDown =
-    DIMENSION_STRENGTH[dimension] < DIMENSION_STRENGTH[classifyResult.dimension];
-
-  // The status widgets promise "routed-up/down = a different-strength model was
-  // actually served", not merely "the dimension label moved". A raise that
-  // re-selects the model the heuristic dimension would have picked served
-  // nothing stronger, so record whether the pick truly moved and let the UI
-  // suppress a misleading label. Bounded to turns where a direction fired.
-  if (decision.routedUp || decision.routedDown) {
-    const heuristicPick = pickBest(
-      candidates,
-      classifyResult.dimension,
-      config.dimensionWeights[classifyResult.dimension],
-      baseOpts,
-    );
-    decision.routedPickChanged = heuristicPick.chosen !== decision.chosen;
-  }
-
   const chosenCandidateForContext = candidates.find(
     (c) => candidateKey(c) === decision.chosen,
   );
   const chosenContextWindow = chosenCandidateForContext?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const contextUsageRatio = estimatedContextTokens / Math.max(1, chosenContextWindow);
-  const undercertainty =
-    classifyResult.confidence < config.lowConfidenceThreshold || decision.routedUp;
-  if (undercertainty && contextUsageRatio >= CONTEXT_PRESSURE_THRESHOLD) {
+  if (contextUsageRatio >= CONTEXT_PRESSURE_THRESHOLD) {
     decision.contextPressure = {
       usageRatio: contextUsageRatio,
       threshold: CONTEXT_PRESSURE_THRESHOLD,
@@ -329,7 +297,6 @@ function annotateDecision(
 export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicyResult {
   const {
     candidates,
-    classifyResult,
     baseDimension,
     baseCause,
     trajectoryEscalation,
@@ -420,12 +387,9 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     decision,
     dimension,
     cause,
-    classifyResult,
     candidates,
     estimatedContextTokens,
     incumbentRegistryId,
-    config,
-    baseOpts,
   );
 
   return { decision, trajectoryApplied: trajectory.applied };

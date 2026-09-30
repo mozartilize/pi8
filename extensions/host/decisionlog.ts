@@ -75,7 +75,7 @@ export interface DecisionLogEntry {
   fallbackRank?: number;
   /** The keyword classifier's confidence; routing decisions only. */
   confidence?: number;
-  routedUp: boolean;
+  routedUp?: boolean;
   routedDown?: boolean;
   cause: string;
   reason: string;
@@ -195,7 +195,6 @@ export function appendExecutionContractSignal(
       chosen: signal.served,
       served: signal.served,
       viaFallback: false,
-      routedUp: false,
       cause: 'execution-contract',
       reason: `execution contract ${signal.action}`,
       chain: [signal.served],
@@ -228,11 +227,9 @@ export interface InvestigationHandoffSignal {
    * entry spent its requests or refusals. `served` marks the first invocation
    * that served the next phase. At entry end, `phase-end` closes an accepted
    * handoff and `no-handoff` owed context that was never handed off.
-   * `waived` marks a plan or review entry whose preparation is waived because
-   * the item's previous collect never handed off.
    */
   action:
-    | 'accept' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
+    | 'accept' | 'answer' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
     | 'served' | 'phase-end' | 'no-handoff';
   rejectReason?: string;
   handoff?: ReasoningHandoffMeta;
@@ -256,7 +253,6 @@ export function appendInvestigationHandoffSignal(
       chosen: signal.served,
       served: signal.served,
       viaFallback: false,
-      routedUp: false,
       cause: 'investigation-handoff',
       reason: `investigation handoff ${signal.action}`,
       chain: [signal.served],
@@ -296,9 +292,6 @@ export function appendDecision(
       served: servedModel,
       viaFallback: served.viaFallback,
       fallbackRank: served.fallbackRank,
-      confidence: decision.confidence,
-      routedUp: decision.routedUp,
-      routedDown: decision.routedDown,
       cause: decision.cause,
       reason: decision.reason,
       chain: decision.fallbackChain,
@@ -353,7 +346,6 @@ export function appendSubagentGapSignal(
       chosen: model,
       served: model,
       viaFallback: false,
-      routedUp: false,
       cause: 'self-healing-gap',
       reason: `subagent tool gap: ${event.tool}`,
       chain: [model],
@@ -406,7 +398,6 @@ export function appendSubagentSpend(
       chosen: record.model,
       served: record.model,
       viaFallback: false,
-      routedUp: false,
       cause: 'heuristic',
       reason: `subagent spend (${record.routerOwned ? 'router-owned' : 'explicit model'})`,
       chain: [record.model],

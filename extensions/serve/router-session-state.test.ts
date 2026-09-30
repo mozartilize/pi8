@@ -109,13 +109,6 @@ describe('router session state', () => {
     defaultRouterSession.setLastResolvedThinkingLevel('high');
     defaultRouterSession.intent.setCachedIntent({
       key: '2:3:abc',
-      classifyResult: {
-        dimension: 'plan',
-        confidence: 0.8,
-        signals: ['plan (1)'],
-        terminal: terminalAssessment(),
-      hasCategoricalEvidence: true,
-      },
       dimension: 'plan',
       cause: 'continuation-context',
     });

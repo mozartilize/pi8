@@ -1100,9 +1100,6 @@ function assembleDecision(
     reason: renderScoredReason(scoredReason),
     scoredReason,
     ...(candidateDiagnostics.length > 0 ? { candidateDiagnostics } : {}),
-    confidence: 0.8, // placeholder — overwritten by classifier
-    routedUp,
-    routedDown: false,
     cause: 'heuristic',
     fallbackChain,
   };

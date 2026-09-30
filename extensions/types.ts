@@ -329,14 +329,15 @@ export interface RoutingDecision {
   reason: string;
   /** Typed source for scorer and policy wording; reason remains the rendered log/UI value. */
   scoredReason?: ScoredReason;
-  confidence: number;
-  routedUp: boolean;
+  /** Historical classification metadata; not emitted by routing. */
+  confidence?: number;
+  routedUp?: boolean;
   /**
    * True when the routed dimension is strictly weaker than the heuristic's.
    * Distinct from `routedUp` because "different" and "stronger" are not the
    * same question, and context-pressure advice is only meaningful upward.
    */
-  routedDown: boolean;
+  routedDown?: boolean;
   /**
    * True only when a routedUp/routedDown actually changed the served model
    * versus the model the un-escalated (heuristic) dimension would have picked.
@@ -465,8 +466,6 @@ export interface AutoRouterConfig {
    * largest routable window.
    */
   routerContextWindow?: number;
-  /** Threshold for classifier low-confidence route-up. */
-  lowConfidenceThreshold: number;
   /**
    * Show a TUI notification when the router picks/switches the model for a
    * turn (default true). The footer status widget updates regardless.

@@ -716,13 +716,6 @@ describe('session lifecycle resets', () => {
       defaultRouterSession.setActiveSkillNames(['writing-plans']);
       defaultRouterSession.intent.setCachedIntent({
         key: 'k',
-        classifyResult: {
-          dimension: 'gather',
-          confidence: 0.8,
-          signals: [],
-          terminal: terminalAssessment(),
-      hasCategoricalEvidence: true,
-        },
         dimension: 'gather',
         cause: 'heuristic',
       });
@@ -1174,7 +1167,7 @@ describe('mutation observation hooks', () => {
     return tool;
   }
 
-  const READY = { outcome: 'ready', deliverable: 'plan', findings: 'f', question: 'q', difficulty: DIFFICULTY };
+  const READY = { outcome: 'ready', deliverable: 'plan', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', difficulty: DIFFICULTY };
 
   function investigating(over: Partial<WorkPhaseState> = {}) {
     defaultRouterSession.intent.commitWorkPhaseState(entryState({ deliverable: 'plan', contextStatus: 'acquiring', ...over }));
@@ -1191,7 +1184,7 @@ describe('mutation observation hooks', () => {
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
     investigating({ readPaths: ['/repo/secret-read.ts'] });
     const request = {
-      outcome: 'ready', deliverable: 'plan',
+      outcome: 'ready', deliverable: 'plan', complexity: 'trivial', scope: 'bounded',
       findings: 'secret-finding', question: 'secret-question', files: ['secret-dir/a.ts'], difficulty: DIFFICULTY,
     };
 
@@ -1252,7 +1245,7 @@ describe('mutation observation hooks', () => {
     expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('ready-pending');
   });
 
-  it('adopts the reported task type only within the bounded adoption rules', async () => {
+  it('uses the declared task type without keyword-based adoption', async () => {
     const registerTool = vi.fn();
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
     const tool = handoffTool(registerTool);
@@ -1261,14 +1254,13 @@ describe('mutation observation hooks', () => {
       await tool.execute('p', { ...READY, ...request }, undefined, undefined, routerAutoCtx);
       return defaultRouterSession.getWorkPhaseState()!;
     };
-    // An implementation never becomes cheaper; a bounded plan can drop one step to review.
+    // A ready handoff names the next work phase; gather is not a ready work phase.
     const change = { deliverable: 'implement' as const, contextReasons: ['carried-open-context' as const], contextSatisfied: false };
     expect((await hand(change, { deliverable: 'gather', scope: 'bounded' })).deliverable).toBe('implement');
     expect((await hand(change, { deliverable: 'implement' })).reasoningHandoff).toBeUndefined();
     expect((await hand(change, { deliverable: 'plan' })).reasoningHandoff).toMatchObject({ target: 'plan' });
     expect((await hand({}, { deliverable: 'review', scope: 'bounded' })).deliverable).toBe('review');
-    // A missing scope counts as open-ended, so it cannot lower the entry.
-    expect((await hand({}, { deliverable: 'review' })).deliverable).toBe('plan');
+    expect((await hand({}, { deliverable: 'review' })).deliverable).toBe('review');
   });
 
   it('raises a planning minimum to the band of the final step, never lowers it', async () => {
@@ -1283,12 +1275,26 @@ describe('mutation observation hooks', () => {
     };
     const economy = { terminal: terminalAssessment({ kind: 'lightweight', complexity: 'trivial', scope: 'bounded' }), terminalBand: 'economy' as const };
     const strong = { terminal: terminalAssessment({ kind: 'plan', complexity: 'moderate', scope: 'open-ended' }), terminalBand: 'strong' as const };
-    expect(await minimum(economy, {})).toBeCloseTo(0.4);
+    expect(await minimum(economy, {})).toBeCloseTo(0.45);
     expect(await minimum(strong, {})).toBeCloseTo(0.7);
     // The handoff's own reading of the final step can only raise it.
     expect(await minimum(economy, { complexity: 'hard', scope: 'open-ended' })).toBeCloseTo(0.85);
     expect(await minimum(strong, { complexity: 'trivial', scope: 'bounded' })).toBeCloseTo(0.7);
   });
+
+  it.each(['complexity', 'scope'])(
+    'rejects a ready handoff without %s', async (missing) => {
+      const registerTool = vi.fn();
+      await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+      const tool = handoffTool(registerTool);
+      investigating({ terminal: undefined, terminalBand: undefined });
+      const request: Record<string, unknown> = { ...READY };
+      delete request[missing];
+      expect((await tool.execute('shape', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
+      expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+      expect(defaultRouterSession.getWorkPhaseState()?.terminal).toBeUndefined();
+    },
+  );
 
   it('hands the entry back to the user and then refuses every call', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();

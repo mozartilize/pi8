@@ -54,7 +54,6 @@ import {
 } from '../routing/policy/execution-difficulty.js';
 import { isMutationCall } from '../routing/policy/mutation-detector.js';
 import { floorForBand, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
-import { adoptAssessment } from '../routing/policy/assessment-adoption.js';
 import { observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
@@ -87,18 +86,18 @@ function contextHandoffParameters() {
   const oneOf = (values: readonly string[], description: string) =>
     Type.Union(values.map((value) => Type.Literal(value)), { description });
   return Type.Object({
-    outcome: oneOf(['ready', 'needs-user'], 'ready: the next step can start. needs-user: ask the user first.'),
-    question: Type.String({
-      description: 'ready: what the next step must decide, judge, or do. needs-user: the question for the user.',
-    }),
+    outcome: oneOf(['ready', 'answer', 'needs-user'], 'ready: hand off to a work phase. answer: answer directly as gather or lightweight. needs-user: ask the user first.'),
+    question: Type.Optional(Type.String({
+      description: 'Required for ready or needs-user: what the next step must do, or the question for the user.',
+    })),
     findings: Type.Optional(Type.String({ description: 'ready: what you found.' })),
-    deliverable: Type.Optional(oneOf(DIMENSIONS, 'ready: the task type the user wants now.')),
+    deliverable: Type.Optional(oneOf(DIMENSIONS, 'Required for ready or answer: declare the task type. answer accepts only gather or lightweight.')),
     workItemId: Type.Optional(Type.String({ description: 'ready, when work is not yet selected: an offered work item or legacy id, NEW_WORK_ITEM, or NONE for a lightweight side question.' })),
     topicId: Type.Optional(Type.String({ description: 'ready: the offered topic id, or NEW_TOPIC. Required when creating work in an existing topic.' })),
     topicTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_TOPIC.' })),
     workItemTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_WORK_ITEM.' })),
-    complexity: Type.Optional(oneOf(COMPLEXITIES, 'ready: how hard that task is.')),
-    scope: Type.Optional(oneOf(SCOPES, 'ready: whether the task is bounded or open-ended.')),
+    complexity: Type.Optional(oneOf(COMPLEXITIES, 'Required for ready or answer: how hard the task is.')),
+    scope: Type.Optional(oneOf(SCOPES, 'Required for ready or answer: bounded or open-ended.')),
     files: Type.Optional(Type.Array(Type.String(), {
       maxItems: MAX_EVIDENCE_PATHS,
       description: 'ready: files the next step rests on. Leave empty when the evidence is in the conversation.',
@@ -128,6 +127,7 @@ const REJECTIONS = {
   'missing-question': 'Context not handed off: give the question for the user. Call it again with outcome "needs-user" and a question.',
   'missing-findings': 'Context not handed off: describe the findings and the question. Call it again with both.',
   'missing-deliverable': 'Context not handed off: name the task type the user wants (deliverable). Call it again with it.',
+  'missing-task-shape': 'Context not handed off: give complexity and scope for the declared task. Call it again with both.',
   'artifact-not-read': 'Context not handed off: the request rests on files not read as they are now. Read them in full, then call it again:',
   'no-next-step': 'Context not handed off: a gather entry hands off only to implement, review, or plan. Call it again with one of those, or continue.',
   'missing-work-choice': 'Context not handed off: choose a listed workItemId, NEW_WORK_ITEM, or NONE for a lightweight side question.',
@@ -228,18 +228,9 @@ export async function measureEvidence(
   };
 }
 
-/**
- * The task type a ready handoff moves the entry to. An owed acquisition
- * adopts under the bounded rules. A gather entry that owes no context keeps
- * implement, review, or plan as reported, and has no next step otherwise.
- */
-function adoptedDeliverable(open: Open, reported: Dimension, scope: TaskScope | undefined): Dimension | undefined {
-  if (!open.acquiring) {
-    return reported === 'implement' || reported === 'review' || reported === 'plan' ? reported : undefined;
-  }
-  const current = open.state.deliverable ?? 'gather';
-  // A missing scope is open-ended: it can raise the entry, never lower it.
-  return adoptAssessment({ heuristic: current, assessment: { kind: reported, scope: scope ?? 'open-ended' } }).dimension;
+/** Ready declares the next work phase; gather/lightweight answers use a separate outcome. */
+function adoptedDeliverable(reported: Dimension): Dimension | undefined {
+  return reported === 'implement' || reported === 'review' || reported === 'plan' ? reported : undefined;
 }
 
 /** I/O the submission needs, supplied by the caller so the decision itself stays synchronous. */
@@ -323,10 +314,21 @@ export function submitContextHandoff(
 
   const reported = member(DIMENSIONS, params?.deliverable);
   if (!reported) return reject(session, 'missing-deliverable', state, served);
+  if (params?.outcome === 'answer') {
+    if (!opened.acquiring) return reject(session, 'not-acquiring', state, served);
+    if (reported !== 'gather' && reported !== 'lightweight') return reject(session, 'no-next-step', state, served);
+    const complexity = member(COMPLEXITIES, params.complexity);
+    const scope = member(SCOPES, params.scope);
+    if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
+    // A direct answer declares its type but creates neither work nor an incumbent.
+    session.commitWorkPhaseState({ ...state, contextAnswer: reported, pendingIdentity: undefined, provisionalGrounding: undefined });
+    log(state, served, 'answer', { deliverable: reported });
+    return { accepted: true, text: `Declared ${reported}. Answer the user directly; do not make changes.` };
+  }
   if (!filled(params?.findings) || !filled(params?.question)) return reject(session, 'missing-findings', state, served);
   const complexity = member(COMPLEXITIES, params?.complexity);
   const scope = member(SCOPES, params?.scope);
-  const deliverable = adoptedDeliverable(opened, reported, scope);
+  const deliverable = adoptedDeliverable(reported);
   if (!deliverable) return reject(session, 'no-next-step', state, served);
   if (facts.selectionError) return reject(session, facts.selectionError, state, served);
   if (facts.unmet && facts.unmet.length > 0) {
@@ -339,7 +341,8 @@ export function submitContextHandoff(
   if (selection && session.getSessionGeneration() !== selection.generation) {
     return reject(session, 'stale-entry', state, served);
   }
-  const terminal = complexity && scope ? withStrongerTerminal(state, { kind: deliverable, complexity, scope }) : state;
+  if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
+  const terminal = withStrongerTerminal(state, { kind: deliverable, complexity, scope });
 
   let reasoning;
   if (deliverable === 'plan' || deliverable === 'review') {
@@ -347,7 +350,6 @@ export function submitContextHandoff(
     const evidence = facts.evidence ?? CONVERSATION_EVIDENCE;
     const requirement = reasoningRequirement(rubric, evidence);
     // The final step's band only raises the rubric's minimum; see withStrongerTerminal.
-    // A recovery entry keeps its deliverable's ordinary minimum.
     const minimum = Math.max(
       reasoningMinimum(requirement),
       floorForBand(terminal.terminalBand) ?? 0,
@@ -423,7 +425,7 @@ export async function prepareHandoffFacts(
   const reported = member(DIMENSIONS, params.deliverable);
   if ('reject' in opened || !reported || !filled(params.findings) || !filled(params.question)) return {};
   const facts: HandoffFacts = {};
-  const deliverable = adoptedDeliverable(opened, reported, member(SCOPES, params.scope));
+  const deliverable = adoptedDeliverable(reported);
   if (!deliverable) return {};
   const pending = opened.state.pendingIdentity;
   if (pending) {
@@ -602,10 +604,11 @@ export function investigationNote(state: WorkPhaseState): string {
     legacy: pending.legacy.slice(0, 5).map((item) => ({ workItemId: item.id, excerpt: item.excerpt.slice(0, 240) })),
   })}. For outcome "ready", choose an offered workItemId, or NEW_WORK_ITEM with a short workItemTitle. ` +
     'For a new topic use topicId NEW_TOPIC and a short topicTitle; for an existing topic use its offered topicId. ' +
-    'For a lightweight side question with no work item use workItemId NONE. Do not infer identity from the active item alone.' : '';
+    'Do not infer identity from the active item alone.' : '';
   return `Router: ${owedNote(state)}${choices} Until you call ${CONTEXT_HANDOFF_TOOL}, only these tools run: ${ALLOWED_TOOLS}, ` +
     `and routing_context updates; other calls are refused. When you have what the next step needs, call ` +
-    `${CONTEXT_HANDOFF_TOOL} with outcome "ready". If the request is unclear or what it rests on cannot be read, ` +
+    `${CONTEXT_HANDOFF_TOOL} with outcome "ready", deliverable, complexity, and scope. To answer directly without a plan, review, or change, ` +
+    'call it with outcome "answer", deliverable "gather" or "lightweight", complexity, and scope. If the request is unclear or what it rests on cannot be read, ' +
     `call it with outcome "needs-user" and your question. You may send at most ${ACQUISITION_REQUEST_LIMIT} ` +
     'model requests. Do not write the plan, review, or change yourself.';
 }

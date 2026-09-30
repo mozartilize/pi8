@@ -7,7 +7,7 @@ import type { Dimension, WorkChoice, WorkContextMeta } from '../types.js';
 import { extractPromptAnchors } from '../routing/context/anchors.js';
 import { buildCatalog, type CatalogSnapshot } from '../routing/context/catalog.js';
 import { buildLegacyIndex, findLegacyCandidates, type LegacyCandidate } from '../routing/context/legacy.js';
-import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
+import { DIMENSION_STRENGTH } from '../routing/dimensions.js';
 import { activeWorkItem, getWorkItem } from '../routing/context/ledger.js';
 import {
   branchHoldsEntry,

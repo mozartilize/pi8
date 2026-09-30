@@ -301,7 +301,7 @@ describe('scorer', () => {
   });
 
   describe('pickBest contracts', () => {
-    it('routes up when all candidates lack quality data', () => {
+    it('retains routable candidates when quality is unknown', () => {
       const noData = candidate('test/no-data-1', {
         bench: undefined,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -314,7 +314,7 @@ describe('scorer', () => {
         estimatedContextTokens: 2000,
       });
       expect(decision.chosen).toBeDefined();
-      expect(decision.routedUp).toBe(true);
+      expect(decision.fallbackChain).toHaveLength(2);
     });
 
     it('does not pick weak models for review', () => {
@@ -678,11 +678,11 @@ describe('scorer', () => {
       expect(decision.chosen).toBe('test/rival');
     });
 
-    it('routes-up on unknown quality for plan/review', () => {
+    it('keeps unknown quality routable for plan/review', () => {
       const a = candidate('test/ua', { bench: undefined, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
       const b = candidate('test/ub', { bench: undefined, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
       const decision = pickBest([a, b], 'review', undefined, { estimatedContextTokens: 500 });
-      expect(decision.routedUp).toBe(true);
+      expect(decision.fallbackChain).toHaveLength(2);
       expect(decision.chosen).toBeDefined();
     });
 

@@ -11,7 +11,6 @@ import { join } from 'node:path';
 import { loadConfig, saveBlacklist, saveApiKey, getConfigPath, saveSemi } from './config.js';
 import {
   DEFAULT_DIMENSION_WEIGHTS,
-  DEFAULT_LOW_CONFIDENCE_THRESHOLD,
   DEFAULT_SWITCH_MARGIN,
 } from './constants.js';
 
@@ -124,7 +123,7 @@ it('drops malformed values and clamps routing policy to documented defaults', ()
 
   const config = loadConfig();
   expect(config.switchMargin).toBe(DEFAULT_SWITCH_MARGIN);
-  expect(config.lowConfidenceThreshold).toBe(DEFAULT_LOW_CONFIDENCE_THRESHOLD);
+  expect(config).not.toHaveProperty('lowConfidenceThreshold');
   expect(config.models).toEqual(['alpha/*']);
   expect(config.blacklist).toEqual(['*/broken']);
   expect(config.dimensionWeights.implement).toEqual({
@@ -169,7 +168,7 @@ describe('malformed config values are normalized to defaults', () => {
   it('rejects a top-level number as config', () => {
     writeFileSync(getConfigPath(), '42', 'utf8');
     const config = loadConfig();
-    expect(config.lowConfidenceThreshold).toBe(DEFAULT_LOW_CONFIDENCE_THRESHOLD);
+    expect(config.sources).toEqual(['artificial-analysis', 'benchlm']);
   });
 
   it('coerces a non-boolean prompt to true (default on)', () => {
@@ -243,11 +242,12 @@ describe('removed keys', () => {
   it('ignores removed keys and drops them on the next write', () => {
     writeFileSync(
       getConfigPath(),
-      JSON.stringify({ embeddingClassifier: true, collectTools: ['ffgrep'], consultRouter: true, semi: false }),
+      JSON.stringify({ embeddingClassifier: true, collectTools: ['ffgrep'], consultRouter: true, lowConfidenceThreshold: 0.9, semi: false }),
       'utf8',
     );
     expect(loadConfig()).not.toHaveProperty('embeddingClassifier');
     expect(loadConfig()).not.toHaveProperty('collectTools');
+    expect(loadConfig()).not.toHaveProperty('lowConfidenceThreshold');
     saveSemi(true);
     const raw = JSON.parse(readFileSync(getConfigPath(), 'utf8')) as Record<string, unknown>;
     expect(raw).toEqual({ semi: true });

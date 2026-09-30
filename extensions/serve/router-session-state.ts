@@ -11,7 +11,6 @@
  * the session generation before publishing results from an earlier session.
  */
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { ClassifyResult } from '../routing/classify/classifier.js';
 import type {
   Candidate,
   DecisionCause,
@@ -40,7 +39,6 @@ import type { ResolvedEntryContext } from './context-resolution.js';
 
 export interface CachedRoutingIntent {
   key: string;
-  classifyResult: ClassifyResult;
   dimension: Dimension;
   cause: DecisionCause;
   /** The entry's work-context resolution; resolved once per entry. */

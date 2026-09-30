@@ -55,11 +55,11 @@ export interface ContextPlan {
 const RESOLVER = 'context-handoff' as const;
 
 /** Task types whose request rests on the files it references. */
-export const CONTEXT_DELIVERABLES: ReadonlySet<Dimension> = new Set(['plan', 'implement', 'review']);
+export const CONTEXT_DELIVERABLES: ReadonlySet<Dimension> = new Set(['gather', 'plan', 'implement', 'review']);
 
 /**
  * What the request itself owes, without a model: an `@`-referenced file
- * behind a plan, change, or review must be read first. Plain path mentions
+ * during gathering or a work phase must be read first. Plain path mentions
  * name targets, not references.
  */
 export function requestContext(anchors: readonly PromptAnchor[], deliverable: Dimension): ContextReason[] {

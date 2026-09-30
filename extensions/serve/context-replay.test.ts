@@ -29,7 +29,7 @@ import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
 import { carriedContext, requestContext, referencedArtifactPaths } from '../routing/context/resolve.js';
 import { referencedArtifactsFresh } from '../routing/context/grounding.js';
 import type { ContextReason } from '../routing/context/types.js';
-import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
+import { DIMENSION_STRENGTH } from '../routing/dimensions.js';
 import { observeContextGrounding } from './context-grounding.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
 
@@ -64,11 +64,11 @@ const MODELS = [
 ];
 
 const HANDOFF = (entry: CorpusEntry) => ({
-  outcome: 'ready',
+  outcome: ['gather', 'lightweight'].includes(entry.label.deliverable) ? 'answer' : 'ready',
   deliverable: entry.label.deliverable,
+  complexity: 'trivial', scope: 'bounded',
   findings: 'the request and visible context were checked',
   question: 'serve the selected work',
-  ...(entry.label.workItem === 'NONE' ? { scope: 'bounded' } : {}),
   ...(['plan', 'review'].includes(entry.label.deliverable)
     ? { difficulty: { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 } } : {}),
 });
@@ -226,12 +226,12 @@ describe('routing-context corpus replay', () => {
         sessionId: session.id,
         apiFamily: session.apiFamily ?? 'openai-completions',
         ordinal,
-        topicId: selected?.resolution.topicId ?? 'UNKNOWN',
-        workItemId: selected?.resolution.workItemId ?? 'UNKNOWN',
+        topicId: selected?.resolution.topicId ?? (phase?.contextAnswer === 'lightweight' ? 'NONE' : 'UNKNOWN'),
+        workItemId: selected?.resolution.workItemId ?? (phase?.contextAnswer === 'lightweight' ? 'NONE' : 'UNKNOWN'),
         createdTopic: selected?.createdTopic === true,
         createdWorkItem: selected?.createdWorkItem === true,
         relation: selected?.resolution.relation ?? 'unknown',
-        deliverable: harness.session.getWorkPhaseState()?.deliverable ?? 'gather',
+        deliverable: phase?.contextAnswer ?? phase?.deliverable ?? 'gather',
         context: observedContext,
         contextSatisfied: observedSatisfied,
         resolver: selected?.resolution.resolver ?? 'pending',
