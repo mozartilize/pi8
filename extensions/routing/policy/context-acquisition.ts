@@ -93,20 +93,17 @@ export function acquisitionRestricted(state: WorkPhaseState | undefined): boolea
 
 /**
  * Whether a call may run in the restricted phase. Clarification allows no
- * tool; collecting context allows the trusted readers, any extra names the host
- * listed, the question tool, the handoff itself, and descriptive
+ * tool; collecting context allows the trusted readers, the question tool, the handoff itself, and descriptive
  * `routing_context` updates.
  */
 export function acquisitionAllows(
   status: ContextStatus | undefined,
   toolName: string,
   input: unknown,
-  extra: readonly string[] = [],
 ): boolean {
   if (status === 'clarification-only') return false;
   if (
     ACQUISITION_READ_TOOLS.includes(toolName)
-    || extra.includes(toolName)
     || toolName === QUESTION_TOOL
     || toolName === CONTEXT_HANDOFF_TOOL
   ) {

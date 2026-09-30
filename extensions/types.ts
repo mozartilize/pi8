@@ -504,13 +504,6 @@ export interface AutoRouterConfig {
    * impersonate the request. Never inferred — the list is explicit config.
    */
   syntheticPrefixes: string[];
-  /**
-   * Extra tool names that may run while collecting context, by exact
-   * registered name. Use this for read-only tools the host did not ship in
-   * the built-in list (`ffgrep`, `ctx_search`). Writers, shells, and code
-   * runners listed here are ignored. Default `[]`.
-   */
-  collectTools: string[];
 }
 
 export interface SyncResult {

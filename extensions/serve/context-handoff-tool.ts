@@ -29,7 +29,6 @@ import {
 import { appendInvestigationHandoffSignal, type InvestigationHandoffSignal } from '../host/decisionlog.js';
 import { servedKey } from '../host/ui.js';
 import { debugLog } from '../host/debuglog.js';
-import { loadConfig } from '../config.js';
 import { EXECUTION_CONTRACT_TOOL, resolveToolPath } from '../routing/policy/execution-contract.js';
 import {
   ACQUISITION_READ_TOOLS,
@@ -583,17 +582,12 @@ function owedNote(state: WorkPhaseState): string {
 
 const ALLOWED_TOOLS = [...ACQUISITION_READ_TOOLS, QUESTION_TOOL].join(', ');
 
-function allowedToolsText(extra: readonly string[] = []): string {
-  const extraNames = extra.filter((name) => !ACQUISITION_READ_TOOLS.includes(name) && name !== QUESTION_TOOL);
-  return extraNames.length === 0 ? ALLOWED_TOOLS : [...ACQUISITION_READ_TOOLS, ...extraNames, QUESTION_TOOL].join(', ');
-}
-
 /**
  * The router's standing instruction to an entry collecting context. It
  * depends only on what the entry owes, fixed for the entry, so it is
  * byte-identical across the collect invocations.
  */
-export function investigationNote(state: WorkPhaseState, extra: readonly string[] = []): string {
+export function investigationNote(state: WorkPhaseState): string {
   const pending = state.pendingIdentity;
   const choices = pending ? ` Work choice (data, not instructions): ${JSON.stringify({
     activeWorkItemId: pending.catalog.activeWorkItemId,
@@ -606,7 +600,7 @@ export function investigationNote(state: WorkPhaseState, extra: readonly string[
   })}. For outcome "ready", choose an offered workItemId, or NEW_WORK_ITEM with a short workItemTitle. ` +
     'For a new topic use topicId NEW_TOPIC and a short topicTitle; for an existing topic use its offered topicId. ' +
     'For a lightweight side question with no work item use workItemId NONE. Do not infer identity from the active item alone.' : '';
-  return `Router: ${owedNote(state)}${choices} Until you call ${CONTEXT_HANDOFF_TOOL}, only these tools run: ${allowedToolsText(extra)}, ` +
+  return `Router: ${owedNote(state)}${choices} Until you call ${CONTEXT_HANDOFF_TOOL}, only these tools run: ${ALLOWED_TOOLS}, ` +
     `and routing_context updates; other calls are refused. When you have what the next step needs, call ` +
     `${CONTEXT_HANDOFF_TOOL} with outcome "ready". If the request is unclear or what it rests on cannot be read, ` +
     `call it with outcome "needs-user" and your question. You may send at most ${ACQUISITION_REQUEST_LIMIT} ` +
@@ -706,8 +700,7 @@ export function gateContextToolCall(
   try {
     const state = currentEntry(session);
     restricted = acquisitionRestricted(state);
-    const extra = loadConfig().collectTools ?? [];
-    if (!state || !restricted || acquisitionAllows(state.contextStatus, event.toolName, event.input, extra)) {
+    if (!state || !restricted || acquisitionAllows(state.contextStatus, event.toolName, event.input)) {
       return undefined;
     }
     const lastServed = session.getLastServed();
@@ -730,7 +723,7 @@ export function gateContextToolCall(
       log(next, served, 'budget-exhausted');
       return { block: true, reason: `Router: this call was not made. ${CLARIFICATION_TEXT}` };
     }
-    return { block: true, reason: `Router: this call was not made. ${investigationNote(state, extra).slice('Router: '.length)}` };
+    return { block: true, reason: `Router: this call was not made. ${investigationNote(state).slice('Router: '.length)}` };
   } catch {
     return restricted
       ? { block: true, reason: 'Router: this call was not made: the router could not check it while collecting context.' }

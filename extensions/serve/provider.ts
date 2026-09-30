@@ -1215,7 +1215,7 @@ async function delegateRouterTurn(args: {
   const acquiring = entry?.contextStatus === 'acquiring';
   const clarifying = entry?.contextStatus === 'clarification-only';
   let delegatedContext = entry && (acquiring || clarifying)
-    ? withInvestigationNote(context, investigationNote(entry, config.collectTools))
+    ? withInvestigationNote(context, investigationNote(entry))
     : context;
   // The one clarification request: tools stay defined, so a history with
   // tool calls remains valid, but none may be called, and no fallback follows.

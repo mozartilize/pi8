@@ -239,30 +239,15 @@ describe('syntheticPrefixes', () => {
   });
 });
 
-describe('collectTools', () => {
-  it('defaults to an empty array when absent', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({}), 'utf8');
-    expect(loadConfig().collectTools).toEqual([]);
-  });
-
-  it('keeps extra reader names and drops writers, shells, runners, and overlong names', () => {
-    writeFileSync(
-      getConfigPath(),
-      JSON.stringify({ collectTools: ['ffgrep', 'bash', 'edit', 'ctx_execute', 42, '', 'x'.repeat(65), 'ctx_search'] }),
-      'utf8',
-    );
-    expect(loadConfig().collectTools).toEqual(['ffgrep', 'ctx_search']);
-  });
-});
-
 describe('removed keys', () => {
   it('ignores removed keys and drops them on the next write', () => {
     writeFileSync(
       getConfigPath(),
-      JSON.stringify({ embeddingClassifier: true, embeddingDeadlineMs: 4000, consultRouter: true, semi: false }),
+      JSON.stringify({ embeddingClassifier: true, collectTools: ['ffgrep'], consultRouter: true, semi: false }),
       'utf8',
     );
     expect(loadConfig()).not.toHaveProperty('embeddingClassifier');
+    expect(loadConfig()).not.toHaveProperty('collectTools');
     saveSemi(true);
     const raw = JSON.parse(readFileSync(getConfigPath(), 'utf8')) as Record<string, unknown>;
     expect(raw).toEqual({ semi: true });

@@ -71,21 +71,9 @@ export interface PersistedConfig {
    * over 200 chars are dropped. Default `[]`.
    */
   syntheticPrefixes?: string[];
-  /**
-   * Extra exact tool names allowed while collecting context. Writers,
-   * shells, and code runners are dropped. Default `[]`.
-   */
-  collectTools?: string[];
 }
 
 const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
-
-/** Names that cannot be granted as extra collect readers. */
-const COLLECT_EXTRA_DENIED = new Set([
-  'edit', 'write', 'bash', 'subagent',
-  'ctx_execute', 'ctx_execute_file',
-  'commit_execution',
-]);
 
 const finiteInRange = (
   value: unknown,
@@ -173,9 +161,6 @@ export function loadConfig(): AutoRouterConfig {
     syntheticPrefixes: stringList(persisted.syntheticPrefixes)?.filter(
       (p) => p.length <= 200,
     ) ?? [],
-    collectTools: stringList(persisted.collectTools)?.filter(
-      (name) => name.length <= 64 && !COLLECT_EXTRA_DENIED.has(name),
-    ) ?? [],
   };
 }
 
@@ -192,6 +177,7 @@ const REMOVED_CONFIG_KEYS = [
   'embeddingMinConfidence',
   'embeddingClassifier',
   'embeddingDeadlineMs',
+  'collectTools',
   'consultRouter',
   'consultRouterAgent',
   'consultModel',

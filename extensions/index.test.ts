@@ -1619,21 +1619,6 @@ describe('mutation observation hooks', () => {
     expect(await call('write')).toBeUndefined();
   });
 
-  it('lets a configured extra reader run while collecting context, and still refuses a listed writer', async () => {
-    const { loadConfig } = await import('./config.js');
-    vi.mocked(loadConfig).mockReturnValue({ debug: false, collectTools: ['ffgrep'] } as never);
-    try {
-      const handlers = await makeToolHandlers();
-      const toolCall = handlers.get('tool_call')!;
-      investigating();
-      expect(await toolCall({ toolName: 'ffgrep', toolCallId: 'g1', input: { pattern: 'x' } }, routerAutoCtx)).toBeUndefined();
-      expect(await toolCall({ toolName: 'bash', toolCallId: 'b1', input: { command: 'rg x' } }, routerAutoCtx))
-        .toMatchObject({ block: true });
-    } finally {
-      vi.mocked(loadConfig).mockReturnValue({ debug: false } as never);
-    }
-  });
-
   it('lets a gather entry hand off to implement, review, or plan, and declines a handoff with no next step', async () => {
     const registerTool = vi.fn();
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
