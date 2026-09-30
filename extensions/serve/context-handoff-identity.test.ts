@@ -8,7 +8,8 @@ import { setupProviderTest, type ProviderTestHarness } from '../test-support/pro
 import { SessionTree } from '../test-support/session-tree.js';
 import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
 import { observeContextGrounding } from './context-grounding.js';
-import { investigationNote, prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
+import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
+import { gatheringNote } from './gathering-gate.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
   contentText: (await importOriginal<typeof import('@earendil-works/pi-ai')>()).contentText,
@@ -68,7 +69,7 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation' });
     expect(first.workContext).toBeUndefined();
     expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(investigationNote(harness.session.getWorkPhaseState()!)).toContain('NEW_WORK_ITEM');
+    expect(gatheringNote(harness.session.getWorkPhaseState()!)).toContain('NEW_WORK_ITEM');
     expect((await handoff({ ...READY, workItemId: 'made-up', topicId: 'NEW_TOPIC', topicTitle: 'Export' })).accepted).toBe(false);
     expect(harness.session.context.getLedger().items.size).toBe(0);
     expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC',
@@ -191,7 +192,7 @@ describe('entry-scoped work choice at the context handoff', () => {
     await entry('review error handling in the exporter');
     const pending = harness.session.getWorkPhaseState()!.pendingIdentity!;
     expect(pending.catalog.workItems.map((item) => item.id)).toContain(original.id);
-    expect(investigationNote(harness.session.getWorkPhaseState()!)).toContain(original.id);
+    expect(gatheringNote(harness.session.getWorkPhaseState()!)).toContain(original.id);
     expect((await handoff({ ...READY, deliverable: 'review', workItemId: original.id,
       topicId: 'fabricated-topic' })).accepted).toBe(false);
     const second = await handoff({ ...READY, deliverable: 'review', workItemId: 'NEW_WORK_ITEM',
@@ -243,7 +244,7 @@ describe('entry-scoped work choice at the context handoff', () => {
     await entry('continue designing the CSV exporter');
     const pending = harness.session.getWorkPhaseState()?.pendingIdentity;
     expect(pending?.legacy.length).toBeGreaterThan(0);
-    expect(investigationNote(harness.session.getWorkPhaseState()!)).toContain(pending!.legacy[0]!.id);
+    expect(gatheringNote(harness.session.getWorkPhaseState()!)).toContain(pending!.legacy[0]!.id);
     const result = await handoff({ ...READY, deliverable: 'plan', workItemId: pending!.legacy[0]!.id,
       topicId: 'NEW_TOPIC', topicTitle: 'Export' });
     expect(result).toMatchObject({ accepted: true });

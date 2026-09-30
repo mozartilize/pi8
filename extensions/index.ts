@@ -84,12 +84,12 @@ import { observeContextGrounding } from './serve/context-grounding.js';
 import { carryPhaseAcrossTree } from './serve/context-resolution.js';
 import { registerRoutingContextTool } from './serve/routing-context-tool.js';
 import {
-  closeInvestigationOnSettle,
+  closeContextOnSettle,
   gateContextToolCall,
-  nudgeInvestigation,
-  observeInvestigationRead,
-  registerContextHandoffTool,
-} from './serve/context-handoff-tool.js';
+  nudgeContextHandoff,
+  observeContextRead,
+} from './serve/gathering-gate.js';
+import { registerContextHandoffTool } from './serve/context-handoff-tool.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
 const SUBAGENT_TOOL = 'subagent';
@@ -659,7 +659,7 @@ export default async function autoModelRouterExtension(
   pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels, session));
 
   pi.on('agent_settled', () => {
-    closeInvestigationOnSettle(session);
+    closeContextOnSettle(session);
     closeContractOnSettle(session);
   });
 
@@ -717,7 +717,7 @@ export default async function autoModelRouterExtension(
       return;
     }
     handleTrajectoryToolResult(event, session);
-    await observeInvestigationRead(event, ctx, session);
+    await observeContextRead(event, ctx, session);
     trackContractToolResult(
       {
         toolName: event.toolName,
@@ -730,7 +730,7 @@ export default async function autoModelRouterExtension(
       ctx,
       session,
     );
-    const nudge = nudgeContractOnEdit(event, session) ?? nudgeInvestigation(event, session);
+    const nudge = nudgeContractOnEdit(event, session) ?? nudgeContextHandoff(event, session);
     await observeContextGrounding(event, ctx, session);
     return nudge;
   });

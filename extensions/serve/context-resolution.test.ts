@@ -11,7 +11,8 @@ import { branchEvents, CONTEXT_ENTRY_TYPE } from '../routing/context/persistence
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type RoutingDecision } from '../types.js';
 import { carryPhaseAcrossTree } from './context-resolution.js';
 import { observeContextGrounding } from './context-grounding.js';
-import { closeInvestigationOnSettle, prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
+import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
+import { closeContextOnSettle } from './gathering-gate.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
   contentText: (await importOriginal<typeof import('@earendil-works/pi-ai')>()).contentText,
@@ -171,7 +172,7 @@ describe('work-context resolution through the provider', () => {
     await setup();
     await entry('review the retry logic in the exporter');
     expect((await handoff({ outcome: 'needs-user', question: 'Which exporter?' })).accepted).toBe(true);
-    closeInvestigationOnSettle(harness.session);
+    closeContextOnSettle(harness.session);
     expect(harness.session.context.getLedger().items.size).toBe(0);
     expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
   });

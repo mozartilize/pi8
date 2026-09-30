@@ -11,7 +11,7 @@ import {
   entryPhase,
   evidencePaths,
   evidenceShape,
-  noteInvestigationRead,
+  noteContextRead,
   serveContextHandoff,
 } from './context-acquisition.js';
 import type { WorkPhaseState } from './work-phase.js';
@@ -135,13 +135,13 @@ describe('restricted tools', () => {
 describe('evidence', () => {
   it('keeps the most recent reads first, deduplicated and capped, and stops after the handoff', () => {
     let entry = state();
-    for (let i = 0; i < MAX_EVIDENCE_PATHS + 5; i += 1) entry = noteInvestigationRead(entry, `/repo/f${i}.ts`);
-    entry = noteInvestigationRead(entry, '/repo/f3.ts');
+    for (let i = 0; i < MAX_EVIDENCE_PATHS + 5; i += 1) entry = noteContextRead(entry, `/repo/f${i}.ts`);
+    entry = noteContextRead(entry, '/repo/f3.ts');
     expect(entry.readPaths).toHaveLength(MAX_EVIDENCE_PATHS);
     expect(entry.readPaths![0]).toBe('/repo/f3.ts');
     expect(entry.readPaths!.filter((p) => p === '/repo/f3.ts')).toHaveLength(1);
     const handed = acceptContextHandoff(entry, { deliverable: 'plan', key: 'k', reasoning });
-    expect(noteInvestigationRead(handed, '/repo/late.ts')).toBe(handed);
+    expect(noteContextRead(handed, '/repo/late.ts')).toBe(handed);
   });
 
   it('measures declared files first, then reads, so an empty declaration after reads is still measured', () => {

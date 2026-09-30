@@ -14,7 +14,7 @@ import {
   appendSubagentGapSignal,
   appendSubagentSpend,
   appendExecutionContractSignal,
-  appendInvestigationHandoffSignal,
+  appendContextHandoffSignal,
   readRecentEntries,
   setDecisionLogBase,
   DECISION_LOG_FILE,
@@ -208,7 +208,7 @@ describe('decision log', () => {
       usage: { inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheWrite: 0 },
     }, dir);
     appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
-    appendInvestigationHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+    appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
 
     const records = readRecentEntries(10, dir);
     expect(records).toHaveLength(5);
@@ -224,7 +224,7 @@ describe('decision log', () => {
       usage: { inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheWrite: 0 },
     }, dir);
     appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
-    appendInvestigationHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+    appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
 
     const [decision, ...others] = readRecentEntries(10, dir);
     for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);

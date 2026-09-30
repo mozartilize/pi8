@@ -189,7 +189,7 @@ export function serveContextHandoff(state: WorkPhaseState, owner: string): WorkP
 }
 
 /** Remember a path the acquisition read, most recent first. */
-export function noteInvestigationRead(state: WorkPhaseState, path: string): WorkPhaseState {
+export function noteContextRead(state: WorkPhaseState, path: string): WorkPhaseState {
   if (state.reasoningHandoff || state.contextStatus === 'ready-pending' || state.contextStatus === 'served') return state;
   const readPaths = [path, ...(state.readPaths ?? []).filter((p) => p !== path)].slice(0, MAX_EVIDENCE_PATHS);
   return { ...state, readPaths };

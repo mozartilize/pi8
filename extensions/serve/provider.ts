@@ -33,7 +33,7 @@ import { loadConfig } from '../config.js';
 import {
   appendDecision,
   appendExecutionContractSignal,
-  appendInvestigationHandoffSignal,
+  appendContextHandoffSignal,
 } from '../host/decisionlog.js';
 import { renderRouterStatus, servedKey, type ServedInfo } from '../host/ui.js';
 import {
@@ -100,10 +100,10 @@ import {
 } from './context-resolution.js';
 import {
   CLARIFICATION_NOTE,
-  closeInvestigationEntry,
-  investigationNote,
-  withInvestigationNote,
-} from './context-handoff-tool.js';
+  closeContextEntry,
+  gatheringNote,
+  withGatheringNote,
+} from './gathering-gate.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -523,7 +523,7 @@ function advanceWorkPhase(args: {
     if (workPhaseState) {
       const previous = args.session.getPreviousServed();
       const served = previous && servedKey(previous);
-      workPhaseState = closeInvestigationEntry(workPhaseState, served);
+      workPhaseState = closeContextEntry(workPhaseState, served);
       if (workPhaseState.contract) workPhaseState = closeContractEntry(workPhaseState, served);
     }
     // The work this entry is on is known only at its handoff, which applies
@@ -907,7 +907,7 @@ function scoreRouterTurn(args: {
     let next = entry.contextStatus == null ? { ...entry, contextStatus: 'acquiring' as const, contextRequests: 0 } : entry;
     if (next.contextStatus === 'acquiring' && (next.contextRequests ?? 0) >= ACQUISITION_REQUEST_LIMIT) {
       next = { ...next, contextStatus: 'clarification-only' };
-      appendInvestigationHandoffSignal({
+      appendContextHandoffSignal({
         intentKey: next.intentKey,
         served: session.getPreviousServed() ? servedKey(session.getPreviousServed()!) : 'unknown/unknown',
         action: 'budget-exhausted',
@@ -1136,7 +1136,7 @@ async function delegateRouterTurn(args: {
   const pendingTrajectory = session.peekPendingTrajectoryEscalation();
   const delegationSessionGeneration = session.getSessionGeneration();
   // An entry collecting context carries the router's standing instruction to
-  // hand off rather than act; see withInvestigationNote. The status, not the
+  // hand off rather than act; see withGatheringNote. The status, not the
   // decision's cause, decides it: a pinned model acquires under its own cause.
   const intentKey = prepared.measured.turnInput.key;
   const current = session.getWorkPhaseState();
@@ -1144,12 +1144,12 @@ async function delegateRouterTurn(args: {
   const acquiring = entry?.contextStatus === 'acquiring';
   const clarifying = entry?.contextStatus === 'clarification-only';
   let delegatedContext = entry && (acquiring || clarifying)
-    ? withInvestigationNote(context, investigationNote(entry))
+    ? withGatheringNote(context, gatheringNote(entry))
     : context;
   // The one clarification request: tools stay defined, so a history with
   // tool calls remains valid, but none may be called, and no fallback follows.
   if (clarifying) {
-    delegatedContext = withInvestigationNote(delegatedContext, CLARIFICATION_NOTE);
+    delegatedContext = withGatheringNote(delegatedContext, CLARIFICATION_NOTE);
     decision.fallbackChain = [decision.chosen];
   }
   const delegationOptions: DelegationOptions = {
@@ -1161,7 +1161,7 @@ async function delegateRouterTurn(args: {
       onRequest: () => countAcquisitionRequest(session, intentKey),
       requireAnswerDeclaration: !entry?.contextAnswer,
       onUndeclaredAnswer: (outcome: 'retry' | 'released', served: string) => {
-        appendInvestigationHandoffSignal({
+        appendContextHandoffSignal({
           intentKey, action: outcome === 'retry' ? 'answer-retry' : 'undeclared-answer',
           deliverable: entry?.deliverable ?? 'gather', served,
           contextReasons: owedContext(entry),
@@ -1250,7 +1250,7 @@ async function delegateRouterTurn(args: {
     const owned = serveContextHandoff(current, served);
     session.commitWorkPhaseState(owned);
     const handoff = owned.reasoningHandoff;
-    appendInvestigationHandoffSignal({
+    appendContextHandoffSignal({
       intentKey: owned.intentKey,
       served: handoff?.owner ?? served,
       action: 'served',

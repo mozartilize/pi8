@@ -7,7 +7,7 @@ import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role, type RoutingDecision } from './types.js';
 
 import { CONTRACT_GATE, CONTRACT_NUDGE } from './serve/execution-contract-tool.js';
-import { INVESTIGATION_NUDGE } from './serve/context-handoff-tool.js';
+import { CONTEXT_HANDOFF_NUDGE } from './serve/gathering-gate.js';
 import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
@@ -1432,7 +1432,7 @@ describe('mutation observation hooks', () => {
     expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, routerAutoCtx))
       .toBeUndefined();
     const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
-    expect(first.content.map((c) => c.text)).toEqual(['edited', INVESTIGATION_NUDGE]);
+    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTEXT_HANDOFF_NUDGE]);
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
 
     investigating({ deliverable: 'plan', contextStatus: 'served' });

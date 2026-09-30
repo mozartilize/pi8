@@ -237,8 +237,8 @@ export interface InvestigationHandoffSignal {
   contextReasons?: ContextReason[];
 }
 
-/** Append an investigation handoff transition. Best-effort; never throws into the tool path. */
-export function appendInvestigationHandoffSignal(
+/** Append a context handoff transition. Best-effort; never throws into the tool path. */
+export function appendContextHandoffSignal(
   signal: InvestigationHandoffSignal,
   storageBase?: string,
 ): void {
