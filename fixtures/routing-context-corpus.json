@@ -1,0 +1,529 @@
+{
+  "version": 1,
+  "description": "Hand-labelled replay scenarios for work-context resolution: the plan's section 15 scenarios and the legacy-install cases. Labels use corpus-local aliases (t:*, w:*) that the replay maps onto generated ids. Too small to evaluate the release gates; it pins that each resolution path handles every scenario shape.",
+  "sessions": [
+    {
+      "id": "A",
+      "scenario": "cold requirement-driven implementation, then the same work item, then a changed requirement",
+      "files": {
+        "requirements/foo.md": "# Foo\n\nThe export command writes CSV with a header row.\n"
+      },
+      "entries": [
+        {
+          "id": "A1",
+          "prompt": "@requirements/foo.md implement this",
+          "titles": {
+            "topic": "Foo export",
+            "work": "Implement the foo requirement"
+          },
+          "after": [{ "read": "requirements/foo.md" }, { "handoff": "investigation" }],
+          "label": {
+            "topic": "t:foo",
+            "topicRelation": "new",
+            "workItem": "w:foo",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": false
+          }
+        },
+        {
+          "id": "A2",
+          "prompt": "implement it",
+          "after": [{ "externalEdit": "requirements/foo.md", "content": "# Foo\n\nThe export command writes TSV without a header row.\n" }],
+          "label": {
+            "topic": "t:foo",
+            "topicRelation": "same",
+            "workItem": "w:foo",
+            "relation": "continue",
+            "existing": true,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "A3",
+          "prompt": "implement it",
+          "label": {
+            "topic": "t:foo",
+            "topicRelation": "same",
+            "workItem": "w:foo",
+            "relation": "continue",
+            "existing": true,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "B",
+      "scenario": "a self-edit keeps grounding for the next entry",
+      "files": {
+        "requirements/bar.md": "# Bar\n\nRetry twice before failing.\n",
+        "src/bar.ts": "export const bar = 1;\n"
+      },
+      "entries": [
+        {
+          "id": "B1",
+          "prompt": "@requirements/bar.md implement it in src/bar.ts",
+          "titles": {
+            "topic": "Bar retries",
+            "work": "Implement bar retries"
+          },
+          "after": [
+            { "read": "requirements/bar.md" },
+            { "read": "src/bar.ts" },
+            { "write": "src/bar.ts", "content": "export const bar = 2;\n" }
+          ],
+          "label": {
+            "topic": "t:bar",
+            "topicRelation": "new",
+            "workItem": "w:bar",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": false
+          }
+        },
+        {
+          "id": "B2",
+          "prompt": "ok continue",
+          "label": {
+            "topic": "t:bar",
+            "topicRelation": "same",
+            "workItem": "w:bar",
+            "relation": "continue",
+            "existing": true,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "P",
+      "scenario": "a partial read does not ground the referenced requirement",
+      "files": {
+        "docs/big.md": "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n"
+      },
+      "entries": [
+        {
+          "id": "P1",
+          "prompt": "@docs/big.md implement this",
+          "titles": {
+            "topic": "Big spec",
+            "work": "Implement the big spec"
+          },
+          "after": [{ "read": "docs/big.md", "offset": 3, "limit": 2 }],
+          "label": {
+            "topic": "t:big",
+            "topicRelation": "new",
+            "workItem": "w:big",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": false
+          }
+        },
+        {
+          "id": "P2",
+          "prompt": "implement it",
+          "label": {
+            "topic": "t:big",
+            "topicRelation": "same",
+            "workItem": "w:big",
+            "relation": "continue",
+            "existing": true,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "C",
+      "scenario": "same topic, new work item",
+      "entries": [
+        {
+          "id": "C1",
+          "prompt": "add churn and co-change signals to the progressive routing evidence",
+          "titles": {
+            "topic": "Pi8 routing architecture",
+            "work": "Progressive routing evidence"
+          },
+          "label": {
+            "topic": "t:pi8",
+            "topicRelation": "new",
+            "workItem": "w:evidence",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "C2",
+          "prompt": "rework topic/session routing before we continue evidence work",
+          "titles": {
+            "topic": "Pi8 routing architecture",
+            "work": "Topic/session-context routing core"
+          },
+          "label": {
+            "topic": "t:pi8",
+            "topicRelation": "same",
+            "workItem": "w:context",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "plan",
+            "context": [],
+            "contextSatisfied": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "D",
+      "scenario": "unrelated side question, then back to the coding work item",
+      "files": { "src/retry.test.ts": "test('retry', () => expect(retries).toBe(2));\n" },
+      "entries": [
+        {
+          "id": "D1",
+          "prompt": "fix the flaky retry test in src/retry.test.ts",
+          "after": [{ "read": "src/retry.test.ts" }],
+          "titles": {
+            "topic": "Retry reliability",
+            "work": "Fix the flaky retry test"
+          },
+          "label": {
+            "topic": "t:retry",
+            "topicRelation": "new",
+            "workItem": "w:retry",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "D2",
+          "prompt": "what is a good substitute for buttermilk in pancakes?",
+          "titles": {
+            "topic": "Cooking",
+            "work": "none"
+          },
+          "label": {
+            "topic": "t:cooking",
+            "topicRelation": "new",
+            "workItem": "NONE",
+            "relation": "switch",
+            "existing": false,
+            "deliverable": "lightweight",
+            "context": [],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "D3",
+          "prompt": "ok continue",
+          "label": {
+            "topic": "t:retry",
+            "topicRelation": "switch",
+            "workItem": "w:retry",
+            "relation": "continue",
+            "existing": true,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "E",
+      "scenario": "resume a dormant work item by its anchor",
+      "files": {
+        "docs/auth.md": "# Auth\n\nMove sessions to signed tokens; refresh before expiry.\n",
+        "src/billing/webhook.ts": "export function handle() {}\n"
+      },
+      "entries": [
+        {
+          "id": "E1",
+          "prompt": "@docs/auth.md implement the auth migration",
+          "titles": {
+            "topic": "Platform work",
+            "work": "Auth migration"
+          },
+          "after": [{ "read": "docs/auth.md" }, { "handoff": "investigation" }],
+          "label": {
+            "topic": "t:platform",
+            "topicRelation": "new",
+            "workItem": "w:auth",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": false
+          }
+        },
+        {
+          "id": "E2",
+          "prompt": "now update the billing webhook handler in src/billing/webhook.ts to log retries",
+          "after": [{ "read": "src/billing/webhook.ts" }],
+          "titles": {
+            "topic": "Platform work",
+            "work": "Billing webhook retry logging"
+          },
+          "label": {
+            "topic": "t:platform",
+            "topicRelation": "same",
+            "workItem": "w:billing",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "E3",
+          "prompt": "back to docs/auth.md: finish the token refresh part",
+          "titles": {
+            "topic": "Platform work",
+            "work": "Auth migration"
+          },
+          "label": {
+            "topic": "t:platform",
+            "topicRelation": "same",
+            "workItem": "w:auth",
+            "relation": "resume",
+            "existing": true,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "F",
+      "scenario": "an uncertain reference falls back to new conservative state",
+      "entries": [
+        {
+          "id": "F1",
+          "prompt": "set up the release checklist for the next version",
+          "titles": {
+            "topic": "Release process",
+            "work": "Release checklist"
+          },
+          "label": {
+            "topic": "t:release",
+            "topicRelation": "new",
+            "workItem": "w:release",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "F2",
+          "prompt": "can you do the thing we talked about with the other repo",
+          "titles": {
+            "topic": "Unknown",
+            "work": "Unknown"
+          },
+          "label": {
+            "topic": "t:other-repo",
+            "topicRelation": "new",
+            "workItem": "w:other-repo",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": ["identity-unresolved"],
+            "contextSatisfied": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "scenario": "first post-install prompt continues the legacy work",
+      "legacyHistory": [
+        { "role": "user", "text": "refactor the cache layer in src/cache.ts into a class" },
+        { "role": "assistant", "text": "Step 1 is done: the cache is now a class. Step 2 moves eviction into it." }
+      ],
+      "entries": [
+        {
+          "id": "L1a",
+          "prompt": "continue with step 2 of the cache refactor",
+          "titles": {
+            "topic": "Cache layer",
+            "work": "Refactor the cache layer"
+          },
+          "label": {
+            "topic": "t:cache",
+            "topicRelation": "new",
+            "workItem": "w:cache",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "L1b",
+          "prompt": "ok go ahead",
+          "label": {
+            "topic": "t:cache",
+            "topicRelation": "same",
+            "workItem": "w:cache",
+            "relation": "continue",
+            "existing": true,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "L2",
+      "scenario": "first post-install prompt switches away from the legacy work",
+      "legacyHistory": [
+        { "role": "user", "text": "refactor the cache layer in src/cache.ts into a class" },
+        { "role": "assistant", "text": "The cache is now a class." }
+      ],
+      "entries": [
+        {
+          "id": "L2a",
+          "prompt": "write a short changelog entry for the 2.3 release",
+          "titles": {
+            "topic": "Release notes",
+            "work": "Changelog for 2.3"
+          },
+          "label": {
+            "topic": "t:notes",
+            "topicRelation": "new",
+            "workItem": "w:changelog",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "L3",
+      "scenario": "legacy migration",
+      "files": {
+        "specs/api.md": "# API\n\nGET /health returns 200.\n"
+      },
+      "legacyHistory": [
+        { "role": "user", "text": "what does the health endpoint return" },
+        { "role": "assistant", "text": "Nothing yet; it is not implemented." }
+      ],
+      "entries": [
+        {
+          "id": "L3a",
+          "prompt": "@specs/api.md implement the endpoint",
+          "label": {
+            "topic": "t:api",
+            "topicRelation": "new",
+            "workItem": "w:api",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": ["referenced-artifact"],
+            "contextSatisfied": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "L4",
+      "scenario": "a request returns to work from before tracking started",
+      "legacyHistory": [
+        { "role": "user", "text": "implement the auth login flow with JWT sessions in src/auth/login.ts" },
+        { "role": "assistant", "text": "Login now issues a JWT and refreshes it." },
+        { "role": "user", "text": "rename the footer component" },
+        { "role": "assistant", "text": "Renamed." },
+        { "role": "user", "text": "bump the lint config" },
+        { "role": "assistant", "text": "Bumped." },
+        { "role": "user", "text": "tidy the changelog" },
+        { "role": "assistant", "text": "Tidied." },
+        { "role": "user", "text": "add the billing invoices export to the reports page" },
+        { "role": "assistant", "text": "The export writes one CSV per invoice." }
+      ],
+      "entries": [
+        {
+          "id": "L4a",
+          "prompt": "continue the billing invoices export with a totals row",
+          "titles": {
+            "topic": "Billing",
+            "work": "Invoices export"
+          },
+          "label": {
+            "topic": "t:legacy-billing",
+            "topicRelation": "new",
+            "workItem": "w:legacy-billing",
+            "relation": "new",
+            "existing": false,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "L4b",
+          "prompt": "add a dark mode toggle to the settings screen",
+          "titles": {
+            "topic": "UI",
+            "work": "Dark mode"
+          },
+          "label": {
+            "topic": "t:legacy-ui",
+            "topicRelation": "new",
+            "workItem": "w:legacy-dark",
+            "relation": "switch",
+            "existing": false,
+            "deliverable": "implement",
+            "context": [],
+            "contextSatisfied": true
+          }
+        },
+        {
+          "id": "L4c",
+          "prompt": "back to the old auth login work",
+          "titles": {
+            "topic": "Auth",
+            "work": "Login flow"
+          },
+          "label": {
+            "topic": "t:legacy-auth",
+            "topicRelation": "new",
+            "workItem": "w:legacy-auth",
+            "relation": "resume",
+            "existing": false,
+            "deliverable": "implement",
+            "context": ["identity-unresolved"],
+            "contextSatisfied": false
+          }
+        }
+      ]
+    }
+  ]
+}
