@@ -22,6 +22,7 @@ import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-too
 import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
+import { SessionTree } from '../test-support/session-tree.js';
 import {
   asStream,
   expectDecisionContract,
@@ -31,18 +32,7 @@ import {
   type ResolvedRequestAuth,
 } from '../test-support/provider-harness.js';
 import type { BenchModel } from '../types.js';
-import type { Dimension } from '../types.js';
-import type { EmbeddingResult } from '../embed/embedding.js';
 import { defaultBlacklistState } from './blacklist.js';
-
-// Embedding engine mock: provider.ts pulls `embedAndClassify` from
-// ./embedding.js. Only the embedding-blend describe below drives it; the
-// blend only fires when config.embeddingClassifier is true, which the other
-// tests never set, so a default undefined (no verdict) is a no-op for them.
-const embeddingMock = vi.hoisted(() => ({ embedAndClassify: vi.fn() }));
-vi.mock('../embed/embedding.js', () => ({
-  embedAndClassify: embeddingMock.embedAndClassify,
-}));
 
 describe('candidate expansion — model × measured effort', () => {
   const benchRow = (effort: string, quality: number): BenchModel => ({
@@ -445,6 +435,24 @@ const REGISTRY_MODELS = [
   }),
 ];
 
+function contextForTree(tree: SessionTree) {
+  return { cwd: temp.path, model: { provider: 'router', id: 'auto' }, sessionManager: tree.manager() };
+}
+
+async function prepareSelectedWork(harness: ProviderTestHarness, tree: SessionTree, prompt: string) {
+  tree.user(prompt, Date.now());
+  const context = { messages: tree.getBranch().filter((e) => e.type === 'message')
+    .map((e) => ({ role: e.message!.role, content: e.message!.content, timestamp: e.message!.timestamp })) } as unknown as Context;
+  await harness.serve(context);
+  const params = { outcome: 'ready', deliverable: 'implement', findings: 'request examined',
+    question: 'implement the selected work', workItemId: 'NEW_WORK_ITEM', topicTitle: 'Parser', workItemTitle: 'Parser change' };
+  const ctx = contextForTree(tree);
+  const facts = await prepareHandoffFacts(params, ctx as never, harness.session,
+    async () => ({ stdout: '', stderr: '', code: 0 }) as never);
+  expect(submitContextHandoff(params, ctx as never, harness.session, facts).accepted).toBe(true);
+  return context;
+}
+
 describe('provider auth filtering', () => {
   it('fails closed when the registry has no snapshot auth', () => {
     const filter = buildSubagentProviderAuthFilter(undefined, [{ provider: 'unavailable', id: 'model' }]);
@@ -525,6 +533,20 @@ describe('provider orchestration', () => {
       pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI,
     });
   });
+
+  async function selectedTurn(prompt: string) {
+    const tree = new SessionTree();
+    harness = await setupProviderTest({
+      dir: temp.path, models: REGISTRY_MODELS, ctx: contextForTree(tree) as never,
+      pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI,
+    });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    const routedContext = await prepareSelectedWork(harness, tree, prompt);
+    const firstReasoning = harness.delegatedCall().options?.reasoning;
+    harness.resetEventStream();
+    vi.mocked(streamSimple).mockClear();
+    return { routedContext, firstReasoning };
+  }
 
   const context = {
     messages: [{ role: 'user', content: 'hi' }],
@@ -615,8 +637,8 @@ describe('provider orchestration', () => {
     expect(harness.streamedModels()).toEqual(['alpha/first']);
   });
 
-  it('resume reuses the pre-pin auto route for one entry, then recomputes', async () => {
-    // 1. An ordinary auto turn establishes the route resume will reuse.
+  it('resume does not reuse a route from unresolved work for a distinct request', async () => {
+    // An unresolved entry cannot establish a reusable WorkItem route.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
     await harness.serve(
       { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context,
@@ -628,18 +650,19 @@ describe('provider orchestration', () => {
     harness.session.setManualModel('alpha/first');
     expect(harness.session.resumeManual()).toBe(true);
 
-    // 3. A fresh user entry reuses the snapshot verbatim, cause `resume`.
+    // A distinct entry must collect its own WorkItem identity.
     harness.resetEventStream();
     harness.scriptReply([{ type: 'text_delta', delta: 'ok2' }, { type: 'done' }]);
     await harness.serve(
       { messages: [{ role: 'user', content: 'a completely different request now' }] } as unknown as Context,
     );
     const resumed = harness.getProviderState().lastDecision!;
-    expect(resumed.cause).toBe('resume');
-    expect(resumed.chosen).toBe(autoDecision.chosen);
-    expect(resumed.fallbackChain).toEqual(autoDecision.fallbackChain);
+    expect(autoDecision.cause).toBe('investigation');
+    expect(resumed.cause).toBe('investigation');
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+    expect(harness.session.context.getLedger().items.size).toBe(0);
 
-    // 4. The one-shot is spent: the next entry classifies normally again.
+    // The one-shot is spent even when identity cannot be resolved.
     harness.resetEventStream();
     harness.scriptReply([{ type: 'text_delta', delta: 'ok3' }, { type: 'done' }]);
     await harness.serve(
@@ -648,7 +671,7 @@ describe('provider orchestration', () => {
     expect(harness.getProviderState().lastDecision!.cause).not.toBe('resume');
   });
 
-  it('surfaces no-data when no candidate has benchmark data and heuristic owns the decision', async () => {
+  it('reports context collection consistently when no candidate has benchmark data', async () => {
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
     await harness.serve(
@@ -658,12 +681,11 @@ describe('provider orchestration', () => {
     // The cause-precedence row must agree across the in-memory decision, the
     // durable decision log (/router-why after restart), and the rendered detail.
     const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { cause: 'no-data' } });
+    expectDecisionContract({ ...handles, match: { cause: 'investigation' } });
   });
 
   it('uses JSON-configured dimension weights when serving a turn', async () => {
-    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({
-      dimensionWeights: {
+    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ dimensionWeights: {
         implement: { quality: 1, cost: 0, speed: 0 },
       },
     }));
@@ -676,11 +698,8 @@ describe('provider orchestration', () => {
         { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90, } },
       ],
     }));
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    await harness.serve(
-      { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context,
-    );
+    const { routedContext } = await selectedTurn('implement the parser');
+    await harness.serve(routedContext);
 
     // With default implement weights the much cheaper beta candidate wins;
     // the JSON override makes quality decisive.
@@ -742,7 +761,7 @@ describe('provider orchestration', () => {
     expect(harness.getProviderState().lastDecision?.fallbackChain[0]).toBe('alpha/first:high');
   });
 
-  it('raises a measured low effort to the dimension minimum before serving', async () => {
+  it('raises a measured low effort to the implement minimum after selecting work', async () => {
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
       version: 2,
       syncedAt: Date.now(),
@@ -751,14 +770,10 @@ describe('provider orchestration', () => {
         { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
       ],
     }));
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    const { routedContext } = await selectedTurn('implement the parser');
+    await harness.serve(routedContext, {});
 
-    await harness.serve(
-      { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context,
-      {},
-    );
-
-    // implement floor is medium: the low measurement is raised, never sent.
+    // The implement minimum is medium even when the benchmark measures low.
     expect(harness.delegatedCall().options?.reasoning).toBe('medium');
   });
 
@@ -782,47 +797,23 @@ describe('provider orchestration', () => {
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
 
-  it('re-adapts thinking level across dimension changes when Pi echoes back the last resolved level', async () => {
-    // Pi's ctx.thinkingLevel mirrors whatever level the router actually used
-    // last turn ("the current effective level"), not a dedicated flag for
-    // "the user explicitly changed this". A turn-1 resolved level
-    // legitimately reappears as turn-2's incoming `options.reasoning` even
-    // though the user never touched the thinking-level control — that must
-    // still be treated as inherited, not as an explicit override, so a
-    // dimension change (gather -> implement) still resolves through the new
-    // dimension's own floor rather than pinning the echoed level.
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    const gatherContext = {
-      messages: [{ role: 'user', content: 'investigate the flaky test' }],
-    } as unknown as Context;
-    await harness.serve(gatherContext, {});
-    const firstReasoning = harness.delegatedCall().options?.reasoning;
+  it('re-adapts thinking when Pi echoes the gather level into an implement handoff', async () => {
+    // Pi echoes the current effective level, which need not be a user override.
+    const { routedContext, firstReasoning } = await selectedTurn('implement a function to parse the pending adjustment payload');
     expect(firstReasoning).toBe('low');
-
-    harness.resetEventStream();
-    vi.mocked(streamSimple).mockClear();
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    const implementContext = {
-      messages: [{ role: 'user', content: 'implement a function to parse the pending adjustment payload' }],
-    } as unknown as Context;
-    // Simulate Pi carrying forward the effective level it saw last turn.
-    await harness.serve(implementContext, { reasoning: firstReasoning });
-    const secondReasoning = harness.delegatedCall().options?.reasoning;
-    expect(secondReasoning).toBe('medium');
+    await harness.serve(routedContext, { reasoning: firstReasoning });
+    expect(harness.delegatedCall().options?.reasoning).toBe('medium');
   });
 
-  it('syncs Pi\'s own thinking-level state to the resolved level', async () => {
+  it('syncs Pi\'s own thinking-level state to the selected implement level', async () => {
     // The footer/session state only updates via pi.setThinkingLevel; without
     // this call it would keep showing whatever level the user last set
     // manually, never reflecting what the router actually picked per-turn.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
-    const implementContext = {
-      messages: [{ role: 'user', content: 'implement a function to parse the pending adjustment payload' }],
-    } as unknown as Context;
-    await harness.serve(implementContext, {});
+    const { routedContext } = await selectedTurn('implement a function to parse the pending adjustment payload');
+    setThinkingLevelSpy.mockClear();
+    await harness.serve(routedContext, {});
 
     expect(setThinkingLevelSpy).toHaveBeenCalledWith('medium');
   });
@@ -874,13 +865,13 @@ describe('provider orchestration', () => {
     ).toBe(true);
   });
 
-  it('classifies concrete subagent calls normally instead of treating ids as roles', async () => {
+  it('collects context for a concrete subagent call without treating the model id as a role', async () => {
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
     await harness.serve(context, undefined, { id: 'first' } as Model<Api>);
 
     const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'lightweight', cause: 'no-data' } });
+    expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'investigation' } });
   });
 
   it('flags context pressure against the chosen model window (not registry max)', async () => {
@@ -1240,18 +1231,15 @@ describe('a thinking-level change the router did not write pins the served model
 });
 
 describe('incumbent effort floor carries across invocations', () => {
-  // The effort floor is a secondary field on a decision (it does not change
-  // `dimension`), so a naive carry that reads only `getLastDecision()?.dimension`
-  // silently drops it one turn after it was set. This must survive an
-  // arbitrary number of subsequent turns, not just one hop.
+  // Gathering an unresolved entry retains the selected work's effort minimum.
   let harness: ProviderTestHarness;
+  let tree: SessionTree;
 
   beforeEach(async () => {
+    tree = new SessionTree();
     harness = await setupProviderTest({
       dir: temp.path,
-      // A high threshold keeps every cheap-phrased follow-up below it, so the
-      // incumbent capability floor holds across turns regardless of the real
-      // classifier's confidence output for short prompts.
+      ctx: contextForTree(tree) as never,
       config: { lowConfidenceThreshold: 0.99 },
       benchmarks: [
         {
@@ -1277,39 +1265,29 @@ describe('incumbent effort floor carries across invocations', () => {
     });
   });
 
-  it('keeps a stronger dimension as the effort floor two turns after it was resolved', async () => {
+  it('keeps the selected work’s effort minimum across two unresolved entries', async () => {
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-    await harness.serve(
-      { messages: [{ role: 'user', content: 'implement the retry logic across the module' }] } as unknown as Context,
-    );
+    const selectedContext = await prepareSelectedWork(harness, tree, 'implement the retry logic across the module');
+    harness.resetEventStream();
+    await harness.serve(selectedContext);
     expect(harness.getProviderState().lastDecision?.dimension).toBe('implement');
     expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
 
-    // Turn 2: a fresh, cheap-phrased entry. The incumbent capability floor
-    // keeps alpha/strong served, and its own resolved dimension ('gather') is
-    // weaker than the carried incumbent dimension ('implement'), so this
-    // turn's decision gets an `effortFloorDimension` distinct from its own
-    // `dimension` — exactly the case the naive carry loses.
-    harness.outStream.events = [];
-    harness.outStream.ended = false;
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-    await harness.serve(
-      { messages: [{ role: 'user', content: 'what about that' }] } as unknown as Context,
-    );
-    const turn2 = harness.getProviderState().lastDecision;
+    async function nextEntry(prompt: string) {
+      tree.assistant('done');
+      tree.user(prompt, Date.now() + tree.getBranch().length);
+      const messages = tree.getBranch().filter((e) => e.type === 'message')
+        .map((e) => ({ role: e.message!.role, content: e.message!.content, timestamp: e.message!.timestamp }));
+      harness.resetEventStream();
+      await harness.serve({ messages } as unknown as Context);
+      return harness.getProviderState().lastDecision;
+    }
+    const turn2 = await nextEntry('give me today’s weather forecast');
     expect(turn2?.dimension).toBe('gather');
     expect(turn2?.effortFloorDimension).toBe('implement');
+    expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
 
-    // Turn 3: another fresh, cheap-phrased entry. With the fix, the floor
-    // carried into this turn's `incumbentResolvedDimension` is turn 2's
-    // *effective* dimension ('implement'), not its raw `dimension` ('gather').
-    harness.outStream.events = [];
-    harness.outStream.ended = false;
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-    await harness.serve(
-      { messages: [{ role: 'user', content: 'and one more thing' }] } as unknown as Context,
-    );
-    const turn3 = harness.getProviderState().lastDecision;
+    const turn3 = await nextEntry('what is a good pancake topping?');
     expect(turn3?.dimension).toBe('gather');
     expect(turn3?.effortFloorDimension).toBe('implement');
   });
@@ -1587,10 +1565,10 @@ describe('provider status reporting', () => {
     const logged = readRecentEntries(1, temp.path)[0];
     expect(logged).toMatchObject({
       chosen: attempted[1],
-      served: attempted[1],
       cause: 'error-fallback',
       viaFallback: true,
     });
+    expect(logged.served?.startsWith(`${attempted[1]}:`)).toBe(true);
     expect(logged.chain[0]).toBe(attempted[1]);
   });
 
@@ -1618,10 +1596,10 @@ describe('provider status reporting', () => {
 describe('thin continuation and deep context', () => {
   let harness: ProviderTestHarness;
 
-  async function setupWithConfig(config: Record<string, unknown>) {
+  async function setup(tree?: SessionTree) {
     harness = await setupProviderTest({
       dir: temp.path,
-      config,
+      ctx: tree ? contextForTree(tree) as never : undefined,
       models: [
         registryModel('alpha/cheap', { contextWindow: 200000, maxTokens: 8192, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 } }),
         registryModel('beta/strong', { contextWindow: 200000, maxTokens: 8192, cost: { input: 2, output: 8, cacheRead: 0, cacheWrite: 0 } }),
@@ -1629,27 +1607,22 @@ describe('thin continuation and deep context', () => {
     });
   }
 
-  it('routes a thin continuation at the previous entry\'s task type and keeps it stable through tool turns', async () => {
-    await setupWithConfig({});
-    const firstEntry = [
-      { role: 'user', content: 'Implement the approved API authentication changes.', timestamp: 1 },
-    ];
-    const baseMessages = [
-      ...firstEntry,
-      {
-        role: 'assistant',
-        content: 'Should I start with the token refresh?',
-        timestamp: 2,
-      },
-      { role: 'user', content: 'ok go for it', timestamp: 3 },
-    ];
+  it('routes a thin continuation at the work it follows and keeps it stable through tool turns', async () => {
+    const tree = new SessionTree();
+    await setup(tree);
+    const branchContext = () => ({ messages: tree.getBranch().filter((e) => e.type === 'message')
+      .map((e) => ({ role: e.message!.role, content: e.message!.content, timestamp: e.message!.timestamp })) }) as unknown as Context;
 
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
 
-    await harness.serve({ messages: firstEntry } as unknown as Context);
-    harness.outStream.events = [];
-    harness.outStream.ended = false;
-    await harness.serve({ messages: baseMessages } as unknown as Context);
+    const earlier = await prepareSelectedWork(harness, tree, 'Implement the pending API authentication changes.');
+    harness.resetEventStream();
+    await harness.serve(earlier);
+    expect(harness.getProviderState().lastDecision?.dimension).toBe('implement');
+    tree.assistant('Next I will implement the approved API authentication changes.');
+    tree.user('ok go for it', Date.now() + 1);
+    harness.resetEventStream();
+    await harness.serve(branchContext());
     const firstDecision = harness.getProviderState().lastDecision;
     // Turn 1's row must agree with the log and the rendered detail.
     const firstHandles = await fetchDecisionContractHandles(temp.path);
@@ -1658,29 +1631,15 @@ describe('thin continuation and deep context', () => {
       match: { dimension: firstDecision?.dimension, cause: firstDecision?.cause },
     });
 
-    harness.outStream.events = [];
-    harness.outStream.ended = false;
-    await harness.serve({
-      messages: [
-        ...baseMessages,
-        {
-          role: 'assistant',
-          content: [{ type: 'toolCall', id: 't', name: 'read', arguments: {} }],
-          timestamp: 4,
-        },
-        {
-          role: 'toolResult',
-          toolCallId: 't',
-          toolName: 'read',
-          content: [{ type: 'text', text: 'large noisy output' }],
-          timestamp: 5,
-        },
-      ],
-    } as unknown as Context);
+    tree.message({ role: 'assistant', content: [{ type: 'toolCall', id: 't', name: 'read', arguments: {} }] });
+    tree.message({ role: 'toolResult', toolCallId: 't', toolName: 'read',
+      content: [{ type: 'text', text: 'large noisy output' }] } as never);
+    harness.resetEventStream();
+    await harness.serve(branchContext());
     const secondDecision = harness.getProviderState().lastDecision;
 
     expect(firstDecision?.dimension).toBe('implement');
-    expect(firstDecision?.cause).toBe('continuation-context');
+    expect(firstDecision?.cause).toBe('work-context');
     // Stability through the tool loop is a user-visible contract: the log and
     // the rendered detail must agree with the in-memory decision on turn 2 too.
     expect(secondDecision?.dimension).toBe(firstDecision?.dimension);
@@ -1693,9 +1652,9 @@ describe('thin continuation and deep context', () => {
   });
 
   it('never raises a gather entry on a deep context', async () => {
-    await setupWithConfig({});
+    await setup();
 
-    // No keyword evidence → gather heuristic fallback, however long the prompt.
+    // Long context does not raise the task type while identity is unresolved.
     const prompt = 'lorem ipsum dolor sit amet '.repeat(20_000);
     const ctx = { messages: [{ role: 'user', content: prompt }] } as unknown as Context;
 
@@ -1706,7 +1665,7 @@ describe('thin continuation and deep context', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.routedUp).toBe(false);
     const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'no-data' } });
+    expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'investigation' } });
   });
 });
 
@@ -1839,6 +1798,33 @@ describe('context acquisition', () => {
     return state.lastDecision as unknown as RoutingDecision | undefined;
   }
 
+  it('collects unresolved work without creating a work item', async () => {
+    const session = await newSession();
+    const first = await session.routeTurn('implement a CSV exporter');
+    expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation' });
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+  });
+
+  it('keeps one bounded choice set through repeated invocations of an unresolved entry', async () => {
+    const session = await newSession();
+    await session.routeTurn('implement the CSV exporter');
+    const pending = harness.session.getWorkPhaseState()?.pendingIdentity;
+    await session.routeTurnAgainWithSameUserEntry();
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toEqual(pending);
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+  });
+
+  it('does not reuse a previous entry’s unresolved identity as a new entry’s identity', async () => {
+    const session = await newSession();
+    await session.routeTurn('implement a CSV exporter');
+    const firstKey = harness.session.getWorkPhaseState()?.intentKey;
+    await session.routeTurn('design a backup scheduler');
+    expect(harness.session.getWorkPhaseState()?.intentKey).not.toBe(firstKey);
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity?.entryKey).toBe(harness.session.getWorkPhaseState()?.intentKey);
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+  });
+
   describe('investigation handoff', () => {
     const PLAN_PROMPT = 'design the architecture and plan the migration roadmap for this system';
     const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
@@ -1850,9 +1836,11 @@ describe('context acquisition', () => {
       difficulty: { alternatives, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 },
     });
     async function submitPrepared(params: Record<string, unknown>) {
-      const facts = await prepareHandoffFacts(params, routerCtx, harness.session,
+      const complete = { workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC', topicTitle: 'Work',
+        workItemTitle: 'Requested work', ...params };
+      const facts = await prepareHandoffFacts(complete, routerCtx, harness.session,
         async () => ({ stdout: '', stderr: '', code: 0 }) as never);
-      return submitContextHandoff(params, routerCtx, harness.session, facts);
+      return submitContextHandoff(complete, routerCtx, harness.session, facts);
     }
 
     // A plan request's final step sets the least planning minimum; lowering it
@@ -1868,8 +1856,18 @@ describe('context acquisition', () => {
       const session = await newSession();
       const first = await session.routeTurn('investigate the flaky test');
       expect(first?.dimension).toBe('gather');
-      expect(first?.cause).toBe('heuristic');
+      expect(first?.cause).toBe('investigation');
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
+    });
+
+    it('can finish collecting identity with a gather deliverable', async () => {
+      const session = await newSession();
+      const first = await session.routeTurn('investigate the flaky test');
+      expect(first?.dimension).toBe('gather');
+      expect((await submitPrepared({ ...handoff(1), deliverable: 'gather' })).accepted).toBe(true);
+      expect(harness.session.context.getLedger().items.size).toBe(1);
+      const next = await session.routeTurnAgainWithSameUserEntry();
+      expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation-handoff' });
     });
 
     it('investigates a plan request until the handoff, then plans at the handoff minimum', async () => {
@@ -1939,7 +1937,7 @@ describe('context acquisition', () => {
 
     describe('a plan submitted while the planning step is still owed', () => {
       // A plan phase for a change request keeps a minimum until a qualifying planner serves.
-      const COMPOUND = 'Trace the race condition across the codebase from scratch, then fix it, refactor it, and implement the corrected logic.';
+      const REFERENCED = 'implement the corrected race-condition logic across the codebase from scratch';
       const plan = {
         steps: [{ kind: 'edit', path: 'src/a.ts', change: 'retry the flaky call' }],
         remainingWork: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
@@ -1950,7 +1948,7 @@ describe('context acquisition', () => {
 
       it('rejects a plan from a fallback below the planning minimum and keeps the step owed', async () => {
         const session = await newSession();
-        await session.routeTurn(COMPOUND);
+        await session.routeTurn(REFERENCED);
         await submitPrepared(handoff(5));
         await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
         expect(harness.session.getLastServed()?.registryId).toBe('alpha/cheap');
@@ -1974,7 +1972,7 @@ describe('context acquisition', () => {
 
       it('accepts a plan from a qualifying planner before its serve settles the step', async () => {
         const session = await newSession();
-        await session.routeTurn(COMPOUND);
+        await session.routeTurn(REFERENCED);
         await submitPrepared(handoff(5));
         await session.routeTurnAgainWithSameUserEntry();
         expect(harness.session.getLastServed()?.registryId).toBe('beta/strong');
@@ -2004,15 +2002,38 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('review');
     });
 
-    it('collects context for an implementation that asks to investigate first, then serves it', async () => {
+    it('chooses work before serving an implementation', async () => {
       const session = await newSession();
       const first = await session.routeTurn(
-        'Trace the race condition across the codebase from scratch, then fix it, refactor it, and implement the corrected logic.',
+        'Trace the race condition across the codebase from scratch, then fix and implement the corrected logic.',
       );
-      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'implement' });
+      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation' });
+      expect(harness.getProviderState().lastDecision?.workContext).toBeUndefined();
       expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
       const executing = await session.routeTurnAgainWithSameUserEntry();
       expect(executing).toMatchObject({ dimension: 'implement', cause: 'investigation-handoff' });
+      expect(harness.getProviderState().lastDecision?.workContext?.workItemId).toBe(harness.session.getWorkPhaseState()?.workItemId);
+    });
+
+    it('collects context when semantic wording is ambiguous', async () => {
+      const session = await newSession();
+      const first = await session.routeTurn('Fix the scheduler race and implement the corrected logic.');
+      expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation' });
+      expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('implement');
+    });
+
+    it('records the selected work only after a ready handoff', async () => {
+      const session = await newSession();
+      await session.routeTurn('trace the scheduler race, then fix it');
+      expect(harness.session.context.getLedger().items.size).toBe(0);
+      expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
+      const workItemId = harness.session.getWorkPhaseState()!.workItemId!;
+      expect(harness.session.context.getLedger().items.get(workItemId)?.openContext).toEqual([]);
+      await session.routeTurnAgainWithSameUserEntry();
+      const next = await session.routeTurn('ok go ahead');
+      expect(harness.getProviderState().lastDecision?.workContext?.workItemId).toBe(workItemId);
+      expect(next?.cause).not.toBe('investigation');
     });
 
     it('does not invent an implementation contract for a plan-only request', async () => {
@@ -2176,9 +2197,11 @@ describe('context acquisition', () => {
       const first = await session.routeTurn(PLAN_PROMPT);
       expect(first?.dimension).toBe('gather');
       expect(first?.cause).toBe('investigation');
-      const facts = await prepareHandoffFacts(DESIGN_HANDOFF, routerCtx, harness.session,
+      const params = { ...DESIGN_HANDOFF, workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC',
+        topicTitle: 'Work', workItemTitle: 'Migration roadmap' };
+      const facts = await prepareHandoffFacts(params, routerCtx, harness.session,
         async () => ({ stdout: '', stderr: '', code: 0 }) as never);
-      expect(submitContextHandoff(DESIGN_HANDOFF, routerCtx, harness.session, facts).accepted).toBe(true);
+      expect(submitContextHandoff(params, routerCtx, harness.session, facts).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
       expect(planning?.dimension).toBe('plan');
       expect(planning?.chosen).toBe('beta/strong');
@@ -2188,6 +2211,18 @@ describe('context acquisition', () => {
         harness.session.commitWorkPhaseState({ ...state, deliverable: 'implement' });
       }
       return session;
+    }
+
+    async function resolvedImplementation(session: Session, prompt: string): Promise<RoutingDecision | undefined> {
+      const first = await session.routeTurn(prompt);
+      expect(first?.dimension).toBe('gather');
+      const params = { outcome: 'ready', deliverable: 'implement', workItemId: 'NEW_WORK_ITEM',
+        topicId: 'NEW_TOPIC', topicTitle: 'Implementation', workItemTitle: 'Requested change',
+        findings: 'read the request', question: 'implement the change' };
+      const facts = await prepareHandoffFacts(params, routerCtx, harness.session,
+        async () => ({ stdout: '', stderr: '', code: 0 }) as never);
+      expect(submitContextHandoff(params, routerCtx, harness.session, facts).accepted).toBe(true);
+      return session.routeTurnAgainWithSameUserEntry();
     }
 
     function breakWithUndeclaredEdit(): void {
@@ -2229,7 +2264,7 @@ describe('context acquisition', () => {
 
     it('hands a plan off from an implement entry, and returns a break to implementation', async () => {
       const session = await planned();
-      const implementing = await session.routeTurn('implement a function to parse the pending adjustment payload');
+      const implementing = await resolvedImplementation(session, 'implement a function to parse the pending adjustment payload');
       expect(implementing?.dimension).toBe('implement');
       expect(implementing?.chosen).toBe('beta/strong');
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
@@ -2502,11 +2537,17 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('plan');
     });
 
-    it('accepts a plan from an implementation entry', async () => {
+    it('accepts a plan after an implementation is selected', async () => {
       const session = await newSession();
-      await session.routeTurn('implement the pending adjustment payload');
+      await resolvedImplementation(session, 'implement the pending adjustment payload');
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('implement');
+    });
+
+    it('accepts a plan when a vague request is identified as implementation at the handoff', async () => {
+      const session = await newSession();
+      await resolvedImplementation(session, 'please handle the pending adjustment');
+      expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
     });
 
     it('rejects a handoff during an investigation and outside router/auto', async () => {
@@ -2519,8 +2560,18 @@ describe('context acquisition', () => {
     });
   });
 
+  it('reuses the unresolved work choice on later tool-loop turns of the same entry', async () => {
+    const session = await newSession();
+    const first = await session.routeTurn('list the main features of docs/plan.md');
+    const second = await session.routeTurnAgainWithSameUserEntry();
+
+    expect(first?.dimension).toBe('gather');
+    expect(second?.dimension).toBe('gather');
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+  });
+
 describe('deep context', () => {
-  it('never changes the routed task type at a large context size', async () => {
+  it('holds the work choice unresolved at a large context size', async () => {
     const session = await newSession();
     const first = await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 150_000,
@@ -2529,6 +2580,7 @@ describe('deep context', () => {
     expect(first?.dimension).toBe('gather');
     expect(after?.dimension).toBe('gather');
     expect(after?.cause).toBe(first?.cause);
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
   });
 
 });
@@ -2901,7 +2953,7 @@ describe('usage-limit provider blacklist — excluded from routing entirely', ()
   });
 });
 
-// ─── Embedding classifier blend (confidence floor) ─────────────────────
+// ─── Keyword classification without categorical evidence ───────────────
 
 const SEEDED_BENCHMARKS = {
   version: 2,
@@ -2913,97 +2965,24 @@ const SEEDED_BENCHMARKS = {
   ],
 };
 
-/** Non-English prompt: keyword classifier has no categorical evidence → gather. */
-const nonEnglishContext = (suffix: string) =>
-  ({ messages: [{ role: 'user', content: `спроектируй систему ${suffix}` }] }) as unknown as Context;
-
-function embeddingResult(overrides: { dimension: Dimension; confidence: number }): EmbeddingResult {
-  return {
-    dimension: overrides.dimension,
-    confidence: overrides.confidence,
-    scores: { lightweight: 0, gather: 0.2, plan: 0.1, implement: 0.9, review: 0.3 },
-  };
-}
-
-function enableEmbeddingClassifier(extra: Record<string, unknown> = {}): void {
-  writeFileSync(
-    join(temp.path, 'config.json'),
-    JSON.stringify({ embeddingClassifier: true, ...extra }),
-    'utf8',
-  );
-  writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify(SEEDED_BENCHMARKS), 'utf8');
-}
-
-describe('embedding classifier blend', () => {
-  let harness: ProviderTestHarness;
-
-  beforeEach(async () => {
-    embeddingMock.embedAndClassify.mockReset();
-    embeddingMock.embedAndClassify.mockResolvedValue(undefined);
-    harness = await setupProviderTest({ dir: temp.path });
-  });
-
-  it('abstains on a low-confidence embedding — keyword gather unchanged', async () => {
-    enableEmbeddingClassifier(); // default embeddingMinConfidence 0.15
-    embeddingMock.embedAndClassify.mockResolvedValue(
-      embeddingResult({ dimension: 'implement', confidence: 0.1 }),
+describe('a prompt with no keyword evidence', () => {
+  it('routes on the keyword classifier when the embedding reader cannot load', async () => {
+    // The optional runtime is not installed here, so the enabled reader fails
+    // fast and the keyword result stands.
+    writeFileSync(
+      join(temp.path, 'config.json'),
+      JSON.stringify({ embeddingClassifier: true }),
+      'utf8',
     );
+    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify(SEEDED_BENCHMARKS), 'utf8');
+    const harness = await setupProviderTest({ dir: temp.path });
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
-    await harness.serve(nonEnglishContext('low'));
-
-    const decision = harness.getProviderState().lastDecision;
-    // Confidence 0.1 < floor 0.15 → abstain: keyword's gather stands, cause stays heuristic.
-    expect(decision?.dimension).toBe('gather');
-    expect(decision?.cause).toBe('heuristic');
-    expect(embeddingMock.embedAndClassify).toHaveBeenCalledTimes(1);
-    expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 1, promoted: 0, abstainedLowConf: 1, degraded: 0 });
-  });
-
-  it('promotes on a high-confidence stronger embedding with cause embedding-classify', async () => {
-    enableEmbeddingClassifier();
-    embeddingMock.embedAndClassify.mockResolvedValue(
-      embeddingResult({ dimension: 'implement', confidence: 0.8 }),
-    );
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    await harness.serve(nonEnglishContext('high'));
-
-    const decision = harness.getProviderState().lastDecision;
-    expect(decision?.dimension).toBe('implement');
-    expect(decision?.cause).toBe('embedding-classify');
-    expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 1, promoted: 1, abstainedLowConf: 0, degraded: 0 });
-  });
-
-  it('never lets a below-floor embedding lower the keyword dimension (R3)', async () => {
-    // Confident but WEAKER than keyword gather — must still keep gather.
-    enableEmbeddingClassifier();
-    embeddingMock.embedAndClassify.mockResolvedValue(
-      embeddingResult({ dimension: 'lightweight', confidence: 0.9 }),
-    );
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    await harness.serve(nonEnglishContext('weak'));
+    await harness.serve({ messages: [{ role: 'user', content: 'спроектируй систему' }] } as unknown as Context);
 
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.dimension).toBe('gather');
-    expect(decision?.cause).toBe('heuristic');
-    // Confident but weaker → kept keyword: fired, no promote, no abstain.
-    expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 1, promoted: 0, abstainedLowConf: 0, degraded: 0 });
-  });
-
-  it('tallies a degraded outcome when inference returns no verdict', async () => {
-    enableEmbeddingClassifier();
-    embeddingMock.embedAndClassify.mockResolvedValue(undefined);
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    await harness.serve(nonEnglishContext('degrade'));
-
-    const decision = harness.getProviderState().lastDecision;
-    // No verdict → keyword stands (R2).
-    expect(decision?.dimension).toBe('gather');
-    expect(decision?.cause).toBe('heuristic');
-    expect(harness.getProviderState().embeddingStats).toMatchObject({ fired: 0, promoted: 0, abstainedLowConf: 0, degraded: 1 });
+    expect(decision?.cause).toBe('investigation');
   });
 });
 

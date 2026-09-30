@@ -1,6 +1,7 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ScoredReason } from './routing/score/decision-reason.js';
 import type { ModelThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
+import type { ContextReason, ContextRelation, ResolverTier } from './routing/context/types.js';
 
 export type { ExtensionContext };
 
@@ -287,6 +288,40 @@ export interface WorkChoice {
   workItemId: string;
 }
 
+/**
+ * The embedding reader's reading of a prompt the keyword rules could not
+ * read: margins and categories only, never the prompt.
+ */
+export interface EmbeddingMeta {
+  /** Lead of the nearest thin examples over the nearest substantive ones. */
+  thinMargin: number;
+  kind: TaskKind;
+  /** Lead of `kind` over the next kind. */
+  kindMargin: number;
+  /** The entry was treated as thin on this reading. */
+  thin?: boolean;
+  /** The entry's terminal kind was raised to `kind` on this reading. */
+  kindRaised?: boolean;
+}
+
+/**
+ * The entry's work-context resolution as routing and logs see it: the tier
+ * that decided it, ids, and categories. Titles and summaries stay out.
+ */
+export interface WorkContextMeta {
+  resolver: ResolverTier;
+  relation: ContextRelation;
+  topicId: string;
+  workItemId: string;
+  /** Reasons the request owed context; empty when it owed none. */
+  contextReasons: ContextReason[];
+  /** Whether the router found that context in hand when the entry resolved. */
+  contextSatisfied: boolean;
+  createdWorkItem?: boolean;
+  /** Placed on work found in the conversation from before tracking started. */
+  legacy?: boolean;
+}
+
 export type DecisionCause =
   | 'heuristic'
   | 'continuation-context'
@@ -302,7 +337,8 @@ export type DecisionCause =
   | 'self-healing-gap'
   | 'manual-override'
   | 'resume'
-  | 'semi-hold';
+  | 'semi-hold'
+  | 'work-context';
 
 export interface RoutingDecision {
   dimension: Dimension;
@@ -353,6 +389,10 @@ export interface RoutingDecision {
   offTopicReset?: boolean;
   /** Message-origin census for this turn's context. */
   provenanceCounts?: Record<MessageProvenance, number>;
+  /** The entry's work-context resolution. */
+  workContext?: WorkContextMeta;
+  /** The embedding reader's reading of the entry's prompt, when it read one. */
+  embedding?: EmbeddingMeta;
   cause: DecisionCause;
   fallbackChain: string[];
   /** Capability-tier evidence for candidates that were demoted or promoted. */

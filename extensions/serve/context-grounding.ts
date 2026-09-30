@@ -43,7 +43,8 @@ export function currentSourceEntry(
   ctx: Pick<ExtensionContext, 'sessionManager'> | undefined,
   session: RouterSession,
 ): string | undefined {
-  return latestGenuineUserEntry(readBranch(ctx?.sessionManager))
+  return session.context.getEntrySource()
+    ?? latestGenuineUserEntry(readBranch(ctx?.sessionManager))
     ?? session.getCachedIntent()?.key;
 }
 
@@ -67,8 +68,13 @@ export async function observeContextGrounding(
 ): Promise<void> {
   try {
     if (event.isError || !ctx.cwd) return;
+    const pending = session.getWorkPhaseState();
+    if (pending?.pendingIdentity) {
+      await observePendingGrounding(event, ctx, session, pending.intentKey);
+      return;
+    }
     const item = activeWorkItem(session.context.getLedger());
-    if (!item) return;
+    if (!item || (pending && !pending.workItemId)) return;
     const tool = event.toolName;
     if (tool === 'read' || tool === 'write' || tool === 'edit') {
       await observeNativeFileTool(tool, event, ctx, session, item);
@@ -143,6 +149,45 @@ function noteRanges(
   const version = { sha256: file.sha256, lineCount: contentLineCount(file.text) };
   // Coverage is dropped once complete, so stop there rather than start it over.
   return ranges.some((range) => session.context.noteRead(item.id, rel, version, range));
+}
+
+/** Complete reads before identity are entry-local; never credit the active item. */
+async function observePendingGrounding(
+  event: Pick<ToolResultEvent, 'toolName' | 'input' | 'content' | 'details'>,
+  ctx: Pick<ExtensionContext, 'cwd' | 'sessionManager'>,
+  session: RouterSession,
+  intentKey: string,
+): Promise<void> {
+  const pending = session.getWorkPhaseState()?.pendingIdentity;
+  if (!pending) return;
+  const raw = (event.input as { path?: unknown } | undefined)?.path;
+  const text = allResultText(event.content);
+  const paths = event.toolName === 'read' && typeof raw === 'string'
+    ? [raw]
+    : [...pending.base.anchors, ...pending.catalog.workItems.flatMap((item) => item.anchors)]
+      .filter((anchor) => anchor.kind === 'path' && `${JSON.stringify(event.input ?? null)}\n${text}`.includes(basename(anchor.value)))
+      .map((anchor) => anchor.value).slice(0, MAX_MATCHED_ANCHORS);
+  for (const rawPath of [...new Set(paths)].slice(0, MAX_MATCHED_ANCHORS)) {
+    const path = insideCwd(ctx.cwd, rawPath);
+    if (!path) continue;
+    const generation = session.getSessionGeneration();
+    const file = await fingerprintFile(path.abs);
+    if (!file || session.getSessionGeneration() !== generation) return;
+    const ranges = event.toolName === 'read'
+      ? [readLineRange(event.input as { offset?: unknown }, event.details, resultText(event.content), file.text)].filter((r): r is LineRange => !!r)
+      : matchedLineRanges(text, file.text);
+    const version = { sha256: file.sha256, lineCount: contentLineCount(file.text) };
+    if (!ranges.some((range) => session.context.noteRead(`pending:${intentKey}`, path.rel, version, range))) continue;
+    const state = session.getWorkPhaseState();
+    if (!state?.pendingIdentity || state.intentKey !== intentKey || state.pendingIdentity.generation !== generation) return;
+    const sourceEntryId = currentSourceEntry(ctx, session);
+    if (!sourceEntryId) return;
+    const artifact = { anchorValue: path.rel, sha256: file.sha256, observedAtEntryId: sourceEntryId, observedBy: 'read' as const };
+    session.commitWorkPhaseState({
+      ...state,
+      provisionalGrounding: [...(state.provisionalGrounding ?? []).filter((g) => g.anchorValue !== path.rel), artifact].slice(-24),
+    });
+  }
 }
 
 function recordGrounding(

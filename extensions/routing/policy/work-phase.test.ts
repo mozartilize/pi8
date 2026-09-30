@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   capabilityBandFor,
+  carryAcrossBranch,
   floorForBand,
-  inheritThinContinuation,
+  inheritWorkContinuation,
   boundaryQualifiers,
   nextProviderInvocation,
   servesBoundary,
@@ -16,7 +17,7 @@ const terminal = (over: Partial<TerminalAssessment> = {}): TerminalAssessment =>
   kind: 'implement',
   complexity: 'hard',
   scope: 'open-ended',
-  compound: true,
+  compound: false,
   confidence: 'high',
   ...over,
 });
@@ -59,7 +60,7 @@ describe('withStrongerTerminal', () => {
   });
 });
 
-describe('inheritThinContinuation', () => {
+describe('inheritWorkContinuation', () => {
   it('retains terminal and band while resetting per-entry counters and handoffs', () => {
     const handoff = {
       id: 'intent-a', requester: 'a/cheap', target: 'plan' as const, minimum: 0.5, requirement: 0.5,
@@ -79,10 +80,12 @@ describe('inheritThinContinuation', () => {
       clarificationDispatched: true,
       handoffKey: 'k',
       contextNudged: true,
+      contextWaived: true,
+      recoveryMinimum: true,
       contextClosed: true,
       contractStrikes: { 'beta/strong': 1 },
     });
-    const next = inheritThinContinuation('intent-b', prior, 'implement');
+    const next = inheritWorkContinuation('intent-b', prior, 'implement');
     expect(next).toMatchObject({
       intentKey: 'intent-b',
       deliverable: 'implement',
@@ -99,10 +102,36 @@ describe('inheritThinContinuation', () => {
     expect(next.reasoningHandoff).toBeUndefined();
     for (const field of [
       'contextStatus', 'contextRequests', 'contextDenials', 'deniedAtInvocation', 'clarificationDispatched',
-      'handoffKey', 'contextNudged', 'contextClosed',
+      'handoffKey', 'contextNudged', 'contextWaived', 'recoveryMinimum', 'contextClosed',
     ] as const) {
       expect(next[field]).toBeUndefined();
     }
+  });
+});
+
+describe('carryAcrossBranch', () => {
+  it('keeps only the task type and final step a thin continuation inherits', () => {
+    const prior = entryState({
+      deliverable: 'gather',
+      providerInvocation: 4,
+      observedMutationTools: 2,
+      contractStrikes: { 'beta/strong': 2 },
+      excludedExecutors: ['beta/strong'],
+      readPaths: ['/repo/a.ts'],
+      contextStatus: 'acquiring',
+      workItemId: 'w_a',
+      contextReasons: ['carried-open-context'],
+      contextSatisfied: false,
+    });
+    expect(carryAcrossBranch(prior, 'plan')).toEqual({
+      intentKey: 'intent-a',
+      deliverable: 'plan',
+      terminal: prior.terminal,
+      terminalBand: prior.terminalBand,
+      providerInvocation: 4,
+      observedMutationTools: 0,
+    });
+    expect(carryAcrossBranch(prior, undefined)).not.toHaveProperty('deliverable');
   });
 });
 

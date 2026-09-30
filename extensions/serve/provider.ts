@@ -4,7 +4,10 @@
  * Pattern: register a synthetic model with Pi (`pi.registerProvider`) that
  * classifies each turn locally, scores candidates from the live model
  * registry, and delegates the stream to the best match with a fallback
- * chain.
+ * chain. Each real user entry first resolves which work it continues or
+ * starts (see context-resolution.ts): deterministically when it can, else
+ * by entering context acquisition so the serving model can inspect the
+ * session and call `hand_off_context`.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -23,9 +26,6 @@ import type { BenchModel, Candidate, Dimension, DecisionCause, AutoRouterConfig,
 import { ROUTER_PROVIDER_ID, AUTO_MODEL_ID } from '../types.js';
 import { loadStore, activeModels } from '../bench/store.js';
 import { classify, estimateTokenCount } from '../routing/classify/classifier.js';
-import { DIMENSION_STRENGTH } from '../routing/classify/classifier.js';
-import { DEFAULT_EMBEDDING_MIN_CONFIDENCE } from '../constants.js';
-import { embedAndClassify } from '../embed/embedding.js';
 import { getTurnClassificationInput } from '../routing/policy/continuation.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter, loadConfigBlacklistFilter } from '../routing/policy/allowlist.js';
 import { loadConfig } from '../config.js';
@@ -68,8 +68,9 @@ import { makeTerminalErrorEvent } from './error-event.js';
 import { resolveRoutingDecision } from '../routing/policy/routing-policy.js';
 import {
   capabilityBandFor,
-  inheritThinContinuation,
+  inheritWorkContinuation,
   nextProviderInvocation,
+  withStrongerTerminal,
   terminalRequirement,
   boundaryQualifiers,
   servesBoundary,
@@ -94,11 +95,25 @@ import {
   serveContextHandoff,
 } from '../routing/policy/context-acquisition.js';
 import {
+  atLeast,
+  recordServedWork,
+  resolveEntryContext,
+  workContextMeta,
+  type PendingIdentity,
+  type ResolvedEntryContext,
+} from './context-resolution.js';
+import {
   CLARIFICATION_NOTE,
   closeInvestigationEntry,
+  consumeRecovery,
   investigationNote,
+  noteMissedHandoff,
+  waiveMissedInvestigation,
   withInvestigationNote,
 } from './context-handoff-tool.js';
+import { DIMENSION_STRENGTH } from '../routing/classify/classifier.js';
+import { DEFAULT_EMBEDDING_MIN_CONFIDENCE } from '../constants.js';
+import { embedAndClassify } from '../embed/embedding.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -167,7 +182,6 @@ export const getProviderState = (session: RouterSession = defaultRouterSession) 
   lastChosenRegistryId: session.getLastChosenRegistryId(),
   lastServed: session.getLastServed(),
   accumulatedCost: session.getAccumulatedCost(),
-  embeddingStats: session.getEmbeddingStats(),
   blacklistedModels: [...session.getBlacklistedModels()].sort(),
   blacklistedProviders: [...session.getBlacklistedProviders()].sort(),
   workPhaseState: session.getWorkPhaseState(),
@@ -373,9 +387,9 @@ function measureTurnInput(context: Context, config: AutoRouterConfig) {
 }
 
 /**
- * Keyword classify plus embedding blend. Blends up only: never overrides
- * keyword downward. Timeout/failure degrades to the keyword result.
- * Escalation is not resolved here — it must not be cached.
+ * The entry's keyword classification, or the cached one for a later
+ * invocation of the same entry. Escalation is not resolved here — it must
+ * not be cached.
  */
 async function resolveBaseIntent(
   args: {
@@ -518,12 +532,87 @@ function buildRoutableCandidates(args: {
   );
 }
 
+/**
+ * A work-context failure must not block the turn: it routes as it would with
+ * no work context at all.
+ */
+async function failOpen<T>(work: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await work();
+  } catch (err) {
+    debugLog('context.error', { message: err instanceof Error ? err.message : String(err) });
+    return undefined;
+  }
+}
+
+/**
+ * Resolve the entry's work context. Does not write the intent cache or touch
+ * the stream. Task-type adoption happens at `hand_off_context`, not here.
+ */
+async function resolveEntrySemantics(entry: {
+  session: RouterSession;
+  stillCurrent: () => boolean;
+  cacheHit: boolean;
+  dimension: Dimension;
+  cause: DecisionCause;
+  /** `thin` may still be settling; see EntryContextRequest.turn. */
+  turn: { key: string; promptText: string; thin: boolean | Promise<boolean> };
+  context?: ResolvedEntryContext;
+  extensionContext: ExtensionContext | undefined;
+  syntheticPrefixes: readonly string[];
+}): Promise<{ dimension: Dimension; cause: DecisionCause; context?: ResolvedEntryContext; pendingIdentity?: PendingIdentity; aborted: boolean }> {
+  let { dimension, cause } = entry;
+  if (entry.cacheHit) return { dimension, cause, ...(entry.context ? { context: entry.context } : {}), aborted: false };
+
+  const previous = entry.session.getWorkPhaseState();
+  const previousDeliverable = previous?.intentKey !== entry.turn.key ? previous?.deliverable : undefined;
+  const resolved = await failOpen(() => resolveEntryContext({
+    session: entry.session,
+    sessionManager: entry.extensionContext?.sessionManager,
+    ...(entry.extensionContext?.cwd ? { cwd: entry.extensionContext.cwd } : {}),
+    turn: entry.turn,
+    deliverable: dimension,
+    syntheticPrefixes: entry.syntheticPrefixes,
+    stillCurrent: entry.stillCurrent,
+  }));
+  if (resolved?.kind === 'aborted') return { dimension, cause, aborted: true };
+  if (resolved?.kind === 'pending') {
+    const kept = atLeast(dimension, (await entry.turn.thin) ? previousDeliverable : undefined);
+    return {
+      dimension: kept,
+      cause: kept === dimension ? cause : 'continuation-context',
+      pendingIdentity: resolved.identity,
+      aborted: false,
+    };
+  }
+  if (!resolved) {
+    // Preserve serving strength after failure without asserting a work identity.
+    const kept = atLeast(dimension, (await entry.turn.thin) ? previousDeliverable : undefined);
+    return { dimension: kept, cause: kept === dimension ? cause : 'continuation-context', aborted: false };
+  }
+  // Continuity comes from an existing WorkItem the entry was placed on. A thin
+  // entry placed nowhere else keeps the previous entry's task type as a
+  // serving minimum, without importing that work's identity or state.
+  const { resolution, workItemId, createdWorkItem } = resolved.context;
+  const onExistingWork = workItemId != null && !createdWorkItem;
+  const carried = !onExistingWork && await entry.turn.thin
+    ? atLeast(resolution.deliverable, previousDeliverable)
+    : resolution.deliverable;
+  if (atLeast(dimension, carried) !== dimension) {
+    dimension = carried;
+    cause = onExistingWork ? 'work-context' : 'continuation-context';
+  }
+  return { dimension, cause, context: resolved.context, aborted: false };
+}
+
 function advanceWorkPhase(args: {
   cacheHit: boolean;
   turnInput: ReturnType<typeof getTurnClassificationInput>;
   classifyResult: ReturnType<typeof classify>;
   /** The entry's task type: what it owes the user. */
   deliverable: Dimension;
+  context?: ResolvedEntryContext;
+  pendingIdentity?: PendingIdentity;
   session: RouterSession;
 }): void {
   let workPhaseState = args.session.getWorkPhaseState();
@@ -532,13 +621,17 @@ function advanceWorkPhase(args: {
     if (workPhaseState) {
       const previous = args.session.getPreviousServed();
       const served = previous && servedKey(previous);
+      noteMissedHandoff(args.session, workPhaseState);
       workPhaseState = closeInvestigationEntry(workPhaseState, served);
       if (workPhaseState.contract) workPhaseState = closeContractEntry(workPhaseState, served);
     }
     const terminal = args.classifyResult.terminal;
+    const sameWork = workPhaseState?.workItemId != null &&
+      args.context?.workItemId === workPhaseState.workItemId &&
+      args.context.resolution.relation === 'continue';
     workPhaseState =
-      workPhaseState && args.turnInput.thin
-        ? inheritThinContinuation(args.turnInput.key, workPhaseState, args.deliverable)
+      workPhaseState && sameWork
+        ? inheritWorkContinuation(args.turnInput.key, workPhaseState, args.deliverable)
         : {
             intentKey: args.turnInput.key,
             deliverable: args.deliverable,
@@ -548,10 +641,33 @@ function advanceWorkPhase(args: {
             observedMutationTools: 0,
             ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
           };
+    // A substantive continuation can demand more than the prior final step.
+    workPhaseState = withStrongerTerminal(workPhaseState, terminal);
+    workPhaseState = withEntryContext(workPhaseState, args.context);
+    if (args.pendingIdentity) workPhaseState = { ...workPhaseState, pendingIdentity: args.pendingIdentity };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
   }
   args.session.commitWorkPhaseState(workPhaseState);
+}
+
+/** Record the entry's resolution; an entry that did not resolve carries none of an earlier one. */
+function withEntryContext(state: WorkPhaseState, context: ResolvedEntryContext | undefined): WorkPhaseState {
+  const {
+    contextResolution: _resolution,
+    workItemId: _item,
+    contextReasons: _reasons,
+    contextSatisfied: _satisfied,
+    ...rest
+  } = state;
+  if (!context) return rest;
+  return {
+    ...rest,
+    contextResolution: context.resolution,
+    ...(context.workItemId ? { workItemId: context.workItemId } : {}),
+    contextReasons: context.resolution.contextReasons,
+    contextSatisfied: context.contextSatisfied,
+  };
 }
 
 function resolveTurnEffort(args: {
@@ -621,6 +737,12 @@ type RouterTurnOutcome =
   | { kind: 'terminal'; reason: 'error' | 'aborted'; message: string }
   | { kind: 'done' };
 
+const SESSION_CHANGED: RouterTurnOutcome = {
+  kind: 'terminal',
+  reason: 'aborted',
+  message: 'Router session changed during this turn.',
+};
+
 function noRoutableCandidates(session: RouterSession): RouterTurnOutcome {
   const excludedProviders = session.getBlacklistedProviders();
   const excludedModels = session.getBlacklistedModels();
@@ -656,6 +778,9 @@ interface ResolvedTurn {
   baseDimension: Dimension;
   baseCause: DecisionCause;
   stillCurrent: () => boolean;
+  /** The entry's work-context resolution. */
+  context?: ResolvedEntryContext;
+  pendingIdentity?: PendingIdentity;
 }
 
 interface ScoredTurn {
@@ -726,52 +851,63 @@ async function prepareRouterTurn(args: {
   };
 }
 
-/** `dimension`, raised to `floor` when the floor is stronger. */
-function atLeast(dimension: Dimension, floor: Dimension | undefined): Dimension {
-  return floor && DIMENSION_STRENGTH[floor] > DIMENSION_STRENGTH[dimension] ? floor : dimension;
-}
-
-/** Settle this entry's task type and cache it for the entry's later invocations. */
-function resolveRouterTurn(args: {
+/** Resolve this entry's work identity and local task-type floor. */
+async function resolveRouterTurn(args: {
   prepared: PreparedTurn;
   session: RouterSession;
-}): ResolvedTurn {
+}): Promise<{ kind: 'ready'; resolved: ResolvedTurn } | RouterTurnOutcome> {
   const { prepared, session } = args;
   const { turnInput } = prepared.measured;
-  const { cacheHit, classifyResult } = prepared.intent;
-  let { baseDimension, baseCause } = prepared.intent;
+  const { cacheHit, cachedIntent } = prepared.intent;
 
   const sessionGeneration = session.getSessionGeneration();
   const stillCurrent = (): boolean => session.getSessionGeneration() === sessionGeneration;
 
-  // A thin entry names no work of its own: the previous entry's task type is
-  // its minimum. The raise is cached with the entry, so it happens once.
-  if (!cacheHit && turnInput.thin) {
-    const previous = session.getWorkPhaseState();
-    const previousDeliverable = previous?.intentKey !== turnInput.key ? previous?.deliverable : undefined;
-    const kept = atLeast(baseDimension, previousDeliverable);
-    if (kept !== baseDimension) {
-      baseDimension = kept;
-      baseCause = 'continuation-context';
-    }
-  }
+  // The embedding reading's raised final step can settle after identity
+  // resolution; adoption at the context handoff reads the settled type.
+  const entry = await resolveEntrySemantics({
+    session,
+    stillCurrent,
+    cacheHit,
+    dimension: prepared.intent.baseDimension,
+    cause: prepared.intent.baseCause,
+    turn: { ...turnInput, thin: turnInput.thin },
+    ...(cachedIntent?.context && cacheHit ? { context: cachedIntent.context } : {}),
+    extensionContext: prepared.extensionContext,
+    syntheticPrefixes: prepared.config.syntheticPrefixes,
+  });
+  if (entry.aborted) return SESSION_CHANGED;
+  const baseDimension = entry.dimension;
+  const baseCause = entry.cause;
+  
+  const settled = prepared.measured.turnInput;
 
   if (!cacheHit) {
     session.setCachedIntent({
-      key: turnInput.key,
-      classifyResult,
+      key: settled.key,
+      classifyResult: prepared.intent.classifyResult,
       dimension: baseDimension,
       cause: baseCause,
-      thin: turnInput.thin,
+      thin: settled.thin,
+      ...(entry.context ? { context: entry.context } : {}),
     });
   }
   debugLog('classify.context', {
-    thin: turnInput.thin,
+    thin: settled.thin,
     cacheHit,
-    key: turnInput.key,
+    key: settled.key,
   });
 
-  return { baseDimension, baseCause, stillCurrent };
+  return {
+    kind: 'ready',
+    resolved: {
+      baseDimension,
+      baseCause,
+      stillCurrent,
+      ...(entry.context ? { context: entry.context } : {}),
+      ...(entry.pendingIdentity ? { pendingIdentity: entry.pendingIdentity } : {}),
+    },
+  };
 }
 
 /**
@@ -888,12 +1024,23 @@ function scoreRouterTurn(args: {
   // submitter's task type and thinking level, until an invocation serves.
   const restore = contract?.status === 'broken' ? contract : undefined;
   const handBack = restore ?? (reviewing ? contract : undefined);
-  advanceWorkPhase({ cacheHit, turnInput, classifyResult, deliverable: baseDimension, session });
+  advanceWorkPhase({
+    cacheHit,
+    turnInput,
+    classifyResult,
+    deliverable: baseDimension,
+    ...(resolved.context ? { context: resolved.context } : {}),
+    ...(resolved.pendingIdentity ? { pendingIdentity: resolved.pendingIdentity } : {}),
+    session,
+  });
   // An entry that owes context acquires it first, read-only; an accepted
   // context handoff routes the rest of the entry as its next phase, including
   // when a broken plan hands back to its submitter. A pinned or held model
   // serves every phase: a pin chooses the model, not what the request owes.
-  let entry = session.getWorkPhaseState();
+  // An entry whose work item's previous acquisition never handed off is a
+  // recovery: its plan or review preparation is waived, and every phase of
+  // it is scored at the deliverable.
+  let entry = waiveMissedInvestigation(session, session.getWorkPhaseState());
   const phase = entryPhase(entry, baseDimension);
   if (phase.cause === 'investigation' && entry) {
     let next = entry.contextStatus == null ? { ...entry, contextStatus: 'acquiring' as const, contextRequests: 0 } : entry;
@@ -920,10 +1067,12 @@ function scoreRouterTurn(args: {
   const routedDimension = reviewing ? 'review' : implementing ? 'implement' : phase.dimension;
   const routedCause = reviewing || implementing ? 'execution-contract' : phase.cause ?? baseCause;
   // The reasoning phase is scored at its handoff's minimum; its incumbent
-  // minimums stand down once, until a model serves the phase.
+  // minimums stand down once, until a model serves the phase. A recovery
+  // entry keeps its deliverable's strength: no rubric discounts it.
   const reasoning = routedDimension === entry?.reasoningHandoff?.target ? entry.reasoningHandoff : undefined;
   const pendingBoundary = entry?.contextStatus === 'ready-pending' && !handBack;
   const reasoningPending = pendingBoundary && reasoning?.pending === true;
+  const reasoningMinimum = reasoning && !entry?.recoveryMinimum ? reasoning : undefined;
 
   // Pi clears lastServed at stream start; the rotated value is the model and
   // effort that actually served, including an effort-floor bump or fallback.
@@ -957,8 +1106,13 @@ function scoreRouterTurn(args: {
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
     ...(execution
       ? { handoffMinimum: execution.minimum, handoffPending: contract?.releasePending === true }
-      : reasoning ? { handoffMinimum: reasoning.minimum, handoffPending: reasoningPending } : {}),
-    ...(entry?.deliverable ? { deliverable: entry.deliverable } : {}),
+      : reasoningMinimum ? { handoffMinimum: reasoningMinimum.minimum, handoffPending: reasoningPending } : {}),
+    // The conservative fallback records new work without evidence of a change.
+    ...(resolved.context ? {
+      workRelation: resolved.context.resolution.resolver === 'fallback'
+        ? 'unknown' as const
+        : resolved.context.resolution.relation,
+    } : {}),
     config,
   });
   const decision = policy.decision;
@@ -970,7 +1124,6 @@ function scoreRouterTurn(args: {
   if (reasoning) decision.reasoningHandoff = session.getWorkPhaseState()?.reasoningHandoff ?? reasoning;
   if (entry?.previousHandoffId && session.getLastDecision()?.intentKey !== turnInput.key) {
     decision.previousHandoffId = entry.previousHandoffId;
-    decision.offTopicReset = policy.offTopicReset;
   }
   if (mutationObserved) decision.mutationObserved = true;
   if (contract) {
@@ -978,6 +1131,8 @@ function scoreRouterTurn(args: {
     const meta = current && contractMeta(current);
     if (meta) decision.executionContract = meta;
   }
+  if (resolved.context) decision.workContext = workContextMeta(resolved.context);
+  
   decision.intentKey = turnInput.key;
   decision.provenanceCounts = turnInput.provenanceCounts;
   try {
@@ -1173,6 +1328,9 @@ async function delegateRouterTurn(args: {
     if (scored.releasesContract && releasing?.contract?.status === 'active') {
       session.commitWorkPhaseState(serveContractRelease(releasing));
     }
+    // A recovery entry's work item flag is used once a model at its
+    // deliverable's strength serves it.
+    consumeRecovery(session);
     const current = session.getWorkPhaseState();
     if (!scored.pendingBoundary || current?.intentKey !== intentKey || current.contextStatus !== 'ready-pending') {
       return finalDecision;
@@ -1189,6 +1347,9 @@ async function delegateRouterTurn(args: {
     return handoff ? { ...finalDecision, reasoningHandoff: handoff } : finalDecision;
   };
   const result = await runDelegationLoop(delegationOptions, stream);
+  if (result.success && session.getSessionGeneration() === delegationSessionGeneration) {
+    recordServedWork(session, session.getWorkPhaseState()?.workItemId);
+  }
 
   if (
     result.capabilityHandoff
@@ -1509,6 +1670,37 @@ async function resolveTrajectoryUnavailableGate(args: {
   }
 }
 
+/**
+ * Resolve a pinned or resumed entry's work context. Only the deterministic
+ * tiers apply; the pin chooses the model, not whether context is owed.
+ */
+async function resolvePinnedEntryContext(
+  prepared: PreparedTurn,
+  session: RouterSession,
+): Promise<ResolvedEntryContext | PendingIdentity | undefined | 'aborted'> {
+  if (prepared.intent.cacheHit) return prepared.intent.cachedIntent?.context
+    ?? session.getWorkPhaseState()?.pendingIdentity;
+  
+  const generation = session.getSessionGeneration();
+  const resolved = await failOpen(() => resolveEntryContext({
+    session,
+    sessionManager: prepared.extensionContext?.sessionManager,
+    ...(prepared.extensionContext?.cwd ? { cwd: prepared.extensionContext.cwd } : {}),
+    turn: prepared.measured.turnInput,
+    deliverable: prepared.intent.baseDimension,
+    ...(prepared.config.syntheticPrefixes.length > 0
+      ? { syntheticPrefixes: prepared.config.syntheticPrefixes }
+      : {}),
+    stillCurrent: () => session.getSessionGeneration() === generation,
+  }));
+  return resolved?.kind === 'aborted' ? 'aborted'
+    : resolved?.kind === 'pending' ? resolved.identity : resolved?.context;
+}
+
+function isPendingIdentity(value: ResolvedEntryContext | PendingIdentity | undefined): value is PendingIdentity {
+  return !!value && 'catalog' in value;
+}
+
 /** Serve the session-scoped manual pin and nothing else. */
 async function runManualTurn(args: {
   prepared: PreparedTurn;
@@ -1522,6 +1714,10 @@ async function runManualTurn(args: {
   stream: AssistantMessageEventStream;
 }): Promise<RouterTurnOutcome> {
   const { prepared, manualModel, cause = 'manual-override', context, options, pi, session, turnTimer, stream } = args;
+  const entryContext = await resolvePinnedEntryContext(prepared, session);
+  if (entryContext === 'aborted') return SESSION_CHANGED;
+  const pendingIdentity = isPendingIdentity(entryContext) ? entryContext : undefined;
+  const resolvedContext = entryContext && 'resolution' in entryContext ? entryContext : undefined;
   if (!prepared.intent.cacheHit) {
     const { turnInput } = prepared.measured;
     session.setCachedIntent({
@@ -1530,6 +1726,7 @@ async function runManualTurn(args: {
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
+      ...(resolvedContext ? { context: resolvedContext } : {}),
     });
   }
   const candidates = manualCandidates(prepared, manualModel);
@@ -1551,6 +1748,8 @@ async function runManualTurn(args: {
     baseDimension: prepared.intent.baseDimension,
     baseCause: cause,
     stillCurrent: () => true,
+    ...(resolvedContext ? { context: resolvedContext } : {}),
+    ...(pendingIdentity ? { pendingIdentity } : {}),
   };
   const scoring = scoreRouterTurn({
     prepared: manualPrepared,
@@ -1622,7 +1821,13 @@ async function runResumeTurn(args: {
     return { kind: 'recompute' };
   }
 
+  const entryContext = await resolvePinnedEntryContext(prepared, session);
   const { turnInput } = prepared.measured;
+  if (entryContext === 'aborted') return SESSION_CHANGED;
+  if (isPendingIdentity(entryContext)) {
+    session.clearPendingResume();
+    return { kind: 'recompute' };
+  }
   if (!prepared.intent.cacheHit) {
     session.setCachedIntent({
       key: turnInput.key,
@@ -1630,6 +1835,7 @@ async function runResumeTurn(args: {
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
+      ...(entryContext ? { context: entryContext } : {}),
     });
   }
 
@@ -1643,10 +1849,12 @@ async function runResumeTurn(args: {
     routedDown: false,
     intentKey: turnInput.key,
     provenanceCounts: turnInput.provenanceCounts,
+    ...(entryContext ? { workContext: workContextMeta(entryContext) } : {}),
   };
   // Drop annotations that belonged to the snapshot's own turn: this turn did
-  // not re-derive friction or a pick change.
+  // not re-derive friction, a pick change, or its work context.
   delete decision.trajectoryFriction;
+  if (!entryContext) delete decision.workContext;
   delete decision.routedPickChanged;
   try {
     decision.baseline = pickBaseline(routableCandidates, decision.dimension, prepared.config.baselineModel);
@@ -1679,9 +1887,9 @@ async function runResumeTurn(args: {
 }
 
 /**
- * Ordered phases for one router turn. Scoring re-filters the candidate pool,
- * and the trajectory handoff is acknowledged only once a stronger model has
- * actually served.
+ * Ordered phases for one router turn. Scoring re-filters the candidate pool
+ * after identity resolution, and the trajectory handoff is acknowledged only
+ * once a stronger model has actually served.
  */
 async function runRouterTurn(args: {
   context: Context;
@@ -1733,7 +1941,9 @@ async function runRouterTurn(args: {
     if (outcome.kind !== 'recompute') return outcome;
   }
 
-  const resolved = resolveRouterTurn({ prepared, session });
+  const resolvedTurn = await resolveRouterTurn({ prepared, session });
+  if (resolvedTurn.kind !== 'ready') return resolvedTurn;
+  const { resolved } = resolvedTurn;
 
   const scoring = scoreRouterTurn({ prepared, resolved, options, session });
   if (scoring.kind !== 'ready') return scoring;

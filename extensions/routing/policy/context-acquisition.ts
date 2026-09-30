@@ -1,9 +1,12 @@
 /**
  * Collecting context: the read-only phase before an entry's deliverable.
  *
- * An entry owes context when its plan or review needs preparation, or when
- * its implementation asks to investigate before its change. It starts as
- * collecting context, routed as `gather`. Until `hand_off_context` is accepted,
+ * An entry owes context when no work item can be chosen for it yet, when its
+ * plan or review needs preparation, when its request rests on a referenced
+ * file not read as it is now, or when its work item left an obligation open.
+ * It starts as
+ * collecting context, routed as `gather` (a missed-handoff recovery entry is
+ * routed at its deliverable instead). Until `hand_off_context` is accepted,
  * only trusted read, search, and list tools run. The model hands off with
  * outcome `ready` and its findings, or `needs-user` and its question; the
  * router, not the model, decides the next phase and its minimum. A ready
@@ -17,6 +20,7 @@
  */
 import { dirname } from 'node:path';
 import type { DecisionCause, Dimension, ReasoningEvidence, ReasoningHandoffMeta } from '../../types.js';
+import { CONTEXT_DELIVERABLES } from '../context/resolve.js';
 import type { ContextReason } from '../context/types.js';
 import type { WorkPhaseState } from './work-phase.js';
 
@@ -59,15 +63,21 @@ export type ContextStatus =
   | 'served';
 
 /**
- * What the entry owes before its deliverable. A plan or review always needs
- * preparation, and so does an implementation that asks to investigate
- * before its change: it needs a decided plan first.
+ * What the entry owes before its deliverable, fixed when it resolved. A plan
+ * or review always needs preparation unless a missed-handoff recovery waived
+ * it; context the request owes and the router found missing is owed whatever
+ * the deliverable, so a waiver never skips a file or an open obligation.
  */
 export function owedContext(state: WorkPhaseState | undefined): ContextReason[] {
   const deliverable = state?.deliverable;
   if (!state || !deliverable) return [];
-  const investigateFirst = deliverable === 'implement' && state.terminal.compound && state.terminal.confidence !== 'low';
-  return deliverable === 'plan' || deliverable === 'review' || investigateFirst ? ['reasoning-prep'] : [];
+  const reasons: ContextReason[] = [];
+  if (state.pendingIdentity) reasons.push('identity-unresolved');
+  if ((deliverable === 'plan' || deliverable === 'review') && !state.contextWaived) reasons.push('reasoning-prep');
+  if (CONTEXT_DELIVERABLES.has(deliverable) && state.contextSatisfied === false) {
+    reasons.push(...(state.contextReasons ?? []));
+  }
+  return reasons;
 }
 
 /** Whether the entry owes collecting context before its deliverable. */
@@ -131,7 +141,8 @@ export interface EntryPhase {
 
 /**
  * The entry's routed phase. A pinned model serves every phase: a pin chooses
- * the model, never which context the request owes.
+ * the model, never which context the request owes. A recovery entry acquires
+ * at its deliverable, so a model trusted with the deliverable does it.
  */
 export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): EntryPhase {
   if (state?.reasoningHandoff) return { dimension: state.reasoningHandoff.target, cause: 'investigation-handoff' };
@@ -139,7 +150,7 @@ export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): 
     return { dimension: state.deliverable ?? base, cause: 'investigation-handoff' };
   }
   if (state?.contextStatus === 'clarification-only' || contextOwed(state)) {
-    return { dimension: 'gather', cause: 'investigation' };
+    return { dimension: state?.recoveryMinimum ? state.deliverable ?? base : 'gather', cause: 'investigation' };
   }
   return { dimension: base };
 }

@@ -16,20 +16,22 @@ import type {
   Candidate,
   DecisionCause,
   Dimension,
+  EmbeddingMeta,
   RoutingDecision,
 } from '../types.js';
-import { servedKey, type ServedInfo } from '../host/ui.js';
 import { debugLog } from '../host/debuglog.js';
-import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/ledger.js';
-import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
-import { ReadCoverage, type LineRange } from '../routing/context/grounding.js';
-import type { LegacyIndex } from '../routing/context/legacy.js';
-import type { BranchState, RoutingContextEvent } from '../routing/context/types.js';
+import { servedKey, type ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
 import type { PendingTrajectoryEscalation, StruggleDecision } from '../routing/struggle/types.js';
 import type { ToolCycleInput } from '../routing/struggle/fingerprints.js';
+import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/ledger.js';
+import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
+import { ReadCoverage, type LineRange } from '../routing/context/grounding.js';
+import type { LegacyIndex } from '../routing/context/legacy.js';
+import { CONTEXT_COMMIT_EVENT_LIMIT, type BranchState, type FlatContextEvent, type RoutingContextEvent } from '../routing/context/types.js';
+import type { ResolvedEntryContext } from './context-resolution.js';
 
 export interface CachedRoutingIntent {
   key: string;
@@ -37,6 +39,10 @@ export interface CachedRoutingIntent {
   dimension: Dimension;
   cause: DecisionCause;
   thin: boolean;
+  /** The entry's work-context resolution; resolved once per entry. */
+  context?: ResolvedEntryContext;
+  /** The embedding reader's reading of the entry's prompt; read once per entry. */
+  embedding?: EmbeddingMeta;
 }
 
 /** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */
@@ -93,8 +99,17 @@ export class RoutingContextState {
   private ledger: TopicLedger = emptyLedger();
   private branchState: BranchState = 'native-empty';
   private persist: ((event: RoutingContextEvent) => void) | undefined;
+  /** Session entry id of the genuine user entry being routed. */
+  private entrySource: string | undefined;
   /** Lines of anchored files read so far, until they cover the whole file; runtime-only. */
   private readCoverage = new Map<string, ReadCoverage>();
+  /**
+   * An entry's resolution failed, so the branch never recorded it and the
+   * active item may be stale work. Runtime-only; it survives a branch restore
+   * because that restore cannot tell whether the failed entry is on the new
+   * branch.
+   */
+  private fastPathBlocked = false;
   /**
    * The index of the history before tracking started, for the boundary it
    * was built at. The path to an entry never changes, so it holds across
@@ -118,12 +133,26 @@ export class RoutingContextState {
   restore(branch: readonly unknown[] | undefined): void {
     this.ledger = rebuildLedger(branch);
     this.branchState = classifyBranch(branch, this.ledger);
+    this.entrySource = undefined;
     this.readCoverage.clear();
   }
 
   /** Re-read an untracked branch's state; a tracked branch keeps its ledger's. */
   refreshBranchState(branch: readonly unknown[] | undefined): void {
     if (this.ledger.events === 0) this.branchState = classifyBranch(branch, this.ledger);
+  }
+
+  /**
+   * Whether the active item may be continued without a resolver. A thin
+   * entry after a failed resolution must not inherit the failed entry's
+   * predecessor; it stays blocked until an entry is placed on a work item.
+   */
+  isFastPathBlocked(): boolean {
+    return this.fastPathBlocked;
+  }
+
+  setFastPathBlocked(blocked: boolean): void {
+    this.fastPathBlocked = blocked;
   }
 
   /**
@@ -161,16 +190,50 @@ export class RoutingContextState {
     return true;
   }
 
+  /** Persist a ready handoff as one branch entry before publishing any of its changes. */
+  appendCommit(events: readonly RoutingContextEvent[]): boolean {
+    const first = events[0];
+    if (!first || first.op === 'context-commit' || events.length > CONTEXT_COMMIT_EVENT_LIMIT
+      || events.some((event) => event.op === 'context-commit' || event.sourceEntryId !== first.sourceEntryId)) return false;
+    let next = this.ledger;
+    for (const event of events) {
+      const applied = applyEvent(next, event);
+      if (applied === next) return false;
+      next = applied;
+    }
+    const record: RoutingContextEvent = { v: 1, op: 'context-commit', sourceEntryId: first.sourceEntryId,
+      events: [...events] as FlatContextEvent[] };
+    try {
+      this.persist?.(record);
+    } catch (err) {
+      debugLog('context.persist-error', { op: record.op, message: err instanceof Error ? err.message : String(err) });
+      return false;
+    }
+    this.ledger = next;
+    this.branchState = 'tracked';
+    return true;
+  }
+
   /** The index for `headEntryId`, built at most once per boundary. */
   legacyIndexFor(headEntryId: string, build: () => LegacyIndex): LegacyIndex {
     if (this.legacyIndex?.headEntryId !== headEntryId) this.legacyIndex = build();
     return this.legacyIndex;
   }
 
+  getEntrySource(): string | undefined {
+    return this.entrySource;
+  }
+
+  setEntrySource(sourceEntryId: string | undefined): void {
+    this.entrySource = sourceEntryId;
+  }
+
   reset(): void {
     this.ledger = emptyLedger();
     this.branchState = 'native-empty';
+    this.entrySource = undefined;
     this.readCoverage.clear();
+    this.fastPathBlocked = false;
     this.legacyIndex = undefined;
   }
 }
@@ -264,6 +327,7 @@ export class RouterSession {
     abstainedLowConf: 0,
     degraded: 0,
   };
+
   private memoizedCandidateExpansion: { key: string; candidates: Candidate[] } | undefined;
 
   constructor(
@@ -629,6 +693,7 @@ export class RouterSession {
     this.embedStats.promoted = 0;
     this.embedStats.abstainedLowConf = 0;
     this.embedStats.degraded = 0;
+
     this.memoizedCandidateExpansion = undefined;
 
     this.intent.reset();

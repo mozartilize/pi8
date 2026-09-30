@@ -44,11 +44,13 @@ describe('entry phase', () => {
   it.each([
     ['plan', {}, 'gather', 'investigation'],
     ['review', {}, 'gather', 'investigation'],
-    ['implement', { terminal: terminal({ kind: 'implement', compound: true }) }, 'gather', 'investigation'],
-    ['implement', { terminal: terminal({ kind: 'implement', compound: true, confidence: 'low' }) }, 'implement', undefined],
+    ['implement', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', 'investigation'],
+    ['implement', { contextReasons: ['carried-open-context'], contextSatisfied: false }, 'gather', 'investigation'],
+    ['implement', { contextReasons: ['referenced-artifact'], contextSatisfied: true }, 'implement', undefined],
+    ['implement', { contextReasons: [], contextSatisfied: true }, 'implement', undefined],
     ['implement', {}, 'implement', undefined],
-    ['gather', {}, 'gather', undefined],
-    ['lightweight', {}, 'lightweight', undefined],
+    ['gather', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', undefined],
+    ['lightweight', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'lightweight', undefined],
   ] as const)('a %s deliverable with %j routes as its acquisition until handoff', (deliverable, over, dimension, cause) => {
     const entry = state({ deliverable, ...over } as Partial<WorkPhaseState>);
     expect(entryPhase(entry, deliverable)).toEqual({ dimension, ...(cause ? { cause } : {}) });
@@ -60,12 +62,21 @@ describe('entry phase', () => {
     });
     expect(entryPhase(toReview, 'review')).toEqual({ dimension: 'review', cause: 'investigation-handoff' });
     const toImplement = acceptContextHandoff(
-      state({ deliverable: 'implement', terminal: terminal({ kind: 'implement', compound: true }), contextStatus: 'acquiring' }),
+      state({ deliverable: 'implement', contextReasons: ['referenced-artifact'], contextSatisfied: false, contextStatus: 'acquiring' }),
       { deliverable: 'implement', key: 'k' },
     );
     expect(entryPhase(toImplement, 'implement')).toEqual({ dimension: 'implement', cause: 'investigation-handoff' });
     expect(entryPhase(serveContextHandoff(toImplement, 'b/x'), 'implement'))
       .toEqual({ dimension: 'implement', cause: 'investigation-handoff' });
+  });
+
+  it('acquires a recovery entry at its deliverable, and a waived plan owes nothing else', () => {
+    const recovery = state({ deliverable: 'review', contextWaived: true, recoveryMinimum: true });
+    expect(owedContext(recovery)).toEqual([]);
+    expect(entryPhase(recovery, 'review')).toEqual({ dimension: 'review' });
+    const withFile = { ...recovery, contextReasons: ['referenced-artifact' as const], contextSatisfied: false };
+    expect(owedContext(withFile)).toEqual(['referenced-artifact']);
+    expect(entryPhase(withFile, 'review')).toEqual({ dimension: 'review', cause: 'investigation' });
   });
 
   it('keeps a clarification-only entry in the restricted phase whatever it owes', () => {
@@ -75,7 +86,8 @@ describe('entry phase', () => {
   });
 
   it('lists every reason an entry owes', () => {
-    expect(owedContext(state({ deliverable: 'review' }))).toEqual(['reasoning-prep']);
+    expect(owedContext(state({ deliverable: 'review', contextReasons: ['referenced-artifact'], contextSatisfied: false })))
+      .toEqual(['reasoning-prep', 'referenced-artifact']);
     expect(owedContext(state({ deliverable: 'gather' }))).toEqual([]);
     expect(owedContext(undefined)).toEqual([]);
   });

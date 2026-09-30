@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -32,7 +32,9 @@ vi.mock('./bench/store.js', () => ({
   // handoff-log writes throw inside their fail-open catch and never land.
   resolveStoragePath: (base?: string) => base ?? '/tmp/pi8-test-store',
 }));
-vi.mock('./config.js', () => ({ loadConfig: vi.fn(() => ({ debug: false })) }));
+vi.mock('./config.js', () => ({
+  loadConfig: vi.fn(() => ({ debug: false })),
+}));
 vi.mock('./routing/policy/allowlist.js', () => ({
   loadModelFilter: vi.fn(() => () => true),
   buildExcludeFilter: vi.fn(() => () => false),
@@ -848,6 +850,48 @@ describe('work ledger lifecycle', () => {
     expect(defaultRouterSession.context.getLedger().items.size).toBe(2);
   });
 
+  it('keeps the entry state on session_tree only while its entry is on the branch', async () => {
+    const tree = new SessionTree();
+    const u1 = tree.user('plan the export', 100);
+    tree.event(createEvent(workItem('w_1', 't_1', { lastDeliverable: 'plan' }), u1));
+    tree.event(activateEvent('w_1', u1));
+    const fork = tree.assistant('planned');
+    tree.user('look up the export callers', 200);
+    const leaf = tree.getLeafId();
+    const { handlers, pi } = makePi(tree);
+    await autoModelRouterExtension(pi);
+    await handlers.get('session_start')!({ reason: 'resume' }, ctxFor(tree));
+    const state: WorkPhaseState = {
+      intentKey: '2:200:abcd',
+      deliverable: 'gather',
+      terminal: terminalAssessment({ kind: 'gather' }),
+      terminalBand: 'standard',
+      providerInvocation: 3,
+      observedMutationTools: 1,
+      contractStrikes: { 'beta/strong': 2 },
+      excludedExecutors: ['beta/strong'],
+      contextStatus: 'acquiring',
+      workItemId: 'w_1',
+    };
+    defaultRouterSession.commitWorkPhaseState(state);
+
+    await handlers.get('session_tree')!({ newLeafId: leaf, oldLeafId: leaf }, ctxFor(tree));
+    expect(defaultRouterSession.getWorkPhaseState()).toBe(state);
+
+    // Off the entry's branch, only what a thin continuation inherits stays,
+    // raised to the restored active item's task type.
+    tree.navigate(fork);
+    await handlers.get('session_tree')!({ newLeafId: fork, oldLeafId: leaf }, ctxFor(tree));
+    expect(defaultRouterSession.getWorkPhaseState()).toEqual({
+      intentKey: '2:200:abcd',
+      deliverable: 'plan',
+      terminal: state.terminal,
+      terminalBand: 'standard',
+      providerInvocation: 3,
+      observedMutationTools: 0,
+    });
+  });
+
   it('reads an untracked branch as legacy after a switch to router/auto, without writing to it', async () => {
     const tree = new SessionTree();
     tree.modelChange('openai', 'gpt-5');
@@ -1002,7 +1046,7 @@ describe('mutation observation hooks', () => {
     flush.mockRestore();
   });
 
-  it('never blocks an edit and never changes the routed task type', async () => {
+  it('lets an edit of an investigation that owes no handoff run, without changing the routed task type', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
     defaultRouterSession.intent.commitWorkPhaseState(entryState());
@@ -1044,7 +1088,7 @@ describe('mutation observation hooks', () => {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
       registerTool,
     } as unknown as ExtensionAPI);
-    // Both handoff tools are registered once, up front, so the tool list never changes mid-session.
+    // Every router tool is registered once, up front, so the tool list never changes mid-session.
     expect(registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name))
       .toEqual(['commit_execution', 'hand_off_context', 'routing_context']);
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
@@ -1219,7 +1263,7 @@ describe('mutation observation hooks', () => {
       return defaultRouterSession.getWorkPhaseState()!;
     };
     // An implementation never becomes cheaper; a bounded plan can drop one step to review.
-    const change = { deliverable: 'implement' as const };
+    const change = { deliverable: 'implement' as const, contextReasons: ['carried-open-context' as const], contextSatisfied: false };
     expect((await hand(change, { deliverable: 'gather', scope: 'bounded' })).deliverable).toBe('implement');
     expect((await hand(change, { deliverable: 'implement' })).reasoningHandoff).toBeUndefined();
     expect((await hand(change, { deliverable: 'plan' })).reasoningHandoff).toMatchObject({ target: 'plan' });
@@ -1268,6 +1312,30 @@ describe('mutation observation hooks', () => {
     expect((await tool.execute('p2', READY, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
     expect(gateRecords('investigationHandoff').map((r) => (r as { action: string }).action))
       .toEqual(['reject', 'needs-user', 'deny', 'deny', 'deny', 'deny', 'reject']);
+  });
+
+  it('declines a ready handoff until every referenced file is read as it is now', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = handoffTool(registerTool);
+    const repo = mkdtempSync(join(tmpdir(), 'ar-handoff-'));
+    writeFileSync(join(repo, 'spec.md'), 'the spec\n');
+    try {
+      const ctx = { ...routerAutoCtx, cwd: repo } as unknown as ExtensionContext;
+      defaultRouterSession.context.append(createEvent(workItem('w_1', 't_1', {
+        anchors: [{ kind: 'path', value: 'spec.md', role: 'reference', source: 'user' }], openContext: ['referenced-artifact'],
+      })));
+      investigating({
+        deliverable: 'implement', workItemId: 'w_1', contextReasons: ['referenced-artifact'], contextSatisfied: false,
+      });
+      const request = { ...READY, deliverable: 'implement' };
+      const declined = await tool.execute('p1', request, undefined, undefined, ctx) as unknown as { content: Array<{ text: string }>; details: { accepted: boolean } };
+      expect(declined.details.accepted).toBe(false);
+      expect(declined.content[0]!.text).toContain('spec.md');
+      expect(defaultRouterSession.getWorkPhaseState()?.contextDenials).toBe(1);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it('never hangs measuring a declared file that is a device', async () => {
@@ -1477,7 +1545,7 @@ describe('mutation observation hooks', () => {
       .toMatchObject({ block: true });
   });
 
-  it('never stops a change with a plan, a pinned model, or outside plan/review', async () => {
+  it('never stops a change with a plan, a pinned model, a plan-only request, or outside plan/review', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
     const edit = (id: string) => toolCall({ toolName: 'edit', toolCallId: id, input: { path: 'src/a.ts' } }, routerAutoCtx);
@@ -1489,6 +1557,9 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.setManualModel('test/plan');
     expect(await edit('e2')).toBeUndefined();
     defaultRouterSession.resumeManual();
+
+    planEntry({ deliverable: 'plan' });
+    expect(await edit('e3')).toBeUndefined();
 
     planEntry({}, {
       dimension: 'implement',
@@ -1535,7 +1606,7 @@ describe('mutation observation hooks', () => {
     expect(defaultRouterSession.getLastDecision()?.dimension).toBe('gather');
 
     // A pinned model is held to the same phase.
-    investigating({ deliverable: 'implement' });
+    investigating({ deliverable: 'implement', contextReasons: ['referenced-artifact'], contextSatisfied: false });
     defaultRouterSession.setManualModel('test/cheap');
     expect(await call('write')).toMatchObject({ block: true });
     defaultRouterSession.resumeManual();

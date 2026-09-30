@@ -54,6 +54,7 @@ import { actionFromTool, cycleFromToolResult, isVerifier } from '../routing/stru
 import { parseCandidateKey } from '../routing/score/scorer.js';
 import { classifyMutationCall, isMutationCall } from '../routing/policy/mutation-detector.js';
 import type { RouterSession } from './router-session-state.js';
+import { recordBoundary } from './context-resolution.js';
 
 const DESCRIPTION =
   'Hand off the remaining implementation as a closed execution plan. Call it only when the user asked for the ' +
@@ -494,6 +495,7 @@ export function submitExecutionContract(
   session.commitWorkPhaseState(next);
   const meta = contractMeta(next);
   appendExecutionContractSignal({ intentKey: state.intentKey, served, action: 'accept', meta });
+  recordBoundary(session, next, 'execution-contract', state.intentKey);
   const contract = next.contract!;
   const header = contract.release
     ? `Execution plan accepted (${contract.band}, executor minimum ${contract.minimum!.toFixed(2)}). A model ` +

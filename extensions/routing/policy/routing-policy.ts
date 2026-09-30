@@ -25,6 +25,7 @@ import {
   type ScoreOpts,
 } from '../score/scorer.js';
 import type { PendingTrajectoryEscalation } from '../struggle/types.js';
+import type { EntryResolution } from '../context/types.js';
 
 // ─── Public interfaces ───────────────────────────────────────────────
 
@@ -54,17 +55,16 @@ export interface RoutingPolicyInput {
   /**
    * The dimension the previous decision resolved at. When the incumbent model
    * stays sticky within a task, this carries forward as an up-only effort
-   * floor so a cheap-phrased same-task follow-up cannot serve the strong
-   * incumbent at a shallow thinking level. Stands down on an off-topic reset
-   * and the same sanctioned downward moves as the incumbent model floor (R3).
+   * minimum so a cheap-phrased same-task follow-up cannot serve the strong
+   * incumbent at a shallow thinking level. It stands down on the same
+   * sanctioned moves as the incumbent capability minimum.
    */
   incumbentResolvedDimension?: Dimension;
   /**
    * True when this invocation shares the previous decision's intent key — i.e.
    * it is a continuation of the same user entry (a post-tool re-invocation),
-   * not a fresh user turn. The incumbent capability floor uses it so an
-   * off-topic reset can only fire on a genuine new entry, never on every
-   * re-invocation of one cached intent.
+   * not a fresh user turn. A cached work relation may release the unrelated
+   * incumbent only at entry start, not on each post-tool invocation.
    */
   sameIntentAsLast?: boolean;
   /**
@@ -79,12 +79,8 @@ export interface RoutingPolicyInput {
    * for the new phase. Once a model serves the phase, it is the incumbent.
    */
   handoffPending?: boolean;
-  /**
-   * Task type the entry owes the user when it differs from the routed phase
-   * (an investigation before planning or review). The off-topic reset keys
-   * on it, so an on-topic planning follow-up keeps its incumbent.
-   */
-  deliverable?: Dimension;
+  /** Recorded semantic relation. Missing or unknown resolution keeps both incumbent minimums. */
+  workRelation?: EntryResolution['relation'];
   config: Pick<
     AutoRouterConfig,
     | 'dimensionWeights'
@@ -97,8 +93,6 @@ export interface RoutingPolicyResult {
   decision: RoutingDecision;
   /** True when trajectory friction selected a stronger head pick. */
   trajectoryApplied: boolean;
-  /** True when a new entry reset the incumbent minimums as off-topic. */
-  offTopicReset: boolean;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -350,7 +344,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     config,
     handoffMinimum,
     handoffPending,
-    deliverable = baseDimension,
+    workRelation,
   } = input;
 
   // The caller's base dimension and cause are the routed task type. Context
@@ -393,25 +387,16 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   decision = trajectory.decision;
   cause = trajectory.cause;
 
-  // The floor stands down for the sanctioned downward moves, never widening
-  // them (R3): an applied trajectory handoff owns the model (its repick
-  // deliberately excludes the source model, so the floor must not restore
-  // it); a genuine new-entry, high-confidence trivial classification (an
-  // off-topic follow-up that resets to a cheap model); and a handoff boundary
-  // until a model serves the new phase. Same-intent re-invocations never
-  // reset, so the stickiness holds across a whole tool loop.
-  // Reset keys on the entry's FINAL resolved deliverable, not the heuristic
-  // or a temporary investigation phase: a fresh entry whose heuristic gather
-  // was raised to an involved dimension (embedding) is not off-topic, so the
-  // floor must still hold.
-  const offTopicReset =
-    !sameIntentAsLast &&
-    classifyResult.confidence >= config.lowConfidenceThreshold &&
-    DIMENSION_STRENGTH[deliverable] <= DIMENSION_STRENGTH['gather'];
+  // The minimums stand down only for sanctioned moves: an applied trajectory
+  // handoff owns the model (its repick excludes the source, so the floor must
+  // not restore it); a handoff boundary until a model serves the new phase;
+  // and a recorded move to other work at entry start. Classifier confidence and cheap wording never count
+  // as a work change, and tool-loop invocations keep the serving model's
+  // minimums even when the entry began as new work.
+  const changedWork = !sameIntentAsLast &&
+    (workRelation === 'new' || workRelation === 'resume' || workRelation === 'switch');
   const incumbentFloorStandsDown =
-    trajectory.applied ||
-    offTopicReset ||
-    handoffPending === true;
+    trajectory.applied || changedWork || handoffPending === true;
 
   // Incumbent capability floor.
   applyIncumbentModelFloor(
@@ -443,5 +428,5 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     baseOpts,
   );
 
-  return { decision, trajectoryApplied: trajectory.applied, offTopicReset };
+  return { decision, trajectoryApplied: trajectory.applied };
 }

@@ -1,6 +1,9 @@
 import type { CapabilityBand, Dimension, ReasoningHandoffMeta, TerminalAssessment } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
+import type { ContextReason, EntryResolution } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
+import type { GroundedArtifact } from '../context/types.js';
+import type { PendingIdentity } from '../../serve/context-resolution.js';
 import { MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
@@ -19,7 +22,7 @@ export interface WorkPhaseState {
   observedMutationTools: number;
   /** Plan/review → implement handoff for this entry; never inherited. */
   contract?: ExecutionContract;
-  /** Contract breaks per executor model id, kept across thin continuations. */
+  /** Contract breaks per executor model id, kept across entries on the same work item. */
   contractStrikes?: Record<string, number>;
   /** Served keys of executor models that reached the strike limit. */
   excludedExecutors?: string[];
@@ -33,6 +36,10 @@ export interface WorkPhaseState {
   previousHandoffId?: string;
   /** Where collecting context stands for the entry; absent until an invocation routes it. */
   contextStatus?: ContextStatus;
+  /** Bounded choice set while this entry's work identity is not yet known. */
+  pendingIdentity?: PendingIdentity;
+  /** Complete reads made before work identity was chosen; entry-local and never inherited. */
+  provisionalGrounding?: GroundedArtifact[];
   /** Collect provider requests so far, fallback attempts included. */
   contextRequests?: number;
   /** Rejected handoffs and refused calls, counted once per provider invocation. */
@@ -45,8 +52,27 @@ export interface WorkPhaseState {
   handoffKey?: string;
   /** The one acquisition reminder for this entry was already appended. */
   contextNudged?: boolean;
+  /**
+   * The entry's plan or review needs no preparation: the item's previous
+   * acquisition answered in the reasoning model's place instead of handing
+   * off. Any other owed context is still owed.
+   */
+  contextWaived?: boolean;
+  /**
+   * A missed-handoff recovery entry: every phase of it is scored at its
+   * deliverable, and no handoff releases a cheaper model.
+   */
+  recoveryMinimum?: boolean;
   /** The entry's acquisition outcome was logged. */
   contextClosed?: boolean;
+  /** The entry's work-context resolution; set once per entry. */
+  contextResolution?: EntryResolution;
+  /** Work item the entry resolved to, when it resolved to one. */
+  workItemId?: string;
+  /** Context the entry's request owes; fixed when it resolved. */
+  contextReasons?: ContextReason[];
+  /** Router-checked when the entry resolved; fixed for the rest of the entry. */
+  contextSatisfied?: boolean;
 }
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));
@@ -78,11 +104,30 @@ export function withStrongerTerminal(state: WorkPhaseState, terminal: TerminalAs
     : state;
 }
 
+/**
+ * What an entry leaves to a branch it is not on, after `/tree`: the task type
+ * and final step, kept only as conservative minimums, with `deliverable` as
+ * the task type. They establish no work identity. Strikes, excluded
+ * executors, contracts, handoffs, and investigation state belong to the
+ * entries of the branch Pi left.
+ */
+export function carryAcrossBranch(state: WorkPhaseState, deliverable: Dimension | undefined): WorkPhaseState {
+  return {
+    intentKey: state.intentKey,
+    ...(deliverable ? { deliverable } : {}),
+    terminal: state.terminal,
+    terminalBand: state.terminalBand,
+    providerInvocation: state.providerInvocation,
+    observedMutationTools: 0,
+  };
+}
+
 export function nextProviderInvocation(state: WorkPhaseState): WorkPhaseState {
   return { ...state, providerInvocation: state.providerInvocation + 1 };
 }
 
-export function inheritThinContinuation(
+/** Carry same-WorkItem penalties, never entry-local execution authority. */
+export function inheritWorkContinuation(
   intentKey: string,
   prior: WorkPhaseState,
   deliverable: Dimension,
@@ -99,12 +144,16 @@ export function inheritThinContinuation(
     reasoningHandoff: undefined,
     previousHandoffId: prior.reasoningHandoff?.id,
     contextStatus: undefined,
+    pendingIdentity: undefined,
+    provisionalGrounding: undefined,
     contextRequests: undefined,
     contextDenials: undefined,
     deniedAtInvocation: undefined,
     clarificationDispatched: undefined,
     handoffKey: undefined,
     contextNudged: undefined,
+    contextWaived: undefined,
+    recoveryMinimum: undefined,
     contextClosed: undefined,
   };
 }

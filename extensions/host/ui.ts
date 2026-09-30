@@ -11,6 +11,8 @@ import type {
   ExecutionContractMeta,
   QualityExclusionReason,
   RoutingDecision,
+  WorkContextMeta,
+  EmbeddingMeta,
 } from '../types.js';
 import { activeWorkItem, ledgerTopics, type TopicLedger } from '../routing/context/ledger.js';
 import type { BranchState, ContextReason } from '../routing/context/types.js';
@@ -72,12 +74,11 @@ export function formatStatus(
 /** Plain-language label for each decision cause; the log keeps the raw value. */
 const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   heuristic: 'keyword classifier',
-  'continuation-context': 'keyword classifier, using earlier messages for a short follow-up',
+  'continuation-context': 'a short follow-up kept at the previous request\'s task type while its work is unresolved',
   'router-consult': 'task type adopted from a context handoff',
   'execution-contract': 'routed by an accepted execution plan',
   investigation: 'collecting context, read-only, before the deliverable',
   'investigation-handoff': 'the next step started after collecting context',
-  'embedding-classify': 'multilingual embedding classifier',
   'error-fallback': 'a fallback model served after the top pick failed',
   'no-data': 'no benchmark data; ranked by price and context window',
   'capability-escalation': 'stronger model, picked by quality alone',
@@ -86,6 +87,8 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   'manual-override': 'manual pin',
   resume: 'reused the route from before the pin',
   'semi-hold': 'kept the current model (semi mode)',
+  'embedding-classify': 'local multilingual embedding classifier',
+  'work-context': 'a follow-up that carries on its resolved work item\'s task type',
 };
 
 const EXCLUSION_LABELS: Readonly<Record<QualityExclusionReason, [label: string, text: string]>> = {
@@ -122,6 +125,8 @@ export function formatDecisionDetail(
     `  cause:      ${CAUSE_LABELS[decision.cause] ?? decision.cause}`,
     `  reason:     ${decision.reason}`,
     ...(decision.mutationObserved && decision.dimension !== 'implement' ? ['  phase:      editing'] : []),
+    ...workContextLines(decision.workContext),
+    ...embeddingLines(decision.embedding),
     ...routingNotes(decision, served),
     ...decision.candidateDiagnostics?.flatMap((diagnostic) => {
       if (!diagnostic.excludedReason) return [];
@@ -135,6 +140,48 @@ export function formatDecisionDetail(
     ...(decision.contextPressure ? contextPressureLines(decision.contextPressure) : []),
     ...(chain ? [`  chain:      ${chain}`] : []),
   ];
+}
+
+const RESOLVER_LABELS: Readonly<Record<WorkContextMeta['resolver'], string>> = {
+  deterministic: 'continues the active work, no model asked',
+  'context-handoff': 'selected after collecting context',
+  fallback: 'not recorded on this branch',
+};
+
+const LEGACY_LABEL = 'found in conversation from before tracking started';
+
+/** The `/router-why` lines for the entry's work context: ids and plain language, no titles. */
+function workContextLines(context: WorkContextMeta | undefined): string[] {
+  if (!context) return [];
+  const target = context.workItemId === 'NONE'
+    ? 'a side question outside any work item'
+    : context.workItemId === 'UNKNOWN'
+      ? 'no work item'
+      : `${context.relation === 'new' || context.relation === 'switch' ? 'new' : context.relation} work item ${context.workItemId}`;
+  const reasons = context.contextReasons.map((reason) => CONTEXT_REASON_LABELS[reason]).join(', ');
+  const status = !context.contextSatisfied ? 'still needed'
+    : context.resolver === 'context-handoff' && reasons ? 'collected'
+    : 'current';
+  return [
+    `  work:       ${target} (${context.legacy ? LEGACY_LABEL : RESOLVER_LABELS[context.resolver]})`,
+    `  context:    ${status}${reasons ? ` (${reasons})` : ''}`,
+  ];
+}
+
+/** The `/router-why` line for a prompt the embedding model read: what it concluded and what that changed. */
+function embeddingLines(embedding: EmbeddingMeta | undefined): string[] {
+  if (!embedding) return [];
+  const thin = embedding.thin
+    ? `a short follow-up (lead ${embedding.thinMargin.toFixed(3)}), so it carries on the earlier work`
+    : `not a short follow-up (lead ${embedding.thinMargin.toFixed(3)})`;
+  const kind = `looks like ${embedding.kind} (lead ${embedding.kindMargin.toFixed(3)})${embedding.kindRaised ? ', raised the final step' : ''}`;
+  return [`  embedding:  ${thin}; ${kind}`];
+}
+
+/** One-line embedding-reader tally for `/router-status`. */
+export function formatEmbeddingStats(s: EmbeddingStats): string {
+  const kept = s.fired - s.promoted - s.abstainedLowConf;
+  return `embedding classifier: ran ${s.fired} (raised ${s.promoted}, unchanged ${kept}, too unsure ${s.abstainedLowConf}), failed ${s.degraded}`;
 }
 
 const CONTRACT_BREAK_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['breakReason']>, string>> = {
@@ -231,12 +278,6 @@ function contextPressureLines(pressure: NonNullable<RoutingDecision['contextPres
     `  note:       context ${pct}% full (advice starts at ${(pressure.threshold * 100).toFixed(0)}%)`,
     `  advice:     ${pressure.suggestion}`,
   ];
-}
-
-/** One-line embedding-classifier tally for `/router-status`. */
-export function formatEmbeddingStats(s: EmbeddingStats): string {
-  const kept = s.fired - s.promoted - s.abstainedLowConf;
-  return `embedding classifier: ran ${s.fired} (raised ${s.promoted}, unchanged ${kept}, too unsure ${s.abstainedLowConf}), failed ${s.degraded}`;
 }
 
 /**

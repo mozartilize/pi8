@@ -18,7 +18,7 @@ import {
   validateContract,
 } from './execution-contract.js';
 import { BASE_REQUIREMENT } from './execution-difficulty.js';
-import { inheritThinContinuation, type WorkPhaseState } from './work-phase.js';
+import { inheritWorkContinuation, type WorkPhaseState } from './work-phase.js';
 
 const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
   intentKey: 'intent-a',
@@ -213,7 +213,7 @@ describe('execution contract lifecycle', () => {
   it('drops the contract but keeps strikes across a thin continuation', () => {
     const broken = breakContract(accepted([edit('a.ts')]), 'x/luna', 'struggle');
     const withActive = accepted([edit('a.ts')], broken);
-    const next = inheritThinContinuation('intent-b', withActive, 'plan');
+    const next = inheritWorkContinuation('intent-b', withActive, 'plan');
     expect(next.contract).toBeUndefined();
     expect(next.contractStrikes).toEqual({ luna: 1 });
   });

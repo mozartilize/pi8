@@ -19,6 +19,8 @@ import type {
   Dimension,
   ReasoningHandoffMeta,
   RoutingDecision,
+  WorkContextMeta,
+  EmbeddingMeta,
 } from '../types.js';
 import type { ContextReason } from '../routing/context/types.js';
 import { resolveStoragePath } from '../bench/store.js';
@@ -117,11 +119,14 @@ export interface DecisionLogEntry {
     /** Why the entry owed context, as categories. */
     contextReasons?: ContextReason[];
   };
+  /** The entry's work-context resolution: tier, ids, categories; never titles. */
+  workContext?: WorkContextMeta;
+  /** The embedding reader's margins and categories for the entry; never the prompt. */
+  embedding?: EmbeddingMeta;
   /** Routed phase records: the deliverable behind an investigation, and the join to the previous entry's handoff. */
   deliverable?: string;
   reasoningHandoff?: ReasoningHandoffMeta;
   previousHandoffId?: string;
-  offTopicReset?: boolean;
   /** Set on `kind: 'execution-contract'` records only. */
   executionContract?: {
     /** `route` marks a routing decision the contract shaped. */
@@ -226,10 +231,12 @@ export interface InvestigationHandoffSignal {
    * entry spent its requests or refusals. `served` marks the first invocation
    * that served the next phase. At entry end, `phase-end` closes an accepted
    * handoff and `no-handoff` owed context that was never handed off.
+   * `waived` marks a plan or review entry whose preparation is waived because
+   * the item's previous collect never handed off.
    */
   action:
     | 'accept' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
-    | 'served' | 'phase-end' | 'no-handoff';
+    | 'served' | 'phase-end' | 'no-handoff' | 'waived';
   rejectReason?: string;
   handoff?: ReasoningHandoffMeta;
   deliverable?: Dimension;
@@ -313,10 +320,12 @@ export function appendDecision(
       ...(decision.executionContract
         ? { executionContract: { action: 'route' as const, meta: decision.executionContract } }
         : {}),
+      ...(decision.workContext ? { workContext: decision.workContext } : {}),
+      ...(decision.embedding ? { embedding: decision.embedding } : {}),
       ...(decision.deliverable ? { deliverable: decision.deliverable } : {}),
       ...(decision.reasoningHandoff ? { reasoningHandoff: decision.reasoningHandoff } : {}),
       ...(decision.previousHandoffId
-        ? { previousHandoffId: decision.previousHandoffId, offTopicReset: decision.offTopicReset === true }
+        ? { previousHandoffId: decision.previousHandoffId }
         : {}),
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

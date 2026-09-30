@@ -79,10 +79,11 @@ import {
   defaultRouterSession,
   defaultRuntimeBindings,
 } from './serve/router-session-state.js';
+import { isMutationCall } from './routing/policy/mutation-detector.js';
 import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
 import { observeContextGrounding } from './serve/context-grounding.js';
+import { carryPhaseAcrossTree } from './serve/context-resolution.js';
 import { registerRoutingContextTool } from './serve/routing-context-tool.js';
-import { isMutationCall } from './routing/policy/mutation-detector.js';
 import {
   closeInvestigationOnSettle,
   gateContextToolCall,
@@ -288,12 +289,9 @@ async function handleSessionStart(
     // Advisory only.
   }
   try {
-    // Pre-warm the ONNX embedding engine off the turn path so the first
-    // ambiguous prompt does not pay the cold-start load inline. Only when the
-    // classifier is enabled and the session actually routes (R9). Detached
-    // and advisory: the engine is a process-global singleton whose load
-    // failures degrade to the keyword classifier (R2), so this never blocks
-    // or fails the session.
+    // Load the embedding model off the turn path, so the first prompt it
+    // reads does not pay the cold start inline. Detached and advisory: a
+    // failed load leaves the keyword rules in charge (R2).
     const cfg = loadConfig();
     if (cfg.embeddingClassifier && isRouterAutoActive(ctx?.model)) {
       void ensureEmbeddingEngine({ deadlineMs: cfg.embeddingDeadlineMs }).catch(() => {});
@@ -424,6 +422,13 @@ function handleTurnStart(
   }
 }
 
+/**
+ * Each role's live model and the exclusion test behind it. Resolved against
+ * the LIVE session blacklist: a model assigned at session_start may have
+ * since failed and been blacklisted by a main-session turn, and must not be
+ * injected into a spawn. A usage-limit-blacklisted provider excludes every
+ * model on it the same way.
+ */
 function handleSubagentToolCall(
   event: ToolCallEvent,
   ctx: ExtensionContext,
@@ -669,11 +674,13 @@ export default async function autoModelRouterExtension(
 
   // Both rewrite the history, so no cached prefix still matches it. Compaction
   // keeps the branch, and with it the ledger; tree navigation moves to
-  // another branch, whose own events rebuild it.
+  // another branch, whose own events rebuild it and which keeps only the
+  // entry state that still applies there.
   pi.on('session_compact', () => session.clearWarmCaches());
   pi.on('session_tree', (_event, ctx) => {
     session.clearWarmCaches();
     restoreWorkLedger(ctx, session);
+    carryPhaseAcrossTree(session, readBranch(ctx?.sessionManager));
   });
 
   pi.on('before_agent_start', (event, ctx) => handleBeforeAgentStart(event, ctx, session));
@@ -688,7 +695,6 @@ export default async function autoModelRouterExtension(
     if (restricted) return restricted;
     if (event.toolName === SUBAGENT_TOOL) {
       handleSubagentToolCall(event, ctx, session, routingState, subagentCalls);
-      return;
     }
     try {
       // A change stopped for an owed plan never runs: it is not counted,

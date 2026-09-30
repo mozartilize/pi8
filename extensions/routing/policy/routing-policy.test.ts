@@ -568,11 +568,11 @@ describe('routing direction', () => {
 });
 
 describe('incumbent capability floor', () => {
-  // Contract: within one task the served model stays at or above the
+  // Contract: within one work item the served model stays at or above the
   // incumbent's measured capability. Uncertainty holds the floor; only a
-  // genuine new entry with a high-confidence trivial classification resets to a
-  // cheaper model. Sanctioned downward moves (trajectory escalation, a consult
-  // that lowered the dimension) stand the floor down.
+  // recorded move to other work at entry start resets to a cheaper model.
+  // Sanctioned downward moves (trajectory escalation, a consult that lowered
+  // the dimension, an unserved handoff boundary) stand the floor down.
   it('baseline (no incumbent) picks the cheap model at gather', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
@@ -685,15 +685,38 @@ describe('incumbent capability floor', () => {
     expect(result.decision.chosen).toBe('bench/strong');
   });
 
-  it('keys the off-topic reset on the deliverable, not a temporary investigation phase', () => {
-    const entry = (deliverable: 'plan' | 'gather') => resolveRoutingDecision(makePolicyInput({
+  it.each(['new', 'resume', 'switch'] as const)('releases both minimums for recorded %s work', (workRelation) => {
+    const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
       classifyDimension: 'gather', baseDimension: 'gather', baseCause: 'heuristic',
-      confidence: 0.9, incumbentRegistryId: 'bench/strong', sameIntentAsLast: false,
-      deliverable,
+      confidence: 0.01, incumbentRegistryId: 'bench/strong',
+      incumbentResolvedDimension: 'plan', sameIntentAsLast: false,
+      workRelation,
     }));
-    expect(entry('gather').decision.chosen).toBe('bench/cheap');
-    expect(entry('plan').decision.chosen).toBe('bench/strong');
+    expect(result.decision.chosen).toBe('bench/cheap');
+    expect(result.decision.effortFloorDimension).toBeUndefined();
+  });
+
+  it.each(['continue', 'unknown', undefined] as const)('keeps both minimums for %s work despite confident cheap wording', (workRelation) => {
+    const result = resolveRoutingDecision(makePolicyInput({
+      candidates: benchmarkCandidates,
+      classifyDimension: 'gather', baseDimension: 'gather', baseCause: 'heuristic',
+      confidence: 1, incumbentRegistryId: 'bench/strong',
+      incumbentResolvedDimension: 'plan', sameIntentAsLast: false,
+      workRelation,
+    }));
+    expect(result.decision.chosen).toBe('bench/strong');
+    expect(result.decision.effortFloorDimension).toBe('plan');
+  });
+
+  it('keeps the minimums on post-tool invocations of an entry that began new work', () => {
+    const result = resolveRoutingDecision(makePolicyInput({
+      candidates: benchmarkCandidates,
+      classifyDimension: 'gather', baseDimension: 'gather',
+      confidence: 1, incumbentRegistryId: 'bench/strong',
+      sameIntentAsLast: true, workRelation: 'new',
+    }));
+    expect(result.decision.chosen).toBe('bench/strong');
   });
 
   it('still demotes an executor below the contract minimum', () => {
@@ -721,7 +744,7 @@ describe('incumbent capability floor', () => {
     expect(result.decision.effortFloorDimension).toBeUndefined();
   });
 
-  it('drops the effort floor carry on an off-topic reset', () => {
+  it('drops the effort floor carry on a recorded work change', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
@@ -730,20 +753,20 @@ describe('incumbent capability floor', () => {
         confidence: 0.9,
         incumbentRegistryId: 'bench/strong',
         incumbentResolvedDimension: 'implement',
+        workRelation: 'new',
         estimatedContextTokens: 1_000,
       }),
     );
     expect(result.decision.effortFloorDimension).toBeUndefined();
   });
 
-  it('stands down on a fresh, high-confidence trivial classification (off-topic reset)', () => {
+  it('stands down on a side question placed outside the current work', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
         classifyDimension: 'gather',
         baseDimension: 'gather',
-        // High confidence + trivial dimension = the user changed topic; a
-        // cheaper model is the correct step-1 route.
+        workRelation: 'switch',
         confidence: 0.9,
         incumbentRegistryId: 'bench/strong',
         estimatedContextTokens: 1_000,
@@ -809,10 +832,9 @@ describe('incumbent capability floor', () => {
   });
 
   it('holds on a fresh entry whose heuristic gather was raised to an involved dimension', () => {
-    // Regression for keying offTopicReset on the heuristic instead of the final
-    // dimension: a fresh, high-confidence gather entry that an adopted consult
-    // raised to implement is involved work, so a measurably weaker economic
-    // pick must not stand the floor down.
+    // A fresh, high-confidence gather entry raised to implement is involved
+    // work on unchanged identity, so a measurably weaker economic pick must
+    // not stand the floor down.
     const close: Candidate[] = [
       makeCandidate({
         registryId: 'bench/near', provider: 'bench', id: 'near',
@@ -836,7 +858,7 @@ describe('incumbent capability floor', () => {
         candidates: close,
         classifyDimension: 'gather',
         baseDimension: 'implement',
-        baseCause: 'router-consult',
+        baseCause: 'work-context',
         confidence: 0.9,
         incumbentRegistryId: 'bench/top',
         estimatedContextTokens: 1_000,

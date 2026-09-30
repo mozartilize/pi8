@@ -72,6 +72,7 @@ describe('formatStatus', () => {
       ...decision, dimension: 'gather' as const, cause: 'investigation' as const, deliverable: 'plan' as const,
     };
     expect(formatStatus(investigating, served)).toContain('auto:gather · collecting context');
+    expect(formatDecisionDetail(investigating, served)).toContain('  cause:      collecting context, read-only, before the deliverable');
     expect(formatDecisionDetail(investigating, served)).toContain('  handoff:    collecting context (deliverable plan)');
     const handoff = {
       id: 'k', requester: 'alpha/model', target: 'plan' as const, minimum: 0.62, requirement: 0.62,
@@ -139,17 +140,6 @@ describe('formatStatus', () => {
       accumulatedCost: 0,
     });
     expect(s).toContain('(context nearly full)');
-  });
-});
-
-describe('formatEmbeddingStats', () => {
-  it('derives kept = fired - promoted - abstainedLowConf', () => {
-    const line = formatEmbeddingStats({ fired: 10, promoted: 4, abstainedLowConf: 3, degraded: 2 });
-    expect(line).toContain('ran 10');
-    expect(line).toContain('raised 4');
-    expect(line).toContain('unchanged 3');
-    expect(line).toContain('too unsure 3');
-    expect(line).toContain('failed 2');
   });
 });
 
@@ -313,6 +303,7 @@ describe('direction notes in /router-why', () => {
       served(),
     );
 
+    expect(lines.join('\n')).toContain('task type adopted from a context handoff');
     expect(lines.join('\n')).toContain('task type lowered by a later reading of the request, so a cheaper model served');
   });
 
@@ -329,7 +320,7 @@ describe('direction notes in /router-why', () => {
     );
     expect(status).not.toContain('(upgraded)');
     const detail = formatDecisionDetail(
-      decisionWith({ routedUp: true, routedPickChanged: false, cause: 'embedding-classify' }),
+      decisionWith({ routedUp: true, routedPickChanged: false, cause: 'router-consult' }),
       served(),
     ).join('\n');
     expect(detail).not.toContain('so a stronger model served');
@@ -389,5 +380,67 @@ describe('formatWorkContext', () => {
     ]);
     expect(formatWorkContext(ledger, 'tracked').at(-1))
       .toContain('tracking started partway through this session; earlier work is looked up when a message returns to it');
+  });
+});
+
+describe('work context in /router-why', () => {
+  it('says which tier resolved the entry and whether its context is in hand, by id only', () => {
+    const lines = formatDecisionDetail({
+      ...decision,
+      workContext: {
+        resolver: 'deterministic', relation: 'continue', topicId: 't_1', workItemId: 'w_1',
+        contextReasons: ['referenced-artifact'], contextSatisfied: true,
+      },
+    }, { registryId: 'a/b', viaFallback: false, accumulatedCost: 0 }).join('\n');
+    expect(lines).toContain('work:       continue work item w_1 (continues the active work, no model asked)');
+    expect(lines).toContain('context:    current (files it references)');
+  });
+
+  it('says when the context was collected before the entry was placed', () => {
+    const lines = formatDecisionDetail({
+      ...decision,
+      workContext: {
+        resolver: 'context-handoff', relation: 'new', topicId: 't_1', workItemId: 'w_2',
+        contextReasons: ['referenced-artifact'], contextSatisfied: true,
+      },
+    }, undefined).join('\n');
+    expect(lines).toContain('work:       new work item w_2 (selected after collecting context)');
+    expect(lines).toContain('context:    collected (files it references)');
+  });
+
+  it('says when the entry was placed on work from before tracking started', () => {
+    const lines = formatDecisionDetail({
+      ...decision,
+      workContext: {
+        resolver: 'context-handoff', relation: 'resume', topicId: 't_1', workItemId: 'w_1',
+        contextReasons: [], contextSatisfied: true, legacy: true,
+      },
+    }, undefined).join('\n');
+    expect(lines).toContain('work:       resume work item w_1 (found in conversation from before tracking started)');
+    expect(lines).toContain('context:    current');
+  });
+
+  it('names a side question and an unrecorded entry plainly', () => {
+    const side = formatDecisionDetail({
+      ...decision,
+      workContext: { resolver: 'context-handoff', relation: 'switch', topicId: 'NEW_TOPIC', workItemId: 'NONE', contextReasons: [], contextSatisfied: true },
+    }, undefined).join('\n');
+    expect(side).toContain('a side question outside any work item');
+    const unresolved = formatDecisionDetail({
+      ...decision,
+      workContext: { resolver: 'fallback', relation: 'unknown', topicId: 'UNKNOWN', workItemId: 'UNKNOWN', contextReasons: ['carried-open-context'], contextSatisfied: false },
+    }, undefined).join('\n');
+    expect(unresolved).toContain('no work item (not recorded on this branch)');
+    expect(unresolved).toContain('context:    still needed (left open by an earlier request)');
+  });
+
+  it('says what the embedding reader concluded and what it changed', () => {
+    const lines = formatDecisionDetail({
+      ...decision,
+      embedding: { thinMargin: 0.034, thin: true, kind: 'implement', kindMargin: 0.015, kindRaised: true },
+    }, undefined).join('\n');
+    expect(lines).toContain('embedding:  a short follow-up (lead 0.034), so it carries on the earlier work; looks like implement (lead 0.015), raised the final step');
+    expect(formatEmbeddingStats({ fired: 4, promoted: 1, abstainedLowConf: 1, degraded: 1 }))
+      .toBe('embedding classifier: ran 4 (raised 1, unchanged 2, too unsure 1), failed 1');
   });
 });
