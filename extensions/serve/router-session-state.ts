@@ -3,6 +3,7 @@
  *
  * Encapsulated domain aggregates:
  * - `IntentState`: Cached routing intent and per-entry work-phase state.
+ * - `RoutingContextState`: The branch's work ledger, rebuilt from Pi's session tree.
  * - `RuntimeBindings`: Pi extension runtime context & model registry (survives session reset).
  * - `RouterSession`: Unified session aggregate owning the lifecycle and domain objects.
  * Paths given an injected session must read and write that same owner, not a
@@ -18,6 +19,10 @@ import type {
   RoutingDecision,
 } from '../types.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
+import { debugLog } from '../host/debuglog.js';
+import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/ledger.js';
+import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
+import type { BranchState, RoutingContextEvent } from '../routing/context/types.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
@@ -76,6 +81,66 @@ export class IntentState {
 }
 
 /**
+ * The active branch's work ledger. Pi's session tree is its source of truth:
+ * an event is applied only once the bound persistence has written it to the
+ * branch, so the in-memory ledger is always the fold of the branch and a
+ * reload rebuilds exactly what routing saw. With no persistence bound it
+ * lives in memory only. A reset forgets the ledger but keeps that binding.
+ */
+export class RoutingContextState {
+  private ledger: TopicLedger = emptyLedger();
+  private branchState: BranchState = 'native-empty';
+  private persist: ((event: RoutingContextEvent) => void) | undefined;
+
+  bindPersistence(persist: ((event: RoutingContextEvent) => void) | undefined): void {
+    this.persist = persist;
+  }
+
+  getLedger(): TopicLedger {
+    return this.ledger;
+  }
+
+  getBranchState(): BranchState {
+    return this.branchState;
+  }
+
+  /** Rebuild from the active branch; an unreadable branch starts empty. */
+  restore(branch: readonly unknown[] | undefined): void {
+    this.ledger = rebuildLedger(branch);
+    this.branchState = classifyBranch(branch, this.ledger);
+  }
+
+  /** Re-read an untracked branch's state; a tracked branch keeps its ledger's. */
+  refreshBranchState(branch: readonly unknown[] | undefined): void {
+    if (this.ledger.events === 0) this.branchState = classifyBranch(branch, this.ledger);
+  }
+
+  /**
+   * Write one event to the branch, then fold it. Returns whether it applied:
+   * an event that does not apply is not written, and one the branch did not
+   * record is not applied.
+   */
+  append(event: RoutingContextEvent): boolean {
+    const next = applyEvent(this.ledger, event);
+    if (next === this.ledger) return false;
+    try {
+      this.persist?.(event);
+    } catch (err) {
+      debugLog('context.persist-error', { op: event.op, message: err instanceof Error ? err.message : String(err) });
+      return false;
+    }
+    this.ledger = next;
+    this.branchState = 'tracked';
+    return true;
+  }
+
+  reset(): void {
+    this.ledger = emptyLedger();
+    this.branchState = 'native-empty';
+  }
+}
+
+/**
  * Runtime extension context & model registry bindings that survive session resets.
  */
 export class RuntimeBindings {
@@ -120,6 +185,7 @@ export class RuntimeBindings {
 export class RouterSession {
   public readonly blacklist: BlacklistState;
   public readonly intent: IntentState;
+  public readonly context = new RoutingContextState();
   private readonly trajectory = new TrajectoryState();
 
   private sessionGen = 0;
@@ -531,6 +597,7 @@ export class RouterSession {
     this.memoizedCandidateExpansion = undefined;
 
     this.intent.reset();
+    this.context.reset();
     this.trajectory.reset();
     // Note: blacklist exclusions are cleared independently via blacklist.clearSessionBlacklist()
   }

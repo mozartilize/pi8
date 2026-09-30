@@ -78,6 +78,7 @@ import {
   defaultRouterSession,
   defaultRuntimeBindings,
 } from './serve/router-session-state.js';
+import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
 import { classifyMutationCall } from './routing/policy/mutation-detector.js';
 import {
   closeInvestigationOnSettle,
@@ -235,6 +236,7 @@ async function handleSessionStart(
   } catch {
     // Session cleanup is best-effort and must not block startup.
   }
+  restoreWorkLedger(ctx, session);
   // Point per-session logs (decisions + debug) at THIS session's directory,
   // and pick up the `debug` config flag.
   try {
@@ -302,6 +304,18 @@ async function handleSessionStart(
   });
 }
 
+/**
+ * Rebuild the work ledger from the active branch. Reading never writes: a
+ * branch without a ledger stays untracked until its next genuine user entry.
+ */
+function restoreWorkLedger(ctx: ExtensionContext | undefined, session: RouterSession): void {
+  try {
+    session.context.restore(readBranch(ctx?.sessionManager));
+  } catch {
+    // An unreadable branch routes as a fresh one.
+  }
+}
+
 function handleModelSelect(
   event: ModelSelectEventLike,
   ctx: ExtensionContext,
@@ -329,6 +343,13 @@ function handleModelSelect(
     // Pi applies the new model's thinking level during the switch; that is
     // not a user choice, so the next turn must not read it as one.
     session.setSyncedThinkingLevel(undefined);
+    // Requests sent under the previous model are history the router never
+    // routed: an untracked branch shows as such until its next entry.
+    try {
+      session.context.refreshBranchState(readBranch(ctx?.sessionManager));
+    } catch {
+      // The next entry reads the branch itself.
+    }
   }
   if (event.model.id === AUTO_MODEL_ID && !isOfflineMode()) {
     void refreshRoleModels(ctx.modelRegistry, ctx).catch(() => {
@@ -606,6 +627,9 @@ export default async function autoModelRouterExtension(
   registerAutoRouterProvider(pi, undefined, session, runtime);
   registerExecutionContractTool(pi, session);
   registerInvestigationHandoffTool(pi, session);
+  session.context.bindPersistence((event) => {
+    if (typeof pi.appendEntry === 'function') pi.appendEntry(CONTEXT_ENTRY_TYPE, event);
+  });
 
   const routingState = new SubagentRoutingState();
   const subagentCalls = new Map<string, SubagentCallObservation>();
@@ -641,9 +665,14 @@ export default async function autoModelRouterExtension(
     closeContractOnSettle(session);
   });
 
-  // Both rewrite the history, so no cached prefix still matches it.
+  // Both rewrite the history, so no cached prefix still matches it. Compaction
+  // keeps the branch, and with it the ledger; tree navigation moves to
+  // another branch, whose own events rebuild it.
   pi.on('session_compact', () => session.clearWarmCaches());
-  pi.on('session_tree', () => session.clearWarmCaches());
+  pi.on('session_tree', (_event, ctx) => {
+    session.clearWarmCaches();
+    restoreWorkLedger(ctx, session);
+  });
 
   pi.on('before_agent_start', (event, ctx) => handleBeforeAgentStart(event, ctx, session));
 

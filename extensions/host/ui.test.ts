@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { clearRouterStatus, formatStatus, formatDecisionDetail, formatEmbeddingStats, servedKey } from './ui.js';
+import { clearRouterStatus, formatStatus, formatDecisionDetail, formatEmbeddingStats, formatWorkContext, servedKey } from './ui.js';
+import { emptyLedger, foldEvents } from '../routing/context/ledger.js';
+import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import { candidateKey } from '../routing/score/scorer.js';
 import type { RoutingDecision } from '../types.js';
 
@@ -350,5 +352,42 @@ describe('servedKey', () => {
     expect(servedKey({ registryId: 'alpha/model', thinkingLevel: 'high' }))
       .toBe(candidateKey({ registryId: 'alpha/model', effort: 'high' }));
     expect(servedKey({ registryId: 'alpha/model' })).toBe(candidateKey({ registryId: 'alpha/model' }));
+  });
+});
+
+describe('formatWorkContext', () => {
+  it('names the active work item and its topic', () => {
+    const ledger = foldEvents([
+      createEvent(workItem('w_1', 't_1', { title: 'Export CSV', topic: { id: 't_1', title: 'Reports' }, anchors: [{ kind: 'path', value: 'req.md', source: 'user' }] })),
+      createEvent(workItem('w_2', 't_2', { status: 'done' })),
+      activateEvent('w_1'),
+    ]);
+    const lines = formatWorkContext(ledger, 'tracked');
+    expect(lines[0]).toBe('Work context: Export CSV (topic: Reports; 1 open of 2 work items in 2 topics)');
+    expect(lines[1]).toContain('w_1, active, 1 anchor, 0 read and fingerprinted');
+    expect(lines.some((line) => line.startsWith('  context:'))).toBe(false);
+  });
+
+  it('says what context the active work item still holds open', () => {
+    const ledger = foldEvents([
+      createEvent(workItem('w_1', 't_1', { openContext: ['referenced-artifact'] })),
+      activateEvent('w_1'),
+    ]);
+    expect(formatWorkContext(ledger, 'tracked')).toContain('  context:    still needed before its next change (files it references)');
+  });
+
+  it('says an untracked legacy branch starts tracking with the next message', () => {
+    expect(formatWorkContext(emptyLedger(), 'legacy-uninitialized')[0]).toContain('your next message starts tracking');
+    expect(formatWorkContext(emptyLedger(), 'native-empty')).toEqual(['Work context: none yet']);
+  });
+
+  it('notes a lazy migration boundary, and whether earlier work is looked up', () => {
+    const ledger = foldEvents([
+      { v: 1, op: 'migration-init', legacyHeadEntryId: 'e1', mode: 'lazy', sourceEntryId: 'e2' },
+      createEvent(workItem('w_1')),
+      activateEvent('w_1'),
+    ]);
+    expect(formatWorkContext(ledger, 'tracked').at(-1))
+      .toContain('tracking started partway through this session; earlier work is looked up when a message returns to it');
   });
 });

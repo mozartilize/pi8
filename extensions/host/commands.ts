@@ -19,7 +19,7 @@ import {
   getProviderState,
   buildSubagentProviderAuthFilter,
 } from '../serve/provider.js';
-import { formatDecisionDetail, formatEmbeddingStats } from './ui.js';
+import { formatDecisionDetail, formatEmbeddingStats, formatWorkContext } from './ui.js';
 import {
   computeRoleModels,
   readExistingOverrides,
@@ -274,11 +274,13 @@ async function handleStatusCommand(
   const { lastDecision, lastServed } = getProviderState(session);
   const manualStatus = `Manual override: ${session.getManualModel() ?? 'none (auto routing)'}`;
   const semiStatus = `Semi-auto: ${loadConfig().semi ? 'on (ask before model switches)' : 'off'}`;
+  const workContext = formatWorkContext(session.context.getLedger(), session.context.getBranchState());
   const store = loadStore();
   if (!store || !store.syncedAt) {
     const msg = [
       manualStatus,
       semiStatus,
+      ...workContext,
       'Auto-router has no benchmark data — run `/router-sync <key>` with a free key from https://artificialanalysis.ai/.',
     ].join('\n');
     ctx.ui.notify(msg, 'warning');
@@ -297,6 +299,7 @@ async function handleStatusCommand(
   const lines = [
     manualStatus,
     semiStatus,
+    ...workContext,
     `Synced: ${new Date(store.syncedAt).toISOString()}${stale ? ' (stale)' : ''}`,
     `Active models in store: ${active.length}`,
     `Registry coverage: ${covered}/${registryIds.size} models have benchmark data`,

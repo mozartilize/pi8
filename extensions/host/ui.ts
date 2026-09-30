@@ -12,6 +12,8 @@ import type {
   QualityExclusionReason,
   RoutingDecision,
 } from '../types.js';
+import { activeWorkItem, ledgerTopics, type TopicLedger } from '../routing/context/ledger.js';
+import type { BranchState, ContextReason } from '../routing/context/types.js';
 import type { EmbeddingStats } from '../serve/router-session-state.js';
 
 export interface ServedInfo {
@@ -92,6 +94,14 @@ const EXCLUSION_LABELS: Readonly<Record<QualityExclusionReason, [label: string, 
   'below-knowledge-floor': ['demoted', 'general-knowledge score below the minimum'],
   'unknown-quality': ['demoted', 'no benchmark data for this task'],
   promoted: ['promoted', 'much cheaper and strong enough'],
+};
+
+/** Plain-language context reason, as the user reads it. */
+const CONTEXT_REASON_LABELS: Readonly<Record<ContextReason, string>> = {
+  'identity-unresolved': 'which work it belongs to',
+  'referenced-artifact': 'files it references',
+  'reasoning-prep': 'preparing the plan or review',
+  'carried-open-context': 'left open by an earlier request',
 };
 
 /** Multi-line detail for `/router-status`. */
@@ -227,6 +237,43 @@ function contextPressureLines(pressure: NonNullable<RoutingDecision['contextPres
 export function formatEmbeddingStats(s: EmbeddingStats): string {
   const kept = s.fired - s.promoted - s.abstainedLowConf;
   return `embedding classifier: ran ${s.fired} (raised ${s.promoted}, unchanged ${kept}, too unsure ${s.abstainedLowConf}), failed ${s.degraded}`;
+}
+
+/**
+ * The session's work context for `/router-status`: local, user-facing state,
+ * so titles are shown; nothing here reaches the decision log.
+ */
+export function formatWorkContext(
+  ledger: TopicLedger,
+  branchState: BranchState,
+): string[] {
+  if (branchState === 'legacy-uninitialized') {
+    return ['Work context: not tracked on this branch yet; your next message starts tracking it (earlier history is left as it is)'];
+  }
+  if (branchState === 'native-empty' || ledger.items.size === 0) {
+    return [`Work context: none yet${ledger.migration ? ' (tracking started on this branch)' : ''}`];
+  }
+  const topics = ledgerTopics(ledger).length;
+  const open = [...ledger.items.values()].filter((item) => item.status === 'active' || item.status === 'blocked').length;
+  const counts = `${open} open of ${ledger.items.size} work item${ledger.items.size === 1 ? '' : 's'} in ${topics} topic${topics === 1 ? '' : 's'}`;
+  const active = activeWorkItem(ledger);
+  const lines = [
+    active
+      ? `Work context: ${active.title} (topic: ${active.topic.title}; ${counts})`
+      : `Work context: no active work item (${counts})`,
+  ];
+  if (active) {
+    const grounded = active.grounding.length;
+    lines.push(`  work item:  ${active.id}, ${active.status}, ${active.anchors.length} anchor${active.anchors.length === 1 ? '' : 's'}, ${grounded} read and fingerprinted`);
+    if (active.openContext?.length) {
+      const reasons = active.openContext.map((reason) => CONTEXT_REASON_LABELS[reason]).join(', ');
+      lines.push(`  context:    still needed before its next change (${reasons})`);
+    }
+  }
+  if (ledger.migration) {
+    lines.push('  note:       tracking started partway through this session; earlier work is looked up when a message returns to it');
+  }
+  return lines;
 }
 
 /**

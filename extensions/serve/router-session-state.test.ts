@@ -1,7 +1,13 @@
 import { describe, expect, it, beforeEach } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setDebugPath } from '../host/debuglog.js';
 import { terminalAssessment, routingDecision } from '../test-support/router-fixtures.js';
 import { defaultRouterSession, RouterSession } from './router-session-state.js';
 import { defaultBlacklistState } from './blacklist.js';
+import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
+import { SessionTree } from '../test-support/session-tree.js';
 
 describe('router session state', () => {
   it('clears a session-scoped manual model pin', () => {
@@ -335,5 +341,51 @@ describe('warm prompt caches', () => {
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
     session.reset();
     expect(session.warmPrefixTokens(Date.now(), 60_000, 300_000)).toEqual(new Map());
+  });
+});
+
+describe('routing context state', () => {
+  it('applies no event the branch did not record', () => {
+    const session = new RouterSession();
+    session.context.bindPersistence(() => { throw new Error('session closed'); });
+    expect(session.context.append(createEvent(workItem('w_1')))).toBe(false);
+    expect(session.context.getLedger().items.has('w_1')).toBe(false);
+    expect(session.context.getLedger().events).toBe(0);
+    expect(session.context.getBranchState()).toBe('native-empty');
+
+    session.context.bindPersistence(() => {});
+    expect(session.context.append(createEvent(workItem('w_1')))).toBe(true);
+    expect(session.context.getLedger().items.has('w_1')).toBe(true);
+  });
+
+  it('writes a failed branch write to the debug log', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pi8-persist-'));
+    const path = join(dir, 'debug.log');
+    setDebugPath(path);
+    try {
+      const session = new RouterSession();
+      session.context.bindPersistence(() => { throw new Error('session closed'); });
+      session.context.append(createEvent(workItem('w_1')));
+      expect(readFileSync(path, 'utf8')).toMatch(/context\.persist-error .*"op":"work-create".*session closed/);
+    } finally {
+      setDebugPath(undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('forgets the ledger on reset but keeps writing to the bound branch', () => {
+    const tree = new SessionTree();
+    const session = new RouterSession();
+    session.context.bindPersistence((event) => tree.appendEntry('pi8-routing-context-v1', event));
+    session.context.append(createEvent(workItem('w_1')));
+    session.reset();
+    expect(session.context.getLedger().items.size).toBe(0);
+    expect(session.context.getBranchState()).toBe('native-empty');
+
+    session.context.append(createEvent(workItem('w_2')));
+    session.context.append(activateEvent('w_2'));
+    session.context.restore(tree.getBranch());
+    expect([...session.context.getLedger().items.keys()]).toEqual(['w_1', 'w_2']);
+    expect(session.context.getLedger().activeWorkItemId).toBe('w_2');
   });
 });
