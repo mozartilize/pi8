@@ -113,7 +113,6 @@ describe('router session state', () => {
       dimension: 'plan',
       cause: 'continuation-context',
       thin: true,
-      contextChars: 120,
     });
     expect(defaultRouterSession.intent.getCachedIntent()?.dimension).toBe('plan');
 

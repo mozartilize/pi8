@@ -1,19 +1,12 @@
 import type { Message } from '@earendil-works/pi-ai';
-import {
-  COMPACTION_SUMMARY_PREFIX,
-  COMPACTION_SUMMARY_SUFFIX,
-  BRANCH_SUMMARY_PREFIX,
-  BRANCH_SUMMARY_SUFFIX,
-} from '@earendil-works/pi-agent-core';
 import { classifyProvenance } from '../context/message-provenance.js';
 import type { MessageProvenance } from '../../types.js';
 
 export interface TurnClassificationInput {
   key: string;
   promptText: string;
-  classifyText: string;
+  /** The prompt points back at the conversation instead of naming work of its own. */
   thin: boolean;
-  contextChars: number;
   /** How many messages of each recoverable origin the context held. */
   provenanceCounts: Record<MessageProvenance, number>;
 }
@@ -31,8 +24,6 @@ const EMPTY_PROVENANCE_COUNTS = (): Record<MessageProvenance, number> => ({
   assistant: 0,
   'tool-result': 0,
 });
-
-const DEFAULT_CONTEXT_CHARS = 1500;
 
 const CONTINUATION_CUES = [
   'ok',
@@ -88,7 +79,7 @@ function normalizeContinuation(text: string): string {
     .trim();
 }
 
-export function isThinContinuation(text: string): boolean {
+function isThinContinuation(text: string): boolean {
   const normalized = normalizeContinuation(text);
   if (!normalized) return false;
 
@@ -100,6 +91,45 @@ export function isThinContinuation(text: string): boolean {
   return CONTINUATION_CUES.some(
     (cue) => normalized === cue || normalized.startsWith(`${cue} `) || normalized.endsWith(` ${cue}`),
   );
+}
+
+const REFERENCE_FILLER_WORDS = new Set([
+  'ok', 'okay', 'yes', 'yep', 'yeah', 'sure', 'continue', 'proceed', 'go', 'ahead', 'keep', 'going',
+  'please', 'now', 'then', 'and', 'also', 'too', 'lets', "let's", 'do',
+]);
+const DELIVERABLE_VERBS = new Set([
+  'implement', 'fix', 'review', 'plan', 'finish', 'apply', 'build', 'write', 'test', 'run', 'commit', 'make',
+  'continue', 'proceed', 'do', 'start',
+]);
+const REFERENTS = new Set([
+  'it', 'this', 'that', 'them', 'these', 'those', 'the', 'rest', 'remaining', 'next', 'step', 'steps',
+  'change', 'changes', 'one', 'same',
+]);
+const MAX_REFERENCE_WORDS = 8;
+
+/**
+ * A short prompt that points back at the conversation instead of naming new
+ * work: continuation words, a deliverable verb, and referents only.
+ */
+function isThinReference(prompt: string): boolean {
+  const words = prompt
+    .toLowerCase()
+    .replace(/[’‘]/g, "'")
+    .replace(/[^a-z'\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0 || words.length > MAX_REFERENCE_WORDS) return false;
+  if (!words.some((word) => DELIVERABLE_VERBS.has(word))) return false;
+  return words.every((word) => REFERENCE_FILLER_WORDS.has(word) || DELIVERABLE_VERBS.has(word) || REFERENTS.has(word));
+}
+
+/**
+ * Whether the prompt carries nothing of its own beyond pointing back: an
+ * approval or transition ("ok go for it", "what's next?") or a deliverable
+ * verb on a referent ("implement it"). The one definition of a thin entry.
+ */
+export function isThinPrompt(prompt: string): boolean {
+  return isThinContinuation(prompt) || isThinReference(prompt);
 }
 
 function textFromMessage(message: Message): string {
@@ -127,100 +157,8 @@ function hashText(text: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-type ConversationLabel = 'User' | 'Assistant' | 'Summary';
-
-/**
- * Strip the flattener's boilerplate markers from a summary body before it is
- * labelled. The markers exist so the harness can round-trip compaction/branch
- * summaries; inside a labelled conversation they are noise that would bury the
- * actual summary content and waste the bounded character budget.
- */
-function stripSummaryMarkers(provenance: MessageProvenance, text: string): string {
-  if (provenance === 'compaction-summary') {
-    let out = text;
-    if (out.startsWith(COMPACTION_SUMMARY_PREFIX)) out = out.slice(COMPACTION_SUMMARY_PREFIX.length);
-    if (out.endsWith(COMPACTION_SUMMARY_SUFFIX)) out = out.slice(0, -COMPACTION_SUMMARY_SUFFIX.length);
-    return out;
-  }
-  if (provenance === 'branch-summary') {
-    let out = text;
-    if (out.startsWith(BRANCH_SUMMARY_PREFIX)) out = out.slice(BRANCH_SUMMARY_PREFIX.length);
-    if (out.endsWith(BRANCH_SUMMARY_SUFFIX)) out = out.slice(0, -BRANCH_SUMMARY_SUFFIX.length);
-    return out;
-  }
-  return text;
-}
-
-function labelFor(provenance: MessageProvenance): ConversationLabel | undefined {
-  switch (provenance) {
-    case 'user':
-      return 'User';
-    case 'assistant':
-      return 'Assistant';
-    case 'compaction-summary':
-    case 'branch-summary':
-      return 'Summary';
-    // synthetic-known and tool-result carry no request intent and are omitted.
-    default:
-      return undefined;
-  }
-}
-
-/**
- * The provenance-labelled, bounded conversation view. Exported because the
- * assessment needs the same labelling rule the thin-continuation path uses —
- * one labelling rule, one place. The caller passes the inclusive end index:
- * the thin path uses the latest user entry; assessment evidence uses
- * `messages.length - 1`.
- */
-export function buildRoleLabelledContext(
-  messages: readonly Message[],
-  endIndex: number,
-  maxChars: number,
-  syntheticPrefixes: readonly string[],
-): string {
-  const segments: Array<{ role: ConversationLabel; text: string }> = [];
-  for (let i = 0; i <= endIndex; i += 1) {
-    const message = messages[i];
-    if (!message) continue;
-    const provenance = classifyProvenance(message, syntheticPrefixes);
-    const role = labelFor(provenance);
-    if (!role) continue;
-    const raw = textFromMessage(message);
-    if (!raw) continue;
-    const text = stripSummaryMarkers(provenance, raw);
-    if (!text) continue;
-    segments.push({ role, text });
-  }
-
-  // Truncation body below is unchanged from the previous implementation.
-  let result = '';
-  for (let i = segments.length - 1; i >= 0; i -= 1) {
-    const segment = segments[i]!;
-    const separator = result ? '\n\n' : '';
-    const full = `${segment.role}: ${segment.text}`;
-    const remaining = maxChars - result.length - separator.length;
-    if (remaining <= 0) break;
-
-    if (full.length <= remaining) {
-      result = `${full}${separator}${result}`;
-      continue;
-    }
-
-    const label = `${segment.role}: `;
-    const textRoom = remaining - label.length;
-    if (textRoom > 1) {
-      const tail = segment.text.slice(-(textRoom - 1));
-      result = `${label}…${tail}${separator}${result}`;
-    }
-    break;
-  }
-  return result;
-}
-
 export function getTurnClassificationInput(
   messages: readonly Message[] | undefined,
-  maxChars = DEFAULT_CONTEXT_CHARS,
   opts: TurnClassificationOptions = {},
 ): TurnClassificationInput {
   const source = messages ?? [];
@@ -260,29 +198,20 @@ export function getTurnClassificationInput(
     return {
       key: 'none',
       promptText: '',
-      classifyText: '',
       thin: false,
-      contextChars: 0,
       provenanceCounts,
     };
   }
 
   const latestUser = source[latestUserIndex]!;
   const promptText = textFromMessage(latestUser);
-  const thin = isThinContinuation(promptText);
   const timestamp = typeof latestUser.timestamp === 'number' ? latestUser.timestamp : 'none';
   const key = `${userOrdinal}:${timestamp}:${hashText(promptText)}`;
-  const classifyText = thin
-    ? buildRoleLabelledContext(source, latestUserIndex, Math.max(1, maxChars), syntheticPrefixes) ||
-      promptText
-    : promptText;
 
   return {
     key,
     promptText,
-    classifyText,
-    thin,
-    contextChars: classifyText.length,
+    thin: isThinPrompt(promptText),
     provenanceCounts,
   };
 }

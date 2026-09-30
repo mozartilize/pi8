@@ -721,7 +721,6 @@ describe('session lifecycle resets', () => {
         dimension: 'gather',
         cause: 'heuristic',
         thin: false,
-        contextChars: 10,
       });
 
       const sessionStart = handlers.get('session_start');

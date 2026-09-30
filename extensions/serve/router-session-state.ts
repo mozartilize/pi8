@@ -30,7 +30,6 @@ export interface CachedRoutingIntent {
   dimension: Dimension;
   cause: DecisionCause;
   thin: boolean;
-  contextChars: number;
 }
 
 /** Embedding-classifier outcome tallies. `kept` = fired - promoted - abstainedLowConf. */

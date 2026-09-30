@@ -1628,13 +1628,16 @@ describe('thin continuation and deep context', () => {
     });
   }
 
-  it('routes a thin continuation from prior context and keeps it stable through tool turns', async () => {
+  it('routes a thin continuation at the previous entry\'s task type and keeps it stable through tool turns', async () => {
     await setupWithConfig({});
+    const firstEntry = [
+      { role: 'user', content: 'Implement the approved API authentication changes.', timestamp: 1 },
+    ];
     const baseMessages = [
-      { role: 'user', content: 'Prepare the pending API authentication changes.', timestamp: 1 },
+      ...firstEntry,
       {
         role: 'assistant',
-        content: 'Next I will implement the approved API authentication changes.',
+        content: 'Should I start with the token refresh?',
         timestamp: 2,
       },
       { role: 'user', content: 'ok go for it', timestamp: 3 },
@@ -1642,6 +1645,9 @@ describe('thin continuation and deep context', () => {
 
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
 
+    await harness.serve({ messages: firstEntry } as unknown as Context);
+    harness.outStream.events = [];
+    harness.outStream.ended = false;
     await harness.serve({ messages: baseMessages } as unknown as Context);
     const firstDecision = harness.getProviderState().lastDecision;
     // Turn 1's row must agree with the log and the rendered detail.

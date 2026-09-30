@@ -348,11 +348,7 @@ function promptHeadIdentity(context: Context): string {
 }
 
 function measureTurnInput(context: Context, config: AutoRouterConfig) {
-  const turnInput = getTurnClassificationInput(
-    context.messages,
-    undefined,
-    { syntheticPrefixes: config.syntheticPrefixes },
-  );
+  const turnInput = getTurnClassificationInput(context.messages, { syntheticPrefixes: config.syntheticPrefixes });
   const systemPrompt = extractSystemPrompt(context);
   const needsVision = hasImageAttachment(context.messages);
   // Pi delivers the system prompt in `context.systemPrompt`, not as a
@@ -384,17 +380,13 @@ async function resolveBaseIntent(
   const cacheHit = cachedIntent?.key === turnInput.key;
   const classifyResult = cacheHit
     ? cachedIntent.classifyResult
-    : classify(turnInput.classifyText, systemPrompt, {
+    : classify(turnInput.promptText, systemPrompt, {
         lowConfidenceThreshold: config.lowConfidenceThreshold,
       });
   let baseDimension: Dimension = cacheHit
     ? cachedIntent.dimension
     : classifyResult.dimension;
-  let baseCause: DecisionCause = cacheHit
-    ? cachedIntent.cause
-    : turnInput.thin
-      ? 'continuation-context'
-      : 'heuristic';
+  let baseCause: DecisionCause = cacheHit ? cachedIntent.cause : 'heuristic';
 
   if (
     !classifyResult.hasCategoricalEvidence &&
@@ -402,7 +394,7 @@ async function resolveBaseIntent(
     !cacheHit
   ) {
     try {
-      const embeddingResult = await embedAndClassify(turnInput.classifyText, {
+      const embeddingResult = await embedAndClassify(turnInput.promptText, {
         deadlineMs: config.embeddingDeadlineMs,
       });
       if (embeddingResult) {
@@ -724,6 +716,11 @@ async function prepareRouterTurn(args: {
   };
 }
 
+/** `dimension`, raised to `floor` when the floor is stronger. */
+function atLeast(dimension: Dimension, floor: Dimension | undefined): Dimension {
+  return floor && DIMENSION_STRENGTH[floor] > DIMENSION_STRENGTH[dimension] ? floor : dimension;
+}
+
 /** Settle this entry's task type and cache it for the entry's later invocations. */
 function resolveRouterTurn(args: {
   prepared: PreparedTurn;
@@ -731,10 +728,23 @@ function resolveRouterTurn(args: {
 }): ResolvedTurn {
   const { prepared, session } = args;
   const { turnInput } = prepared.measured;
-  const { cacheHit, classifyResult, baseDimension, baseCause } = prepared.intent;
+  const { cacheHit, classifyResult } = prepared.intent;
+  let { baseDimension, baseCause } = prepared.intent;
 
   const sessionGeneration = session.getSessionGeneration();
   const stillCurrent = (): boolean => session.getSessionGeneration() === sessionGeneration;
+
+  // A thin entry names no work of its own: the previous entry's task type is
+  // its minimum. The raise is cached with the entry, so it happens once.
+  if (!cacheHit && turnInput.thin) {
+    const previous = session.getWorkPhaseState();
+    const previousDeliverable = previous?.intentKey !== turnInput.key ? previous?.deliverable : undefined;
+    const kept = atLeast(baseDimension, previousDeliverable);
+    if (kept !== baseDimension) {
+      baseDimension = kept;
+      baseCause = 'continuation-context';
+    }
+  }
 
   if (!cacheHit) {
     session.setCachedIntent({
@@ -743,13 +753,11 @@ function resolveRouterTurn(args: {
       dimension: baseDimension,
       cause: baseCause,
       thin: turnInput.thin,
-      contextChars: turnInput.contextChars,
     });
   }
   debugLog('classify.context', {
     thin: turnInput.thin,
     cacheHit,
-    contextChars: turnInput.contextChars,
     key: turnInput.key,
   });
 
@@ -1469,7 +1477,6 @@ async function runManualTurn(args: {
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
-      contextChars: turnInput.contextChars,
     });
   }
   const candidates = manualCandidates(prepared, manualModel);
@@ -1570,7 +1577,6 @@ async function runResumeTurn(args: {
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
-      contextChars: turnInput.contextChars,
     });
   }
 
