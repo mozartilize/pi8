@@ -70,15 +70,6 @@ describe('entry phase', () => {
       .toEqual({ dimension: 'implement', cause: 'investigation-handoff' });
   });
 
-  it('acquires a recovery entry at its deliverable, and a waived plan owes nothing else', () => {
-    const recovery = state({ deliverable: 'review', contextWaived: true, recoveryMinimum: true });
-    expect(owedContext(recovery)).toEqual([]);
-    expect(entryPhase(recovery, 'review')).toEqual({ dimension: 'review' });
-    const withFile = { ...recovery, contextReasons: ['referenced-artifact' as const], contextSatisfied: false };
-    expect(owedContext(withFile)).toEqual(['referenced-artifact']);
-    expect(entryPhase(withFile, 'review')).toEqual({ dimension: 'review', cause: 'investigation' });
-  });
-
   it('keeps a clarification-only entry in the restricted phase whatever it owes', () => {
     const entry = state({ deliverable: 'implement', contextStatus: 'clarification-only' });
     expect(contextOwed(entry)).toBe(false);

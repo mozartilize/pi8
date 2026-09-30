@@ -79,14 +79,6 @@ export interface WorkItem {
    */
   openContext?: ContextReason[];
   /**
-   * An entry of this item owed plan or review preparation and its run ended
-   * without a context handoff: the acquiring model answered in its place.
-   * The item's next plan or review entry skips that preparation and is
-   * served at its deliverable; any file or investigation it owes is still
-   * acquired first.
-   */
-  handoffMissed?: boolean;
-  /**
    * The user entry, recorded before tracking started on the branch, this
    * item was found from. It identifies the item for later entries that
    * return to the same history; nothing routes on it.
@@ -130,7 +122,6 @@ export interface WorkItemPatch {
   status?: 'active' | 'blocked';
   lastDeliverable?: Dimension;
   openContext?: ContextReason[];
-  handoffMissed?: boolean;
 }
 
 export type BoundaryKind = 'investigation-handoff' | 'execution-contract';

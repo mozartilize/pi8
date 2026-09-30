@@ -57,7 +57,7 @@ import { floorForBand, withStrongerTerminal, type WorkPhaseState } from '../rout
 import { adoptAssessment } from '../routing/policy/assessment-adoption.js';
 import { observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
-import { planPendingIdentity, publishSelectedWork, recordHandoffMissed } from './context-resolution.js';
+import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
 import { readBranch } from '../routing/context/persistence.js';
 import { promptAnchorsForItem, referencedArtifactPaths } from '../routing/context/resolve.js';
 import type { ContextPlan } from '../routing/context/resolve.js';
@@ -349,7 +349,6 @@ export function submitContextHandoff(
     const minimum = Math.max(
       reasoningMinimum(requirement),
       floorForBand(terminal.terminalBand) ?? 0,
-      state.recoveryMinimum ? reasoningMinimum(1) : 0,
     );
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence };
   }
@@ -749,25 +748,11 @@ export function closeInvestigationEntry(state: WorkPhaseState, served: string | 
   return { ...state, contextClosed: true };
 }
 
-/**
- * Before an entry's acquisition closes: a plan or review acquisition that
- * ended still acquiring answered in the reasoning model's place. Its work
- * item remembers that, so the item's next plan or review entry is served at
- * its deliverable. An entry that asked the user, or was placed on no work
- * item, records nothing.
- */
-export function noteMissedHandoff(session: RouterSession, state: WorkPhaseState): void {
-  const missed = !state.contextClosed && !state.reasoningHandoff && state.contextStatus === 'acquiring'
-    && (state.deliverable === 'plan' || state.deliverable === 'review');
-  if (missed) recordHandoffMissed(session, state, true);
-}
-
 /** Close the entry's acquisition once Pi's run has settled, so the last entry of a session is logged too. */
 export function closeInvestigationOnSettle(session: RouterSession): void {
   try {
     const state = session.getWorkPhaseState();
     if (!state) return;
-    noteMissedHandoff(session, state);
     const lastServed = session.getLastServed();
     const next = closeInvestigationEntry(state, lastServed ? servedKey(lastServed) : undefined);
     if (next !== state) session.commitWorkPhaseState(next);
@@ -776,39 +761,3 @@ export function closeInvestigationOnSettle(session: RouterSession): void {
   }
 }
 
-/**
- * Start a missed-handoff recovery: a plan or review entry on an item whose
- * previous acquisition answered in the reasoning model's place. The entry's
- * preparation is waived, since the same acquisition is not trusted to hand
- * off; any other owed context (a file, an investigation) is still acquired,
- * but by a model scored at the deliverable. Every phase of the entry keeps
- * that strength. The item's flag is cleared only once a qualifying model
- * serves the entry (see consumeRecovery). Logged as `waived`.
- */
-export function waiveMissedInvestigation(
-  session: RouterSession,
-  state: WorkPhaseState | undefined,
-): WorkPhaseState | undefined {
-  try {
-    if (!state || state.recoveryMinimum || state.contextStatus != null || state.reasoningHandoff) return state;
-    if (state.deliverable !== 'plan' && state.deliverable !== 'review') return state;
-    if (!getWorkItem(session.context.getLedger(), state.workItemId)?.handoffMissed) return state;
-    const next: WorkPhaseState = { ...state, contextWaived: true, recoveryMinimum: true };
-    session.commitWorkPhaseState(next);
-    const lastServed = session.getLastServed();
-    log(state, lastServed ? servedKey(lastServed) : 'unknown/unknown', 'waived', { deliverable: state.deliverable });
-    return next;
-  } catch {
-    return state;
-  }
-}
-
-/** A qualifying model served the recovery entry: its item's flag is used. */
-export function consumeRecovery(session: RouterSession): void {
-  try {
-    const state = session.getWorkPhaseState();
-    if (state?.recoveryMinimum) recordHandoffMissed(session, state, false);
-  } catch {
-    // The flag only strengthens a later entry; keeping it is the safe side.
-  }
-}

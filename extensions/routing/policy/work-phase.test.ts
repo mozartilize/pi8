@@ -78,8 +78,6 @@ describe('inheritWorkContinuation', () => {
       clarificationDispatched: true,
       handoffKey: 'k',
       contextNudged: true,
-      contextWaived: true,
-      recoveryMinimum: true,
       contextClosed: true,
       contractStrikes: { 'beta/strong': 1 },
     });
@@ -100,7 +98,7 @@ describe('inheritWorkContinuation', () => {
     expect(next.reasoningHandoff).toBeUndefined();
     for (const field of [
       'contextStatus', 'contextRequests', 'contextDenials', 'deniedAtInvocation', 'clarificationDispatched',
-      'handoffKey', 'contextNudged', 'contextWaived', 'recoveryMinimum', 'contextClosed',
+      'handoffKey', 'contextNudged', 'contextClosed',
     ] as const) {
       expect(next[field]).toBeUndefined();
     }

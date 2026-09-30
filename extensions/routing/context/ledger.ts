@@ -138,7 +138,6 @@ function applyPatch(item: WorkItem, patch: WorkItemPatch, sourceEntryId: string)
     ...(patch.status ? { status: patch.status } : {}),
     ...(patch.lastDeliverable ? { lastDeliverable: patch.lastDeliverable } : {}),
     ...(patch.openContext ? { openContext: patch.openContext } : {}),
-    ...(patch.handoffMissed != null ? { handoffMissed: patch.handoffMissed } : {}),
     updatedAtEntryId: sourceEntryId,
   };
 }
@@ -211,11 +210,8 @@ export function applyEvent(ledger: TopicLedger, event: RoutingContextEvent): Top
       const item = ledger.items.get(event.workItemId);
       if (!item) return ledger;
       // An accepted context handoff is the explicit boundary that ends the
-      // item's open context, and shows its acquisitions hand off again; a
-      // contract only associates its record.
-      const next = event.boundary === 'investigation-handoff'
-        ? { ...item, openContext: [], ...(item.handoffMissed ? { handoffMissed: false } : {}) }
-        : item;
+      // item's open context; a contract only associates its record.
+      const next = event.boundary === 'investigation-handoff' ? { ...item, openContext: [] } : item;
       return withItem(ledger, next, false);
     }
     case 'context-commit':
@@ -332,7 +328,6 @@ function parseWorkItem(value: unknown): WorkItem | undefined {
   if (DIMENSIONS.has(value.lastDeliverable as Dimension)) item.lastDeliverable = value.lastDeliverable as Dimension;
   const openContext = parseOpenContext(value);
   if (openContext) item.openContext = openContext;
-  if (typeof value.handoffMissed === 'boolean') item.handoffMissed = value.handoffMissed;
   // A damaged reference loses the link to history, never the item.
   if (text(value.legacySourceEntryId) && value.legacySourceEntryId.length <= CONTEXT_LIMITS.id) {
     item.legacySourceEntryId = value.legacySourceEntryId;
@@ -396,10 +391,8 @@ function parsePatch(value: unknown): WorkItemPatch | undefined {
     if (!openContext) return undefined;
     patch.openContext = openContext;
   }
-  if (value.handoffMissed != null) {
-    if (typeof value.handoffMissed !== 'boolean') return undefined;
-    patch.handoffMissed = value.handoffMissed;
-  }
+  // Recorded by an earlier missed-handoff flag; valid, but carries nothing.
+  if (value.handoffMissed != null && typeof value.handoffMissed !== 'boolean') return undefined;
   return patch;
 }
 

@@ -73,7 +73,7 @@ export function owedContext(state: WorkPhaseState | undefined): ContextReason[] 
   if (!state || !deliverable) return [];
   const reasons: ContextReason[] = [];
   if (state.pendingIdentity) reasons.push('identity-unresolved');
-  if ((deliverable === 'plan' || deliverable === 'review') && !state.contextWaived) reasons.push('reasoning-prep');
+  if (deliverable === 'plan' || deliverable === 'review') reasons.push('reasoning-prep');
   if (CONTEXT_DELIVERABLES.has(deliverable) && state.contextSatisfied === false) {
     reasons.push(...(state.contextReasons ?? []));
   }
@@ -147,7 +147,7 @@ export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): 
     return { dimension: state.deliverable ?? base, cause: 'investigation-handoff' };
   }
   if (state?.contextStatus === 'clarification-only' || contextOwed(state)) {
-    return { dimension: state?.recoveryMinimum ? state.deliverable ?? base : 'gather', cause: 'investigation' };
+    return { dimension: 'gather', cause: 'investigation' };
   }
   return { dimension: base };
 }

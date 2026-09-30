@@ -52,17 +52,6 @@ export interface WorkPhaseState {
   handoffKey?: string;
   /** The one acquisition reminder for this entry was already appended. */
   contextNudged?: boolean;
-  /**
-   * The entry's plan or review needs no preparation: the item's previous
-   * acquisition answered in the reasoning model's place instead of handing
-   * off. Any other owed context is still owed.
-   */
-  contextWaived?: boolean;
-  /**
-   * A missed-handoff recovery entry: every phase of it is scored at its
-   * deliverable, and no handoff releases a cheaper model.
-   */
-  recoveryMinimum?: boolean;
   /** The entry's acquisition outcome was logged. */
   contextClosed?: boolean;
   /** The entry's work-context resolution; set once per entry. */
@@ -152,8 +141,6 @@ export function inheritWorkContinuation(
     clarificationDispatched: undefined,
     handoffKey: undefined,
     contextNudged: undefined,
-    contextWaived: undefined,
-    recoveryMinimum: undefined,
     contextClosed: undefined,
   };
 }

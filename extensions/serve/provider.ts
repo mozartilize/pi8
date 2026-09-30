@@ -105,10 +105,7 @@ import {
 import {
   CLARIFICATION_NOTE,
   closeInvestigationEntry,
-  consumeRecovery,
   investigationNote,
-  noteMissedHandoff,
-  waiveMissedInvestigation,
   withInvestigationNote,
 } from './context-handoff-tool.js';
 
@@ -585,7 +582,6 @@ function advanceWorkPhase(args: {
     if (workPhaseState) {
       const previous = args.session.getPreviousServed();
       const served = previous && servedKey(previous);
-      noteMissedHandoff(args.session, workPhaseState);
       workPhaseState = closeInvestigationEntry(workPhaseState, served);
       if (workPhaseState.contract) workPhaseState = closeContractEntry(workPhaseState, served);
     }
@@ -998,10 +994,7 @@ function scoreRouterTurn(args: {
   // context handoff routes the rest of the entry as its next phase, including
   // when a broken plan hands back to its submitter. A pinned or held model
   // serves every phase: a pin chooses the model, not what the request owes.
-  // An entry whose work item's previous acquisition never handed off is a
-  // recovery: its plan or review preparation is waived, and every phase of
-  // it is scored at the deliverable.
-  let entry = waiveMissedInvestigation(session, session.getWorkPhaseState());
+  let entry = session.getWorkPhaseState();
   const phase = entryPhase(entry, baseDimension);
   if (phase.cause === 'investigation' && entry) {
     let next = entry.contextStatus == null ? { ...entry, contextStatus: 'acquiring' as const, contextRequests: 0 } : entry;
@@ -1033,7 +1026,6 @@ function scoreRouterTurn(args: {
   const reasoning = routedDimension === entry?.reasoningHandoff?.target ? entry.reasoningHandoff : undefined;
   const pendingBoundary = entry?.contextStatus === 'ready-pending' && !handBack;
   const reasoningPending = pendingBoundary && reasoning?.pending === true;
-  const reasoningMinimum = reasoning && !entry?.recoveryMinimum ? reasoning : undefined;
 
   // Pi clears lastServed at stream start; the rotated value is the model and
   // effort that actually served, including an effort-floor bump or fallback.
@@ -1067,7 +1059,7 @@ function scoreRouterTurn(args: {
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
     ...(execution
       ? { handoffMinimum: execution.minimum, handoffPending: contract?.releasePending === true }
-      : reasoningMinimum ? { handoffMinimum: reasoningMinimum.minimum, handoffPending: reasoningPending } : {}),
+      : reasoning ? { handoffMinimum: reasoning.minimum, handoffPending: reasoningPending } : {}),
     // The conservative fallback records new work without evidence of a change.
     ...(resolved.context ? {
       workRelation: resolved.context.resolution.resolver === 'fallback'
@@ -1288,9 +1280,6 @@ async function delegateRouterTurn(args: {
     if (scored.releasesContract && releasing?.contract?.status === 'active') {
       session.commitWorkPhaseState(serveContractRelease(releasing));
     }
-    // A recovery entry's work item flag is used once a model at its
-    // deliverable's strength serves it.
-    consumeRecovery(session);
     const current = session.getWorkPhaseState();
     if (!scored.pendingBoundary || current?.intentKey !== intentKey || current.contextStatus !== 'ready-pending') {
       return finalDecision;

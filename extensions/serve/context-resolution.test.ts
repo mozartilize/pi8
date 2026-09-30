@@ -35,8 +35,6 @@ const MODELS = [
     cost: { input: 2, output: 8, cacheRead: 0, cacheWrite: 0 } }),
 ];
 const READY = { outcome: 'ready', deliverable: 'implement', findings: 'checked the request', question: 'implement the change' };
-const REVIEW = { ...READY, deliverable: 'review',
-  difficulty: { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 } };
 
 describe('work-context resolution through the provider', () => {
   let temp: ReturnType<typeof createTempRouterDir>;
@@ -290,20 +288,5 @@ describe('work-context resolution through the provider', () => {
     expect(raw).toContain('"workContext"');
     expect(raw).not.toContain('Codename Bluebird');
     expect(ledgerEvents()).toEqual(expect.arrayContaining(['work-create', 'activate', 'served']));
-  });
-
-  it('records a missed review handoff only for an existing work item still collecting context', async () => {
-    await setup();
-    await entry('review the retry logic in the exporter');
-    expect((await handoff({ ...REVIEW, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export',
-      workItemTitle: 'Retry review' })).accepted).toBe(true);
-    const id = harness.session.context.getLedger().activeWorkItemId!;
-    await entry('ok go ahead');
-    expect(harness.session.getWorkPhaseState()).toMatchObject({ contextStatus: 'acquiring', workItemId: id });
-    closeInvestigationOnSettle(harness.session);
-    expect(harness.session.context.getLedger().items.get(id)?.handoffMissed).toBe(true);
-    const next = await entry('ok go ahead');
-    expect(next.dimension).toBe('review');
-    expect(harness.session.context.getLedger().items.get(id)?.handoffMissed).toBe(false);
   });
 });

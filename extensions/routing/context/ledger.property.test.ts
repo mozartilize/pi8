@@ -45,7 +45,6 @@ const patch: fc.Arbitrary<WorkItemPatch> = fc.record(
     status: fc.constantFrom<'active' | 'blocked'>('active', 'blocked'),
     lastDeliverable: fc.constantFrom(...DIMENSIONS),
     openContext: fc.subarray<'referenced-artifact' | 'carried-open-context'>(['referenced-artifact', 'carried-open-context']),
-    handoffMissed: fc.boolean(),
   },
   { requiredKeys: [] },
 );

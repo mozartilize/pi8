@@ -318,23 +318,3 @@ export function carryPhaseAcrossTree(session: RouterSession, branch: readonly un
     // The next entry replaces the state either way.
   }
 }
-
-/**
- * Record on the entry's work item whether its acquisition answered in the
- * reasoning model's place. Written only when it changed.
- */
-export function recordHandoffMissed(session: RouterSession, state: WorkPhaseState, missed: boolean): void {
-  try {
-    const item = getWorkItem(session.context.getLedger(), state.workItemId);
-    if (!item || (item.handoffMissed ?? false) === missed) return;
-    session.context.append({
-      v: 1,
-      op: 'work-update',
-      workItemId: item.id,
-      patch: { handoffMissed: missed },
-      sourceEntryId: session.context.getEntrySource() ?? state.intentKey,
-    });
-  } catch {
-    // The flag only strengthens a later entry; losing it keeps today's routing.
-  }
-}

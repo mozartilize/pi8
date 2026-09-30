@@ -80,17 +80,12 @@ describe('ledger fold', () => {
     expect(item.openContext).toEqual([]);
   });
 
-  it('remembers a missed investigation handoff until a patch or an accepted handoff clears it', () => {
-    const missed = { v: 1, op: 'work-update', workItemId: 'w_1', patch: { handoffMissed: true }, sourceEntryId: 'u1' } as const;
-    const flagged = foldEvents([create(workItem('w_1')), missed]);
-    expect(flagged.items.get('w_1')!.handoffMissed).toBe(true);
-    const cleared = foldEvents([{ ...missed, patch: { handoffMissed: false }, sourceEntryId: 'u2' }], flagged);
-    expect(cleared.items.get('w_1')!.handoffMissed).toBe(false);
-    const handedOff = foldEvents([{ v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'investigation-handoff', handoffId: 'k', sourceEntryId: 'u2' }], flagged);
-    expect(handedOff.items.get('w_1')!.handoffMissed).toBe(false);
-    // An item that never missed one keeps no flag through a handoff.
-    const plain = foldEvents([create(workItem('w_1')), { v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'investigation-handoff', handoffId: 'k', sourceEntryId: 'u2' }]);
-    expect(plain.items.get('w_1')!).not.toHaveProperty('handoffMissed');
+  it('reads a recorded missed-handoff flag and carries nothing from it', () => {
+    const recorded = { v: 1, op: 'work-update', workItemId: 'w_1', patch: { handoffMissed: true }, sourceEntryId: 'u1' };
+    const parsed = parseContextEvent(recorded);
+    expect(parsed).toBeDefined();
+    expect(foldEvents([create(workItem('w_1')), parsed!]).items.get('w_1')).not.toHaveProperty('handoffMissed');
+    expect(parseContextEvent({ ...recorded, patch: { handoffMissed: 'yes' } })).toBeUndefined();
   });
 
   it('records the last served model as a hint on the item', () => {
@@ -174,8 +169,8 @@ describe('bounded metadata', () => {
 describe('parseContextEvent', () => {
   it('round-trips every event shape', () => {
     const events: RoutingContextEvent[] = [
-      create(workItem('w_1', 't_1', { anchors: [{ kind: 'path', value: 'a.md', source: 'user' }], lastDeliverable: 'implement', openContext: [], handoffMissed: true, legacySourceEntryId: 'e4' })),
-      { v: 1, op: 'work-update', workItemId: 'w_1', patch: { title: 't', summary: 's', topicTitle: 'T', status: 'blocked', anchors: [{ kind: 'issue', value: '#12', source: 'model' }], lastDeliverable: 'plan', openContext: ['referenced-artifact', 'carried-open-context'], handoffMissed: false }, sourceEntryId: 'u' },
+      create(workItem('w_1', 't_1', { anchors: [{ kind: 'path', value: 'a.md', source: 'user' }], lastDeliverable: 'implement', openContext: [], legacySourceEntryId: 'e4' })),
+      { v: 1, op: 'work-update', workItemId: 'w_1', patch: { title: 't', summary: 's', topicTitle: 'T', status: 'blocked', anchors: [{ kind: 'issue', value: '#12', source: 'model' }], lastDeliverable: 'plan', openContext: ['referenced-artifact', 'carried-open-context'] }, sourceEntryId: 'u' },
       { v: 1, op: 'work-close', workItemId: 'w_1', status: 'done', sourceEntryId: 'u' },
       activate('w_1'),
       { v: 1, op: 'migration-init', legacyHeadEntryId: 'e1', mode: 'lazy', sourceEntryId: 'e2' },

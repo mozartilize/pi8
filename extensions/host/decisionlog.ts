@@ -233,7 +233,7 @@ export interface InvestigationHandoffSignal {
    */
   action:
     | 'accept' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
-    | 'served' | 'phase-end' | 'no-handoff' | 'waived';
+    | 'served' | 'phase-end' | 'no-handoff';
   rejectReason?: string;
   handoff?: ReasoningHandoffMeta;
   deliverable?: Dimension;
