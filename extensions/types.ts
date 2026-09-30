@@ -281,6 +281,12 @@ export interface ExecutionContractMeta {
   handoffId?: string;
 }
 
+/** Catalog choice of work, by id or reserved value; the router derives the relation. */
+export interface WorkChoice {
+  topicId: string;
+  workItemId: string;
+}
+
 export type DecisionCause =
   | 'heuristic'
   | 'continuation-context'
