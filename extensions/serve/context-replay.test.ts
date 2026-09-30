@@ -114,13 +114,20 @@ describe('routing-context corpus replay', () => {
       await harness.serve({ messages: messages() } as unknown as Context);
     };
 
+    // The entry's model asked the user which work it is, in text or through the handoff.
+    let askedUser = false;
     // These choices test the handoff contract; they are not model-generated predictions.
     const handoff = async (entry: CorpusEntry): Promise<boolean> => {
       const state = harness.session.getWorkPhaseState();
-      if (state?.contextStatus !== 'acquiring') return false;
+      const acquiring = state?.contextStatus === 'acquiring';
+      // Collecting context hands off; so does an incumbent that changes phase.
+      if (!state || (!acquiring && !(state.incumbentServes && state.contextStatus == null))) return false;
       const pending = state.pendingIdentity;
       const label = entry.label;
       if (label.context.includes('identity-unresolved')) {
+        askedUser = true;
+        // An incumbent asks in its answer; collecting context asks through the handoff.
+        if (!acquiring) return false;
         return submitContextHandoff({ outcome: 'needs-user', question: 'Which work and source should I use?' },
           routerCtx, harness.session).accepted;
       }
@@ -152,6 +159,7 @@ describe('routing-context corpus replay', () => {
 
     const predictions: EntryPrediction[] = [];
     for (const [ordinal, entry] of session.entries.entries()) {
+      askedUser = false;
       tree.user(entry.prompt, 1_000 + tree.getBranch().length);
       await serve();
       const initialContext = harness.getProviderState().lastDecision?.workContext;
@@ -193,11 +201,13 @@ describe('routing-context corpus replay', () => {
       const contextStatus = harness.session.getWorkPhaseState()?.contextStatus;
       // An entry the handoff could only answer with a question owes which work it is.
       const observedContext: ContextReason[] = requested.length > 0 ? requested
-        : contextStatus === 'clarification-only' ? ['identity-unresolved']
+        : askedUser || contextStatus === 'clarification-only' ? ['identity-unresolved']
         : selected?.resolution.contextReasons ?? [];
+      // Unresolved work is owed only while collecting context: an incumbent answers without it.
+      const phase = harness.session.getWorkPhaseState();
       const observedSatisfied = observedContext.includes('identity-unresolved') ? false
         : requested.length > 0 ? requestedSatisfied
-        : selected?.contextSatisfied ?? (harness.session.getWorkPhaseState()?.pendingIdentity ? false : requestedSatisfied);
+        : selected?.contextSatisfied ?? (phase?.pendingIdentity && !phase.incumbentServes ? false : requestedSatisfied);
       const label = entry.label;
       if (selected?.createdWorkItem && selected.workItemId && !label.existing && label.workItem !== 'NONE') {
         ids.set(label.workItem, selected.workItemId);

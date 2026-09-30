@@ -36,6 +36,8 @@ export interface WorkPhaseState {
   previousHandoffId?: string;
   /** Where collecting context stands for the entry; absent until an invocation routes it. */
   contextStatus?: ContextStatus;
+  /** An incumbent was serving when this entry arrived: it serves the entry, which collects no context. */
+  incumbentServes?: boolean;
   /** Bounded choice set while this entry's work identity is not yet known. */
   pendingIdentity?: PendingIdentity;
   /** Complete reads made before work identity was chosen; entry-local and never inherited. */
@@ -133,6 +135,7 @@ export function inheritWorkContinuation(
     reasoningHandoff: undefined,
     previousHandoffId: prior.reasoningHandoff?.id,
     contextStatus: undefined,
+    incumbentServes: undefined,
     pendingIdentity: undefined,
     provisionalGrounding: undefined,
     contextRequests: undefined,

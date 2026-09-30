@@ -144,7 +144,20 @@ export type FlatContextEvent =
       served: { registryId: string; thinkingLevel?: string };
       sourceEntryId: string;
     }
-  | { v: 1; op: 'boundary'; workItemId: WorkItemId; boundary: BoundaryKind; handoffId: string; sourceEntryId: string };
+  | { v: 1; op: 'boundary'; workItemId: WorkItemId; boundary: BoundaryKind; handoffId: string; sourceEntryId: string }
+  | { v: 1; op: 'incumbent'; served: { registryId: string; thinkingLevel?: string }; dimension: Dimension; sourceEntryId: string };
+
+/**
+ * The model the router last chose outside collecting context, and the task
+ * type it served. A later entry is served by it until a handoff, a plan, or
+ * trajectory evidence routes elsewhere. A switch to another model voids it.
+ */
+export interface Incumbent {
+  registryId: string;
+  thinkingLevel?: string;
+  dimension: Dimension;
+  entryId: string;
+}
 
 /** A ready handoff persists its selection, grounding, and boundary as one branch entry. */
 export type RoutingContextEvent = FlatContextEvent | {

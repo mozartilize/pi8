@@ -35,7 +35,7 @@ import {
   appendExecutionContractSignal,
   appendInvestigationHandoffSignal,
 } from '../host/decisionlog.js';
-import { renderRouterStatus, servedKey } from '../host/ui.js';
+import { renderRouterStatus, servedKey, type ServedInfo } from '../host/ui.js';
 import {
   buildCandidate,
   buildRouterThinkingLevelMap,
@@ -604,6 +604,7 @@ function advanceWorkPhase(args: {
     // A substantive continuation can demand more than the prior final step.
     workPhaseState = withStrongerTerminal(workPhaseState, terminal);
     workPhaseState = withEntryContext(workPhaseState, args.context);
+    if (args.session.context.getIncumbent()) workPhaseState = { ...workPhaseState, incumbentServes: true };
     if (args.pendingIdentity) workPhaseState = { ...workPhaseState, pendingIdentity: args.pendingIdentity };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
@@ -1059,7 +1060,9 @@ function scoreRouterTurn(args: {
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
     ...(execution
       ? { handoffMinimum: execution.minimum, handoffPending: contract?.releasePending === true }
-      : reasoning ? { handoffMinimum: reasoning.minimum, handoffPending: reasoningPending } : {}),
+      : reasoning ? { handoffMinimum: reasoning.minimum, handoffPending: reasoningPending }
+        // Any accepted handoff lets the router choose the next phase's model once.
+        : pendingBoundary ? { handoffPending: true } : {}),
     // The conservative fallback records new work without evidence of a change.
     ...(resolved.context ? {
       workRelation: resolved.context.resolution.resolver === 'fallback'
@@ -1110,17 +1113,47 @@ function scoreRouterTurn(args: {
     estContextTokens,
   });
 
-  return {
-    kind: 'ready',
-    scored: {
-      decision,
-      routableCandidates,
-      requestedReasoning,
-      ...(restore ? { restoredContract: restore } : {}),
-      ...(pendingBoundary ? { pendingBoundary: true } : {}),
-      ...(execution && contract?.releasePending ? { releasesContract: true } : {}),
-    },
+  const scored: ScoredTurn = {
+    decision,
+    routableCandidates,
+    requestedReasoning,
+    ...(restore ? { restoredContract: restore } : {}),
+    ...(pendingBoundary ? { pendingBoundary: true } : {}),
+    ...(execution && contract?.releasePending ? { releasesContract: true } : {}),
   };
+  // Outside collecting context and its boundary, the incumbent serves: only
+  // a plan, trajectory evidence, or a pin routes elsewhere.
+  const status = session.getWorkPhaseState()?.contextStatus;
+  const holds = !pinned && !contract && !policy.trajectoryApplied
+    && status !== 'acquiring' && status !== 'clarification-only' && status !== 'ready-pending';
+  return { kind: 'ready', scored: (holds && holdIncumbentServing(prepared, scored, session)) || scored };
+}
+
+/**
+ * The incumbent at its served thinking level, with the scored chain behind it
+ * as fallback. Undefined when it is not routable now: an excluded or removed
+ * model is never restored by holding it.
+ */
+function holdIncumbentServing(prepared: PreparedTurn, scored: ScoredTurn, session: RouterSession): ScoredTurn | undefined {
+  const incumbent = session.context.getIncumbent();
+  if (!incumbent) return undefined;
+  const preferred = incumbent.thinkingLevel ? `${incumbent.registryId}:${incumbent.thinkingLevel}` : incumbent.registryId;
+  const held = scored.routableCandidates.find((c) => candidateKey(c) === preferred)
+    ?? scored.routableCandidates.find((c) => candidateKey(c) === incumbent.registryId);
+  if (!held) return undefined;
+  const key = candidateKey(held);
+  if (key === scored.decision.chosen) return undefined;
+  const pinned = pinnedScored({
+    base: scored,
+    chosen: held,
+    routableCandidates: scored.routableCandidates,
+    cause: 'incumbent',
+    reason: `kept ${key}, the model serving this session`,
+    prepared,
+    session,
+  });
+  pinned.decision.fallbackChain = [key, ...scored.decision.fallbackChain.filter((other) => other !== key)];
+  return { ...scored, decision: pinned.decision };
 }
 
 /**
@@ -1255,6 +1288,22 @@ async function delegateRouterTurn(args: {
   // Settled before the loop records the decision, so the decision log and
   // `/router-why` show the boundary's owner for the invocation that took it.
   delegationOptions.settleServed = (lastServed, finalDecision) => {
+    const settled = settleBoundary(lastServed, finalDecision);
+    noteIncumbent(lastServed, settled);
+    return settled;
+  };
+  // The model that served outside collecting context, and not by a pin, is the incumbent.
+  const noteIncumbent = (lastServed: ServedInfo, decision: RoutingDecision): void => {
+    try {
+      const status = session.getWorkPhaseState()?.contextStatus;
+      if (status === 'acquiring' || status === 'clarification-only') return;
+      if (session.getManualModel() || session.getSemiHold(intentKey)) return;
+      session.context.recordIncumbent(lastServed, decision.dimension, session.context.getEntrySource() ?? intentKey);
+    } catch {
+      // A lost record only means the next entry is routed afresh.
+    }
+  };
+  const settleBoundary = (lastServed: ServedInfo, finalDecision: RoutingDecision): RoutingDecision => {
     const served = servedKey(lastServed);
     const settling = session.getWorkPhaseState();
     // Marked only after a model served: a failed clarification request can retry.

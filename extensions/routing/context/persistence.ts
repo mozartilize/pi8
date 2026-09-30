@@ -42,6 +42,15 @@ function scanContextEvents(branch: readonly unknown[] | undefined): { events: Ro
   const events: RoutingContextEvent[] = [];
   let ledger = emptyLedger();
   for (const entry of asEntries(branch)) {
+    // A switch to another model ends the incumbent; a switch back to
+    // router/auto starts without one until the router chooses again.
+    if (entry.type === 'model_change' && !(entry.provider === ROUTER_PROVIDER_ID && entry.modelId === AUTO_MODEL_ID)) {
+      if (ledger.incumbent) {
+        const { incumbent: _ended, ...rest } = ledger;
+        ledger = rest;
+      }
+      continue;
+    }
     if (entry.type !== 'custom' || entry.customType !== CONTEXT_ENTRY_TYPE) continue;
     const event = parseContextEvent(entry.data);
     if (!event) continue;

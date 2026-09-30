@@ -29,7 +29,13 @@ import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/le
 import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
 import { ReadCoverage, type LineRange } from '../routing/context/grounding.js';
 import type { LegacyIndex } from '../routing/context/legacy.js';
-import { CONTEXT_COMMIT_EVENT_LIMIT, type BranchState, type FlatContextEvent, type RoutingContextEvent } from '../routing/context/types.js';
+import {
+  CONTEXT_COMMIT_EVENT_LIMIT,
+  type BranchState,
+  type FlatContextEvent,
+  type Incumbent,
+  type RoutingContextEvent,
+} from '../routing/context/types.js';
 import type { ResolvedEntryContext } from './context-resolution.js';
 
 export interface CachedRoutingIntent {
@@ -195,6 +201,40 @@ export class RoutingContextState {
     this.ledger = next;
     this.branchState = 'tracked';
     return true;
+  }
+
+  getIncumbent(): Incumbent | undefined {
+    return this.ledger.incumbent;
+  }
+
+  /**
+   * Record the model the router chose outside collecting context. Written to
+   * the branch only when it changed, so a resumed session restores it.
+   */
+  recordIncumbent(served: { registryId: string; thinkingLevel?: string }, dimension: Dimension, sourceEntryId: string): void {
+    const event: RoutingContextEvent = {
+      v: 1,
+      op: 'incumbent',
+      served: { registryId: served.registryId, ...(served.thinkingLevel ? { thinkingLevel: served.thinkingLevel } : {}) },
+      dimension,
+      sourceEntryId,
+    };
+    const next = applyEvent(this.ledger, event);
+    if (next === this.ledger) return;
+    try {
+      this.persist?.(event);
+    } catch (err) {
+      debugLog('context.persist-error', { op: event.op, message: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    this.ledger = next;
+  }
+
+  /** Pi switched to another model: the next router entry starts without an incumbent. */
+  clearIncumbent(): void {
+    if (!this.ledger.incumbent) return;
+    const { incumbent: _ended, ...rest } = this.ledger;
+    this.ledger = rest;
   }
 
   /** The index for `headEntryId`, built at most once per boundary. */

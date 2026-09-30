@@ -1282,14 +1282,14 @@ describe('incumbent effort floor carries across invocations', () => {
       await harness.serve({ messages } as unknown as Context);
       return harness.getProviderState().lastDecision;
     }
+    // The incumbent serves each later entry, at its task type's effort minimum.
     const turn2 = await nextEntry('give me today’s weather forecast');
-    expect(turn2?.dimension).toBe('gather');
     expect(turn2?.effortFloorDimension).toBe('implement');
     expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
 
     const turn3 = await nextEntry('what is a good pancake topping?');
-    expect(turn3?.dimension).toBe('gather');
     expect(turn3?.effortFloorDimension).toBe('implement');
+    expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
   });
 });
 
@@ -2170,6 +2170,49 @@ describe('context acquisition', () => {
       expect(actions).toEqual(['accept', 'served', 'phase-end']);
       expect(JSON.stringify(records)).not.toContain('swallows timeouts');
     });
+
+    describe('the incumbent', () => {
+      async function served(): Promise<Session> {
+        const session = await newSession();
+        await session.routeTurn(PLAN_PROMPT);
+        await submitPrepared(handoff(5));
+        await session.routeTurnAgainWithSameUserEntry();
+        return session;
+      }
+
+      it('is the model chosen outside collecting context, never the one that collected it', async () => {
+        const session = await newSession();
+        await session.routeTurn(PLAN_PROMPT);
+        expect(harness.session.context.getIncumbent()).toBeUndefined();
+        await submitPrepared(handoff(5));
+        await session.routeTurnAgainWithSameUserEntry();
+        expect(harness.session.context.getIncumbent()).toMatchObject({ registryId: 'beta/strong', dimension: 'plan' });
+      });
+
+      it('serves every later entry with all tools, without collecting context', async () => {
+        const session = await served();
+        const next = await session.routeTurn('please handle the pending adjustment');
+        expect(next?.chosen.startsWith('beta/strong')).toBe(true);
+        expect(next?.cause).not.toBe('investigation');
+        expect(harness.session.getWorkPhaseState()).toMatchObject({ incumbentServes: true });
+        expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
+      });
+
+      it('hands off to change phase, and the router chooses the next model', async () => {
+        const session = await served();
+        await session.routeTurn('please handle the pending adjustment');
+        expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
+        const next = await session.routeTurnAgainWithSameUserEntry();
+        expect(next).toMatchObject({ dimension: 'implement', cause: 'investigation-handoff' });
+      });
+
+      it('is never a pinned model', async () => {
+        const session = await newSession();
+        harness.session.setManualModel('alpha/cheap');
+        await session.routeTurn('please handle the pending adjustment');
+        expect(harness.session.context.getIncumbent()).toBeUndefined();
+      });
+    });
   });
 
   describe('execution contract handoff', () => {
@@ -2214,8 +2257,11 @@ describe('context acquisition', () => {
     }
 
     async function resolvedImplementation(session: Session, prompt: string): Promise<RoutingDecision | undefined> {
+      const incumbent = harness.session.context.getIncumbent();
       const first = await session.routeTurn(prompt);
-      expect(first?.dimension).toBe('gather');
+      // With no incumbent the entry collects context; an incumbent serves it and hands off.
+      if (incumbent) expect(first?.chosen.startsWith(incumbent.registryId)).toBe(true);
+      else expect(first?.dimension).toBe('gather');
       const params = { outcome: 'ready', deliverable: 'implement', workItemId: 'NEW_WORK_ITEM',
         topicId: 'NEW_TOPIC', topicTitle: 'Implementation', workItemTitle: 'Requested change',
         findings: 'read the request', question: 'implement the change' };

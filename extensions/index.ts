@@ -320,7 +320,11 @@ function handleModelSelect(
       : undefined,
     ...session.blacklist.getDebugState(),
   });
-  // A concrete model selection makes the previous router decision stale.
+  // A concrete model selection makes the previous router decision stale,
+  // and ends the incumbent: switching back starts by collecting context.
+  if (event.model.provider !== ROUTER_PROVIDER_ID || event.model.id !== AUTO_MODEL_ID) {
+    session.context.clearIncumbent();
+  }
   if (event.model.provider !== ROUTER_PROVIDER_ID) {
     clearRouterStatus(ctx);
     return;

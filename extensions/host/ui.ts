@@ -85,6 +85,7 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   'manual-override': 'manual pin',
   resume: 'reused the route from before the pin',
   'semi-hold': 'kept the current model (semi mode)',
+  incumbent: 'kept the model serving this session until a handoff',
   'work-context': 'a follow-up that carries on its resolved work item\'s task type',
 };
 

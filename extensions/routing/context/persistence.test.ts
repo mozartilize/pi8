@@ -58,6 +58,22 @@ describe('branch reconstruction', () => {
     expect(rebuildLedger(t.getBranch()).items.has('w_2')).toBe(true);
   });
 
+  it('restores the incumbent, and a switch to another model ends it', () => {
+    const t = new SessionTree();
+    const u = t.user('implement the exporter');
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'incumbent', served: { registryId: 'a/opus', thinkingLevel: 'high' }, dimension: 'implement', sourceEntryId: u });
+    const ledger = rebuildLedger(t.getBranch());
+    expect(ledger.incumbent).toEqual({ registryId: 'a/opus', thinkingLevel: 'high', dimension: 'implement', entryId: u });
+    // Serving history never makes a branch tracked.
+    expect(ledger.events).toBe(0);
+    // Pi re-selecting router/auto on resume keeps it.
+    t.modelChange('router', 'auto');
+    expect(rebuildLedger(t.getBranch()).incumbent?.registryId).toBe('a/opus');
+    t.modelChange('openai', 'gpt-5');
+    t.modelChange('router', 'auto');
+    expect(rebuildLedger(t.getBranch()).incumbent).toBeUndefined();
+  });
+
   it('skips other extensions\' entries and malformed ledger entries', () => {
     const t = new SessionTree();
     const u = t.user('hi');

@@ -180,6 +180,8 @@ function openFor(ctx: Pick<ExtensionContext, 'model'> | undefined, session: Rout
     return { reject: 'already-handed-off', state, served };
   }
   if (state.contextStatus === 'acquiring') return { state, served, acquiring: true };
+  // The incumbent changes phase by handing off; the router picks the next model.
+  if (state.incumbentServes) return { state, served, acquiring: false };
   if (last.dimension === 'gather' && !contextOwed(state)) return { state, served, acquiring: false };
   return { reject: 'not-acquiring', state, served };
 }

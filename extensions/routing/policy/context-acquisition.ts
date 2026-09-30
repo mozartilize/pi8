@@ -146,6 +146,8 @@ export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): 
   if (state?.contextStatus === 'ready-pending' || state?.contextStatus === 'served') {
     return { dimension: state.deliverable ?? base, cause: 'investigation-handoff' };
   }
+  // The incumbent serves the entry with every tool; it hands off to change phase.
+  if (state?.incumbentServes && state.contextStatus == null) return { dimension: base };
   if (state?.contextStatus === 'clarification-only' || contextOwed(state)) {
     return { dimension: 'gather', cause: 'investigation' };
   }

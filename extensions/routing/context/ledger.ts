@@ -16,6 +16,7 @@ import {
   type AnchorRole,
   type GroundedArtifact,
   type ContextReason,
+  type Incumbent,
   type RoutingContextEvent,
   type TopicLabel,
   type WorkItem,
@@ -43,8 +44,9 @@ export interface TopicLedger {
   readonly activeWorkItemId?: string;
   /** The lazy migration boundary, when this branch predates pi8. */
   readonly migration?: { legacyHeadEntryId: string; sourceEntryId: string };
-  /** Events applied; zero means the branch carries no ledger. */
+  /** Events applied; zero means the branch carries no ledger. The incumbent is not counted. */
   readonly events: number;
+  readonly incumbent?: Incumbent;
 }
 
 export function emptyLedger(): TopicLedger {
@@ -213,6 +215,21 @@ export function applyEvent(ledger: TopicLedger, event: RoutingContextEvent): Top
       // item's open context; a contract only associates its record.
       const next = event.boundary === 'investigation-handoff' ? { ...item, openContext: [] } : item;
       return withItem(ledger, next, false);
+    }
+    case 'incumbent': {
+      const current = ledger.incumbent;
+      if (current && current.registryId === event.served.registryId
+        && current.thinkingLevel === event.served.thinkingLevel && current.dimension === event.dimension) return ledger;
+      // Serving history, not work: it never makes a branch tracked.
+      return {
+        ...ledger,
+        incumbent: {
+          registryId: event.served.registryId,
+          ...(event.served.thinkingLevel ? { thinkingLevel: event.served.thinkingLevel } : {}),
+          dimension: event.dimension,
+          entryId: event.sourceEntryId,
+        },
+      };
     }
     case 'context-commit':
       // Branch restoration validates the entire commit before applying its flat events.
@@ -453,6 +470,21 @@ function parseFlatContextEvent(data: unknown): FlatContextEvent | undefined {
         if (!workItemId || !text(data.handoffId)) return undefined;
         if (data.boundary !== 'investigation-handoff' && data.boundary !== 'execution-contract') return undefined;
         return { v: 1, op: 'boundary', workItemId, boundary: data.boundary, handoffId: data.handoffId, sourceEntryId };
+      }
+      case 'incumbent': {
+        const served = isRecord(data.served) ? data.served : undefined;
+        if (!served || !text(served.registryId) || !DIMENSIONS.has(data.dimension as Dimension)) return undefined;
+        if (served.thinkingLevel != null && typeof served.thinkingLevel !== 'string') return undefined;
+        return {
+          v: 1,
+          op: 'incumbent',
+          served: {
+            registryId: served.registryId,
+            ...(served.thinkingLevel ? { thinkingLevel: served.thinkingLevel as string } : {}),
+          },
+          dimension: data.dimension as Dimension,
+          sourceEntryId,
+        };
       }
       default:
         return undefined;

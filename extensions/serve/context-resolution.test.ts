@@ -116,8 +116,41 @@ describe('work-context resolution through the provider', () => {
     const id = harness.session.context.getLedger().activeWorkItemId;
     expect((await entry('implement it')).workContext).toMatchObject({ workItemId: id, contextSatisfied: true });
     writeFileSync(join(cwd, 'requirements', 'foo.md'), 'TSV without a header row\n');
+    // Without an incumbent, as after a switch from another model, the entry collects it again.
+    harness.session.context.clearIncumbent();
     expect(await entry('implement it')).toMatchObject({ dimension: 'gather', cause: 'investigation',
       workContext: { workItemId: id, contextSatisfied: false } });
+  });
+
+  it('restores the incumbent on resume and serves the next entry with it', async () => {
+    await setup();
+    await createItem();
+    await serveBranch();
+    const incumbent = harness.session.context.getIncumbent();
+    expect(incumbent).toBeDefined();
+    expect(ledgerEvents()).toContain('incumbent');
+    // A resumed session starts empty and restores the branch.
+    harness.session.reset();
+    harness.session.context.restore(tree.getBranch());
+    const next = await entry('ok go ahead');
+    expect(next.chosen.startsWith(incumbent!.registryId)).toBe(true);
+    expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
+  });
+
+  it('serves a follow-up by the incumbent, which reads a changed file itself', async () => {
+    await setup();
+    await entry('@requirements/foo.md implement this');
+    await groundFile();
+    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export',
+      workItemTitle: 'CSV exporter' })).accepted).toBe(true);
+    await entry('implement it');
+    const incumbent = harness.session.context.getIncumbent();
+    expect(incumbent).toBeDefined();
+    writeFileSync(join(cwd, 'requirements', 'foo.md'), 'TSV without a header row\n');
+    const next = await entry('implement it');
+    expect(next.cause).not.toBe('investigation');
+    expect(next.chosen.startsWith(incumbent!.registryId)).toBe(true);
+    expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
   });
 
   it('closes a directory investigation at the handoff without inventing file grounding', async () => {

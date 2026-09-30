@@ -310,6 +310,7 @@ export type DecisionCause =
   | 'manual-override'
   | 'resume'
   | 'semi-hold'
+  | 'incumbent'
   | 'work-context';
 
 export interface RoutingDecision {
