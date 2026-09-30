@@ -1,17 +1,13 @@
 /**
- * Resolve one genuine user entry's work context: the deterministic fast path
- * when it applies, otherwise a pending choice set for `hand_off_context`.
- * Identity is not written until that handoff is accepted. Every await
- * re-checks the session generation: a result from an earlier session is
- * dropped, never written.
+ * Resolve one genuine user entry's work context: a pending choice set for
+ * `hand_off_context`. Identity is not written until that handoff is
+ * accepted. A result from an earlier session is dropped, never written.
  */
 import type { Dimension, WorkChoice, WorkContextMeta } from '../types.js';
 import { extractPromptAnchors } from '../routing/context/anchors.js';
 import { buildCatalog, type CatalogSnapshot } from '../routing/context/catalog.js';
 import { buildLegacyIndex, findLegacyCandidates, type LegacyCandidate } from '../routing/context/legacy.js';
-import { continuationFloor, fastPathItem } from '../routing/context/fast-path.js';
 import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
-import { referencedArtifactsFresh } from '../routing/context/grounding.js';
 import { activeWorkItem, getWorkItem } from '../routing/context/ledger.js';
 import {
   branchHoldsEntry,
@@ -21,11 +17,8 @@ import {
   type BranchReader,
 } from '../routing/context/persistence.js';
 import {
-  contextCheck,
-  planFastPath,
   planFromChoice,
   planFromLegacy,
-  unrecordedPlan,
   type ContextPlan,
   type PlanBase,
   type WorkTitles,
@@ -60,7 +53,7 @@ export interface EntryContextRequest {
   session: RouterSession;
   sessionManager?: BranchReader;
   cwd?: string;
-  turn: { key: string; promptText: string; thin: boolean };
+  turn: { key: string; promptText: string };
   /** Heuristic task type for this entry; unknown quality never lowers it. */
   deliverable: Dimension;
   /** Prefixes of known integrations' messages, which the history search skips. */
@@ -69,7 +62,6 @@ export interface EntryContextRequest {
 }
 
 export type EntryContextResult =
-  | { kind: 'resolved'; context: ResolvedEntryContext }
   | { kind: 'pending'; identity: PendingIdentity }
   | { kind: 'aborted' };
 
@@ -110,19 +102,10 @@ function legacyCandidates(
 }
 
 /**
- * A throw leaves the entry unrecorded, so the active item may be work the
- * user has since left; the fast path stays closed until an entry is placed.
+ * Every entry starts unresolved: its bounded choice set goes to the entry's
+ * model, and identity is written only at an accepted `hand_off_context`.
  */
 export async function resolveEntryContext(req: EntryContextRequest): Promise<EntryContextResult> {
-  try {
-    return await resolveRecordedEntry(req);
-  } catch (err) {
-    req.session.context.setFastPathBlocked(true);
-    throw err;
-  }
-}
-
-async function resolveRecordedEntry(req: EntryContextRequest): Promise<EntryContextResult> {
   const { session, turn } = req;
   const ledger = session.context.getLedger();
   const branch = readBranch(req.sessionManager);
@@ -133,69 +116,24 @@ async function resolveRecordedEntry(req: EntryContextRequest): Promise<EntryCont
   const untracked = ledger.events === 0 ? classifyBranchBefore(branch, sourceEntryId, ledger) : undefined;
   const known = [...ledger.items.values()].flatMap((item) => item.anchors);
   const anchors = extractPromptAnchors(turn.promptText, { ...(req.cwd ? { cwd: req.cwd } : {}), known });
-  const { thin } = turn;
-  const base = (floor?: Dimension): PlanBase => ({
+  const base: PlanBase = {
     ledger,
     branchState: untracked ?? session.context.getBranchState(),
     sourceEntryId,
     ...(parentOf(branch, sourceEntryId) ? { legacyHeadEntryId: parentOf(branch, sourceEntryId) } : {}),
     prompt: turn.promptText,
     anchors,
-    deliverable: atLeast(req.deliverable, floor),
-    thin,
-  });
-
-  const continued = ledger.items.size > 0 && !session.context.isFastPathBlocked()
-    ? fastPathItem(ledger, turn.promptText, anchors)
-    : undefined;
-  if (continued) {
-        if (!req.stillCurrent()) return { kind: 'aborted' };
-    const plan = planFastPath(base(thin ? continuationFloor(continued) : undefined), continued);
-    if (!req.stillCurrent()) return { kind: 'aborted' };
-    let recorded = plan;
-    if (!plan.events.every((event) => session.context.append(event))) {
-      recorded = unrecordedPlan(plan);
-      session.context.setFastPathBlocked(true);
-    }
-    session.context.setEntrySource(sourceEntryId);
-    if (recorded.workItemId) session.context.setFastPathBlocked(false);
-
-    const item = getWorkItem(session.context.getLedger(), recorded.workItemId);
-    const check = contextCheck(recorded.resolution.contextReasons, item);
-    let contextSatisfied: boolean;
-    if ('satisfied' in check) {
-      contextSatisfied = check.satisfied;
-    } else {
-      contextSatisfied = item ? await referencedArtifactsFresh(req.cwd, item, check.freshPaths) : false;
-      if (!req.stillCurrent()) return { kind: 'aborted' };
-    }
-
-    return {
-      kind: 'resolved',
-      context: {
-        resolution: recorded.resolution,
-        ...(recorded.workItemId ? { workItemId: recorded.workItemId } : {}),
-        contextSatisfied,
-        createdTopic: recorded.createdTopic,
-        createdWorkItem: recorded.createdWorkItem,
-        ...(recorded.legacy ? { legacy: true } : {}),
-      },
-    };
-  }
-
-    if (!req.stillCurrent()) return { kind: 'aborted' };
+    deliverable: req.deliverable,
+  };
   const catalog = buildCatalog(ledger, anchors, 'normal');
   const legacyHead = ledger.migration?.legacyHeadEntryId
     ?? (untracked === 'legacy-uninitialized' ? parentOf(branch, sourceEntryId) : undefined);
-  const legacy = legacyHead && !thin
-    ? legacyCandidates(req, legacyHead, { prompt: turn.promptText, anchors }, catalog)
-    : [];
+  const legacy = legacyHead ? legacyCandidates(req, legacyHead, { prompt: turn.promptText, anchors }, catalog) : [];
   if (!req.stillCurrent()) return { kind: 'aborted' };
   session.context.setEntrySource(sourceEntryId);
-  session.context.setFastPathBlocked(true);
   return {
     kind: 'pending',
-    identity: { base: base(), catalog, legacy, entryKey: turn.key, generation: session.getSessionGeneration() },
+    identity: { base, catalog, legacy, entryKey: turn.key, generation: session.getSessionGeneration() },
   };
 }
 
@@ -220,7 +158,6 @@ export function planPendingIdentity(
 /** Publish runtime identity only after the complete handoff record is durable. */
 export function publishSelectedWork(session: RouterSession, plan: ContextPlan): ResolvedEntryContext {
   session.context.setEntrySource(plan.resolution.sourceEntryId);
-  session.context.setFastPathBlocked(!plan.workItemId);
   return {
     resolution: plan.resolution,
     ...(plan.workItemId ? { workItemId: plan.workItemId } : {}),

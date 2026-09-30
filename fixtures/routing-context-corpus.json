@@ -308,7 +308,7 @@
             "relation": "resume",
             "existing": true,
             "deliverable": "implement",
-            "context": [],
+            "context": ["referenced-artifact"],
             "contextSatisfied": true
           }
         }

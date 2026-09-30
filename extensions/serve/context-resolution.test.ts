@@ -99,27 +99,31 @@ describe('work-context resolution through the provider', () => {
     expect(ledgerEvents()).toEqual([]);
   });
 
-  it('routes a selected work item deterministically without reassessing its continuation', async () => {
+  it('offers the selected work item to the next entry, which continues it only at a handoff', async () => {
     await setup();
     const item = await createItem();
     const next = await entry('implement it');
-    expect(next.workContext).toMatchObject({ resolver: 'deterministic', relation: 'continue', workItemId: item.id });
-    expect(next.dimension).toBe('implement');
+    expect(next.workContext).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity?.catalog.workItems.map((w) => w.id)).toContain(item.id);
+    expect((await handoff({ ...READY, workItemId: item.id })).accepted).toBe(true);
+    expect(harness.session.getCachedIntent()?.context?.resolution).toMatchObject({ workItemId: item.id, relation: 'continue' });
   });
 
-  it('requires fresh grounding again if a selected work item’s referenced file changes', async () => {
+  it('requires a selected work item’s changed referenced file to be read again at the handoff', async () => {
     await setup();
     await entry('@requirements/foo.md implement this');
     await groundFile();
     expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export',
       workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    const id = harness.session.context.getLedger().activeWorkItemId;
-    expect((await entry('implement it')).workContext).toMatchObject({ workItemId: id, contextSatisfied: true });
+    const id = harness.session.context.getLedger().activeWorkItemId!;
     writeFileSync(join(cwd, 'requirements', 'foo.md'), 'TSV without a header row\n');
-    // Without an incumbent, as after a switch from another model, the entry collects it again.
-    harness.session.context.clearIncumbent();
-    expect(await entry('implement it')).toMatchObject({ dimension: 'gather', cause: 'investigation',
-      workContext: { workItemId: id, contextSatisfied: false } });
+    expect(await entry('implement it')).toMatchObject({ dimension: 'gather', cause: 'investigation' });
+    const declined = await handoff({ ...READY, workItemId: id });
+    expect(declined.accepted).toBe(false);
+    expect(declined.text).toContain('requirements/foo.md');
+    await groundFile();
+    expect((await handoff({ ...READY, workItemId: id })).accepted).toBe(true);
+    expect(harness.session.getCachedIntent()?.context?.resolution.contextReasons).toEqual(['referenced-artifact']);
   });
 
   it('restores the incumbent on resume and serves the next entry with it', async () => {
@@ -143,7 +147,7 @@ describe('work-context resolution through the provider', () => {
     await groundFile();
     expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export',
       workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    await entry('implement it');
+    await serveBranch();
     const incumbent = harness.session.context.getIncumbent();
     expect(incumbent).toBeDefined();
     writeFileSync(join(cwd, 'requirements', 'foo.md'), 'TSV without a header row\n');
@@ -160,8 +164,7 @@ describe('work-context resolution through the provider', () => {
       workItemTitle: 'CSV exporter' })).accepted).toBe(true);
     const item = [...harness.session.context.getLedger().items.values()][0]!;
     expect(item.grounding).toEqual([]);
-    const next = await entry('implement it');
-    expect(next).toMatchObject({ dimension: 'implement', workContext: { workItemId: item.id, contextSatisfied: true } });
+    expect(item.openContext).toEqual([]);
   });
 
   it('keeps a needs-user outcome out of the work ledger and out of missed-handoff recovery', async () => {
@@ -178,14 +181,18 @@ describe('work-context resolution through the provider', () => {
     const item = await createItem();
     harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!,
       contractStrikes: { 'beta/strong': 1 } });
-    expect((await entry('implement it')).workContext?.workItemId).toBe(item.id);
+    await entry('implement it');
+    expect(harness.session.getWorkPhaseState()?.contractStrikes).toBeUndefined();
+    expect((await handoff({ ...READY, workItemId: item.id })).accepted).toBe(true);
     expect(harness.session.getWorkPhaseState()?.contractStrikes).toEqual({ 'beta/strong': 1 });
-    await entry('@requirements/foo.md review database backups');
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+    await entry('@requirements/foo.md implement a backup check');
+    await groundFile();
+    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Backups',
+      workItemTitle: 'Backup check' })).accepted).toBe(true);
     expect(harness.session.getWorkPhaseState()?.contractStrikes).toBeUndefined();
   });
 
-  it('carries only a conservative task type across /tree, not an old work identity or penalties', async () => {
+  it('carries no old work identity or penalties across /tree', async () => {
     await setup();
     await createItem();
     harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!,
@@ -195,13 +202,13 @@ describe('work-context resolution through the provider', () => {
     carryPhaseAcrossTree(harness.session, tree.getBranch());
     await entry('ok go ahead');
     const state = harness.session.getWorkPhaseState()!;
-    expect(state).toMatchObject({ deliverable: 'implement', contextStatus: 'acquiring' });
+    expect(state).toMatchObject({ contextStatus: 'acquiring' });
     expect(state.workItemId).toBeUndefined();
     expect(state.contractStrikes).toBeUndefined();
     expect(state.excludedExecutors).toBeUndefined();
   });
 
-  it('blocks an inherited fast path when work-context resolution fails', async () => {
+  it('fails open when work-context resolution fails', async () => {
     await setup();
     const item = await createItem();
     vi.spyOn(harness.session.context, 'getBranchState').mockImplementationOnce(() => { throw new Error('branch unreadable'); });
@@ -300,23 +307,13 @@ describe('work-context resolution through the provider', () => {
     expect(raw).not.toContain('LOGIN_FILE_CONTENTS');
   });
 
-  it('searches no pre-tracking history for a thin request', async () => {
-    tree.modelChange('openai', 'gpt-5');
-    tree.user('implement the auth login flow'); tree.assistant('done');
-    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
-    await setup();
-    const search = vi.spyOn(harness.session.context, 'legacyIndexFor');
-    await entry('ok go ahead');
-    expect(search).not.toHaveBeenCalled();
-  });
-
   it('keeps work titles out of the decision log after the boundary', async () => {
     await setup();
     await entry('@requirements/foo.md implement this');
     await groundFile();
     expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Release',
       workItemTitle: 'Codename Bluebird rollout' })).accepted).toBe(true);
-    await entry('implement it');
+    await serveBranch();
     const raw = readFileSync(join(temp.path, 'decisions.jsonl'), 'utf8');
     expect(raw).toContain('"workContext"');
     expect(raw).not.toContain('Codename Bluebird');

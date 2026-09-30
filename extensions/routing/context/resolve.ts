@@ -8,14 +8,12 @@
  * starts with nothing grounded for other work.
  */
 import type { Dimension, WorkChoice } from '../../types.js';
-import { DIMENSION_STRENGTH } from '../classify/classifier-keywords.js';
 import type { PromptAnchor } from './anchors.js';
 import { checkChoice, type CatalogSnapshot } from './catalog.js';
 import { bound, CONTEXT_LIMITS, getWorkItem, legacyWorkItem, newTopicId, newWorkItemId, type TopicLedger } from './ledger.js';
 import {
   NEW_TOPIC,
   NONE,
-  UNKNOWN,
   type BranchState,
   type ContextReason,
   type EntryResolution,
@@ -34,8 +32,6 @@ export interface PlanBase {
   anchors: readonly PromptAnchor[];
   /** The entry's task type. */
   deliverable: Dimension;
-  /** Thin wording can retain the selected item's task type, never select an item. */
-  thin?: boolean;
 }
 
 /** Titles a handoff gives new work; a blank one falls back to the prompt's first line. */
@@ -55,7 +51,7 @@ export interface ContextPlan {
   legacy?: true;
 }
 
-/** Only a context handoff selects work outside the fast path. */
+/** Only a context handoff selects work. */
 const RESOLVER = 'context-handoff' as const;
 
 /** Task types whose request rests on the files it references. */
@@ -72,9 +68,9 @@ export function requestContext(anchors: readonly PromptAnchor[], deliverable: Di
 }
 
 /**
- * What a continuation of `item` owes: files the user referenced for it,
- * checked again because they may have changed, and any obligation an earlier
- * entry left open.
+ * What returning to `item` owes: files the user referenced for it, checked
+ * again because they may have changed, and any obligation an earlier entry
+ * left open.
  */
 export function carriedContext(item: Pick<WorkItem, 'anchors' | 'openContext'>): ContextReason[] {
   const referenced = item.anchors.some((anchor) =>
@@ -83,6 +79,11 @@ export function carriedContext(item: Pick<WorkItem, 'anchors' | 'openContext'>):
     ...(referenced || item.openContext?.includes('referenced-artifact') ? ['referenced-artifact' as const] : []),
     ...(item.openContext?.includes('carried-open-context') ? ['carried-open-context' as const] : []),
   ];
+}
+
+/** What an entry selecting existing `item` owes: its own request's context and what the item carries. */
+function ownedAndCarried(base: PlanBase, item: WorkItem): ContextReason[] {
+  return [...new Set([...requestContext(base.anchors, base.deliverable), ...carriedContext(item)])];
 }
 
 /** No accepted context handoff is still owed on the item; unknown counts as owed. */
@@ -208,23 +209,6 @@ function createItem(
   };
 }
 
-/** Tier 1: an anchor-free continuation owes what the active item carries. */
-export function planFastPath(base: PlanBase, item: WorkItem): ContextPlan {
-  return {
-    resolution: resolution(base, {
-      topicId: item.topic.id,
-      workItemId: item.id,
-      relation: 'continue',
-      contextReasons: carriedContext(item),
-      resolver: 'deterministic',
-    }),
-    events: touchItem(base, item, []),
-    workItemId: item.id,
-    createdTopic: false,
-    createdWorkItem: false,
-  };
-}
-
 /**
  * A `hand_off_context` choice from the catalog shown to the entry.
  * Undefined when the choice is UNKNOWN or does not hold against it.
@@ -254,11 +238,7 @@ export function planFromChoice(
   if (checked.kind === 'existing') {
     const item = getWorkItem(base.ledger, checked.workItemId);
     if (!item) return undefined;
-    if (base.thin && item.lastDeliverable &&
-        DIMENSION_STRENGTH[item.lastDeliverable] > DIMENSION_STRENGTH[base.deliverable]) {
-      base = { ...base, deliverable: item.lastDeliverable };
-    }
-    const reasons = requestContext(base.anchors, base.deliverable);
+    const reasons = ownedAndCarried(base, item);
     return {
       resolution: resolution(base, {
         topicId: item.topic.id,
@@ -314,15 +294,16 @@ export function planFromLegacy(
   const reasons = requestContext(base.anchors, base.deliverable);
   const found = legacyWorkItem(base.ledger, seedEntryId);
   if (found) {
+    const carried = ownedAndCarried(base, found);
     return {
       resolution: resolution(base, {
         topicId: found.topic.id,
         workItemId: found.id,
         relation: 'resume',
-        contextReasons: reasons,
+        contextReasons: carried,
         resolver: RESOLVER,
       }),
-      events: [...migration(base), ...touchItem(base, found, reasons)],
+      events: [...migration(base), ...touchItem(base, found, carried)],
       workItemId: found.id,
       createdTopic: false,
       createdWorkItem: false,
@@ -344,19 +325,5 @@ export function planFromLegacy(
     createdTopic: listedTopic == null,
     createdWorkItem: true,
     legacy: true,
-  };
-}
-
-/**
- * A plan whose events the branch did not all record: the entry stays
- * unplaced, as an unresolved one does, and keeps the context it owes and its
- * task type. Events already written stay; nothing more is written.
- */
-export function unrecordedPlan(plan: ContextPlan): ContextPlan {
-  return {
-    resolution: { ...plan.resolution, topicId: UNKNOWN, workItemId: UNKNOWN, relation: 'unknown', resolver: 'fallback' },
-    events: [],
-    createdTopic: false,
-    createdWorkItem: false,
   };
 }

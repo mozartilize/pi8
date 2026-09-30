@@ -26,7 +26,8 @@ import {
   type EntryPrediction,
 } from '../test-support/context-replay.js';
 import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
-import { requestContext } from '../routing/context/resolve.js';
+import { carriedContext, requestContext, referencedArtifactPaths } from '../routing/context/resolve.js';
+import { referencedArtifactsFresh } from '../routing/context/grounding.js';
 import type { ContextReason } from '../routing/context/types.js';
 import { DIMENSION_STRENGTH } from '../routing/classify/classifier-keywords.js';
 import { observeContextGrounding } from './context-grounding.js';
@@ -164,9 +165,16 @@ describe('routing-context corpus replay', () => {
       await serve();
       const initialContext = harness.getProviderState().lastDecision?.workContext;
       const pendingBase = harness.session.getWorkPhaseState()?.pendingIdentity?.base;
-      const requested = initialContext?.contextReasons
-        ?? (pendingBase ? requestContext(pendingBase.anchors, pendingBase.deliverable) : []);
-      const requestedSatisfied = initialContext?.contextSatisfied ?? requested.length === 0;
+      // The scripted choice declares which existing item the handoff will
+      // select; check its carried references without assigning entry identity.
+      const declaredId = ids.get(entry.label.workItem);
+      const declaredItem = declaredId ? harness.session.context.getLedger().items.get(declaredId) : undefined;
+      const requested = initialContext?.contextReasons ?? [...new Set([
+        ...(pendingBase ? requestContext(pendingBase.anchors, pendingBase.deliverable) : []),
+        ...(declaredItem ? carriedContext(declaredItem) : []),
+      ])];
+      const requestedSatisfied = initialContext?.contextSatisfied ?? (requested.length === 0
+        || (!!declaredItem && await referencedArtifactsFresh(cwd, declaredItem, referencedArtifactPaths(declaredItem))));
       let attemptedHandoff = false;
       for (const action of entry.after ?? []) {
         if ('read' in action) {
@@ -276,7 +284,7 @@ describe('routing-context corpus replay', () => {
   it('resolves every scenario with no critical false continuation', async () => {
     const { predictions, labels } = await replay();
     const metrics = scoreByApiFamily(predictions, labels).get("all")!;
-    // A partial read cannot materialize work; a thin follow-up cannot claim it.
+    // A partial read cannot materialize work; a follow-up cannot claim uncreated work.
     expect(predictions.find((entry) => entry.entryId === 'P1')).toMatchObject({ workItemId: 'UNKNOWN', contextSatisfied: false });
     expect(predictions.find((entry) => entry.entryId === 'P2')).toMatchObject({ workItemId: 'UNKNOWN', relation: 'unknown' });
     expect(predictions.find((entry) => entry.entryId === 'F2')).toMatchObject({ workItemId: 'UNKNOWN', context: ['identity-unresolved'] });
@@ -286,7 +294,6 @@ describe('routing-context corpus replay', () => {
     expect(contextDisagreements).toEqual(['P2']);
     expect(metrics.entries).toBe(labels.size);
     expect(metrics.criticalFalseContinuation.numerator).toBe(0);
-    expect(metrics.fastPathFalseContinuation.numerator).toBe(0);
     expect(metrics.workItemAccuracy.value).toBe(1);
     expect(metrics.contextSatisfiedAccuracy.value).toBe(1);
     // A corpus this size cannot show the 0.5% bound.

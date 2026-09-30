@@ -84,7 +84,9 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(harness.session.context.getLedger().activeWorkItemId).toBe(item.id);
     expect(harness.session.context.getLedger().items.get(item.id)?.openContext).toEqual([]);
     const next = await entry('implement it');
-    expect(next.workContext).toMatchObject({ resolver: 'deterministic', relation: 'continue', workItemId: item.id });
+    // The next entry is offered the work again and chooses it at its own handoff.
+    expect(next.workContext).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity?.catalog.activeWorkItemId).toBe(item.id);
   });
 
   it('keeps manual-pinned unresolved work provisional until an accepted handoff', async () => {
@@ -267,7 +269,7 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(harness.session.context.getLedger().items.size).toBe(2);
   });
 
-  it('does not inherit an earlier item’s identity from a thin prompt without a fast-path match', async () => {
+  it('leaves a follow-up’s identity unresolved until its handoff', async () => {
     await entry('implement a CSV exporter');
     expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export', workItemTitle: 'CSV exporter' })).accepted).toBe(true);
     const original = [...harness.session.context.getLedger().items.values()][0]!;

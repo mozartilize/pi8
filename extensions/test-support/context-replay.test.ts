@@ -92,7 +92,6 @@ describe('scoreReplay', () => {
     expect(metrics.workItemAccuracy).toMatchObject({ numerator: 2, denominator: 2, value: 1 });
     expect(metrics.topicAccuracy.value).toBe(1);
     expect(metrics.criticalFalseContinuation.numerator).toBe(0);
-    expect(metrics.fastPathHitRate).toMatchObject({ numerator: 1, denominator: 1 });
     expect(metrics.relationMacroF1).toBe(1);
   });
 
@@ -108,7 +107,6 @@ describe('scoreReplay', () => {
       }),
     ], labels);
     expect(metrics.criticalFalseContinuation).toMatchObject({ numerator: 1, denominator: 2 });
-    expect(metrics.fastPathFalseContinuation).toMatchObject({ numerator: 1, denominator: 1 });
     expect(metrics.newWorkItemRecall).toMatchObject({ numerator: 1, denominator: 2 });
   });
 
@@ -145,7 +143,6 @@ describe('scoreReplay', () => {
     // Entry 3 continues w_2, split off w:a: inexact, same work. Entry 5
     // continues w_3, created for w:b, into w:a: a false continuation.
     expect(metrics.criticalFalseContinuation.numerator).toBe(1);
-    expect(metrics.fastPathFalseContinuation).toMatchObject({ numerator: 1, denominator: 2 });
   });
 
   it('keeps UNKNOWN out of accuracy', () => {

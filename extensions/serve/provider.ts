@@ -68,9 +68,8 @@ import { makeTerminalErrorEvent } from './error-event.js';
 import { resolveRoutingDecision } from '../routing/policy/routing-policy.js';
 import {
   capabilityBandFor,
-  inheritWorkContinuation,
+  penaltiesOf,
   nextProviderInvocation,
-  withStrongerTerminal,
   terminalRequirement,
   boundaryQualifiers,
   servesBoundary,
@@ -95,7 +94,6 @@ import {
   serveContextHandoff,
 } from '../routing/policy/context-acquisition.js';
 import {
-  atLeast,
   recordServedWork,
   resolveEntryContext,
   workContextMeta,
@@ -509,7 +507,7 @@ async function failOpen<T>(work: () => Promise<T>): Promise<T | undefined> {
 
 /**
  * Resolve the entry's work context. Does not write the intent cache or touch
- * the stream. Task-type adoption happens at `hand_off_context`, not here.
+ * the stream. Identity and task-type adoption happen at `hand_off_context`.
  */
 async function resolveEntrySemantics(entry: {
   session: RouterSession;
@@ -517,16 +515,13 @@ async function resolveEntrySemantics(entry: {
   cacheHit: boolean;
   dimension: Dimension;
   cause: DecisionCause;
-  turn: { key: string; promptText: string; thin: boolean };
+  turn: { key: string; promptText: string };
   context?: ResolvedEntryContext;
   extensionContext: ExtensionContext | undefined;
   syntheticPrefixes: readonly string[];
 }): Promise<{ dimension: Dimension; cause: DecisionCause; context?: ResolvedEntryContext; pendingIdentity?: PendingIdentity; aborted: boolean }> {
-  let { dimension, cause } = entry;
+  const { dimension, cause } = entry;
   if (entry.cacheHit) return { dimension, cause, ...(entry.context ? { context: entry.context } : {}), aborted: false };
-
-  const previous = entry.session.getWorkPhaseState();
-  const previousDeliverable = previous?.intentKey !== entry.turn.key ? previous?.deliverable : undefined;
   const resolved = await failOpen(() => resolveEntryContext({
     session: entry.session,
     sessionManager: entry.extensionContext?.sessionManager,
@@ -537,33 +532,7 @@ async function resolveEntrySemantics(entry: {
     stillCurrent: entry.stillCurrent,
   }));
   if (resolved?.kind === 'aborted') return { dimension, cause, aborted: true };
-  if (resolved?.kind === 'pending') {
-    const kept = atLeast(dimension, entry.turn.thin ? previousDeliverable : undefined);
-    return {
-      dimension: kept,
-      cause: kept === dimension ? cause : 'continuation-context',
-      pendingIdentity: resolved.identity,
-      aborted: false,
-    };
-  }
-  if (!resolved) {
-    // Preserve serving strength after failure without asserting a work identity.
-    const kept = atLeast(dimension, entry.turn.thin ? previousDeliverable : undefined);
-    return { dimension: kept, cause: kept === dimension ? cause : 'continuation-context', aborted: false };
-  }
-  // Continuity comes from an existing WorkItem the entry was placed on. A thin
-  // entry placed nowhere else keeps the previous entry's task type as a
-  // serving minimum, without importing that work's identity or state.
-  const { resolution, workItemId, createdWorkItem } = resolved.context;
-  const onExistingWork = workItemId != null && !createdWorkItem;
-  const carried = !onExistingWork && entry.turn.thin
-    ? atLeast(resolution.deliverable, previousDeliverable)
-    : resolution.deliverable;
-  if (atLeast(dimension, carried) !== dimension) {
-    dimension = carried;
-    cause = onExistingWork ? 'work-context' : 'continuation-context';
-  }
-  return { dimension, cause, context: resolved.context, aborted: false };
+  return { dimension, cause, ...(resolved ? { pendingIdentity: resolved.identity } : {}), aborted: false };
 }
 
 function advanceWorkPhase(args: {
@@ -572,7 +541,6 @@ function advanceWorkPhase(args: {
   classifyResult: ReturnType<typeof classify>;
   /** The entry's task type: what it owes the user. */
   deliverable: Dimension;
-  context?: ResolvedEntryContext;
   pendingIdentity?: PendingIdentity;
   session: RouterSession;
 }): void {
@@ -586,49 +554,25 @@ function advanceWorkPhase(args: {
       if (workPhaseState.contract) workPhaseState = closeContractEntry(workPhaseState, served);
     }
     const terminal = args.classifyResult.terminal;
-    const sameWork = workPhaseState?.workItemId != null &&
-      args.context?.workItemId === workPhaseState.workItemId &&
-      args.context.resolution.relation === 'continue';
-    workPhaseState =
-      workPhaseState && sameWork
-        ? inheritWorkContinuation(args.turnInput.key, workPhaseState, args.deliverable)
-        : {
-            intentKey: args.turnInput.key,
-            deliverable: args.deliverable,
-            terminal,
-            terminalBand: capabilityBandFor(terminalRequirement(terminal)),
-            providerInvocation: 1,
-            observedMutationTools: 0,
-            ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
-          };
-    // A substantive continuation can demand more than the prior final step.
-    workPhaseState = withStrongerTerminal(workPhaseState, terminal);
-    workPhaseState = withEntryContext(workPhaseState, args.context);
+    // The work this entry is on is known only at its handoff, which applies
+    // the previous work item's penalties when it continues that item.
+    const priorWork = workPhaseState && penaltiesOf(workPhaseState);
+    workPhaseState = {
+      intentKey: args.turnInput.key,
+      deliverable: args.deliverable,
+      terminal,
+      terminalBand: capabilityBandFor(terminalRequirement(terminal)),
+      providerInvocation: 1,
+      observedMutationTools: 0,
+      ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
+      ...(priorWork ? { priorWork } : {}),
+    };
     if (args.session.context.getIncumbent()) workPhaseState = { ...workPhaseState, incumbentServes: true };
     if (args.pendingIdentity) workPhaseState = { ...workPhaseState, pendingIdentity: args.pendingIdentity };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
   }
   args.session.commitWorkPhaseState(workPhaseState);
-}
-
-/** Record the entry's resolution; an entry that did not resolve carries none of an earlier one. */
-function withEntryContext(state: WorkPhaseState, context: ResolvedEntryContext | undefined): WorkPhaseState {
-  const {
-    contextResolution: _resolution,
-    workItemId: _item,
-    contextReasons: _reasons,
-    contextSatisfied: _satisfied,
-    ...rest
-  } = state;
-  if (!context) return rest;
-  return {
-    ...rest,
-    contextResolution: context.resolution,
-    ...(context.workItemId ? { workItemId: context.workItemId } : {}),
-    contextReasons: context.resolution.contextReasons,
-    contextSatisfied: context.contextSatisfied,
-  };
 }
 
 function resolveTurnEffort(args: {
@@ -846,12 +790,10 @@ async function resolveRouterTurn(args: {
       classifyResult: prepared.intent.classifyResult,
       dimension: baseDimension,
       cause: baseCause,
-      thin: settled.thin,
       ...(entry.context ? { context: entry.context } : {}),
     });
   }
   debugLog('classify.context', {
-    thin: settled.thin,
     cacheHit,
     key: settled.key,
   });
@@ -987,7 +929,6 @@ function scoreRouterTurn(args: {
     turnInput,
     classifyResult,
     deliverable: baseDimension,
-    ...(resolved.context ? { context: resolved.context } : {}),
     ...(resolved.pendingIdentity ? { pendingIdentity: resolved.pendingIdentity } : {}),
     session,
   });
@@ -1690,8 +1631,7 @@ async function resolvePinnedEntryContext(
       : {}),
     stillCurrent: () => session.getSessionGeneration() === generation,
   }));
-  return resolved?.kind === 'aborted' ? 'aborted'
-    : resolved?.kind === 'pending' ? resolved.identity : resolved?.context;
+  return resolved?.kind === 'aborted' ? 'aborted' : resolved?.identity;
 }
 
 function isPendingIdentity(value: ResolvedEntryContext | PendingIdentity | undefined): value is PendingIdentity {
@@ -1722,7 +1662,6 @@ async function runManualTurn(args: {
       classifyResult: prepared.intent.classifyResult,
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
-      thin: turnInput.thin,
       ...(resolvedContext ? { context: resolvedContext } : {}),
     });
   }
@@ -1831,7 +1770,6 @@ async function runResumeTurn(args: {
       classifyResult: prepared.intent.classifyResult,
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
-      thin: turnInput.thin,
       ...(entryContext ? { context: entryContext } : {}),
     });
   }

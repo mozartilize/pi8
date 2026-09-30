@@ -118,7 +118,6 @@ describe('router session state', () => {
       },
       dimension: 'plan',
       cause: 'continuation-context',
-      thin: true,
     });
     expect(defaultRouterSession.intent.getCachedIntent()?.dimension).toBe('plan');
 
@@ -371,15 +370,6 @@ describe('routing context state', () => {
       setDebugPath(undefined);
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  it('keeps the fast path closed across a branch restore and opens it on reset', () => {
-    const session = new RouterSession();
-    session.context.setFastPathBlocked(true);
-    session.context.restore([]);
-    expect(session.context.isFastPathBlocked()).toBe(true);
-    session.reset();
-    expect(session.context.isFastPathBlocked()).toBe(false);
   });
 
   it('forgets the ledger on reset but keeps writing to the bound branch', () => {

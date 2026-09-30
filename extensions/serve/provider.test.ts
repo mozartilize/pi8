@@ -1593,7 +1593,7 @@ describe('provider status reporting', () => {
   });
 });
 
-describe('thin continuation and deep context', () => {
+describe('incumbent continuation and deep context', () => {
   let harness: ProviderTestHarness;
 
   async function setup(tree?: SessionTree) {
@@ -1607,7 +1607,7 @@ describe('thin continuation and deep context', () => {
     });
   }
 
-  it('routes a thin continuation at the work it follows and keeps it stable through tool turns', async () => {
+  it('serves a follow-up by the incumbent and keeps it stable through tool turns', async () => {
     const tree = new SessionTree();
     await setup(tree);
     const branchContext = () => ({ messages: tree.getBranch().filter((e) => e.type === 'message')
@@ -1619,6 +1619,8 @@ describe('thin continuation and deep context', () => {
     harness.resetEventStream();
     await harness.serve(earlier);
     expect(harness.getProviderState().lastDecision?.dimension).toBe('implement');
+    const incumbent = harness.session.context.getIncumbent();
+    expect(incumbent).toBeDefined();
     tree.assistant('Next I will implement the approved API authentication changes.');
     tree.user('ok go for it', Date.now() + 1);
     harness.resetEventStream();
@@ -1638,8 +1640,8 @@ describe('thin continuation and deep context', () => {
     await harness.serve(branchContext());
     const secondDecision = harness.getProviderState().lastDecision;
 
-    expect(firstDecision?.dimension).toBe('implement');
-    expect(firstDecision?.cause).toBe('work-context');
+    expect(firstDecision?.chosen.startsWith(incumbent!.registryId)).toBe(true);
+    expect(secondDecision?.chosen).toBe(firstDecision?.chosen);
     // Stability through the tool loop is a user-visible contract: the log and
     // the rendered detail must agree with the in-memory decision on turn 2 too.
     expect(secondDecision?.dimension).toBe(firstDecision?.dimension);
@@ -2032,7 +2034,8 @@ describe('context acquisition', () => {
       expect(harness.session.context.getLedger().items.get(workItemId)?.openContext).toEqual([]);
       await session.routeTurnAgainWithSameUserEntry();
       const next = await session.routeTurn('ok go ahead');
-      expect(harness.getProviderState().lastDecision?.workContext?.workItemId).toBe(workItemId);
+      // The incumbent serves the next entry; the selected work stays recorded.
+      expect(harness.session.context.getLedger().items.has(workItemId)).toBe(true);
       expect(next?.cause).not.toBe('investigation');
     });
 

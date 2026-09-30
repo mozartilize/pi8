@@ -53,7 +53,7 @@ import {
   reasoningRequirement,
 } from '../routing/policy/execution-difficulty.js';
 import { isMutationCall } from '../routing/policy/mutation-detector.js';
-import { floorForBand, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { floorForBand, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { adoptAssessment } from '../routing/policy/assessment-adoption.js';
 import { observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -372,15 +372,14 @@ export function submitContextHandoff(
   }
   // One append-only branch record must include the selection and the releasing boundary.
   if (events.length > 0 && !session.context.appendCommit(events)) {
-    session.context.setFastPathBlocked(true);
     return reject(session, 'not-recorded', state, served);
   }
   const selected = plan ? publishSelectedWork(session, plan) : undefined;
   const materialized = selected
-    ? { ...terminal, pendingIdentity: undefined, provisionalGrounding: undefined,
+    ? withContinuedPenalties({ ...terminal, pendingIdentity: undefined, provisionalGrounding: undefined,
       contextResolution: selected.resolution, workItemId: selected.workItemId,
-      createdTopic: selected.createdTopic, createdWorkItem: selected.createdWorkItem,
-      contextReasons: selected.resolution.contextReasons, contextSatisfied: true }
+      contextReasons: selected.resolution.contextReasons, contextSatisfied: true },
+    selected.workItemId, selected.resolution.relation)
     : terminal;
   if (selected) {
     const cached = session.getCachedIntent();
@@ -466,7 +465,10 @@ export async function prepareHandoffFacts(
     const anchors = [...(existing?.anchors ?? created?.workItem.anchors ?? []), ...promptAnchorsForItem(pending.base.anchors)];
     const required = referencedArtifactPaths({ anchors });
     const groundings = (opened.state.provisionalGrounding ?? []).filter((artifact) => required.includes(artifact.anchorValue));
-    const grounding = [...(existing?.grounding ?? []), ...groundings];
+    // Entry-local reads supersede stored hashes of the same files.
+    const grounding = [...groundings, ...(existing?.grounding ?? []).filter(
+      (artifact) => !groundings.some((fresh) => fresh.anchorValue === artifact.anchorValue),
+    )];
     facts.unmet = await unmetArtifactPaths(ctx.cwd, { grounding, openContext: [] }, required);
     if (facts.unmet.length > 0) return facts;
     facts.selection = { plan, key: handoffKey(params), generation: pending.generation, groundings };

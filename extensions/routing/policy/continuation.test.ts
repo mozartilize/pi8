@@ -2,43 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '@earendil-works/pi-ai';
 import { COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX } from '@earendil-works/pi-agent-core';
 
-import { getTurnClassificationInput, isThinPrompt } from './continuation.js';
-
-describe('isThinPrompt', () => {
-  it.each([
-    'ok go for it',
-    'continue',
-    'do it',
-    'yes',
-    'proceed',
-    'go ahead',
-    'keep going',
-    "what's next?",
-    "ok, what's next?",
-  ])('reads the approval or transition %j as thin', (text) => {
-    expect(isThinPrompt(text)).toBe(true);
-  });
-
-  it.each(['implement it', 'fix it', 'ok now implement that', 'go ahead and finish the rest', 'review this'])(
-    'reads %j as pointing back at the conversation', (text) => {
-      expect(isThinPrompt(text)).toBe(true);
-    });
-
-  it.each([
-    'hi',
-    'thanks',
-    'go fix auth',
-    'continue debugging auth',
-    'review the provider implementation',
-    'implement the export command',
-    'fix the flaky retry test',
-    'it',
-    'what is next for the auth work',
-    '',
-  ])('reads %j as carrying content of its own', (text) => {
-    expect(isThinPrompt(text)).toBe(false);
-  });
-});
+import { getTurnClassificationInput } from './continuation.js';
 
 describe('getTurnClassificationInput', () => {
   const baseMessages = [
@@ -54,7 +18,7 @@ describe('getTurnClassificationInput', () => {
     { role: 'user', content: [{ type: 'text', text: 'ok go for it' }], timestamp: 3 },
   ] as unknown as Message[];
 
-  it('marks a thin entry and keys it the same across its tool loop', () => {
+  it('keys an entry the same across its tool loop', () => {
     const first = getTurnClassificationInput(baseMessages);
     const afterToolTurn = getTurnClassificationInput([
       ...baseMessages,
@@ -72,8 +36,8 @@ describe('getTurnClassificationInput', () => {
       },
     ] as unknown as Message[]);
 
-    expect(first).toMatchObject({ promptText: 'ok go for it', thin: true });
-    expect(afterToolTurn).toMatchObject({ key: first.key, promptText: 'ok go for it', thin: true });
+    expect(first).toMatchObject({ promptText: 'ok go for it' });
+    expect(afterToolTurn).toMatchObject({ key: first.key, promptText: 'ok go for it' });
   });
 
   it('changes the key when a new user entry arrives', () => {
@@ -86,7 +50,6 @@ describe('getTurnClassificationInput', () => {
 
     expect(next.key).not.toBe(first.key);
     expect(next.promptText).toBe('review the diff');
-    expect(next.thin).toBe(false);
   });
 
   it('ignores an ephemeral no-timestamp user injection for the key and ordinal', () => {
@@ -103,11 +66,10 @@ describe('getTurnClassificationInput', () => {
     expect(withReminder.promptText).toBe('ok go for it');
   });
 
-  it('returns an empty non-thin input when no user message exists', () => {
+  it('returns an empty input when no user message exists', () => {
     expect(getTurnClassificationInput([{ role: 'assistant', content: 'hello' }] as unknown as Message[])).toEqual({
       key: 'none',
       promptText: '',
-      thin: false,
       provenanceCounts: {
         user: 0,
         'compaction-summary': 0,
@@ -156,17 +118,17 @@ describe('getTurnClassificationInput — provenance', () => {
     expect(withSummary.key).toBe(withoutSummary.key);
   });
 
-  it('reads a thin entry after a summary as the user speaking, not the summary', () => {
+  it('reads an entry after a summary as the user speaking, not the summary', () => {
     const input = getTurnClassificationInput([
       summaryMessage('we were refactoring the scorer', 1),
       assistantMessage('shall I continue?', 2),
       userMessage('ok', 3),
     ]);
 
-    expect(input).toMatchObject({ promptText: 'ok', thin: true });
+    expect(input).toMatchObject({ promptText: 'ok' });
   });
 
-  it('returns an empty non-thin input when only summaries exist', () => {
+  it('returns an empty input when only summaries exist', () => {
     const input = getTurnClassificationInput([summaryMessage('everything so far', 1)]);
     expect(input.promptText).toBe('');
     expect(input.key).toBe('none');

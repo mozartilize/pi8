@@ -108,8 +108,6 @@ export interface ReplayMetrics {
   contextSatisfiedAccuracy: Rate;
   unknownRate: Rate;
   criticalFalseContinuation: Rate;
-  fastPathHitRate: Rate;
-  fastPathFalseContinuation: Rate;
 }
 
 const rate = (numerator: number, denominator: number): Rate => ({
@@ -160,7 +158,7 @@ export function scoreReplay(
   let newWorkTp = 0; let newWorkPredicted = 0; let newWorkExpected = 0;
   let deliverableHits = 0; let contextHits = 0; let satisfiedHits = 0;
   let unknown = 0; let later = 0;
-  let falseContinuation = 0; let fastHits = 0; let fastFalse = 0;
+  let falseContinuation = 0;
   const relationPairs: Array<{ expected: CorpusRelation; predicted: string }> = [];
 
   for (const prediction of predictions) {
@@ -233,10 +231,6 @@ export function scoreReplay(
     const falseReuse = reused && predictedWork !== label.workItem
       && (workOrigin.get(prediction.workItemId) ?? predictedWork) !== label.workItem;
     if (falseReuse) falseContinuation += 1;
-    if (isLater && prediction.resolver === 'deterministic') {
-      fastHits += 1;
-      if (falseReuse) fastFalse += 1;
-    }
   }
 
   const total = predictions.filter((p) => labels.has(p.entryId)).length;
@@ -255,8 +249,6 @@ export function scoreReplay(
     contextSatisfiedAccuracy: rate(satisfiedHits, total),
     unknownRate: rate(unknown, total),
     criticalFalseContinuation: rate(falseContinuation, total),
-    fastPathHitRate: rate(fastHits, later),
-    fastPathFalseContinuation: rate(fastFalse, fastHits),
   };
 }
 

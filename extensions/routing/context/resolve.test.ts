@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  carriedContext,
   contextCheck,
-  planFastPath,
   planFromChoice,
   planFromLegacy,
   referencedArtifactPaths,
@@ -57,38 +55,6 @@ describe('planFromChoice (cold entry)', () => {
     }), cold, newWork, { topicTitle: 'Cache', workItemTitle: 'Refactor cache' })!;
     expect(plan.events[0]).toEqual({ v: 1, op: 'migration-init', legacyHeadEntryId: 'e8', mode: 'lazy', sourceEntryId: 'e9' });
     expect(plan.events.filter((e) => e.op === 'migration-init')).toHaveLength(1);
-  });
-});
-
-describe('planFastPath (same work item later)', () => {
-  it('continues the active item, checking the files the user referenced for it again', () => {
-    const ledger = foldEvents([
-      createEvent(workItem('w_1', 't_1', {
-        anchors: [{ kind: 'path', value: 'docs/spec.md', role: 'reference', source: 'user' }],
-        openContext: [], lastDeliverable: 'implement',
-      })),
-      activateEvent('w_1'),
-    ]);
-    const plan = planFastPath(base('implement it', { ledger }), ledger.items.get('w_1')!);
-    expect(plan.resolution).toMatchObject({ workItemId: 'w_1', relation: 'continue', contextReasons: ['referenced-artifact'], resolver: 'deterministic' });
-    expect(plan.events).toEqual([]);
-  });
-
-  it('keeps an obligation the active item still holds open', () => {
-    const ledger = foldEvents([
-      createEvent(workItem('w_1', 't_1', {
-        anchors: [{ kind: 'path', value: 'docs/spec.md', source: 'user' }],
-        openContext: ['carried-open-context'], lastDeliverable: 'implement',
-      })),
-      activateEvent('w_1'),
-    ]);
-    const plan = planFastPath(base('implement it', { ledger }), ledger.items.get('w_1')!);
-    expect(plan.resolution.contextReasons).toEqual(['carried-open-context']);
-  });
-
-  it('owes nothing for an item whose paths the user only named', () => {
-    const item = workItem('w_1', 't_1', { anchors: [{ kind: 'path', value: 'src/a.ts', source: 'user' }], openContext: [] });
-    expect(carriedContext(item)).toEqual([]);
   });
 });
 

@@ -10,6 +10,13 @@ const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.
 const COMPLEXITY = { trivial: 0, routine: 0.25, moderate: 0.5, hard: 0.75, frontier: 1 } as const;
 const FLOOR = { economy: undefined, standard: 0.45, strong: 0.70, frontier: 0.85 } as const;
 
+/** Execution penalties of one work item, carried until an entry continues it. */
+export interface PriorWork {
+  workItemId: string;
+  contractStrikes?: Record<string, number>;
+  excludedExecutors?: string[];
+}
+
 /** Per-entry routing state: the entry's final step and its explicit handoffs. */
 export interface WorkPhaseState {
   intentKey: string;
@@ -26,6 +33,8 @@ export interface WorkPhaseState {
   contractStrikes?: Record<string, number>;
   /** Served keys of executor models that reached the strike limit. */
   excludedExecutors?: string[];
+  /** The previous work item's penalties, applied only if this entry's handoff continues that item. */
+  priorWork?: PriorWork;
   /** The one handoff reminder for this entry was already appended. */
   contractNudged?: boolean;
   /** Files the entry's tools looked at, most recent first; router-observed, never inherited. */
@@ -117,34 +126,33 @@ export function nextProviderInvocation(state: WorkPhaseState): WorkPhaseState {
   return { ...state, providerInvocation: state.providerInvocation + 1 };
 }
 
-/** Carry same-WorkItem penalties, never entry-local execution authority. */
-export function inheritWorkContinuation(
-  intentKey: string,
-  prior: WorkPhaseState,
-  deliverable: Dimension,
-): WorkPhaseState {
+/**
+ * The penalties a later entry takes over when its handoff continues this
+ * entry's work item. An entry placed on no work item passes on the ones it
+ * received, so a run of entries that never hand off does not drop them.
+ */
+export function penaltiesOf(state: WorkPhaseState): PriorWork | undefined {
+  if (!state.workItemId) return state.priorWork;
+  if (!state.contractStrikes && !state.excludedExecutors) return undefined;
   return {
-    ...prior,
-    intentKey,
-    deliverable,
-    providerInvocation: 1,
-    observedMutationTools: 0,
-    contract: undefined,
-    contractNudged: undefined,
-    readPaths: undefined,
-    reasoningHandoff: undefined,
-    previousHandoffId: prior.reasoningHandoff?.id,
-    contextStatus: undefined,
-    incumbentServes: undefined,
-    pendingIdentity: undefined,
-    provisionalGrounding: undefined,
-    contextRequests: undefined,
-    contextDenials: undefined,
-    deniedAtInvocation: undefined,
-    clarificationDispatched: undefined,
-    handoffKey: undefined,
-    contextNudged: undefined,
-    contextClosed: undefined,
+    workItemId: state.workItemId,
+    ...(state.contractStrikes ? { contractStrikes: state.contractStrikes } : {}),
+    ...(state.excludedExecutors ? { excludedExecutors: state.excludedExecutors } : {}),
+  };
+}
+
+/** Take over the previous work item's penalties when the entry continues it; nothing else crosses. */
+export function withContinuedPenalties(
+  state: WorkPhaseState,
+  workItemId: string | undefined,
+  relation: string,
+): WorkPhaseState {
+  const prior = state.priorWork;
+  if (!prior || prior.workItemId !== workItemId || relation !== 'continue') return state;
+  return {
+    ...state,
+    ...(prior.contractStrikes ? { contractStrikes: prior.contractStrikes } : {}),
+    ...(prior.excludedExecutors ? { excludedExecutors: prior.excludedExecutors } : {}),
   };
 }
 

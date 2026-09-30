@@ -3,7 +3,8 @@ import {
   capabilityBandFor,
   carryAcrossBranch,
   floorForBand,
-  inheritWorkContinuation,
+  penaltiesOf,
+  withContinuedPenalties,
   boundaryQualifiers,
   nextProviderInvocation,
   servesBoundary,
@@ -58,55 +59,27 @@ describe('withStrongerTerminal', () => {
   });
 });
 
-describe('inheritWorkContinuation', () => {
-  it('retains terminal and band while resetting per-entry counters and handoffs', () => {
-    const handoff = {
-      id: 'intent-a', requester: 'a/cheap', target: 'plan' as const, minimum: 0.5, requirement: 0.5,
-      rubric: { alternatives: 2, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 },
-      evidence: { applicable: false, files: 0, directories: 0 }, pending: false,
-    };
-    const prior = entryState({
-      providerInvocation: 3,
-      observedMutationTools: 1,
-      contractNudged: true,
-      readPaths: ['/repo/a.ts'],
-      reasoningHandoff: handoff,
-      contextStatus: 'served',
-      contextRequests: 4,
-      contextDenials: 1,
-      deniedAtInvocation: 2,
-      clarificationDispatched: true,
-      handoffKey: 'k',
-      contextNudged: true,
-      contextClosed: true,
-      contractStrikes: { 'beta/strong': 1 },
-    });
-    const next = inheritWorkContinuation('intent-b', prior, 'implement');
-    expect(next).toMatchObject({
-      intentKey: 'intent-b',
-      deliverable: 'implement',
-      previousHandoffId: 'intent-a',
-      terminal: prior.terminal,
-      terminalBand: prior.terminalBand,
-      providerInvocation: 1,
-      observedMutationTools: 0,
-      contractStrikes: { 'beta/strong': 1 },
-    });
-    expect(next.contract).toBeUndefined();
-    expect(next.contractNudged).toBeUndefined();
-    expect(next.readPaths).toBeUndefined();
-    expect(next.reasoningHandoff).toBeUndefined();
-    for (const field of [
-      'contextStatus', 'contextRequests', 'contextDenials', 'deniedAtInvocation', 'clarificationDispatched',
-      'handoffKey', 'contextNudged', 'contextClosed',
-    ] as const) {
-      expect(next[field]).toBeUndefined();
-    }
+describe('penaltiesOf / withContinuedPenalties', () => {
+  const strikes = { contractStrikes: { 'beta/strong': 2 }, excludedExecutors: ['beta/strong'] };
+
+  it('applies a work item\'s penalties only to an entry that continues that item', () => {
+    const prior = penaltiesOf(entryState({ workItemId: 'w_1', ...strikes }));
+    const next = entryState({ intentKey: 'intent-b', priorWork: prior! });
+    expect(withContinuedPenalties(next, 'w_1', 'continue')).toMatchObject(strikes);
+    expect(withContinuedPenalties(next, 'w_2', 'continue')).toBe(next);
+    expect(withContinuedPenalties(next, 'w_1', 'resume')).toBe(next);
+    expect(withContinuedPenalties(next, undefined, 'unknown')).toBe(next);
+  });
+
+  it('passes penalties on through entries placed on no work item', () => {
+    const received = penaltiesOf(entryState({ workItemId: 'w_1', ...strikes }));
+    expect(penaltiesOf(entryState({ priorWork: received! }))).toEqual({ workItemId: 'w_1', ...strikes });
+    expect(penaltiesOf(entryState({ workItemId: 'w_1' }))).toBeUndefined();
   });
 });
 
 describe('carryAcrossBranch', () => {
-  it('keeps only the task type and final step a thin continuation inherits', () => {
+  it('keeps only the task type and final step across branch navigation', () => {
     const prior = entryState({
       deliverable: 'gather',
       providerInvocation: 4,

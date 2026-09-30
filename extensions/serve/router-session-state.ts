@@ -43,7 +43,6 @@ export interface CachedRoutingIntent {
   classifyResult: ClassifyResult;
   dimension: Dimension;
   cause: DecisionCause;
-  thin: boolean;
   /** The entry's work-context resolution; resolved once per entry. */
   context?: ResolvedEntryContext;
 }
@@ -93,13 +92,6 @@ export class RoutingContextState {
   /** Lines of anchored files read so far, until they cover the whole file; runtime-only. */
   private readCoverage = new Map<string, ReadCoverage>();
   /**
-   * An entry's resolution failed, so the branch never recorded it and the
-   * active item may be stale work. Runtime-only; it survives a branch restore
-   * because that restore cannot tell whether the failed entry is on the new
-   * branch.
-   */
-  private fastPathBlocked = false;
-  /**
    * The index of the history before tracking started, for the boundary it
    * was built at. The path to an entry never changes, so it holds across
    * `/tree` and is dropped only on reset.
@@ -129,19 +121,6 @@ export class RoutingContextState {
   /** Re-read an untracked branch's state; a tracked branch keeps its ledger's. */
   refreshBranchState(branch: readonly unknown[] | undefined): void {
     if (this.ledger.events === 0) this.branchState = classifyBranch(branch, this.ledger);
-  }
-
-  /**
-   * Whether the active item may be continued without a resolver. A thin
-   * entry after a failed resolution must not inherit the failed entry's
-   * predecessor; it stays blocked until an entry is placed on a work item.
-   */
-  isFastPathBlocked(): boolean {
-    return this.fastPathBlocked;
-  }
-
-  setFastPathBlocked(blocked: boolean): void {
-    this.fastPathBlocked = blocked;
   }
 
   /**
@@ -256,7 +235,6 @@ export class RoutingContextState {
     this.branchState = 'native-empty';
     this.entrySource = undefined;
     this.readCoverage.clear();
-    this.fastPathBlocked = false;
     this.legacyIndex = undefined;
   }
 }
