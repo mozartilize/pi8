@@ -2966,14 +2966,7 @@ const SEEDED_BENCHMARKS = {
 };
 
 describe('a prompt with no keyword evidence', () => {
-  it('routes on the keyword classifier when the embedding reader cannot load', async () => {
-    // The optional runtime is not installed here, so the enabled reader fails
-    // fast and the keyword result stands.
-    writeFileSync(
-      join(temp.path, 'config.json'),
-      JSON.stringify({ embeddingClassifier: true }),
-      'utf8',
-    );
+  it('collects context for a prompt the keyword rules cannot read', async () => {
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify(SEEDED_BENCHMARKS), 'utf8');
     const harness = await setupProviderTest({ dir: temp.path });
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);

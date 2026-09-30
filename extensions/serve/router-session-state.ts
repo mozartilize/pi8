@@ -16,7 +16,6 @@ import type {
   Candidate,
   DecisionCause,
   Dimension,
-  EmbeddingMeta,
   RoutingDecision,
 } from '../types.js';
 import { debugLog } from '../host/debuglog.js';
@@ -41,20 +40,6 @@ export interface CachedRoutingIntent {
   thin: boolean;
   /** The entry's work-context resolution; resolved once per entry. */
   context?: ResolvedEntryContext;
-  /** The embedding reader's reading of the entry's prompt; read once per entry. */
-  embedding?: EmbeddingMeta;
-}
-
-/** Embedding-reader tallies for `/router-status`. */
-export interface EmbeddingStats {
-  /** Prompts the reader read. */
-  read: number;
-  /** Of those, entries treated as thin on the reading. */
-  thin: number;
-  /** Of those, entries whose terminal kind the reading raised. */
-  kindRaised: number;
-  /** Reads that failed or ran out of time; the keyword result stood. */
-  failed: number;
 }
 
 /**
@@ -319,7 +304,6 @@ export class RouterSession {
   private resolvedThinkingLevel: string | undefined;
   private syncedThinkingLevel: string | undefined;
   private activeSkills: readonly string[] = [];
-  private embeddingStats: EmbeddingStats = { read: 0, thin: 0, kindRaised: 0, failed: 0 };
   private memoizedCandidateExpansion: { key: string; candidates: Candidate[] } | undefined;
 
   constructor(
@@ -499,14 +483,6 @@ export class RouterSession {
     this.activeSkills = [...names];
   }
 
-  getEmbeddingStats(): EmbeddingStats {
-    return { ...this.embeddingStats };
-  }
-
-  recordEmbedding(outcome: keyof EmbeddingStats): void {
-    this.embeddingStats = { ...this.embeddingStats, [outcome]: this.embeddingStats[outcome] + 1 };
-  }
-
   getCandidateExpansion(): { key: string; candidates: Candidate[] } | undefined {
     return this.memoizedCandidateExpansion;
   }
@@ -681,7 +657,6 @@ export class RouterSession {
     this.resolvedThinkingLevel = undefined;
     this.syncedThinkingLevel = undefined;
     this.activeSkills = [];
-    this.embeddingStats = { read: 0, thin: 0, kindRaised: 0, failed: 0 };
     this.memoizedCandidateExpansion = undefined;
 
     this.intent.reset();

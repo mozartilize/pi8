@@ -20,7 +20,6 @@ import type {
   ReasoningHandoffMeta,
   RoutingDecision,
   WorkContextMeta,
-  EmbeddingMeta,
 } from '../types.js';
 import type { ContextReason } from '../routing/context/types.js';
 import { resolveStoragePath } from '../bench/store.js';
@@ -121,8 +120,6 @@ export interface DecisionLogEntry {
   };
   /** The entry's work-context resolution: tier, ids, categories; never titles. */
   workContext?: WorkContextMeta;
-  /** The embedding reader's margins and categories for the entry; never the prompt. */
-  embedding?: EmbeddingMeta;
   /** Routed phase records: the deliverable behind an investigation, and the join to the previous entry's handoff. */
   deliverable?: string;
   reasoningHandoff?: ReasoningHandoffMeta;
@@ -321,7 +318,6 @@ export function appendDecision(
         ? { executionContract: { action: 'route' as const, meta: decision.executionContract } }
         : {}),
       ...(decision.workContext ? { workContext: decision.workContext } : {}),
-      ...(decision.embedding ? { embedding: decision.embedding } : {}),
       ...(decision.deliverable ? { deliverable: decision.deliverable } : {}),
       ...(decision.reasoningHandoff ? { reasoningHandoff: decision.reasoningHandoff } : {}),
       ...(decision.previousHandoffId

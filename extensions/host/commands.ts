@@ -19,7 +19,7 @@ import {
   getProviderState,
   buildSubagentProviderAuthFilter,
 } from '../serve/provider.js';
-import { formatDecisionDetail, formatEmbeddingStats, formatWorkContext } from './ui.js';
+import { formatDecisionDetail, formatWorkContext } from './ui.js';
 import {
   computeRoleModels,
   readExistingOverrides,
@@ -28,7 +28,6 @@ import {
 } from '../agents/subagents.js';
 import { readRecentEntries, type DecisionLogEntry } from './decisionlog.js';
 import { detectToolGaps } from './gap-detector.js';
-import { provisionEmbedding } from '../embed/embedding-provision.js';
 import {
   RouterSession,
   defaultRouterSession,
@@ -233,17 +232,7 @@ async function handleSyncCommand(
   args: string,
   ctx: ExtensionCommandContext,
 ): Promise<void> {
-  const [sourceOrKey, subArg] = splitArgs(args);
-
-  // `/router-sync embedding` — download the embedding model only.
-  if (sourceOrKey === 'embedding') {
-    const result = await provisionEmbedding({
-      force: subArg === '--force',
-      onProgress: (status) => ctx.ui.notify(status, 'info'),
-    });
-    ctx.ui.notify(result.status, result.ok ? 'info' : 'error');
-    return;
-  }
+  const [sourceOrKey] = splitArgs(args);
 
   const config = loadConfig();
   let apiKey: string | undefined;
@@ -310,8 +299,6 @@ async function handleStatusCommand(
     lines.push('Map one manually with `/router-fix <bench-slug> <provider/id>`.');
   }
     lines.push('', ...formatDecisionDetail(lastDecision, lastServed));
-  const embeddingStats = session.getEmbeddingStats();
-  if (embeddingStats.read + embeddingStats.failed > 0) lines.push(formatEmbeddingStats(embeddingStats));
   // M4: show recent routing history, surfacing any real fallbacks.
   // Only actual routing decisions belong here: secondary records join
   // decisions by intentKey offline, and letting them through would push real

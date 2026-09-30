@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearRouterStatus, formatStatus, formatDecisionDetail, formatEmbeddingStats, formatWorkContext, servedKey } from './ui.js';
+import { clearRouterStatus, formatStatus, formatDecisionDetail, formatWorkContext, servedKey } from './ui.js';
 import { emptyLedger, foldEvents } from '../routing/context/ledger.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import { candidateKey } from '../routing/score/scorer.js';
@@ -432,15 +432,5 @@ describe('work context in /router-why', () => {
     }, undefined).join('\n');
     expect(unresolved).toContain('no work item (not recorded on this branch)');
     expect(unresolved).toContain('context:    still needed (left open by an earlier request)');
-  });
-
-  it('says what the embedding reader concluded and what it changed', () => {
-    const lines = formatDecisionDetail({
-      ...decision,
-      embedding: { thinMargin: 0.034, thin: true, kind: 'implement', kindMargin: 0.015, kindRaised: true },
-    }, undefined).join('\n');
-    expect(lines).toContain('embedding:  a short follow-up (lead 0.034), so it carries on the earlier work; looks like implement (lead 0.015), raised the final step');
-    expect(formatEmbeddingStats({ read: 4, thin: 2, kindRaised: 1, failed: 1 }))
-      .toBe('embedding reader: read 4 prompts the keywords could not (short follow-ups 2, final step raised 1), failed 1');
   });
 });

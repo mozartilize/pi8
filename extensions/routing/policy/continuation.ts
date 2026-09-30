@@ -7,11 +7,6 @@ export interface TurnClassificationInput {
   promptText: string;
   /** The prompt points back at the conversation instead of naming work of its own. */
   thin: boolean;
-  /**
-   * The embedding reader, not the keyword rules, found it thin. Such an
-   * entry raises routing like any thin entry but never takes the fast path.
-   */
-  thinByEmbedding?: boolean;
   /** How many messages of each recoverable origin the context held. */
   provenanceCounts: Record<MessageProvenance, number>;
 }

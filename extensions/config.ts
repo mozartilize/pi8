@@ -7,7 +7,6 @@ import type { AutoRouterConfig, Dimension, ScoreWeights } from './types.js';
 import {
   CONFIG_FILE,
   DEFAULT_DIMENSION_WEIGHTS,
-  DEFAULT_EMBEDDING_DEADLINE_MS,
   DEFAULT_LOW_CONFIDENCE_THRESHOLD,
   DEFAULT_SWITCH_MARGIN,
 } from './constants.js';
@@ -77,15 +76,6 @@ export interface PersistedConfig {
    * shells, and code runners are dropped. Default `[]`.
    */
   collectTools?: string[];
-  /**
-   * Read prompts the English keyword rules cannot read with the local
-   * multilingual embedding model (E5-small). Its readings only ever raise
-   * routing. Needs the optional onnxruntime-node and @xenova/transformers
-   * packages and `/router-sync embedding`. Default false.
-   */
-  embeddingClassifier?: boolean;
-  /** Max ms for model load + inference. Default 5000. */
-  embeddingDeadlineMs?: number;
 }
 
 const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
@@ -106,9 +96,6 @@ const finiteInRange = (
   typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max
     ? value
     : fallback;
-
-const positiveInteger = (value: unknown, fallback: number): number =>
-  typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback;
 
 const stringList = (value: unknown): string[] | undefined => {
   if (!Array.isArray(value)) return undefined;
@@ -189,8 +176,6 @@ export function loadConfig(): AutoRouterConfig {
     collectTools: stringList(persisted.collectTools)?.filter(
       (name) => name.length <= 64 && !COLLECT_EXTRA_DENIED.has(name),
     ) ?? [],
-    embeddingClassifier: persisted.embeddingClassifier === true,
-    embeddingDeadlineMs: positiveInteger(persisted.embeddingDeadlineMs, DEFAULT_EMBEDDING_DEADLINE_MS),
   };
 }
 
@@ -205,6 +190,8 @@ const REMOVED_CONFIG_KEYS = [
   'assessmentMode',
   'assessmentShadowDeadlineMs',
   'embeddingMinConfidence',
+  'embeddingClassifier',
+  'embeddingDeadlineMs',
   'consultRouter',
   'consultRouterAgent',
   'consultModel',

@@ -255,18 +255,16 @@ describe('collectTools', () => {
   });
 });
 
-describe('embeddingClassifier', () => {
-  it('reads the switch and deadline', () => {
+describe('removed keys', () => {
+  it('ignores removed keys and drops them on the next write', () => {
     writeFileSync(
       getConfigPath(),
-      JSON.stringify({ embeddingClassifier: true, embeddingDeadlineMs: 4000, semi: true }),
+      JSON.stringify({ embeddingClassifier: true, embeddingDeadlineMs: 4000, consultRouter: true, semi: false }),
       'utf8',
     );
-    expect(loadConfig()).toMatchObject({ semi: true, embeddingClassifier: true, embeddingDeadlineMs: 4000 });
-  });
-
-  it('leaves the embedding reader off unless enabled', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ embeddingClassifier: 'yes', embeddingDeadlineMs: -1 }), 'utf8');
-    expect(loadConfig()).toMatchObject({ embeddingClassifier: false, embeddingDeadlineMs: 5000 });
+    expect(loadConfig()).not.toHaveProperty('embeddingClassifier');
+    saveSemi(true);
+    const raw = JSON.parse(readFileSync(getConfigPath(), 'utf8')) as Record<string, unknown>;
+    expect(raw).toEqual({ semi: true });
   });
 });

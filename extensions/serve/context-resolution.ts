@@ -60,11 +60,7 @@ export interface EntryContextRequest {
   session: RouterSession;
   sessionManager?: BranchReader;
   cwd?: string;
-  /**
-   * `thin` may still be settling (the embedding reading). It is awaited only
-   * after the fast-path check, so a miss does not stall the index lookup.
-   */
-  turn: { key: string; promptText: string; thin: boolean | Promise<boolean> };
+  turn: { key: string; promptText: string; thin: boolean };
   /** Heuristic task type for this entry; unknown quality never lowers it. */
   deliverable: Dimension;
   /** Prefixes of known integrations' messages, which the history search skips. */
@@ -137,10 +133,7 @@ async function resolveRecordedEntry(req: EntryContextRequest): Promise<EntryCont
   const untracked = ledger.events === 0 ? classifyBranchBefore(branch, sourceEntryId, ledger) : undefined;
   const known = [...ledger.items.values()].flatMap((item) => item.anchors);
   const anchors = extractPromptAnchors(turn.promptText, { ...(req.cwd ? { cwd: req.cwd } : {}), known });
-  let thin = false;
-  const settleThin = async (): Promise<void> => {
-    thin = await turn.thin;
-  };
+  const { thin } = turn;
   const base = (floor?: Dimension): PlanBase => ({
     ledger,
     branchState: untracked ?? session.context.getBranchState(),
@@ -156,8 +149,7 @@ async function resolveRecordedEntry(req: EntryContextRequest): Promise<EntryCont
     ? fastPathItem(ledger, turn.promptText, anchors)
     : undefined;
   if (continued) {
-    await settleThin();
-    if (!req.stillCurrent()) return { kind: 'aborted' };
+        if (!req.stillCurrent()) return { kind: 'aborted' };
     const plan = planFastPath(base(thin ? continuationFloor(continued) : undefined), continued);
     if (!req.stillCurrent()) return { kind: 'aborted' };
     let recorded = plan;
@@ -191,8 +183,7 @@ async function resolveRecordedEntry(req: EntryContextRequest): Promise<EntryCont
     };
   }
 
-  await settleThin();
-  if (!req.stillCurrent()) return { kind: 'aborted' };
+    if (!req.stillCurrent()) return { kind: 'aborted' };
   const catalog = buildCatalog(ledger, anchors, 'normal');
   const legacyHead = ledger.migration?.legacyHeadEntryId
     ?? (untracked === 'legacy-uninitialized' ? parentOf(branch, sourceEntryId) : undefined);

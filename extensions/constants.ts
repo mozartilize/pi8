@@ -40,9 +40,3 @@ export const DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.15;
 /** Reported confidence never drops below this floor, so a caller threshold
  * below it cannot silently change the routed dimension. */
 export const CONFIDENCE_FLOOR = 0.1;
-
-/**
- * Budget for loading the embedding model and reading one prompt. Past it the
- * keyword result stands; a cold load keeps going in the background.
- */
-export const DEFAULT_EMBEDDING_DEADLINE_MS = 5000;

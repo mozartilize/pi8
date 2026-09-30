@@ -11,7 +11,6 @@ import {
 } from './store.js';
 import { resolveRows } from './matcher.js';
 import { loadConfig } from '../config.js';
-import { provisionEmbedding } from '../embed/embedding-provision.js';
 import { getEnabledAdapters, buildAdapterConfig, type AdapterName } from '../adapters/index.js';
 
 export async function syncBenchmarks(
@@ -119,16 +118,6 @@ export async function syncBenchmarks(
     models: merged,
   };
   saveStore(nextStore);
-
-  // Non-fatal: a failed model download does not fail the benchmark sync.
-  if (loadConfig().embeddingClassifier) {
-    const provResult = await provisionEmbedding({
-      onProgress: (status) => opts.onProgress?.({ source: 'embedding', ok: true, fetched: 0, matched: 0, unresolved: 0, error: status }),
-    });
-    if (!provResult.ok) {
-      opts.onProgress?.({ source: 'embedding', ok: false, fetched: 0, matched: 0, unresolved: 0, error: provResult.status });
-    }
-  }
 
   // Sync refreshes the benchmark store only; role models are injected per
   // spawn (see subagents.ts / index.ts tool_call handler).

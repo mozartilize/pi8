@@ -111,7 +111,6 @@ import {
   waiveMissedInvestigation,
   withInvestigationNote,
 } from './context-handoff-tool.js';
-import { readEntryPrompt, type EntryReading } from './embedding-reading.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -521,8 +520,7 @@ async function resolveEntrySemantics(entry: {
   cacheHit: boolean;
   dimension: Dimension;
   cause: DecisionCause;
-  /** `thin` may still be settling; see EntryContextRequest.turn. */
-  turn: { key: string; promptText: string; thin: boolean | Promise<boolean> };
+  turn: { key: string; promptText: string; thin: boolean };
   context?: ResolvedEntryContext;
   extensionContext: ExtensionContext | undefined;
   syntheticPrefixes: readonly string[];
@@ -543,7 +541,7 @@ async function resolveEntrySemantics(entry: {
   }));
   if (resolved?.kind === 'aborted') return { dimension, cause, aborted: true };
   if (resolved?.kind === 'pending') {
-    const kept = atLeast(dimension, (await entry.turn.thin) ? previousDeliverable : undefined);
+    const kept = atLeast(dimension, entry.turn.thin ? previousDeliverable : undefined);
     return {
       dimension: kept,
       cause: kept === dimension ? cause : 'continuation-context',
@@ -553,7 +551,7 @@ async function resolveEntrySemantics(entry: {
   }
   if (!resolved) {
     // Preserve serving strength after failure without asserting a work identity.
-    const kept = atLeast(dimension, (await entry.turn.thin) ? previousDeliverable : undefined);
+    const kept = atLeast(dimension, entry.turn.thin ? previousDeliverable : undefined);
     return { dimension: kept, cause: kept === dimension ? cause : 'continuation-context', aborted: false };
   }
   // Continuity comes from an existing WorkItem the entry was placed on. A thin
@@ -561,7 +559,7 @@ async function resolveEntrySemantics(entry: {
   // serving minimum, without importing that work's identity or state.
   const { resolution, workItemId, createdWorkItem } = resolved.context;
   const onExistingWork = workItemId != null && !createdWorkItem;
-  const carried = !onExistingWork && await entry.turn.thin
+  const carried = !onExistingWork && entry.turn.thin
     ? atLeast(resolution.deliverable, previousDeliverable)
     : resolution.deliverable;
   if (atLeast(dimension, carried) !== dimension) {
@@ -730,13 +728,6 @@ interface PreparedTurn {
   config: AutoRouterConfig;
   measured: ReturnType<typeof measureTurnInput>;
   intent: ReturnType<typeof resolveBaseIntent>;
-  /** The embedding reader's reading of the entry's prompt, when it read one. */
-  embedding?: import('../types.js').EmbeddingMeta;
-  /**
-   * A new entry's embedding reading, still in flight. `measured`, `intent`,
-   * and `embedding` hold the keyword reading until settleEntryReading().
-   */
-  pendingReading?: Promise<EntryReading>;
   trajectoryEscalation: ReturnType<RouterSession['peekPendingTrajectoryEscalation']>;
   /**
    * Pre-exclusion pool. Scoring re-filters this rather than the snapshot so
@@ -768,20 +759,6 @@ interface ScoredTurn {
   releasesContract?: boolean;
 }
 
-/**
- * Fold a new entry's embedding reading into `prepared` once it arrives. Every
- * path that uses the entry's thinness or final step settles it first.
- */
-async function settleEntryReading(prepared: PreparedTurn): Promise<void> {
-  const pending = prepared.pendingReading;
-  if (!pending) return;
-  const read = await pending;
-  delete prepared.pendingReading;
-  prepared.measured = { ...prepared.measured, turnInput: read.turnInput };
-  prepared.intent = { ...prepared.intent, classifyResult: read.classifyResult };
-  if (read.embedding) prepared.embedding = read.embedding;
-}
-
 /** Resolve the registry, this turn's input identity, and the candidate pool. */
 async function prepareRouterTurn(args: {
   context: Context;
@@ -805,14 +782,6 @@ async function prepareRouterTurn(args: {
     { turnInput: measured.turnInput, systemPrompt: measured.systemPrompt, config },
     session,
   );
-  // A new entry the keyword rules cannot read is read once by the embedding
-  // model, in flight while the entry resolves; later invocations of the
-  // entry reuse that reading. The reading never changes the intent key.
-  const unread: EntryReading = { turnInput: measured.turnInput, classifyResult: intent.classifyResult };
-  const pendingReading = intent.cacheHit
-    ? undefined
-    : readEntryPrompt(measured.turnInput, intent.classifyResult, config, session).catch(() => unread);
-  const cachedEmbedding = intent.cacheHit ? intent.cachedIntent?.embedding : undefined;
 
   session.bindTrajectoryIntent(measured.turnInput.key);
   // Blocked preflights never emit tool_result. Finalize that batch
@@ -839,8 +808,6 @@ async function prepareRouterTurn(args: {
       config,
       measured,
       intent,
-      ...(cachedEmbedding ? { embedding: cachedEmbedding } : {}),
-      ...(pendingReading ? { pendingReading } : {}),
       trajectoryEscalation,
       candidates,
       routableCandidates,
@@ -860,15 +827,13 @@ async function resolveRouterTurn(args: {
   const sessionGeneration = session.getSessionGeneration();
   const stillCurrent = (): boolean => session.getSessionGeneration() === sessionGeneration;
 
-  // The embedding reading's raised final step can settle after identity
-  // resolution; adoption at the context handoff reads the settled type.
   const entry = await resolveEntrySemantics({
     session,
     stillCurrent,
     cacheHit,
     dimension: prepared.intent.baseDimension,
     cause: prepared.intent.baseCause,
-    turn: { ...turnInput, thin: prepared.pendingReading?.then((read) => read.turnInput.thin) ?? turnInput.thin },
+    turn: turnInput,
     ...(cachedIntent?.context && cacheHit ? { context: cachedIntent.context } : {}),
     extensionContext: prepared.extensionContext,
     syntheticPrefixes: prepared.config.syntheticPrefixes,
@@ -876,8 +841,7 @@ async function resolveRouterTurn(args: {
   if (entry.aborted) return SESSION_CHANGED;
   const baseDimension = entry.dimension;
   const baseCause = entry.cause;
-  await settleEntryReading(prepared);
-  const settled = prepared.measured.turnInput;
+  const settled = turnInput;
 
   if (!cacheHit) {
     session.setCachedIntent({
@@ -887,7 +851,6 @@ async function resolveRouterTurn(args: {
       cause: baseCause,
       thin: settled.thin,
       ...(entry.context ? { context: entry.context } : {}),
-      ...(prepared.embedding ? { embedding: prepared.embedding } : {}),
     });
   }
   debugLog('classify.context', {
@@ -1130,7 +1093,6 @@ function scoreRouterTurn(args: {
     if (meta) decision.executionContract = meta;
   }
   if (resolved.context) decision.workContext = workContextMeta(resolved.context);
-  if (prepared.embedding) decision.embedding = prepared.embedding;
   decision.intentKey = turnInput.key;
   decision.provenanceCounts = turnInput.provenanceCounts;
   try {
@@ -1678,7 +1640,6 @@ async function resolvePinnedEntryContext(
 ): Promise<ResolvedEntryContext | PendingIdentity | undefined | 'aborted'> {
   if (prepared.intent.cacheHit) return prepared.intent.cachedIntent?.context
     ?? session.getWorkPhaseState()?.pendingIdentity;
-  await settleEntryReading(prepared);
   const generation = session.getSessionGeneration();
   const resolved = await failOpen(() => resolveEntryContext({
     session,
@@ -1725,7 +1686,6 @@ async function runManualTurn(args: {
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
       ...(resolvedContext ? { context: resolvedContext } : {}),
-      ...(prepared.embedding ? { embedding: prepared.embedding } : {}),
     });
   }
   const candidates = manualCandidates(prepared, manualModel);
@@ -1835,7 +1795,6 @@ async function runResumeTurn(args: {
       cause: prepared.intent.baseCause,
       thin: turnInput.thin,
       ...(entryContext ? { context: entryContext } : {}),
-      ...(prepared.embedding ? { embedding: prepared.embedding } : {}),
     });
   }
 

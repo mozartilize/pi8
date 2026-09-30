@@ -12,11 +12,9 @@ import type {
   QualityExclusionReason,
   RoutingDecision,
   WorkContextMeta,
-  EmbeddingMeta,
 } from '../types.js';
 import { activeWorkItem, ledgerTopics, type TopicLedger } from '../routing/context/ledger.js';
 import type { BranchState, ContextReason } from '../routing/context/types.js';
-import type { EmbeddingStats } from '../serve/router-session-state.js';
 
 export interface ServedInfo {
   /** The model that actually produced the turn, after any fallback. */
@@ -125,7 +123,6 @@ export function formatDecisionDetail(
     `  reason:     ${decision.reason}`,
     ...(decision.mutationObserved && decision.dimension !== 'implement' ? ['  phase:      editing'] : []),
     ...workContextLines(decision.workContext),
-    ...embeddingLines(decision.embedding),
     ...routingNotes(decision, served),
     ...decision.candidateDiagnostics?.flatMap((diagnostic) => {
       if (!diagnostic.excludedReason) return [];
@@ -165,21 +162,6 @@ function workContextLines(context: WorkContextMeta | undefined): string[] {
     `  work:       ${target} (${context.legacy ? LEGACY_LABEL : RESOLVER_LABELS[context.resolver]})`,
     `  context:    ${status}${reasons ? ` (${reasons})` : ''}`,
   ];
-}
-
-/** The `/router-why` line for a prompt the embedding model read: what it concluded and what that changed. */
-function embeddingLines(embedding: EmbeddingMeta | undefined): string[] {
-  if (!embedding) return [];
-  const thin = embedding.thin
-    ? `a short follow-up (lead ${embedding.thinMargin.toFixed(3)}), so it carries on the earlier work`
-    : `not a short follow-up (lead ${embedding.thinMargin.toFixed(3)})`;
-  const kind = `looks like ${embedding.kind} (lead ${embedding.kindMargin.toFixed(3)})${embedding.kindRaised ? ', raised the final step' : ''}`;
-  return [`  embedding:  ${thin}; ${kind}`];
-}
-
-/** One-line embedding-reader tally for `/router-status`. */
-export function formatEmbeddingStats(stats: EmbeddingStats): string {
-  return `embedding reader: read ${stats.read} prompts the keywords could not (short follow-ups ${stats.thin}, final step raised ${stats.kindRaised}), failed ${stats.failed}`;
 }
 
 const CONTRACT_BREAK_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['breakReason']>, string>> = {

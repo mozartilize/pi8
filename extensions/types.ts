@@ -278,22 +278,6 @@ export interface WorkChoice {
 }
 
 /**
- * The embedding reader's reading of a prompt the keyword rules could not
- * read: margins and categories only, never the prompt.
- */
-export interface EmbeddingMeta {
-  /** Lead of the nearest thin examples over the nearest substantive ones. */
-  thinMargin: number;
-  kind: TaskKind;
-  /** Lead of `kind` over the next kind. */
-  kindMargin: number;
-  /** The entry was treated as thin on this reading. */
-  thin?: boolean;
-  /** The entry's terminal kind was raised to `kind` on this reading. */
-  kindRaised?: boolean;
-}
-
-/**
  * The entry's work-context resolution as routing and logs see it: the tier
  * that decided it, ids, and categories. Titles and summaries stay out.
  */
@@ -377,8 +361,6 @@ export interface RoutingDecision {
   provenanceCounts?: Record<MessageProvenance, number>;
   /** The entry's work-context resolution. */
   workContext?: WorkContextMeta;
-  /** The embedding reader's reading of the entry's prompt, when it read one. */
-  embedding?: EmbeddingMeta;
   cause: DecisionCause;
   fallbackChain: string[];
   /** Capability-tier evidence for candidates that were demoted or promoted. */
@@ -529,14 +511,6 @@ export interface AutoRouterConfig {
    * runners listed here are ignored. Default `[]`.
    */
   collectTools: string[];
-  /**
-   * Read prompts the English keyword rules cannot read with the local
-   * multilingual embedding model (E5-small); its readings only ever raise
-   * routing. Default false.
-   */
-  embeddingClassifier: boolean;
-  /** Maximum ms the embedding model load + one reading may take. Default 5000. */
-  embeddingDeadlineMs: number;
 }
 
 export interface SyncResult {

@@ -55,7 +55,6 @@ import { isUsageLimitErrorMessage } from './serve/usage-limit.js';
 import { computeSubagentSpend } from './agents/subagent-spend.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './routing/policy/allowlist.js';
 import { loadConfig } from './config.js';
-import { ensureEmbeddingEngine } from './embed/embedding.js';
 import { setSessionFile } from './sessionpaths.js';
 import { debugLog, setConfigDebug } from './host/debuglog.js';
 import type { RegistryModelInfo } from './routing/score/scorer.js';
@@ -285,17 +284,6 @@ async function handleSessionStart(
     // Gated: a concrete-model session must not poke provider auth (it can
     // trigger a token refresh under Pi's credential-store lock, pi#7508).
     if (shouldRunAuthSweep(ctx?.model)) await refreshRoleModels(ctx.modelRegistry, ctx);
-  } catch {
-    // Advisory only.
-  }
-  try {
-    // Load the embedding model off the turn path, so the first prompt it
-    // reads does not pay the cold start inline. Detached and advisory: a
-    // failed load leaves the keyword rules in charge (R2).
-    const cfg = loadConfig();
-    if (cfg.embeddingClassifier && isRouterAutoActive(ctx?.model)) {
-      void ensureEmbeddingEngine({ deadlineMs: cfg.embeddingDeadlineMs }).catch(() => {});
-    }
   } catch {
     // Advisory only.
   }
