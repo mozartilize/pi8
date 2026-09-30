@@ -66,6 +66,7 @@ import {
 } from './host/decisionlog.js';
 import { clearRouterStatus, renderRouterStatus } from './host/ui.js';
 import {
+  gateContractMutation,
   handleContractToolCall,
   nudgeContractOnEdit,
   registerExecutionContractTool,
@@ -81,7 +82,7 @@ import {
 import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
 import { observeContextGrounding } from './serve/context-grounding.js';
 import { registerRoutingContextTool } from './serve/routing-context-tool.js';
-import { classifyMutationCall } from './routing/policy/mutation-detector.js';
+import { isMutationCall } from './routing/policy/mutation-detector.js';
 import {
   closeInvestigationOnSettle,
   nudgeInvestigation,
@@ -466,7 +467,7 @@ function handleSubagentToolCall(
 
 /**
  * Count mutation calls for the `editing` status. Observation only: a mutation
- * never blocks and never changes the routed task type.
+ * never changes the routed task type.
  */
 function observeMutationToolCall(
   event: ToolCallEvent,
@@ -474,10 +475,7 @@ function observeMutationToolCall(
   session: RouterSession,
 ): void {
   try {
-    const native = event.toolName === 'edit' || event.toolName === 'write';
-    const shell = event.toolName === 'bash' &&
-      classifyMutationCall('bash', event.input as Record<string, unknown>).confidence === 'high';
-    if (!native && !shell) return;
+    if (!isMutationCall(event.toolName, event.input)) return;
     const state = session.getWorkPhaseState();
     if (!state) return;
     const committed = { ...state, observedMutationTools: state.observedMutationTools + 1 };
@@ -688,6 +686,10 @@ export default async function autoModelRouterExtension(
       return;
     }
     try {
+      // A change stopped for an owed plan never runs: it is not counted,
+      // attributed to a plan, or observed as trajectory.
+      const gate = gateContractMutation(event, session);
+      if (gate) return gate;
       observeMutationToolCall(event, ctx, session);
       handleContractToolCall(event, ctx, session);
       const flushed = session.noteTrajectoryToolCall(event.toolName, event.toolCallId, event.input);

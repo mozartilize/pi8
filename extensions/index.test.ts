@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { RegistryModelInfo } from './routing/score/scorer.js';
-import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
+import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role, type RoutingDecision } from './types.js';
 
-import { CONTRACT_NUDGE } from './serve/execution-contract-tool.js';
+import { CONTRACT_GATE, CONTRACT_NUDGE } from './serve/execution-contract-tool.js';
 import { INVESTIGATION_NUDGE } from './serve/investigation-handoff-tool.js';
 import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
@@ -1026,7 +1026,10 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.setLastDecision(decision);
     defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
 
+    // The first change without a plan is stopped; the repeated one runs.
     await handlers.get('tool_call')!({ toolName: 'write', toolCallId: 'w1', input: { path: 'docs/notes.md' } }, ctx);
+    expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
+    await handlers.get('tool_call')!({ toolName: 'write', toolCallId: 'w2', input: { path: 'docs/notes.md' } }, ctx);
 
     expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(1);
     expect(defaultRouterSession.getLastDecision()?.dimension).toBe('plan');
@@ -1314,6 +1317,77 @@ describe('mutation observation hooks', () => {
     const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
     expect(first.content.map((c) => c.text)).toEqual(['edited', CONTRACT_NUDGE]);
     expect(CONTRACT_NUDGE).toContain('if the user asked for this change');
+  });
+
+  function planEntry(over: Partial<WorkPhaseState> = {}, decision: Partial<RoutingDecision> = {}) {
+    defaultRouterSession.intent.commitWorkPhaseState(entryState(over));
+    defaultRouterSession.setLastDecision({
+      ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a', ...decision,
+    });
+    defaultRouterSession.setLastServed({ registryId: 'test/plan', viaFallback: false, accumulatedCost: 0 });
+  }
+
+  function gateRecords(key: 'executionContract' | 'investigationHandoff'): unknown[] {
+    const raw = readFileSync(join(logDir, DECISION_LOG_FILE), 'utf8').trim().split('\n');
+    return raw.map((line) => (JSON.parse(line) as Record<string, unknown>)[key]).filter(Boolean);
+  }
+
+  it('stops the first change of a plan/review entry without a plan once, before it runs', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    const toolResult = handlers.get('tool_result')!;
+    planEntry();
+    const note = vi.spyOn(defaultRouterSession, 'noteTrajectoryToolCall');
+
+    expect(await toolCall({ toolName: 'bash', toolCallId: 'b0', input: { command: 'ls -la' } }, routerAutoCtx)).toBeUndefined();
+    expect(await toolCall({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, routerAutoCtx))
+      .toEqual({ block: true, reason: CONTRACT_GATE });
+    expect(CONTRACT_GATE).toContain('commit_execution');
+    expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
+    expect(note).toHaveBeenCalledTimes(1);
+    note.mockRestore();
+
+    expect(await toolCall({ toolName: 'edit', toolCallId: 'e2', input: { path: 'src/a.ts' } }, routerAutoCtx)).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(1);
+    expect(defaultRouterSession.getLastDecision()?.dimension).toBe('plan');
+    // The stop was the entry's one reminder.
+    const content = [{ type: 'text', text: 'edited' }];
+    expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
+    expect(gateRecords('executionContract')).toEqual([{ action: 'nudge' }]);
+  });
+
+  it('stops a high-confidence shell write of a review entry without a plan', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    planEntry({}, { dimension: 'review' });
+    expect(await toolCall({ toolName: 'bash', toolCallId: 'b1', input: { command: 'python script.py' } }, routerAutoCtx))
+      .toBeUndefined();
+    expect(await toolCall({ toolName: 'bash', toolCallId: 'b2', input: { command: 'echo x > out.txt' } }, routerAutoCtx))
+      .toMatchObject({ block: true });
+  });
+
+  it('never stops a change with a plan, a pinned model, or outside plan/review', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    const edit = (id: string) => toolCall({ toolName: 'edit', toolCallId: id, input: { path: 'src/a.ts' } }, routerAutoCtx);
+
+    planEntry({ contract: { status: 'broken' } as WorkPhaseState['contract'] });
+    expect(await edit('e1')).toBeUndefined();
+
+    planEntry();
+    defaultRouterSession.setManualModel('test/plan');
+    expect(await edit('e2')).toBeUndefined();
+    defaultRouterSession.resumeManual();
+
+    planEntry({}, {
+      dimension: 'implement',
+      scoredReason: { score: 0.8, quality: 0.5, cost: 0.2, speed: 0.1, costBasis: 'per-1m', upgraded: false, details: [{ kind: 'incumbent-model' }] },
+    });
+    expect(await edit('e4')).toBeUndefined();
+
+    planEntry();
+    expect(await toolCall({ toolName: 'edit', toolCallId: 'e5', input: { path: 'src/a.ts' } }, concreteCtx)).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()?.contractNudged).toBeUndefined();
   });
 
   it('counts a high-confidence mutating bash call without blocking it', async () => {

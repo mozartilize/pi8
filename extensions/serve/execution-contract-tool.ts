@@ -13,6 +13,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ToolCallEvent,
+  ToolCallEventResult,
   ToolResultEvent,
   ToolResultEventResult,
 } from '@earendil-works/pi-coding-agent';
@@ -51,7 +52,7 @@ import { parseRubric } from '../routing/policy/execution-difficulty.js';
 import { boundaryQualifiers, servesBoundary, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { actionFromTool, cycleFromToolResult, isVerifier } from '../routing/struggle/fingerprints.js';
 import { parseCandidateKey } from '../routing/score/scorer.js';
-import { classifyMutationCall } from '../routing/policy/mutation-detector.js';
+import { classifyMutationCall, isMutationCall } from '../routing/policy/mutation-detector.js';
 import type { RouterSession } from './router-session-state.js';
 
 const DESCRIPTION =
@@ -121,11 +122,18 @@ function executionContractParameters() {
 /**
  * Appended once per entry to the first edit result without a plan: in a
  * plan/review entry, or in an implement entry whose model the incumbent
- * minimums raised above what the work needs.
+ * minimums raised above what the work needs. A plan/review entry's first
+ * change is stopped instead (`CONTRACT_GATE`), which uses up this reminder.
  */
 export const CONTRACT_NUDGE =
   `Router note: if the user asked for this change and the remaining work is fully decided, call ` +
   `${EXECUTION_CONTRACT_TOOL} with the remaining steps so the router can choose the executor. Otherwise continue.`;
+
+/** The error of the stopped first change of a plan/review entry without a plan. */
+export const CONTRACT_GATE =
+  `Router: this change was not made. If the user asked for it and the remaining work is fully decided, call ` +
+  `${EXECUTION_CONTRACT_TOOL} with the remaining steps first, so the router can choose the executor. ` +
+  `Otherwise make the change again; the router stops only the first one.`;
 
 /** Reason details that mark a pick raised by the incumbent minimums. */
 const INCUMBENT_RAISES = new Set(['incumbent-model', 'incumbent-capability', 'incumbent-effort']);
@@ -610,6 +618,41 @@ export function trackContractToolResult(
     session.commitWorkPhaseState(noteContractVerifier(state, passed));
   } catch {
     // Contract bookkeeping must never change a tool result.
+  }
+}
+
+/**
+ * Stop the first file change of a plan/review entry that has no plan, before
+ * it runs, under the conditions in which `commit_execution` accepts one. A
+ * reminder on a tool result comes after the change is made, and no tool call
+ * can be forced; the stopped change returns `CONTRACT_GATE` as its error.
+ * Once per entry, so a model the handoff does not fit is never stuck. The
+ * task type does not change. Logged as a `nudge`.
+ */
+export function gateContractMutation(
+  event: Pick<ToolCallEvent, 'toolName' | 'input'>,
+  session: RouterSession,
+): ToolCallEventResult | undefined {
+  try {
+    if (!isMutationCall(event.toolName, event.input)) return undefined;
+    const state = session.getWorkPhaseState();
+    const last = session.getLastDecision();
+    if (!state || !last || last.intentKey !== state.intentKey) return undefined;
+    if (last.dimension !== 'plan' && last.dimension !== 'review') return undefined;
+    if (state.contract || state.contractNudged || session.getManualModel() != null) return undefined;
+    const lastServed = session.getLastServed();
+    const served = lastServed ? servedKey(lastServed) : undefined;
+    if (handoffInapplicable(last, state, served)) return undefined;
+    session.commitWorkPhaseState({ ...state, contractNudged: true });
+    appendExecutionContractSignal({
+      intentKey: state.intentKey,
+      served: served ?? 'unknown/unknown',
+      action: 'nudge',
+    });
+    return { block: true, reason: CONTRACT_GATE };
+  } catch {
+    // A gate failure must never block a tool call.
+    return undefined;
   }
 }
 

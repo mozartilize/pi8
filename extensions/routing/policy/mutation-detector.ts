@@ -63,6 +63,11 @@ export function classifyMutationCall(toolName: string, input: Record<string, unk
   return classifyBashCommand(command);
 }
 
+/** Whether a call writes files: a native `edit`/`write` or a high-confidence shell write. */
+export function isMutationCall(toolName: string, input: unknown): boolean {
+  return classifyMutationCall(toolName, (input ?? {}) as Record<string, unknown>).confidence === 'high';
+}
+
 // ─── Bash classification ──────────────────────────────────────────────────
 
 /** When several shapes appear, the first listed one is reported. */
