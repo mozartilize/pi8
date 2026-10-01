@@ -9,6 +9,13 @@ export interface TurnClassificationInput {
   provenanceCounts: Record<MessageProvenance, number>;
 }
 
+/**
+ * Hidden settle reminders start with this. Pi flattens them into timestamped
+ * user messages, so classification always treats the prefix as synthetic.
+ * A user-configured prefix list does not have to repeat it.
+ */
+export const ROUTER_SETTLE_PREFIX = '[pi8-settle]';
+
 export interface TurnClassificationOptions {
   /** Opt-in literal prefixes for known integrations; never inferred. */
   syntheticPrefixes?: readonly string[];
@@ -53,7 +60,7 @@ export function getTurnClassificationInput(
   opts: TurnClassificationOptions = {},
 ): TurnClassificationInput {
   const source = messages ?? [];
-  const syntheticPrefixes = opts.syntheticPrefixes ?? [];
+  const syntheticPrefixes = [ROUTER_SETTLE_PREFIX, ...(opts.syntheticPrefixes ?? [])];
   const provenanceCounts = EMPTY_PROVENANCE_COUNTS();
 
   // Pi flattens compaction/branch summaries into `role: "user"`, so counting

@@ -84,6 +84,8 @@ export interface WorkPhaseState {
   firstLook?: { workItemId: string };
   /** The entry completed its work item; no change runs for the rest of the entry until a reopen. */
   completion?: { workItemId: string; status: 'done' | 'superseded' };
+  /** This entry already got its one settle reminder to call complete_work. */
+  completionSettleNudged?: boolean;
 }
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '@earendil-works/pi-ai';
 import { COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX } from '@earendil-works/pi-agent-core';
 
-import { getTurnClassificationInput } from './continuation.js';
+import { ROUTER_SETTLE_PREFIX, getTurnClassificationInput } from './continuation.js';
 
 describe('getTurnClassificationInput', () => {
   const baseMessages = [
@@ -52,7 +52,23 @@ describe('getTurnClassificationInput', () => {
     expect(next.promptText).toBe('review the diff');
   });
 
-  it('ignores an ephemeral no-timestamp user injection for the key and ordinal', () => {
+    it('keeps the entry key when a settle reminder arrives as a timestamped user message', () => {
+      const first = getTurnClassificationInput(baseMessages);
+      const nudged = getTurnClassificationInput([
+        ...baseMessages,
+        {
+          role: 'user',
+          content: [{ type: 'text', text: `${ROUTER_SETTLE_PREFIX}\nRouter: this work item is still open.` }],
+          timestamp: 99,
+        },
+      ] as unknown as Message[]);
+
+      expect(nudged.key).toBe(first.key);
+      expect(nudged.promptText).toBe('ok go for it');
+      expect(nudged.provenanceCounts['synthetic-known']).toBe(1);
+    });
+
+    it('ignores an ephemeral no-timestamp user injection for the key and ordinal', () => {
     // A hook/reminder injected as a user-role message with no timestamp appears
     // and vanishes mid tool-loop. It must not shift the intent key, or a
     // post-tool re-invocation would miss the cache and re-route from scratch.
