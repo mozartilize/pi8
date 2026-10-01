@@ -12,8 +12,8 @@
  */
 import type { Candidate, DecisionCause, Dimension, RoutingDecision } from '../../types.js';
 import { addReasonDetail } from '../score/decision-reason.js';
-import type { AutoRouterConfig } from '../../types.js';
 import { DIMENSION_STRENGTH } from '../dimensions.js';
+import type { AutoRouterConfig } from '../../types.js';
 import type { ThinkingLevel } from '@earendil-works/pi-ai';
 import {
   pickBest,
@@ -107,18 +107,6 @@ export const POLICY_PASSIVE_CAUSES: ReadonlySet<DecisionCause> = new Set([
 ] satisfies DecisionCause[]);
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
-
-/**
- * Dimensions ordered by strength, indexable by {@link DIMENSION_STRENGTH}.
- * Keep in sync with DIMENSION_STRENGTH in classifier-keywords.ts.
- */
-export const STRENGTH_ORDER: Dimension[] = ['lightweight', 'gather', 'implement', 'review', 'plan'];
-
-/** One tier up, capped at the top dimension. */
-export function nextStrongerDimension(dimension: Dimension): Dimension {
-  const next = Math.min(DIMENSION_STRENGTH[dimension] + 1, STRENGTH_ORDER.length - 1);
-  return STRENGTH_ORDER[next]!;
-}
 
 /**
  * Context usage ratio above which advisory pressure metadata is attached.

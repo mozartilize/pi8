@@ -261,11 +261,6 @@ export function legacyWorkItem(ledger: TopicLedger, entryId: string): WorkItem |
   return undefined;
 }
 
-/** Whether an item can be continued without a new resolution. */
-export function isOpen(item: WorkItem | undefined): item is WorkItem {
-  return item != null && (item.status === 'active' || item.status === 'blocked');
-}
-
 /** Topics derived from their items, most recently touched first. */
 export function ledgerTopics(ledger: TopicLedger): TopicLabel[] {
   const seen = new Map<string, TopicLabel>();

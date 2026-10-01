@@ -336,7 +336,7 @@ function blend(input: number | undefined, output: number | undefined): number | 
 }
 
 /** Complete input/output pricing used by request-shape economics. */
-export function inputOutputPricePer1M(
+function inputOutputPricePer1M(
   c: Candidate,
 ): { input: number; output: number } | undefined {
   const benchInput = c.bench?.priceInputPer1M;

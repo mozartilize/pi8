@@ -15,14 +15,6 @@ import type { Incumbent, WorkItem } from '../context/types.js';
 export const COMPLETE_WORK_TOOL = 'complete_work';
 export const REOPEN_WORK_TOOL = 'reopen_work';
 
-/** The incumbent, when it serves the active work item. */
-export function activeIncumbent(ledger: TopicLedger): Incumbent | undefined {
-  const incumbent = ledger.incumbent;
-  if (!incumbent?.workItemId || incumbent.workItemId !== ledger.activeWorkItemId) return undefined;
-  const item = ledger.items.get(incumbent.workItemId);
-  return item && (item.status === 'active' || item.status === 'blocked') ? incumbent : undefined;
-}
-
 /**
  * The incumbent and the completed work item it served last, while no work
  * item is active. An incumbent recorded without a work item, or whose item

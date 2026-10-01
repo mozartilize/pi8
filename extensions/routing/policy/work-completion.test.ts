@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { foldEvents } from '../context/ledger.js';
 import type { RoutingContextEvent } from '../context/types.js';
 import { activateEvent, createEvent, workItem } from '../../test-support/context-fixtures.js';
-import { activeIncumbent, completedIncumbent, incumbentWorkItem } from './work-completion.js';
+import { completedIncumbent, incumbentWorkItem } from './work-completion.js';
 
 const incumbent = (workItemId?: string, registryId = 'a/b'): RoutingContextEvent => ({
   v: 1, op: 'incumbent', served: { registryId }, dimension: 'implement',
@@ -11,14 +11,12 @@ const incumbent = (workItemId?: string, registryId = 'a/b'): RoutingContextEvent
 const close = (status: 'done' | 'superseded'): RoutingContextEvent =>
   ({ v: 1, op: 'work-close', workItemId: 'w_1', status, sourceEntryId: 'u2' });
 
-describe('activeIncumbent / completedIncumbent', () => {
-  it('owns the active item while it is open, and keeps only the conversation once it completes', () => {
+describe('completedIncumbent', () => {
+  it('keeps the conversation after completion, and owns nothing while the item is still open', () => {
     const active = foldEvents([createEvent(workItem('w_1')), activateEvent('w_1'), incumbent('w_1')]);
-    expect(activeIncumbent(active)?.workItemId).toBe('w_1');
     expect(completedIncumbent(active)).toBeUndefined();
 
     const done = foldEvents([close('done')], active);
-    expect(activeIncumbent(done)).toBeUndefined();
     expect(completedIncumbent(done)).toMatchObject({ incumbent: { registryId: 'a/b' }, workItem: { id: 'w_1', status: 'done' } });
   });
 
