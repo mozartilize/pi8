@@ -10,11 +10,11 @@ import { workChoiceNote } from './gathering-gate.js';
 
 /** A completed item has no mutation authority, but its model still has the conversation. */
 export function completedWorkNote(state: WorkPhaseState): string {
-  return 'Router: the work item you most recently owned is complete. ' +
-    'If this request only asks a question about completed work, answer it directly; do not reopen it. ' +
-    'For more changes to that item, call hand_off_context with its workItemId; the router records a reopen. ' +
-    'For different work, call hand_off_context with the matching workItemId or NEW_WORK_ITEM. ' +
-    'Do not change files or start a subagent before that boundary.' + workChoiceNote(state);
+    return 'Router: the work item you most recently owned is complete. ' +
+      'If this request only asks a question about completed work, answer it directly; do not reopen it. ' +
+      'For more changes to that item, call reopen_work. ' +
+      'For different work, call hand_off_context with the matching workItemId or NEW_WORK_ITEM. ' +
+      'Do not change files or start a subagent before that boundary.' + workChoiceNote(state);
 }
 
 /** User-requested work defines completion; optional suggestions never extend it. */
@@ -50,11 +50,12 @@ export function gateCompletedWorkToolCall(
     });
     return {
       block: true,
-      reason: state.completion
-        ? 'Router: this call was not made. This entry completed its work item. Give your final reply without more changes.'
-        : 'Router: this call was not made. The work item is complete. ' +
-          'For more changes to it, call hand_off_context with that work item first. ' +
-          'For different work, call hand_off_context. A question about completed work needs neither.',
+        reason: state.completion
+          ? 'Router: this call was not made. This entry completed its work item. ' +
+            'For more changes to it, call reopen_work first. Otherwise give your final reply.'
+          : 'Router: this call was not made. The work item is complete. ' +
+            'For more changes to it, call reopen_work. ' +
+            'For different work, call hand_off_context. A question about completed work needs neither.',
     };
   } catch {
     // A gate error must never fail the user's turn.

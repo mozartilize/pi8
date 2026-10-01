@@ -945,6 +945,7 @@ describe('work ledger lifecycle', () => {
     const names = () => registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name);
     expect(names().filter((name) => name === 'routing_context')).toHaveLength(1);
     expect(names().filter((name) => name === 'complete_work')).toHaveLength(1);
+    expect(names().filter((name) => name === 'reopen_work')).toHaveLength(1);
     const before = registerTool.mock.calls.length;
     const ctx = { ...ctxFor(tree), model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } };
     await handlers.get('session_start')!({ reason: 'startup' }, ctx);
@@ -1101,7 +1102,7 @@ describe('mutation observation hooks', () => {
     } as unknown as ExtensionAPI);
     // Every router tool is registered once, up front, so the tool list never changes mid-session.
     expect(registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name))
-      .toEqual(['commit_execution', 'hand_off_context', 'routing_context', 'complete_work']);
+        .toEqual(['commit_execution', 'hand_off_context', 'routing_context', 'complete_work', 'reopen_work']);
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
 
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;

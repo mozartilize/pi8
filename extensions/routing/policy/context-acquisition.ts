@@ -23,6 +23,7 @@ import type { DecisionCause, Dimension, ReasoningEvidence, ReasoningHandoffMeta 
 import { CONTEXT_DELIVERABLES } from '../context/resolve.js';
 import type { ContextReason } from '../context/types.js';
 import type { WorkPhaseState } from './work-phase.js';
+import { REOPEN_WORK_TOOL } from './work-completion.js';
 
 export const CONTEXT_HANDOFF_TOOL = 'hand_off_context';
 
@@ -94,7 +95,8 @@ export function acquisitionRestricted(state: WorkPhaseState | undefined): boolea
 /**
  * Whether a call may run in the restricted phase. Clarification allows no
  * tool; collecting context allows the trusted readers, the question tool, the handoff itself, and descriptive
- * `routing_context` updates.
+ * `routing_context` updates. A pending boundary also allows `reopen_work`, so
+ * that tool can refuse a second reopen.
  */
 export function acquisitionAllows(
   status: ContextStatus | undefined,
@@ -102,6 +104,8 @@ export function acquisitionAllows(
   input: unknown,
 ): boolean {
   if (status === 'clarification-only') return false;
+  // The boundary is already pending. Let the tool refuse a second reopen itself.
+  if (status === 'ready-pending' && toolName === REOPEN_WORK_TOOL) return true;
   if (
     ACQUISITION_READ_TOOLS.includes(toolName)
     || toolName === QUESTION_TOOL

@@ -110,6 +110,8 @@ describe('restricted tools', () => {
     expect(acquisitionAllows('clarification-only', 'read', {})).toBe(false);
     expect(acquisitionAllows('clarification-only', 'hand_off_context', {})).toBe(false);
     expect(acquisitionAllows('acquiring', 'ffgrep', {})).toBe(false);
+    expect(acquisitionAllows('acquiring', 'reopen_work', {})).toBe(false);
+    expect(acquisitionAllows('ready-pending', 'reopen_work', {})).toBe(true);
   });
 
   it('restricts until a model serves the next phase', () => {

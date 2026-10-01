@@ -90,8 +90,8 @@ function reject(state: WorkPhaseState | undefined, served: string | undefined, c
 
 function acceptedText(status: Outcome): string {
   return status === 'done'
-    ? 'Work item complete. Give your final reply to the user now. Do not change files. ' +
-      'For more work on it in a later request, call hand_off_context with this work item.'
+      ? 'Work item complete. Give your final reply to the user now. Do not change files. ' +
+        'For more work on it, call reopen_work.'
     : 'Work item closed as superseded. Give your final reply to the user now. Do not change files.';
 }
 
