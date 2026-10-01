@@ -2194,6 +2194,13 @@ describe('context acquisition', () => {
         expect(harness.session.context.getIncumbent()).toMatchObject({ registryId: 'beta/strong', dimension: 'plan' });
       });
 
+      it('records the work item the handoff chose with the incumbent', async () => {
+        await served();
+        const workItemId = harness.session.getWorkPhaseState()?.workItemId;
+        expect(workItemId).toBeDefined();
+        expect(harness.session.context.getIncumbent()?.workItemId).toBe(workItemId);
+      });
+
       it('serves every later entry with all tools, without collecting context', async () => {
         const session = await served();
         const next = await session.routeTurn('please handle the pending adjustment');

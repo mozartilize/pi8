@@ -144,14 +144,17 @@ export function penaltiesOf(state: WorkPhaseState): PriorWork | undefined {
   };
 }
 
-/** Take over the previous work item's penalties when the entry continues it; nothing else crosses. */
+/**
+ * Take over the previous work item's penalties when the entry continues or
+ * reopens that same item; nothing else crosses.
+ */
 export function withContinuedPenalties(
   state: WorkPhaseState,
   workItemId: string | undefined,
   relation: string,
 ): WorkPhaseState {
   const prior = state.priorWork;
-  if (!prior || prior.workItemId !== workItemId || relation !== 'continue') return state;
+  if (!prior || prior.workItemId !== workItemId || (relation !== 'continue' && relation !== 'reopen')) return state;
   return {
     ...state,
     ...(prior.contractStrikes ? { contractStrikes: prior.contractStrikes } : {}),

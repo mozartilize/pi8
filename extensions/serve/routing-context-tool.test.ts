@@ -76,6 +76,18 @@ describe('routing_context update', () => {
     expect(submitRoutingContext(params, ctx, session).accepted).toBe(false);
     expect(session.context.getLedger()).toBe(before);
   });
+
+  it.each(['done', 'superseded'] as const)('never changes the status of a %s item, but still describes it', (status) => {
+    const { session, ctx } = setup();
+    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status }, ctx, session).accepted).toBe(true);
+    const before = session.context.getLedger();
+    for (const next of ['active', 'blocked']) {
+      expect(submitRoutingContext({ op: 'update', workItemId: 'w_2', status: next }, ctx, session).accepted).toBe(false);
+    }
+    expect(session.context.getLedger()).toBe(before);
+    expect(submitRoutingContext({ op: 'update', workItemId: 'w_2', title: 'Renamed' }, ctx, session).accepted).toBe(true);
+    expect(session.context.getLedger().items.get('w_2')).toMatchObject({ status, title: 'Renamed' });
+  });
 });
 
 describe('routing_context close', () => {

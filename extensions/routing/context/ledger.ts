@@ -14,6 +14,7 @@ import {
   type FlatContextEvent,
   type AnchorKind,
   type AnchorRole,
+  type BoundaryKind,
   type GroundedArtifact,
   type ContextReason,
   type Incumbent,
@@ -75,6 +76,7 @@ const ANCHOR_ROLES: ReadonlySet<AnchorRole> = new Set(['requirement', 'design', 
 const ANCHOR_SOURCES = new Set(['user', 'model', 'router']);
 const STATUSES: ReadonlySet<WorkItemStatus> = new Set(['active', 'blocked', 'done', 'superseded']);
 const DIMENSIONS: ReadonlySet<Dimension> = new Set(['lightweight', 'gather', 'plan', 'implement', 'review']);
+const BOUNDARIES: ReadonlySet<BoundaryKind> = new Set(['investigation-handoff', 'execution-contract', 'work-complete', 'work-reopen']);
 /** Reasons a work item can hold open; the others belong to one entry. */
 const OPEN_CONTEXT: ReadonlySet<ContextReason> = new Set(['referenced-artifact', 'carried-open-context']);
 
@@ -219,7 +221,8 @@ export function applyEvent(ledger: TopicLedger, event: RoutingContextEvent): Top
     case 'incumbent': {
       const current = ledger.incumbent;
       if (current && current.registryId === event.served.registryId
-        && current.thinkingLevel === event.served.thinkingLevel && current.dimension === event.dimension) return ledger;
+        && current.thinkingLevel === event.served.thinkingLevel && current.dimension === event.dimension
+        && current.workItemId === event.workItemId) return ledger;
       // Serving history, not work: it never makes a branch tracked.
       return {
         ...ledger,
@@ -228,6 +231,7 @@ export function applyEvent(ledger: TopicLedger, event: RoutingContextEvent): Top
           ...(event.served.thinkingLevel ? { thinkingLevel: event.served.thinkingLevel } : {}),
           dimension: event.dimension,
           entryId: event.sourceEntryId,
+          ...(event.workItemId ? { workItemId: event.workItemId } : {}),
         },
       };
     }
@@ -468,13 +472,15 @@ function parseFlatContextEvent(data: unknown): FlatContextEvent | undefined {
       case 'boundary': {
         const workItemId = parseId(data.workItemId);
         if (!workItemId || !text(data.handoffId)) return undefined;
-        if (data.boundary !== 'investigation-handoff' && data.boundary !== 'execution-contract') return undefined;
-        return { v: 1, op: 'boundary', workItemId, boundary: data.boundary, handoffId: data.handoffId, sourceEntryId };
+        if (!BOUNDARIES.has(data.boundary as BoundaryKind)) return undefined;
+        return { v: 1, op: 'boundary', workItemId, boundary: data.boundary as BoundaryKind, handoffId: data.handoffId, sourceEntryId };
       }
       case 'incumbent': {
         const served = isRecord(data.served) ? data.served : undefined;
         if (!served || !text(served.registryId) || !DIMENSIONS.has(data.dimension as Dimension)) return undefined;
         if (served.thinkingLevel != null && typeof served.thinkingLevel !== 'string') return undefined;
+        const workItemId = data.workItemId == null ? undefined : parseId(data.workItemId);
+        if (data.workItemId != null && !workItemId) return undefined;
         return {
           v: 1,
           op: 'incumbent',
@@ -483,6 +489,7 @@ function parseFlatContextEvent(data: unknown): FlatContextEvent | undefined {
             ...(served.thinkingLevel ? { thinkingLevel: served.thinkingLevel as string } : {}),
           },
           dimension: data.dimension as Dimension,
+          ...(workItemId ? { workItemId } : {}),
           sourceEntryId,
         };
       }

@@ -577,7 +577,7 @@ describe('incumbent capability floor', () => {
     expect(result.decision.chosen).toBe('bench/strong');
   });
 
-  it.each(['new', 'resume', 'switch'] as const)('releases both minimums for recorded %s work', (workRelation) => {
+  it.each(['new', 'resume', 'reopen', 'switch'] as const)('releases both minimums for recorded %s work', (workRelation) => {
     const result = resolveRoutingDecision(makePolicyInput({
       candidates: benchmarkCandidates,
       baseDimension: 'gather', baseCause: 'heuristic',

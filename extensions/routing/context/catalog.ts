@@ -64,6 +64,8 @@ export function buildCatalog(
   const topics: CatalogSnapshot['topics'] = [];
   const workItems: CatalogSnapshot['workItems'] = [];
   for (const item of orderedItems(ledger, anchors)) {
+    // Superseded work was abandoned or replaced; no choice returns to it.
+    if (item.status === 'superseded') continue;
     const anchorMatch = anchors.some((anchor) => hasAnchor(item, anchor));
     if (workItems.length >= limits.workItems) break;
     const topicListed = topics.some((topic) => topic.id === item.topic.id);
@@ -91,7 +93,7 @@ export function catalogAddsItems(smaller: CatalogSnapshot, larger: CatalogSnapsh
 }
 
 export type CheckedChoice =
-  | { kind: 'existing'; workItemId: string; topicId: string; relation: 'continue' | 'resume' }
+  | { kind: 'existing'; workItemId: string; topicId: string; relation: 'continue' | 'resume' | 'reopen' }
   | { kind: 'new-item'; topicId: string; relation: 'new' | 'switch' }
   | { kind: 'none'; topicId: string; relation: 'switch' }
   | { kind: 'unknown' }
@@ -99,10 +101,11 @@ export type CheckedChoice =
 
 /**
  * Validate a choice against the catalog it was made from. Ids are the
- * router's to check, and the relation follows from them: the active item
- * continues, another listed item resumes, a side question switches, and new
- * work under a new topic switches away from the active item when there is
- * one.
+ * router's to check, and the relation follows from them and from the item's
+ * status: the active item continues, a completed item reopens, another
+ * listed item resumes, a side question switches, and new work under a new
+ * topic switches away from the active item when there is one. A superseded
+ * item is never a choice.
  */
 export function checkChoice(
   choice: { topicId: string; workItemId: string },
@@ -124,5 +127,9 @@ export function checkChoice(
   const item = snapshot.workItems.find((candidate) => candidate.id === workItemId);
   if (!item) return { kind: 'invalid', reason: `work item ${workItemId} is not in the catalog` };
   if (topicId !== item.topicId) return { kind: 'invalid', reason: `work item ${workItemId} belongs to topic ${item.topicId}` };
-  return { kind: 'existing', workItemId, topicId, relation: workItemId === snapshot.activeWorkItemId ? 'continue' : 'resume' };
+  if (item.status === 'superseded') {
+    return { kind: 'invalid', reason: `work item ${workItemId} was superseded; choose ${NEW_WORK_ITEM} to start it again` };
+  }
+  const relation = item.status === 'done' ? 'reopen' : workItemId === snapshot.activeWorkItemId ? 'continue' : 'resume';
+  return { kind: 'existing', workItemId, topicId, relation };
 }

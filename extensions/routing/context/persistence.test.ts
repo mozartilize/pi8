@@ -74,6 +74,25 @@ describe('branch reconstruction', () => {
     expect(rebuildLedger(t.getBranch()).incumbent).toBeUndefined();
   });
 
+  it('restores a completed item with the incumbent that served it, until another model is chosen', () => {
+    const t = new SessionTree();
+    const u = t.user('implement the exporter');
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'context-commit', sourceEntryId: u,
+      events: [createEvent(workItem('w_1'), u), activateEvent('w_1', u)] });
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'incumbent', served: { registryId: 'a/opus' }, dimension: 'implement', workItemId: 'w_1', sourceEntryId: u });
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'context-commit', sourceEntryId: u, events: [
+      { v: 1, op: 'work-close', workItemId: 'w_1', status: 'done', sourceEntryId: u },
+      { v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'work-complete', handoffId: u, sourceEntryId: u },
+    ] });
+    const ledger = rebuildLedger(t.getBranch());
+    expect(ledger.activeWorkItemId).toBeUndefined();
+    expect(ledger.items.get('w_1')?.status).toBe('done');
+    expect(ledger.incumbent).toMatchObject({ registryId: 'a/opus', workItemId: 'w_1' });
+    t.modelChange('openai', 'gpt-5');
+    t.modelChange('router', 'auto');
+    expect(rebuildLedger(t.getBranch()).incumbent).toBeUndefined();
+  });
+
   it('skips other extensions\' entries and malformed ledger entries', () => {
     const t = new SessionTree();
     const u = t.user('hi');

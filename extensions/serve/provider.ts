@@ -104,6 +104,7 @@ import {
   gatheringNote,
   withGatheringNote,
 } from './gathering-gate.js';
+import { incumbentWorkItem } from '../routing/policy/work-completion.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -1212,7 +1213,8 @@ async function delegateRouterTurn(args: {
       const status = session.getWorkPhaseState()?.contextStatus;
       if (status === 'acquiring' || status === 'clarification-only') return;
       if (session.getManualModel() || session.getSemiHold(intentKey)) return;
-      session.context.recordIncumbent(lastServed, decision.dimension, session.context.getEntrySource() ?? intentKey);
+      const workItemId = incumbentWorkItem(session.context.getLedger(), lastServed.registryId, session.getWorkPhaseState()?.workItemId);
+      session.context.recordIncumbent(lastServed, decision.dimension, session.context.getEntrySource() ?? intentKey, workItemId);
     } catch {
       // A lost record only means the next entry is routed afresh.
     }

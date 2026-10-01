@@ -110,6 +110,46 @@ describe('ledger fold', () => {
     const ledger = foldEvents([create(workItem('w_1')), create(workItem('w_2')), activate('w_1')]);
     expect(ledger.recency).toEqual(['w_1', 'w_2']);
   });
+
+  it('keeps the incumbent when its work item completes', () => {
+    const ledger = foldEvents([
+      create(workItem('w_1')),
+      activate('w_1'),
+      { v: 1, op: 'incumbent', served: { registryId: 'a/b' }, dimension: 'implement', workItemId: 'w_1', sourceEntryId: 'u1' },
+      { v: 1, op: 'work-close', workItemId: 'w_1', status: 'done', sourceEntryId: 'u2' },
+    ]);
+    expect(ledger.activeWorkItemId).toBeUndefined();
+    expect(ledger.incumbent).toEqual({ registryId: 'a/b', dimension: 'implement', entryId: 'u1', workItemId: 'w_1' });
+  });
+
+  it('records the same model serving another work item as a new incumbent', () => {
+    const first = foldEvents([
+      { v: 1, op: 'incumbent', served: { registryId: 'a/b' }, dimension: 'implement', workItemId: 'w_1', sourceEntryId: 'u1' },
+    ]);
+    const same = applyEvent(first, { v: 1, op: 'incumbent', served: { registryId: 'a/b' }, dimension: 'implement', workItemId: 'w_1', sourceEntryId: 'u2' });
+    expect(same).toBe(first);
+    const moved = applyEvent(first, { v: 1, op: 'incumbent', served: { registryId: 'a/b' }, dimension: 'implement', workItemId: 'w_2', sourceEntryId: 'u3' });
+    expect(moved.incumbent).toMatchObject({ workItemId: 'w_2', entryId: 'u3' });
+  });
+
+  it('records model-declared completion and reopen boundaries without changing the item', () => {
+    const base = foldEvents([create(workItem('w_1', 't_1', { openContext: ['carried-open-context'] }))]);
+    for (const boundary of ['work-complete', 'work-reopen'] as const) {
+      const next = applyEvent(base, { v: 1, op: 'boundary', workItemId: 'w_1', boundary, handoffId: 'u2', sourceEntryId: 'u2' });
+      expect(next.items.get('w_1')).toMatchObject({ status: 'active', openContext: ['carried-open-context'] });
+    }
+  });
+
+  it('replays a commit that activates a completed item before its status update', () => {
+    // Branches recorded before reopen boundaries existed wrote this order.
+    const ledger = foldEvents([
+      create(workItem('w_1', 't_1', { status: 'done' })),
+      activate('w_1', 'u2'),
+      { v: 1, op: 'work-update', workItemId: 'w_1', patch: { status: 'active' }, sourceEntryId: 'u2' },
+    ]);
+    expect(ledger.activeWorkItemId).toBe('w_1');
+    expect(ledger.items.get('w_1')?.status).toBe('active');
+  });
 });
 
 describe('ids', () => {
@@ -177,8 +217,20 @@ describe('parseContextEvent', () => {
       { v: 1, op: 'grounding-upsert', workItemId: 'w_1', artifact: { anchorValue: 'a.md', sha256: SHA, observedAtEntryId: 'u', observedBy: 'read' }, sourceEntryId: 'u' },
       { v: 1, op: 'served', workItemId: 'w_1', served: { registryId: 'a/b' }, sourceEntryId: 'u' },
       { v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'execution-contract', handoffId: 'k', sourceEntryId: 'u' },
+      { v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'work-complete', handoffId: 'k', sourceEntryId: 'u' },
+      { v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'work-reopen', handoffId: 'k', sourceEntryId: 'u' },
+      { v: 1, op: 'incumbent', served: { registryId: 'a/b', thinkingLevel: 'high' }, dimension: 'plan', sourceEntryId: 'u' },
+      { v: 1, op: 'incumbent', served: { registryId: 'a/b' }, dimension: 'plan', workItemId: 'w_1', sourceEntryId: 'u' },
     ];
     for (const event of events) expect(parseContextEvent(JSON.parse(JSON.stringify(event)))).toEqual(event);
+  });
+
+  it('rejects an incumbent whose work item id is damaged, and an unknown boundary', () => {
+    const incumbent = { v: 1, op: 'incumbent', served: { registryId: 'a/b' }, dimension: 'plan', sourceEntryId: 'u' };
+    expect(parseContextEvent({ ...incumbent, workItemId: 7 })).toBeUndefined();
+    expect(parseContextEvent({ ...incumbent, workItemId: 'NONE' })).toBeUndefined();
+    expect(parseContextEvent({ v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'work-done', handoffId: 'k', sourceEntryId: 'u' }))
+      .toBeUndefined();
   });
 
   it('round-trips a bounded commit and rejects malformed batches as a unit', () => {

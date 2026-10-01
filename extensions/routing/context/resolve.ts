@@ -20,6 +20,7 @@ import {
   type RoutingContextEvent,
   type WorkItem,
   type WorkItemAnchor,
+  type WorkItemPatch,
 } from './types.js';
 
 export interface PlanBase {
@@ -157,24 +158,42 @@ function resolution(
   return { sourceEntryId: base.sourceEntryId, deliverable: base.deliverable, ...fields };
 }
 
-/** Events that record an entry on an item it continues or resumes. */
+/**
+ * The one transition that makes a completed item active again: its status,
+ * activation, and a `work-reopen` boundary, appended in one commit. Every
+ * path that reopens a `done` item writes it, so a reopen is always
+ * recorded as one.
+ */
+export function reopenEvents(
+  item: Pick<WorkItem, 'id'>,
+  sourceEntryId: string,
+  patch: Omit<WorkItemPatch, 'status'> = {},
+): RoutingContextEvent[] {
+  return [
+    { v: 1, op: 'work-update', workItemId: item.id, patch: { ...patch, status: 'active' }, sourceEntryId },
+    { v: 1, op: 'activate', workItemId: item.id, sourceEntryId },
+    { v: 1, op: 'boundary', workItemId: item.id, boundary: 'work-reopen', handoffId: sourceEntryId, sourceEntryId },
+  ];
+}
+
+/** Events that record an entry on an item it continues, resumes, or reopens. */
 function touchItem(base: PlanBase, item: WorkItem, reasons: readonly ContextReason[]): RoutingContextEvent[] {
-  const events: RoutingContextEvent[] = [];
-  if (base.ledger.activeWorkItemId !== item.id) {
-    events.push({ v: 1, op: 'activate', workItemId: item.id, sourceEntryId: base.sourceEntryId });
-  }
   const anchors = promptAnchorsForItem(base.anchors);
   // A request that owes context opens it for this entry, even when an
   // earlier entry of the same item already handed off.
   const opened = [...new Set([...(item.openContext ?? []), ...reasons])];
-  const patch = {
+  const described = {
     ...(anchors.length > 0 ? { anchors } : {}),
-    ...(item.status !== 'active' && item.status !== 'blocked' ? { status: 'active' as const } : {}),
     ...(item.lastDeliverable !== base.deliverable ? { lastDeliverable: base.deliverable } : {}),
     ...(reasons.length > 0 && opened.length !== item.openContext?.length ? { openContext: opened } : {}),
   };
-  if (Object.keys(patch).length > 0) {
-    events.push({ v: 1, op: 'work-update', workItemId: item.id, patch, sourceEntryId: base.sourceEntryId });
+  if (item.status === 'done') return reopenEvents(item, base.sourceEntryId, described);
+  const events: RoutingContextEvent[] = [];
+  if (base.ledger.activeWorkItemId !== item.id) {
+    events.push({ v: 1, op: 'activate', workItemId: item.id, sourceEntryId: base.sourceEntryId });
+  }
+  if (Object.keys(described).length > 0) {
+    events.push({ v: 1, op: 'work-update', workItemId: item.id, patch: described, sourceEntryId: base.sourceEntryId });
   }
   return events;
 }
@@ -293,13 +312,15 @@ export function planFromLegacy(
   if (choice.topicId !== NEW_TOPIC && !listedTopic) return undefined;
   const reasons = requestContext(base.anchors, base.deliverable);
   const found = legacyWorkItem(base.ledger, seedEntryId);
+  // Superseded work is never chosen again, through its history either.
+  if (found?.status === 'superseded') return undefined;
   if (found) {
     const carried = ownedAndCarried(base, found);
     return {
       resolution: resolution(base, {
         topicId: found.topic.id,
         workItemId: found.id,
-        relation: 'resume',
+        relation: found.status === 'done' ? 'reopen' : 'resume',
         contextReasons: carried,
         resolver: RESOLVER,
       }),

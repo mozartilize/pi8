@@ -361,7 +361,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   // as a work change, and tool-loop invocations keep the serving model's
   // minimums even when the entry began as new work.
   const changedWork = !sameIntentAsLast &&
-    (workRelation === 'new' || workRelation === 'resume' || workRelation === 'switch');
+    (workRelation === 'new' || workRelation === 'resume' || workRelation === 'reopen' || workRelation === 'switch');
   const incumbentFloorStandsDown =
     trajectory.applied || changedWork || handoffPending === true;
 

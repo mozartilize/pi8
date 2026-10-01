@@ -86,7 +86,12 @@ export interface WorkItem {
   legacySourceEntryId?: string;
 }
 
-export type ContextRelation = 'continue' | 'resume' | 'switch' | 'new' | 'unknown';
+/**
+ * How an entry's work relates to the ledger. `resume` returns to an open or
+ * blocked item; `reopen` makes a `done` item active again. The router derives
+ * it from the item's status before the entry touched it.
+ */
+export type ContextRelation = 'continue' | 'resume' | 'reopen' | 'switch' | 'new' | 'unknown';
 
 /** Reserved choices: uppercase, never generated as ids. */
 export const NEW_TOPIC = 'NEW_TOPIC';
@@ -124,7 +129,12 @@ export interface WorkItemPatch {
   openContext?: ContextReason[];
 }
 
-export type BoundaryKind = 'investigation-handoff' | 'execution-contract';
+/**
+ * `investigation-handoff` is the stored name of a context handoff.
+ * `work-complete` and `work-reopen` mark the model-declared end and restart
+ * of a work item, distinct from a metadata-only close.
+ */
+export type BoundaryKind = 'investigation-handoff' | 'execution-contract' | 'work-complete' | 'work-reopen';
 
 /**
  * Append-only branch events; the ledger is their fold in branch order. Every
@@ -145,7 +155,15 @@ export type FlatContextEvent =
       sourceEntryId: string;
     }
   | { v: 1; op: 'boundary'; workItemId: WorkItemId; boundary: BoundaryKind; handoffId: string; sourceEntryId: string }
-  | { v: 1; op: 'incumbent'; served: { registryId: string; thinkingLevel?: string }; dimension: Dimension; sourceEntryId: string };
+  | {
+      v: 1;
+      op: 'incumbent';
+      served: { registryId: string; thinkingLevel?: string };
+      dimension: Dimension;
+      /** Work item the model served; absent on events written before the association existed. */
+      workItemId?: WorkItemId;
+      sourceEntryId: string;
+    };
 
 /**
  * The model the router last chose outside collecting context, and the task
@@ -157,6 +175,11 @@ export interface Incumbent {
   thinkingLevel?: string;
   dimension: Dimension;
   entryId: string;
+  /**
+   * Work item the model most recently served. An incumbent without one is
+   * serving history only: it never qualifies to reopen completed work.
+   */
+  workItemId?: WorkItemId;
 }
 
 /** A ready handoff persists its selection, grounding, and boundary as one branch entry. */

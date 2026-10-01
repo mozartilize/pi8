@@ -130,6 +130,11 @@ function update(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'cwd' 
   if (present(params.status) && params.status !== 'active' && params.status !== 'blocked') {
     return reject('routing_context update: status is active or blocked; use op="close" for done or superseded. Nothing changed.');
   }
+  // A closed item changes status only through its lifecycle boundary, which
+  // records the reopen; a metadata update never revives it.
+  if (present(params.status) && !topicOnly && (item.status === 'done' || item.status === 'superseded')) {
+    return reject(`routing_context update: work item ${item.id} is ${item.status}; its status does not change here. Nothing changed.`);
+  }
   const anchors = present(params.anchors) ? parseAnchors(params.anchors, ctx.cwd) : undefined;
   if (typeof anchors === 'string') return reject(`routing_context update: ${anchors}. Nothing changed.`);
 

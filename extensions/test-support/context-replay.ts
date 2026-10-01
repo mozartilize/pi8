@@ -15,7 +15,7 @@
 import type { Dimension } from '../types.js';
 import type { ContextReason } from '../routing/context/types.js';
 
-export type CorpusRelation = 'continue' | 'resume' | 'switch' | 'new';
+export type CorpusRelation = 'continue' | 'resume' | 'reopen' | 'switch' | 'new';
 
 export interface CorpusLabel {
   topic: string;

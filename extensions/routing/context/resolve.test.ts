@@ -62,17 +62,35 @@ describe('planFromChoice (catalog)', () => {
   const ledger = foldEvents([
     createEvent(workItem('w_1', 't_1', { lastDeliverable: 'implement' })),
     createEvent(workItem('w_2', 't_1', { status: 'done' })),
+    createEvent(workItem('w_3', 't_1', { status: 'blocked' })),
+    createEvent(workItem('w_4', 't_1', { status: 'superseded' })),
     activateEvent('w_1'),
   ]);
   const catalog = buildCatalog(ledger, []);
 
-  it('resumes a dormant item, reopening it and owing what the request owes', () => {
+  it('reopens a completed item as one recorded transition, owing what the request owes', () => {
     const plan = planFromChoice(base('back to the auth work: check @docs/auth.md first', { ledger }), catalog,
       { topicId: 't_1', workItemId: 'w_2' }, { topicTitle: 'x', workItemTitle: 'y' })!;
-    expect(plan.resolution).toMatchObject({ workItemId: 'w_2', relation: 'resume', contextReasons: ['referenced-artifact'] });
+    expect(plan.resolution).toMatchObject({ workItemId: 'w_2', relation: 'reopen', contextReasons: ['referenced-artifact'] });
+    expect(plan.events.map((e) => e.op)).toEqual(['work-update', 'activate', 'boundary']);
+    expect(plan.events[2]).toMatchObject({ boundary: 'work-reopen', workItemId: 'w_2' });
     const after = fold(ledger, plan.events);
     expect(after.activeWorkItemId).toBe('w_2');
     expect(after.items.get('w_2')).toMatchObject({ status: 'active', openContext: ['referenced-artifact'] });
+  });
+
+  it('resumes a blocked item without reopening it', () => {
+    const plan = planFromChoice(base('back to the blocked work', { ledger }), catalog, { topicId: 't_1', workItemId: 'w_3' }, {})!;
+    expect(plan.resolution.relation).toBe('resume');
+    expect(plan.events.some((e) => e.op === 'boundary')).toBe(false);
+    expect(fold(ledger, plan.events).items.get('w_3')?.status).toBe('blocked');
+  });
+
+  it('never offers or accepts a superseded item', () => {
+    expect(catalog.workItems.map((item) => item.id)).not.toContain('w_4');
+    const listed = { ...catalog, workItems: [...catalog.workItems,
+      { id: 'w_4', topicId: 't_1', title: 'old', status: 'superseded' as const, anchors: [] }] };
+    expect(planFromChoice(base('back to it', { ledger }), listed, { topicId: 't_1', workItemId: 'w_4' }, {})).toBeUndefined();
   });
 
   it('keeps an obligation the item already holds open when the request adds one', () => {
@@ -130,7 +148,7 @@ describe('planFromLegacy (earlier work)', () => {
     expect(plan).toMatchObject({ createdTopic: false, resolution: { topicId: 't_1' } });
   });
 
-  it('resumes the item already found from that request instead of starting another', () => {
+  it('reopens the completed item already found from that request instead of starting another', () => {
     const found = fold(ledger, [
       createEvent(workItem('w_2', 't_2', { legacySourceEntryId: 'e2', grounding: [{ anchorValue: 'a.ts', sha256: SHA, observedAtEntryId: 'e5', observedBy: 'read' }] })),
       { v: 1, op: 'work-close', workItemId: 'w_2', status: 'done', sourceEntryId: 'e6' },
@@ -139,11 +157,20 @@ describe('planFromLegacy (earlier work)', () => {
     const plan = planFromLegacy(base('back to the old auth work in @docs/auth.md', { ledger: found }), buildCatalog(found, []),
       { topicId: 'NEW_TOPIC', workItemId: 'l_1' }, 'e2', titles)!;
     expect(plan).toMatchObject({ workItemId: 'w_2', createdWorkItem: false, createdTopic: false, legacy: true });
-    expect(plan.resolution).toMatchObject({ relation: 'resume', topicId: 't_2' });
+    expect(plan.resolution).toMatchObject({ relation: 'reopen', topicId: 't_2' });
     const after = fold(found, plan.events);
     expect(after.items.size).toBe(2);
     expect(after.activeWorkItemId).toBe('w_2');
     expect(after.items.get('w_2')).toMatchObject({ status: 'active', openContext: ['referenced-artifact'] });
+  });
+
+  it('does not return to superseded work through its history', () => {
+    const superseded = fold(ledger, [
+      createEvent(workItem('w_2', 't_2', { legacySourceEntryId: 'e2' })),
+      { v: 1, op: 'work-close', workItemId: 'w_2', status: 'superseded', sourceEntryId: 'e6' },
+    ]);
+    expect(planFromLegacy(base('back to it', { ledger: superseded }), buildCatalog(superseded, []),
+      { topicId: 'NEW_TOPIC', workItemId: 'l_1' }, 'e2', titles)).toBeUndefined();
   });
 
   it('writes the migration boundary first on the entry that starts tracking', () => {

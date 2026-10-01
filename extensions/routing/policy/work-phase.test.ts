@@ -62,10 +62,12 @@ describe('withStrongerTerminal', () => {
 describe('penaltiesOf / withContinuedPenalties', () => {
   const strikes = { contractStrikes: { 'beta/strong': 2 }, excludedExecutors: ['beta/strong'] };
 
-  it('applies a work item\'s penalties only to an entry that continues that item', () => {
+  it('applies a work item\'s penalties only to an entry that continues or reopens that item', () => {
     const prior = penaltiesOf(entryState({ workItemId: 'w_1', ...strikes }));
     const next = entryState({ intentKey: 'intent-b', priorWork: prior! });
     expect(withContinuedPenalties(next, 'w_1', 'continue')).toMatchObject(strikes);
+    expect(withContinuedPenalties(next, 'w_1', 'reopen')).toMatchObject(strikes);
+    expect(withContinuedPenalties(next, 'w_2', 'reopen')).toBe(next);
     expect(withContinuedPenalties(next, 'w_2', 'continue')).toBe(next);
     expect(withContinuedPenalties(next, 'w_1', 'resume')).toBe(next);
     expect(withContinuedPenalties(next, undefined, 'unknown')).toBe(next);

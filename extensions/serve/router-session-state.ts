@@ -185,15 +185,22 @@ export class RoutingContextState {
   }
 
   /**
-   * Record the model the router chose outside collecting context. Written to
-   * the branch only when it changed, so a resumed session restores it.
+   * Record the model the router chose outside collecting context, and the
+   * work item it served. Written to the branch only when it changed, so a
+   * resumed session restores it.
    */
-  recordIncumbent(served: { registryId: string; thinkingLevel?: string }, dimension: Dimension, sourceEntryId: string): void {
+  recordIncumbent(
+    served: { registryId: string; thinkingLevel?: string },
+    dimension: Dimension,
+    sourceEntryId: string,
+    workItemId?: string,
+  ): void {
     const event: RoutingContextEvent = {
       v: 1,
       op: 'incumbent',
       served: { registryId: served.registryId, ...(served.thinkingLevel ? { thinkingLevel: served.thinkingLevel } : {}) },
       dimension,
+      ...(workItemId ? { workItemId } : {}),
       sourceEntryId,
     };
     const next = applyEvent(this.ledger, event);
