@@ -12,6 +12,9 @@
 import type { TopicLedger } from '../context/ledger.js';
 import type { Incumbent, WorkItem } from '../context/types.js';
 
+export const COMPLETE_WORK_TOOL = 'complete_work';
+export const REOPEN_WORK_TOOL = 'reopen_work';
+
 /** The incumbent, when it serves the active work item. */
 export function activeIncumbent(ledger: TopicLedger): Incumbent | undefined {
   const incumbent = ledger.incumbent;

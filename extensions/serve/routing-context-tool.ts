@@ -20,6 +20,7 @@ import { normalizeAnchorPath } from '../routing/context/anchors.js';
 import { CONTEXT_LIMITS, activeWorkItem, getWorkItem } from '../routing/context/ledger.js';
 import { RESERVED_IDS, type AnchorKind, type AnchorRole, type WorkItemAnchor, type WorkItemPatch } from '../routing/context/types.js';
 import { currentSourceEntry } from './context-grounding.js';
+import { submitCompleteWork } from './complete-work-tool.js';
 import type { RouterSession } from './router-session-state.js';
 
 export const ROUTING_CONTEXT_TOOL = 'routing_context';
@@ -27,8 +28,8 @@ export const ROUTING_CONTEXT_TOOL = 'routing_context';
 const DESCRIPTION =
   'Keep the router\'s record of this session\'s work current. op="update": when you learn a better title, ' +
   'a short summary, anchors (the files, symbols, or issues the work is about, with their role), or that the ' +
-  'work is blocked. op="close": mark a work item (by default the current one) done or superseded. ' +
-  'It records metadata only: it never changes which model serves, and never stop other work to call it.';
+  'work is blocked. op="close": mark an earlier work item done or superseded. To end the current work, call ' +
+  'complete_work instead. It records metadata only: it never changes which model serves, and never stop other work to call it.';
 
 const ANCHOR_KINDS: readonly AnchorKind[] = ['path', 'symbol', 'issue', 'requirement', 'other'];
 const ANCHOR_ROLES: readonly AnchorRole[] = ['requirement', 'design', 'implementation', 'test', 'reference'];
@@ -155,7 +156,7 @@ function update(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'cwd' 
   return { accepted: true, text: `Recorded (${topicOnly ? item.topic.id : item.id}).`, details: { accepted: true, workItemId: item.id } };
 }
 
-function close(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'sessionManager'>, session: RouterSession): RoutingContextResult {
+function close(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'model' | 'sessionManager'>, session: RouterSession): RoutingContextResult {
   if (params.status !== 'done' && params.status !== 'superseded') {
     return reject('routing_context close needs status "done" or "superseded". Nothing changed.');
   }
@@ -166,6 +167,17 @@ function close(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'sessio
     ? (typeof params.workItemId === 'string' && !RESERVED_IDS.has(params.workItemId) ? getWorkItem(ledger, params.workItemId) : undefined)
     : activeWorkItem(ledger);
   if (!item) return reject('routing_context close: no such work item. Nothing changed.');
+  if (item.status === 'superseded' && params.status === 'done') {
+    return reject('routing_context close: superseded work stays terminal. Choose NEW_WORK_ITEM to return to it. Nothing changed.');
+  }
+  // Ending the active item is a lifecycle boundary: it takes the same checks
+  // and record as complete_work, so this op cannot bypass them.
+  if (item.id === ledger.activeWorkItemId) {
+    const completed = submitCompleteWork({ outcome: params.status }, ctx, session);
+    return completed.accepted
+      ? { accepted: true, text: `Closed ${item.id} (${params.status}).`, details: { accepted: true, workItemId: item.id } }
+      : reject(`routing_context close: ${completed.text}`);
+  }
   const sourceEntryId = currentSourceEntry(ctx, session);
   if (!sourceEntryId) return reject('routing_context close: no request is in progress. Nothing changed.');
   if (!session.context.append({ v: 1, op: 'work-close', workItemId: item.id, status: params.status, sourceEntryId })) {

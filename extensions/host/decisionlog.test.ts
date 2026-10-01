@@ -15,6 +15,7 @@ import {
   appendSubagentSpend,
   appendExecutionContractSignal,
   appendContextHandoffSignal,
+  appendWorkLifecycleSignal,
   readRecentEntries,
   setDecisionLogBase,
   DECISION_LOG_FILE,
@@ -209,9 +210,10 @@ describe('decision log', () => {
     }, dir);
     appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
     appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'complete-accept', workItemId: 'w_1', status: 'done' }, dir);
 
     const records = readRecentEntries(10, dir);
-    expect(records).toHaveLength(5);
+    expect(records).toHaveLength(6);
     expect(records.every((record) => record.schemaVersion === DECISION_LOG_SCHEMA_VERSION)).toBe(true);
   });
 
@@ -225,11 +227,27 @@ describe('decision log', () => {
     }, dir);
     appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
     appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'first-look', workItemId: 'w_1' }, dir);
 
     const [decision, ...others] = readRecentEntries(10, dir);
     for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
-    expect(others).toHaveLength(4);
+    expect(others).toHaveLength(5);
     expect(others.every((record) => !('confidence' in record))).toBe(true);
+  });
+
+  it('writes lifecycle categories without model-supplied text and tolerates unwritable storage', () => {
+    appendWorkLifecycleSignal({
+      intentKey: 'k', served: 'a/b', action: 'complete-accept', workItemId: 'w_1', status: 'done',
+      deliverable: 'review', title: 'secret title', reply: 'secret reply',
+    } as Parameters<typeof appendWorkLifecycleSignal>[0], dir);
+    const record = readRecentEntries(1, dir)[0];
+    expect(record).toMatchObject({ kind: 'work-lifecycle', workLifecycle: {
+      action: 'complete-accept', workItemId: 'w_1', status: 'done', deliverable: 'review',
+    } });
+    expect(JSON.stringify(record)).not.toContain('secret');
+    const blocker = join(dir, 'blocker.txt');
+    writeFileSync(blocker, 'not a directory');
+    expect(() => appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'gate' }, join(blocker, 'sub'))).not.toThrow();
   });
 
   it('reads an unversioned record as written', () => {

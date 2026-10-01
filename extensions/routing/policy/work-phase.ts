@@ -76,6 +76,14 @@ export interface WorkPhaseState {
   contextReasons?: ContextReason[];
   /** Router-checked when the entry resolved; fixed for the rest of the entry. */
   contextSatisfied?: boolean;
+  /**
+   * The model of this completed work item serves the entry first. It may
+   * answer about the completed work, but changes nothing until it reopens
+   * the item or hands off; either boundary clears this. Entry-local.
+   */
+  firstLook?: { workItemId: string };
+  /** The entry completed its work item; no change runs for the rest of the entry until a reopen. */
+  completion?: { workItemId: string; status: 'done' | 'superseded' };
 }
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));

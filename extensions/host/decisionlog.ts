@@ -63,7 +63,7 @@ export interface DecisionLogEntry {
   /** {@link DECISION_LOG_SCHEMA_VERSION} at write time; absent on unversioned records. */
   schemaVersion?: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'subagent-spend' | 'execution-contract' | 'investigation-handoff';
+  kind?: 'decision' | 'subagent-spend' | 'execution-contract' | 'investigation-handoff' | 'work-lifecycle';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -124,6 +124,15 @@ export interface DecisionLogEntry {
   deliverable?: string;
   reasoningHandoff?: ReasoningHandoffMeta;
   previousHandoffId?: string;
+  /** Set on `kind: 'work-lifecycle'` records only. */
+  workLifecycle?: {
+    action: WorkLifecycleSignal['action'];
+    workItemId?: string;
+    /** Router-authored reject code. */
+    rejectReason?: string;
+    status?: 'done' | 'superseded';
+    deliverable?: Dimension;
+  };
   /** Set on `kind: 'execution-contract'` records only. */
   executionContract?: {
     /** `route` marks a routing decision the contract shaped. */
@@ -229,7 +238,7 @@ export interface InvestigationHandoffSignal {
    * handoff and `no-handoff` owed context that was never handed off.
    */
   action:
-    | 'accept' | 'answer' | 'answer-retry' | 'undeclared-answer' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
+    | 'accept' | 'answer' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
     | 'served' | 'phase-end' | 'no-handoff';
   rejectReason?: string;
   handoff?: ReasoningHandoffMeta;
@@ -263,6 +272,57 @@ export function appendContextHandoffSignal(
         ...(signal.handoff ? { handoff: signal.handoff } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
         ...(signal.contextReasons?.length ? { contextReasons: signal.contextReasons } : {}),
+      },
+    };
+    appendFileSync(path, serializeRecord(entry), 'utf8');
+  } catch {
+    // A logging failure must never fail the user's turn.
+  }
+}
+
+/**
+ * One work item lifecycle transition the model declared or the router
+ * enforced. Ids, codes and categories only: never titles or reply text.
+ */
+export interface WorkLifecycleSignal {
+  intentKey: string;
+  /** Model that served the invocation the transition belongs to. */
+  served: string;
+  /**
+   * `complete-*` and `reopen-*` mark `complete_work` and `reopen_work`
+   * calls; `first-look` an entry a completed item's model served first;
+   * `gate` a change refused because the work item is complete.
+   */
+  action: 'complete-accept' | 'complete-reject' | 'reopen-accept' | 'reopen-reject' | 'first-look' | 'gate';
+  workItemId?: string;
+  rejectReason?: string;
+  status?: 'done' | 'superseded';
+  deliverable?: Dimension;
+}
+
+/** Append a work lifecycle transition. Best-effort; never throws into the tool path. */
+export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBase?: string): void {
+  try {
+    const path = decisionLogPath(storageBase);
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const entry: DecisionLogEntry = {
+      ts: Date.now(),
+      kind: 'work-lifecycle',
+      dimension: signal.deliverable ?? 'gather',
+      chosen: signal.served,
+      served: signal.served,
+      viaFallback: false,
+      cause: 'incumbent',
+      reason: `work ${signal.action}`,
+      chain: [signal.served],
+      intentKey: signal.intentKey,
+      workLifecycle: {
+        action: signal.action,
+        ...(signal.workItemId ? { workItemId: signal.workItemId } : {}),
+        ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
+        ...(signal.status ? { status: signal.status } : {}),
+        ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

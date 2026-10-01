@@ -83,6 +83,8 @@ import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js
 import { observeContextGrounding } from './serve/context-grounding.js';
 import { carryPhaseAcrossTree } from './serve/context-resolution.js';
 import { registerRoutingContextTool } from './serve/routing-context-tool.js';
+import { registerCompleteWorkTool } from './serve/complete-work-tool.js';
+import { gateCompletedWorkToolCall } from './serve/completed-work-gate.js';
 import {
   closeContextOnSettle,
   gateContextToolCall,
@@ -625,6 +627,7 @@ export default async function autoModelRouterExtension(
   registerExecutionContractTool(pi, session);
   registerContextHandoffTool(pi, session);
   registerRoutingContextTool(pi, session);
+  registerCompleteWorkTool(pi, session);
   session.context.bindPersistence((event) => {
     if (typeof pi.appendEntry === 'function') pi.appendEntry(CONTEXT_ENTRY_TYPE, event);
   });
@@ -682,6 +685,8 @@ export default async function autoModelRouterExtension(
     if (!isRouterAutoActive(ctx?.model)) return;
     // Collecting context runs only its allowed tools, delegation included:
     // a refused call never runs, is not counted, attributed, or observed.
+    const completed = gateCompletedWorkToolCall(event, session);
+    if (completed) return completed;
     const restricted = gateContextToolCall(event, session);
     if (restricted) return restricted;
     if (event.toolName === SUBAGENT_TOOL) {

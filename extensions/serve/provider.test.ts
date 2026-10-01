@@ -19,6 +19,8 @@ import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provid
 import { setDelegationTimeouts } from './delegation.js';
 import { handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
+import { submitCompleteWork } from './complete-work-tool.js';
+import { gateCompletedWorkToolCall } from './completed-work-gate.js';
 import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
@@ -576,7 +578,7 @@ describe('provider orchestration', () => {
     expect(decision?.cause).toBe('manual-override');
     expect(decision?.fallbackChain).toEqual(['alpha/first']);
     expect(harness.session.getCachedIntent()).toBeDefined();
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
   });
 
   it('names failed models, not the allowlist, when every candidate is excluded', async () => {
@@ -601,7 +603,7 @@ describe('provider orchestration', () => {
 
     await harness.serve(context);
 
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
     expect(harness.outStream.events.some((e) => e.type === 'error')).toBe(false);
   });
 
@@ -634,7 +636,7 @@ describe('provider orchestration', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.chosen).toBe('alpha/first');
     expect(decision?.cause).toBe('manual-override');
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
   });
 
   it('resume does not reuse a route from unresolved work for a distinct request', async () => {
@@ -858,7 +860,7 @@ describe('provider orchestration', () => {
 
     await harness.serve(context, undefined, { id: 'reviewer' } as Model<Api>);
 
-    expect(call).toBe(3);
+    expect(call).toBe(2);
     expect(harness.outStream.events.filter((e) => e.type === 'error')).toHaveLength(0);
     expect(
       harness.outStream.events.some((e) => e.type === 'text_delta' && e.delta === 'review ok'),
@@ -976,7 +978,7 @@ describe('semi-automatic confirmation gate', () => {
 
     expect(ui.select).toHaveBeenCalledTimes(1);
     expect(ui.input).not.toHaveBeenCalled();
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
     // "Use" keeps the router's own cause; it is not a hold or a pin.
     expect(harness.getProviderState().lastDecision?.cause).not.toBe('semi-hold');
     expect(harness.getProviderState().lastDecision?.cause).not.toBe('manual-override');
@@ -994,7 +996,7 @@ describe('semi-automatic confirmation gate', () => {
     expect(decision?.cause).toBe('semi-hold');
     expect(decision?.chosen).toBe('beta/second');
     expect(decision?.fallbackChain).toEqual(['beta/second']);
-    expect(harness.streamedModels()).toEqual(['beta/second', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['beta/second']);
     // A hold is transient: it must not create a persistent manual pin.
     expect(harness.session.getManualModel()).toBeUndefined();
   });
@@ -1013,7 +1015,7 @@ describe('semi-automatic confirmation gate', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.cause).toBe('manual-override');
     expect(decision?.chosen).toBe('beta/second');
-    expect(harness.streamedModels()).toEqual(['beta/second', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['beta/second']);
     // The pin persists so subsequent turns take the manual path.
     expect(harness.session.getManualModel()).toBe('beta/second');
   });
@@ -1026,7 +1028,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     expect(ui.select).not.toHaveBeenCalled();
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
   });
 
   it('does not prompt when the routed pick equals the incumbent', async () => {
@@ -1038,7 +1040,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     expect(ui.select).not.toHaveBeenCalled();
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
   });
 
   it('is a no-op without an interactive UI', async () => {
@@ -1049,7 +1051,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     // Semi cannot ask, so it must degrade to the router's pick, never block.
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'alpha/first']);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
     expect(harness.getProviderState().lastDecision?.cause).not.toBe('semi-hold');
   });
 
@@ -1079,7 +1081,7 @@ describe('semi-automatic confirmation gate', () => {
 
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
     expect(harness.session.getManualModel()).toBe('beta/second:high');
-    expect(harness.streamedModels()).toEqual(['beta/second', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['beta/second']);
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
 
@@ -1096,7 +1098,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     expect(ui.select).toHaveBeenCalledTimes(1);
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
   });
 
   it('keeps manual-override cause when a specific fallback model serves', async () => {
@@ -1115,7 +1117,7 @@ describe('semi-automatic confirmation gate', () => {
     await harness.serve(implementTurn);
 
     expect(ui.input).toHaveBeenCalledTimes(1);
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
     expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second');
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
   });
@@ -1135,7 +1137,7 @@ describe('semi-automatic confirmation gate', () => {
 
     await harness.serve(implementTurn);
 
-    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second', 'beta/second']);
+    expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
     expect(harness.delegatedCall(1).options?.reasoning).toBe('high');
     expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second:high');
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
@@ -1196,7 +1198,7 @@ describe('a thinking-level change the router did not write pins the served model
     await harness.serve(implement, piReasoning());
 
     expect(harness.session.getManualModel()).toBe(`${served}:${target}`);
-    expect(harness.streamedModels()).toEqual([served, served]);
+    expect(harness.streamedModels()).toEqual([served]);
     expect(harness.delegatedCall().options?.reasoning).toBe(target);
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
   });
@@ -1452,8 +1454,8 @@ describe('provider auth filtering', () => {
     const handles = await fetchDecisionContractHandles(temp.path);
     expectDecisionContract({ ...handles, match: { chosen: 'beta/second', cause: 'error-fallback' } });
 
-    // Credential failures spend no provider requests; the fallback also retries its undeclared answer.
-    expect(harness.streamedModels()).toEqual(['beta/second', 'beta/second']);
+    // Credential failures spend no provider requests; only the fallback reaches the provider.
+    expect(harness.streamedModels()).toEqual(['beta/second']);
   });
 
   it('reports exhausted fallbacks when no provider is authenticated', async () => {
@@ -2097,7 +2099,8 @@ describe('context acquisition', () => {
       await submitPrepared(handoff(1));
       await session.routeTurnAgainWithSameUserEntry();
       const entry = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
-      expect(entry.content).toBe(PLAN_PROMPT);
+      expect(JSON.stringify(entry.content)).toContain('complete_work');
+      expect(JSON.stringify(entry.content)).not.toContain('Do not write the plan, review, or change yourself');
     });
 
     it('has a pinned model acquire the context too, then serve the deliverable', async () => {
@@ -2172,7 +2175,7 @@ describe('context acquisition', () => {
       const actions = records
         .map((r) => (r.investigationHandoff as { action?: string } | undefined)?.action)
         .filter(Boolean);
-      expect(actions).toEqual(['answer-retry', 'undeclared-answer', 'accept', 'served', 'phase-end']);
+      expect(actions).toEqual(['accept', 'served', 'phase-end']);
       expect(JSON.stringify(records)).not.toContain('swallows timeouts');
     });
 
@@ -2216,6 +2219,99 @@ describe('context acquisition', () => {
         expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next).toMatchObject({ dimension: 'implement', cause: 'investigation-handoff' });
+      });
+
+      it('attaches the same active-work note to delegated requests without changing transcript or system messages', async () => {
+        const session = await served();
+        await session.routeTurnAgainWithSameUserEntry();
+        const first = JSON.stringify(session.servedContext!.messages);
+        expect(first).toContain('Your own suggestions, next steps, offers');
+        await session.routeTurnAgainWithSameUserEntry();
+        expect(JSON.stringify(session.servedContext!.messages)).toBe(first);
+        expect(JSON.stringify(session.piContext)).not.toContain('Router:');
+        expect(session.servedContext!.messages.filter((m) => m.role === 'system'))
+          .toEqual(session.piContext!.messages.filter((m) => m.role === 'system'));
+      });
+
+      describe('completed work', () => {
+        async function completed() {
+          const session = await served();
+          const workItemId = harness.session.context.getLedger().activeWorkItemId!;
+          expect(submitCompleteWork({ outcome: 'done' }, routerCtx, harness.session).accepted).toBe(true);
+          return { session, workItemId };
+        }
+
+        it('keeps the post-completion reply on the same entry and model without replyPending', async () => {
+          const { session, workItemId } = await completed();
+          const key = harness.session.getWorkPhaseState()!.intentKey;
+          const reply = await session.routeTurnAgainWithSameUserEntry();
+          expect(reply?.chosen).toBe('beta/strong');
+          expect(harness.session.getWorkPhaseState()).toMatchObject({
+            intentKey: key, completion: { workItemId, status: 'done' },
+          });
+          expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
+          expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, harness.session)?.block).toBe(true);
+        });
+
+        it('answers about done work on the incumbent without reopening or sending extra acquisition requests', async () => {
+          const { session, workItemId } = await completed();
+          const count = harness.streamedModels().length;
+          const decision = await session.routeTurn('explain the migration tradeoffs');
+          expect(decision?.chosen).toBe('beta/strong');
+          expect(harness.streamedModels()).toHaveLength(count + 1);
+          expect(harness.session.getWorkPhaseState()).toMatchObject({ firstLook: { workItemId } });
+          expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
+          expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
+          expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
+          const user = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
+          expect(JSON.stringify(user.content)).toContain(workItemId);
+          expect(JSON.stringify(user.content)).toContain('answer it directly');
+          expect(JSON.stringify(session.piContext)).not.toContain('Router:');
+          expect(gateCompletedWorkToolCall({ toolName: 'edit', input: {} }, harness.session)?.block).toBe(true);
+        });
+
+        it('hands off to the same done item as reopen, then removes the first-look restriction', async () => {
+          const { session, workItemId } = await completed();
+          await session.routeTurn('add the pending adjustment to this migration');
+          const topicId = harness.session.context.getLedger().items.get(workItemId)!.topic.id;
+          expect((await submitPrepared({ ...handoff(1, 'implement'), workItemId, topicId })).accepted).toBe(true);
+          expect(harness.session.getWorkPhaseState()?.contextResolution?.relation).toBe('reopen');
+          expect(harness.session.getWorkPhaseState()?.firstLook).toBeUndefined();
+          expect(harness.session.context.getLedger().activeWorkItemId).toBe(workItemId);
+          await session.routeTurnAgainWithSameUserEntry();
+          expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, harness.session)).toBeUndefined();
+        });
+
+        it('hands off unrelated work to a new item without reopening the completed one', async () => {
+          const { session, workItemId } = await completed();
+          await session.routeTurn('implement a CSV exporter');
+          expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
+          const ledger = harness.session.context.getLedger();
+          expect(ledger.activeWorkItemId).not.toBe(workItemId);
+          expect(ledger.items.get(workItemId)?.status).toBe('done');
+          expect(harness.session.getWorkPhaseState()?.firstLook).toBeUndefined();
+          await session.routeTurnAgainWithSameUserEntry();
+          expect(harness.session.context.getIncumbent()?.workItemId).toBe(ledger.activeWorkItemId);
+        });
+
+        it('keeps completed ownership and the first-look gate after a fallback answers', async () => {
+          const { session, workItemId } = await completed();
+          await session.routeTurn('explain what the migration does', { failModels: ['beta/strong'] });
+          const incumbent = harness.session.context.getIncumbent()!;
+          expect(incumbent.registryId).not.toBe('beta/strong');
+          expect(incumbent.workItemId).toBe(workItemId);
+          await session.routeTurn('make another change to it');
+          expect(harness.session.getWorkPhaseState()?.firstLook).toEqual({ workItemId });
+          expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, harness.session)?.block).toBe(true);
+          expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
+        });
+
+        it('does not reinterpret a legacy incumbent without a work item as completed ownership', async () => {
+          const { session } = await completed();
+          harness.session.context.recordIncumbent({ registryId: 'beta/strong' }, 'plan', 'legacy');
+          await session.routeTurn('a follow-up question');
+          expect(harness.session.getWorkPhaseState()?.firstLook).toBeUndefined();
+        });
       });
 
       it('is never a pinned model', async () => {
@@ -2863,7 +2959,7 @@ describe('no-stronger escalation gate', () => {
     await harness.serve(context);
 
     expect(ui.select).toHaveBeenCalledTimes(1);
-    expect(harness.streamedModels()).toEqual(['alpha/solo', 'alpha/solo']);
+    expect(harness.streamedModels()).toEqual(['alpha/solo']);
   });
 
   it('semi off: warns and continues without a blocking prompt', async () => {
@@ -2881,7 +2977,7 @@ describe('no-stronger escalation gate', () => {
     const warnings = ui.notify.mock.calls.filter((c) => c[1] === 'warning');
     expect(warnings).toHaveLength(1);
     expect(String(warnings[0]?.[0])).toContain('no stronger model');
-    expect(harness.streamedModels()).toEqual(['alpha/solo', 'alpha/solo']);
+    expect(harness.streamedModels()).toEqual(['alpha/solo']);
   });
 });
 
@@ -3041,7 +3137,7 @@ describe('an entry without an incumbent', () => {
   });
 });
 
-describe('gathering answer hold', () => {
+describe('gathering direct answers', () => {
   const context = { messages: [{ role: 'user', content: 'hello', timestamp: 1 }] } as unknown as Context;
   const records = async (): Promise<Array<Record<string, unknown>>> => {
     const { readFileSync } = await import('node:fs');
@@ -3052,23 +3148,19 @@ describe('gathering answer hold', () => {
   const actions = (rows: Array<Record<string, unknown>>) => rows
     .map((r) => (r.investigationHandoff as { action?: string } | undefined)?.action).filter(Boolean);
 
-  it('discards the first answer and logs a bounded fail-open without creating an incumbent', async () => {
+  it('streams one answer without a handoff, an incumbent, or retry telemetry', async () => {
     const harness = await setupProviderTest({ dir: temp.path, models: [registryModel('a/model')] });
-    let attempts = 0;
-    harness.scriptReply(() => asStream([
-      { type: 'text_delta', delta: attempts++ === 0 ? 'private-sensitive-answer' : 'visible answer' },
-      { type: 'done' },
-    ]));
+    harness.scriptReply([{ type: 'text_delta', delta: 'visible answer' }, { type: 'done' }]);
     await harness.serve(context);
-    expect(harness.streamedModels()).toEqual(['a/model', 'a/model']);
+    expect(harness.streamedModels()).toEqual(['a/model']);
     expect(harness.outStream.events.filter((e) => e.type === 'text_delta').map((e) => (e as { delta: string }).delta))
       .toEqual(['visible answer']);
     expect(harness.outStream.events.filter((e) => e.type === 'done')).toHaveLength(1);
     expect(harness.session.context.getIncumbent()).toBeUndefined();
     expect(harness.session.context.getLedger().items.size).toBe(0);
     const logged = await records();
-    expect(actions(logged)).toEqual(['answer-retry', 'undeclared-answer']);
-    expect(JSON.stringify(logged)).not.toContain('private-sensitive-answer');
+    expect(actions(logged)).toEqual([]);
+    expect(JSON.stringify(logged)).not.toContain('visible answer');
   });
 
   it('serves a declared direct answer once and remains gathering on the next entry', async () => {
@@ -3089,7 +3181,7 @@ describe('gathering answer hold', () => {
     harness.resetEventStream();
     harness.scriptReply([{ type: 'text_delta', delta: 'another entry' }, { type: 'done' }]);
     await harness.serve({ messages: [...context.messages, { role: 'user', content: 'next', timestamp: 2 }] } as unknown as Context);
-    expect(harness.streamedModels()).toHaveLength(4);
+    expect(harness.streamedModels()).toHaveLength(3);
     expect(harness.session.getWorkPhaseState()?.contextAnswer).toBeUndefined();
     expect(harness.session.context.getIncumbent()).toBeUndefined();
   });
@@ -3187,8 +3279,8 @@ describe('router-report counterfactual baseline', () => {
     expect(entry?.baselineModel).toBe('alpha/strong');
     expect(entry?.baselineSource).toBe('config');
     expect(typeof entry?.routedCost).toBe('number');
-    // Both the discarded answer and its retry spent tokens, priced on the same registry basis.
-    expect(harness.streamedModels()).toHaveLength(2);
-    expect(entry?.baselineCost).toBe((10 * 200 + 50 * 40) / 1_000_000);
+    // The answer's observed tokens price both costs on the same registry basis.
+    expect(harness.streamedModels()).toHaveLength(1);
+    expect(entry?.baselineCost).toBe((10 * 100 + 50 * 20) / 1_000_000);
   });
 });

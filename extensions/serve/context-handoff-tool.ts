@@ -350,7 +350,7 @@ export function submitContextHandoff(
     if (cached?.key === state.intentKey) session.setCachedIntent({ ...cached, context: selected, dimension: deliverable });
   }
   const next = acceptContextHandoff(materialized, { deliverable, key, ...(reasoning ? { reasoning } : {}) });
-  session.commitWorkPhaseState(next);
+  session.commitWorkPhaseState({ ...next, firstLook: undefined, completion: undefined });
   log(state, served, 'accept', {
     ...(next.reasoningHandoff ? { handoff: next.reasoningHandoff } : {}),
     deliverable,

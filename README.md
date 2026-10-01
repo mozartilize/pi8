@@ -68,6 +68,18 @@ Uncertainty always routes up. Missing data, an ambiguous prompt, or low confiden
 
 pi8 has no effect on a session that uses a concrete model instead of `router/auto`.
 
+### Completing and returning to work
+
+In `router/auto`, the serving model calls `complete_work` when the user's request is complete, in any task type. Its own suggestions, optional next steps, and offers to do more do not keep the work open. An unfinished request, a required answer from the user, or an unfixed failed test/build does.
+
+Completion closes the current work item but keeps the model and conversation. On the next entry that model gets the first look:
+
+- A question about completed work can be answered directly, without reopening it.
+- More changes need `hand_off_context` selecting that completed work item. The router records a `reopen` and can repick the serving model.
+- Different work needs a handoff to its own work item or a new one.
+
+Until the handoff, the mutation gate blocks file changes, execution plans, and subagent calls. It uses the router's best-effort mutation detector, not a shell sandbox. Superseded work stays terminal. The work-choice catalog and reminders are added only to delegated requests, not the system prompt or Pi transcript. Answers stream without a retry just because a handoff declaration is missing.
+
 ### Compound tasks
 
 Some requests have an investigation step and a fix step, for example "investigate X, then fix it". When the fix needs a frontier-level model, the router uses two phases:
@@ -129,7 +141,7 @@ The full configuration reference is in [`ARCHITECTURE.md`](ARCHITECTURE.md#9-con
 
 ## Observability
 
-- **Decision log**: one append-only JSONL file for each session, next to Pi's transcript: `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`. Each routing decision records the task type, chosen model, cause, and fallback order. Separate assessment records show how the assessment changed the keyword result. A session without a saved session file writes to the shared `~/.pi/agent/pi8/decisions.jsonl`.
+- **Decision log**: one append-only JSONL file for each session, next to Pi's transcript: `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`. Each routing decision records the task type, chosen model, cause, and fallback order. Separate assessment records show how the assessment changed the keyword result. `work-lifecycle` records contain completion, first-look, and gate outcomes as IDs and categories, without reply text or work-item titles. A session without a saved session file writes to the shared `~/.pi/agent/pi8/decisions.jsonl`.
 - **Debug timing log** (turn it on with `debug`): per-step timing in milliseconds, in a per-session `*.router-debug.log` file. A session without a saved session file writes to `/tmp/pi8-debug.log`.
 
 ## Further reading

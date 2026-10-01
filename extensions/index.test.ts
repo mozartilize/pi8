@@ -937,13 +937,14 @@ describe('work ledger lifecycle', () => {
     }
   });
 
-  it('registers routing_context once at init and never changes the tool list afterwards', async () => {
+  it('registers lifecycle and metadata tools once and never changes the tool list afterwards', async () => {
     const tree = new SessionTree();
     const { handlers, pi } = makePi(tree);
     await autoModelRouterExtension(pi);
     const registerTool = vi.mocked(pi.registerTool);
     const names = () => registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name);
     expect(names().filter((name) => name === 'routing_context')).toHaveLength(1);
+    expect(names().filter((name) => name === 'complete_work')).toHaveLength(1);
     const before = registerTool.mock.calls.length;
     const ctx = { ...ctxFor(tree), model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } };
     await handlers.get('session_start')!({ reason: 'startup' }, ctx);
@@ -1007,6 +1008,24 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.reset();
     setDecisionLogBase(undefined);
     rmSync(logDir, { recursive: true, force: true });
+  });
+
+  it('uses the completed-work gate before mutation observation and subagent routing', async () => {
+    const handlers = await makeToolHandlers();
+    const toolCall = handlers.get('tool_call')!;
+    defaultRouterSession.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'intent-a' });
+    for (const marker of [
+      { firstLook: { workItemId: 'w_1' } },
+      { completion: { workItemId: 'w_1', status: 'done' as const } },
+    ]) {
+      defaultRouterSession.commitWorkPhaseState(entryState(marker));
+      for (const toolName of ['write', 'commit_execution', 'subagent']) {
+        expect(await toolCall({ toolName, input: {} }, routerAutoCtx)).toMatchObject({ block: true });
+      }
+      expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
+      expect(defaultRouterSession.getWorkPhaseState()?.contextDenials).toBeUndefined();
+      expect(await toolCall({ toolName: 'write', input: {} }, concreteCtx)).toBeUndefined();
+    }
   });
 
   it('keeps concrete-model sessions a complete no-op', async () => {
@@ -1082,7 +1101,7 @@ describe('mutation observation hooks', () => {
     } as unknown as ExtensionAPI);
     // Every router tool is registered once, up front, so the tool list never changes mid-session.
     expect(registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name))
-      .toEqual(['commit_execution', 'hand_off_context', 'routing_context']);
+      .toEqual(['commit_execution', 'hand_off_context', 'routing_context', 'complete_work']);
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
 
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;

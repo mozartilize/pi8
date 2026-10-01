@@ -4,6 +4,8 @@ import { ROUTING_CONTEXT_TOOL, registerRoutingContextTool, submitRoutingContext 
 import { RouterSession } from './router-session-state.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import { SessionTree } from '../test-support/session-tree.js';
+import { routingDecision } from '../test-support/router-fixtures.js';
+import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 
 function setup() {
   const tree = new SessionTree();
@@ -90,20 +92,54 @@ describe('routing_context update', () => {
   });
 });
 
+/** A request the router is serving, as complete_work requires to end the active item. */
+function routed(session: RouterSession, over: Partial<WorkPhaseState> = {}): RouterSession {
+  session.commitWorkPhaseState({ intentKey: 'entry', deliverable: 'implement', providerInvocation: 1, observedMutationTools: 0, ...over });
+  session.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'entry', dimension: 'implement' });
+  session.setLastServed({ registryId: 'a/model', viaFallback: false, accumulatedCost: 0 });
+  return session;
+}
+
 describe('routing_context close', () => {
-  it('closes a known item and clears it as the active one', () => {
+  it('ends the active item as a recorded completion of the routed request', () => {
     const { session, ctx } = setup();
+    routed(session);
     expect(submitRoutingContext({ op: 'close', workItemId: 'w_1', status: 'done' }, ctx, session).accepted).toBe(true);
     expect(session.context.getLedger().items.get('w_1')?.status).toBe('done');
     expect(session.context.getLedger().activeWorkItemId).toBeUndefined();
+    expect(session.getWorkPhaseState()?.completion).toEqual({ workItemId: 'w_1', status: 'done' });
+  });
+
+  it('takes the completion checks for the active item: no request in progress, or an unfinished plan', () => {
+    const { session, ctx } = setup();
+    expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session).accepted).toBe(false);
+    routed(session, { contract: { status: 'active' } as never });
+    expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session).accepted).toBe(false);
+    expect(session.context.getLedger().items.get('w_1')?.status).toBe('active');
+  });
+
+  it('closes an earlier item without a routed request', () => {
+    const { session, ctx } = setup();
+    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status: 'superseded' }, ctx, session).accepted).toBe(true);
+    expect(session.context.getLedger().items.get('w_2')?.status).toBe('superseded');
+    expect(session.context.getLedger().activeWorkItemId).toBe('w_1');
   });
 
   it('closes the active item when no id is given', () => {
     const { session, ctx } = setup();
+    routed(session);
     const result = submitRoutingContext({ op: 'close', status: 'superseded' }, ctx, session);
     expect(result).toMatchObject({ accepted: true, details: { workItemId: 'w_1' } });
     expect(session.context.getLedger().items.get('w_1')?.status).toBe('superseded');
     expect(session.context.getLedger().items.get('w_2')?.status).toBe('active');
+  });
+
+  it('cannot turn superseded work into reopenable done work', () => {
+    const { session, ctx } = setup();
+    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status: 'superseded' }, ctx, session).accepted).toBe(true);
+    const before = session.context.getLedger();
+    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status: 'done' }, ctx, session).accepted).toBe(false);
+    expect(session.context.getLedger()).toBe(before);
   });
 
   it('rejects an unknown or reserved item, a missing status, or no active item without changing the ledger', () => {
@@ -114,6 +150,7 @@ describe('routing_context close', () => {
     expect(submitRoutingContext({ op: 'close', workItemId: 'w_1' }, ctx, session).accepted).toBe(false);
     expect(session.context.getLedger()).toBe(before);
 
+    routed(session);
     submitRoutingContext({ op: 'close', status: 'done' }, ctx, session);
     const closed = session.context.getLedger();
     expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session).accepted).toBe(false);
@@ -128,8 +165,11 @@ describe('routing_context when the session does not record it', () => {
     const before = session.context.getLedger();
     expect(submitRoutingContext({ op: 'update', title: 'CSV export' }, ctx, session))
       .toMatchObject({ accepted: false, text: expect.stringContaining('did not record') });
-    expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session))
+    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status: 'done' }, ctx, session))
       .toMatchObject({ accepted: false, text: expect.stringContaining('did not record') });
+    routed(session);
+    expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session))
+      .toMatchObject({ accepted: false, text: expect.stringContaining('could not record') });
     expect(session.context.getLedger()).toBe(before);
   });
 });

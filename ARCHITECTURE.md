@@ -283,6 +283,14 @@ The contract breaks when the executor edits (native `edit`/`write`) a file outsi
 
 ---
 
+### Work completion and completed-incumbent first look
+
+Work-item lifecycle is independent of task type and execution-contract state. `complete_work` appends `work-close` and a `work-complete` boundary in one `context-commit`, before updating entry-local completion state. It only affects the active item and rejects `done` while an execution contract is active or broken. Supersession does not claim the contract was executed.
+
+The incumbent stores the work item it served and survives completion. With no active item, `completedIncumbent` identifies a `done` item still associated with that model; the next entry receives a `firstLook` marker. The model may answer about the completed work directly. A separate completed-work gate blocks detected mutations, `commit_execution`, and subagents without counting acquisition refusals. A valid handoff clears the marker. Selecting a done item derives relation `reopen` from its prior status and writes the reopen transition; selecting different work leaves the completed item unchanged. A fallback that serves first look retains the same work-item association.
+
+Active and completed work reminders use `withGatheringNote`: delegated-request content only, never system sections or Pi transcript entries. `complete_work` is registered once and executes sequentially so later tool calls in its batch see the completion. No `replyPending` state is needed: tool-result continuations retain the intent key. Direct answers stream immediately without a declaration-triggered retry; failed-attempt buffering and the no-replay-after-visible-output rule remain independent of work lifecycle.
+
 ## 8. Data flow
 
 ### Benchmarks

@@ -34,6 +34,7 @@ import {
   appendDecision,
   appendExecutionContractSignal,
   appendContextHandoffSignal,
+  appendWorkLifecycleSignal,
 } from '../host/decisionlog.js';
 import { renderRouterStatus, servedKey, type ServedInfo } from '../host/ui.js';
 import {
@@ -104,7 +105,8 @@ import {
   gatheringNote,
   withGatheringNote,
 } from './gathering-gate.js';
-import { incumbentWorkItem } from '../routing/policy/work-completion.js';
+import { completedIncumbent, incumbentWorkItem } from '../routing/policy/work-completion.js';
+import { activeWorkNote, completedWorkNote } from './completed-work-gate.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -539,6 +541,8 @@ function advanceWorkPhase(args: {
       ...(priorWork ? { priorWork } : {}),
     };
     if (args.session.context.getIncumbent()) workPhaseState = { ...workPhaseState, incumbentServes: true };
+    const completed = completedIncumbent(args.session.context.getLedger());
+    if (completed) workPhaseState = { ...workPhaseState, firstLook: { workItemId: completed.workItem.id } };
     if (args.pendingIdentity) workPhaseState = { ...workPhaseState, pendingIdentity: args.pendingIdentity };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
@@ -1144,9 +1148,11 @@ async function delegateRouterTurn(args: {
   const entry = current?.intentKey === intentKey ? current : undefined;
   const acquiring = entry?.contextStatus === 'acquiring';
   const clarifying = entry?.contextStatus === 'clarification-only';
+  const workNote = entry?.firstLook ? completedWorkNote(entry)
+    : entry && (session.context.getLedger().activeWorkItemId || entry.completion) ? activeWorkNote : undefined;
   let delegatedContext = entry && (acquiring || clarifying)
     ? withGatheringNote(context, gatheringNote(entry))
-    : context;
+    : workNote ? withGatheringNote(context, workNote) : context;
   // The one clarification request: tools stay defined, so a history with
   // tool calls remains valid, but none may be called, and no fallback follows.
   if (clarifying) {
@@ -1160,14 +1166,6 @@ async function delegateRouterTurn(args: {
     options: clarifying ? { ...delegatedOptions, toolChoice: 'none' } : delegatedOptions,
     ...(acquiring ? {
       onRequest: () => countAcquisitionRequest(session, intentKey),
-      requireAnswerDeclaration: !entry?.contextAnswer,
-      onUndeclaredAnswer: (outcome: 'retry' | 'released', served: string) => {
-        appendContextHandoffSignal({
-          intentKey, action: outcome === 'retry' ? 'answer-retry' : 'undeclared-answer',
-          deliverable: entry?.deliverable ?? 'gather', served,
-          contextReasons: owedContext(entry),
-        });
-      },
     } : {}),
     candidates: routableCandidates,
     reasoning: explicitThinking ?? resolvedReasoning,
@@ -1213,8 +1211,13 @@ async function delegateRouterTurn(args: {
       const status = session.getWorkPhaseState()?.contextStatus;
       if (status === 'acquiring' || status === 'clarification-only') return;
       if (session.getManualModel() || session.getSemiHold(intentKey)) return;
-      const workItemId = incumbentWorkItem(session.context.getLedger(), lastServed.registryId, session.getWorkPhaseState()?.workItemId);
+      const state = session.getWorkPhaseState();
+      const ownedWork = state?.workItemId ?? state?.completion?.workItemId ?? state?.firstLook?.workItemId;
+      const workItemId = incumbentWorkItem(session.context.getLedger(), lastServed.registryId, ownedWork);
       session.context.recordIncumbent(lastServed, decision.dimension, session.context.getEntrySource() ?? intentKey, workItemId);
+      if (state?.firstLook && state.providerInvocation === 1) {
+        appendWorkLifecycleSignal({ intentKey, served: servedKey(lastServed), action: 'first-look', workItemId: state.firstLook.workItemId });
+      }
     } catch {
       // A lost record only means the next entry is routed afresh.
     }
