@@ -4,14 +4,14 @@ Implementation-level architecture for the router. For user-facing setup and comm
 
 ## Terms and minimums
 
-- **Task type (`Dimension`)**: one of `lightweight`, `gather`, `plan`, `implement`, or `review`. **Capability tier**: 0 (eligible on measured quality), 1 (quality unknown), or 2 (measured but below the task's requirement). **Capability band**: `economy`, `standard`, `strong`, or `frontier`, used for the final step of a compound task. These are three different scales; raising the task type does not mean raising a capability tier.
-- **Final step (`terminal` in code)**: the requested outcome after investigation, often a file change. A stream's terminal event instead ends one model attempt. **Inspect phase**: the investigation before that change. Its bounded discount permits a model one capability band below the final step's requirement until the change begins.
+- **Task type (`Dimension`)**: one of `lightweight`, `gather`, `plan`, `implement`, or `review`. **Capability tier**: 0 (eligible on measured quality), 1 (quality unknown), or 2 (measured but below the task's requirement). **Capability band**: `economy`, `standard`, `strong`, or `frontier`, used for a declared final step and for an execution contract's executor. These are three different scales; raising the task type does not mean raising a capability tier.
+- **Final step (`terminal` in code)**: the requested outcome that a ready `hand_off_context` or `reopen_work` declares as `deliverable`, `complexity`, and `scope`. A stream's terminal event instead ends one model attempt.
 - **Economic promotion**: measured evidence can admit a cheaper tier-2 model when it meets the 70% task-quality minimum and the other conditions in §2. Estimated quality cannot qualify.
 - **Trajectory friction (TFI)**: objective signs of a stalled attempt, such as repeated actions or verifier failures; not a judgment of the answer's meaning. **Provider circuit/strike**: a provider-level failure counter; three strikes temporarily exclude that provider. A shared usage limit excludes it immediately.
-- **Session generation/currentness**: a generation changes on session reset; asynchronous results check that they still belong to the active generation before writing state. **Assessment egress**: the limited task context sent to a separate assessor provider. **Provenance** labels whether text came from a user, assistant, or summary; the assessor's **output ontology** is its allowed structured verdict vocabulary.
+- **Session generation/currentness**: a generation changes on session reset; asynchronous results check that they still belong to the active generation before writing state. **Provenance** labels whether text came from a user, an assistant, a summary, or a known synthetic source such as a router settle reminder.
 - **Sidecar**: the per-session decision-log file beside Pi's transcript. **Seam**: a deliberate test hook for replacing a path, timeout, or runtime dependency.
 
-Each *minimum* has a different subject: the **heuristic minimum task type** prevents uncertain assessments from lowering the keyword classification; the **role minimum task type** constrains subagent picks; the **incumbent capability minimum** keeps the serving model at or above the previous served candidate's quality on the routed task axis, while its **minimum thinking level** constrains effort separately. The **dimension effort minimum** sets reasoning per task type. The **assessor competence minimum** gates which model may assess a request. For measured model quality, the **tier-0 task minimum** defaults to 85% of the strongest peer, the **economic-promotion minimum** is 70%, and the **broad-capability sanity minimum** is 45% for implementation/review. A compound task's **final-step capability minimum** comes from its band; its **investigation capability minimum** is one band lower while the discount applies. An execution contract's **executor implement minimum** is the higher of the requirement computed from the submitter's rubric and the router's measurements (30% at least) and the minimum of the contract's band (`economy` 30%, `standard` 45%, `strong` 70%). Name the subject rather than saying only “floor.”
+Each *minimum* has a different subject: the **role minimum task type** constrains subagent picks; the **incumbent capability minimum** keeps the serving model at or above the previous served candidate's quality on the routed task axis, while its **minimum thinking level** constrains effort separately. The **dimension effort minimum** sets reasoning per task type. For measured model quality, the **tier-0 task minimum** defaults to 85% of the strongest peer, the **economic-promotion minimum** is 70%, and the **broad-capability sanity minimum** is 45% for implementation/review. A plan or review handoff's **reasoning minimum** is the higher of its rubric requirement and its final step's band minimum (`standard` 45%, `strong` 70%, `frontier` 85%). An execution contract's **executor implement minimum** is the higher of the requirement computed from the submitter's rubric and the router's measurements (30% at least) and the minimum of the contract's band (`economy` 30%, `standard` 45%, `strong` 70%). Name the subject rather than saying only “floor.”
 
 ## Pipeline overview
 
@@ -21,7 +21,7 @@ Each *minimum* has a different subject: the **heuristic minimum task type** prev
         normalize + fuzzy-match against Pi's live model registry
 ~/.pi/agent/pi8/benchmarks.json
         ▼
-classify + assess (per user entry) → one of 5 dimensions
+task type: incumbent's, or gather until hand_off_context declares the next step
         ▼
 pickBest(candidates × measured effort, dimension, weights) → ranked fallback chain
         ▼
@@ -30,39 +30,23 @@ delegate to top (model, effort) candidate; on objective pre-answer failure, walk
 
 Every turn:
 
-1. **Resolve intent** — two classifiers run per real user entry.
+1. **Resolve the task type** — from router-owned state and the model's accepted declarations; no prompt classifier runs.
 2. **Score** — expand (model, effort) candidates, capability-gate, rank by quality/cost/speed.
 3. **Delegate with objective fallback** — stream, handle pre-answer failures, walk the chain.
 4. **Route subagents** — inject a concrete model per spawn via `tool_call` hook.
 
 ---
 
-## 1. Intent resolution
+## 1. Task type
 
-### Keyword classifier (deterministic fallback)
+No prompt classifier runs. An entry's task type comes from state the router owns and from declarations it accepts (`entryPhase` in `context-acquisition.ts`):
 
-A fast local keyword/intent classifier ported from LiteLLM's `complexity_router.py` (Apache-2.0). Maps the request to a task dimension using five keyword lists (code, reasoning, technical, simple, gather) plus dimension-specific markers (review, plan, intent verbs). Weighted-sum scoring with LiteLLM's dimension weights produces a confidence score; ties are broken by dimension strength. The resolved intent is cached per user entry key and reused through that entry's Pi tool loop, except while an execution contract is active (§7).
+- With no incumbent, an entry routes as `gather` (cause `investigation`) and collects context. The gathering gate (`gathering-gate.ts`) allows only trusted readers, the question tool, `hand_off_context`, and `routing_context`; a refused mutation or subagent call, or a rejected handoff, counts against the entry, and two refusals turn it `clarification-only`, where it may only ask the user. Collecting context ends after a bounded number of requests.
+- `hand_off_context` ends collecting context. A ready handoff declares `deliverable`, `complexity`, and `scope`, selects or creates the work item, and the next invocation routes at that deliverable (cause `investigation-handoff`). A declared direct answer creates no work and no incumbent; `needs-user` hands the request back to the user.
+- An incumbent serves later entries at its task type with every tool (cause `incumbent`) until it hands off. A completed incumbent gets a first look instead (§6).
+- Mid-intent `plan`/`review` changes to `implement` only through an accepted execution contract (§6, cause `execution-contract`). An identified mutation call alone never changes the task type; the status shows `editing` separately.
 
-Thin approvals and transitions (e.g. `ok go for it` or `what's next?`) use at most 1,500 characters of role-labelled user/assistant context ending at that entry, keyed differently so a full-classification turn and its thin continuation share the same intent dimension.
-
-The keyword classifier is frozen in semantic scope — it exists as a survivable fallback, not a policy engine. Structural thresholds (depth escalation tokens, assessment deadlines, input caps) remain tunable; keyword lists and scope rules do not.
-
-### Semantic assessment (enabled by default)
-
-The always-on assessment dispatches a bounded model call — selected from the routable pool under a competence floor (`assessorQualityRatio`, default 0.5 of the strongest routable intelligence) — asking only what kind of work this is. The deterministic scorer still owns which models serve.
-
-One assessment per real user entry, bounded by one end-to-end deadline (`assessmentDeadlineMs`, default 1500ms). Input is capped by `assessmentMaxInputChars` (default 6000), truncated oldest-first, and credential-scrubbed before dispatch.
-
-Verdicts are adopted under strict caps:
-
-- Uncertainty always routes up: low-confidence assessments yield `max(heuristic, oneTierAbove(verdict))`, never anything below the heuristic.
-- At entry, only a **high-confidence, `scope: bounded`** verdict may lower the dimension, by **at most one tier** (or release an unassisted keyword ambiguity bump to `rawHeuristic`), never from `implement` or `review`, and never while the depth latch is engaged.
-- Mid-intent: `plan`/`review` changes to `implement` only through an accepted execution contract (§7, `execution-contract` cause). A high-confidence `plan`/`review` verdict rejects the contract; a missing verdict does not. An identified mutation call alone never changes the task type; the status shows `editing` separately from the routed task type.
-- Trajectory repick: a consult that raised the dimension owns that decision (`router-consult` cause remains active for trajectory repick purposes).
-
-Each attempt writes an `assessment-metric` decision-log record joined by `intentKey`, preserving the heuristic delta or fallback reason. A depth-latch transition writes a second metric from the same single assessment dispatch. Assessment spend is tracked separately from routed spend.
-
-Set `consultRouter: false` to keep routing fully local with no assessment dispatched.
+The resolved intent is cached per user entry key and reused through that entry's Pi tool loop. Router settle reminders (`[pi8-settle]`) and configured `syntheticPrefixes` never start a new entry.
 
 ---
 
@@ -191,7 +175,7 @@ Once visible text or a tool call has streamed, the router never replays on anoth
 
 ### Role injection
 
-pi-subagents roles (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) each provide a minimum dimension via `ROLE_DIMENSIONS`. The router builds and auth-filters the candidate snapshot during session refresh, then re-scores each visible structured child at spawn time from its role and task. `assessTerminal(task)` may raise the role floor, never lower it; configured dimension weights and the live context guard apply to that pick before the concrete `provider/model` is injected through the `tool_call` hook. Workflow-script children are opaque to the structured walker, so those calls retain the worker-first tool-level default (worker → planner → researcher → advisor → reviewer) rather than task-aware per-child routing. A per-child `model` inside the script still wins, and scripted failures remain ordinary tool errors. Reviewer children are kept independent from the selected worker's model family.
+pi-subagents roles (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) each provide a minimum dimension via `ROLE_DIMENSIONS`. The router builds and auth-filters the candidate snapshot during session refresh, then re-scores each visible structured child at spawn time from its role; configured dimension weights and the live context guard apply to that pick before the concrete `provider/model` is injected through the `tool_call` hook. Workflow-script children are opaque to the structured walker, so those calls retain the worker-first tool-level default (worker → planner → researcher → advisor → reviewer) rather than task-aware per-child routing. A per-child `model` inside the script still wins, and scripted failures remain ordinary tool errors. Reviewer children are kept independent from the selected worker's model family.
 
 Nothing is written to `settings.json` — injection is per-spawn only. Explicit model choices and user/project pins (`source` ≠ `pi8`) always win. A concrete child cannot switch models mid-process.
 
@@ -205,81 +189,48 @@ Before subagent role assignment, a per-provider credential probe (timeout 3s) fi
 
 ---
 
-## 5. Depth escalation
-
-Covers the transition the classifier cannot see: a gather session that keeps accumulating context has become synthesis over gathered material, which cheap tiers serve badly.
-
-- **Trigger**: live context exceeds `depthEscalationTokens` (default 32768), the pre-depth dimension is lightweight/gather, and the cause is depth-passive (`heuristic`, `continuation-context`, `no-data`, or `router-consult`)
-- **Effect**: raise the task type by one step for that invocation (cause: `context-depth`)
-- **Properties**: up-only, never cached, per-invocation evaluation
-- **One-time exception**: only the first such upgrade per session may be cancelled by a high-confidence assessment with `scope: bounded`. The task type and cause then stay unchanged; the router reuses the assessment for this entry instead of making another request. If assessment times out, is unavailable or disabled, or returns an invalid reply, the upgrade proceeds.
-
----
-
-## 6. Escalation mechanisms (2 distinct paths)
+## 5. Escalation mechanisms (2 distinct paths)
 
 ### 1. Objective trajectory escalation
-Objective trajectory friction (repeated action/observation, persistent verifier failure, confirmed stagnation, pre-output reasoning loops) sets a pending same-dimension quality-first repick for the next provider invocation, or hops immediately when replay is still safe. Models do not self-escalate; `commit_execution` hands work down, and the router decides the executor (§7).
+Objective trajectory friction (repeated action/observation, persistent verifier failure, confirmed stagnation, pre-output reasoning loops) sets a pending same-dimension quality-first repick for the next provider invocation, or hops immediately when replay is still safe. Models do not self-escalate; `commit_execution` hands work down, and the router decides the executor (§6).
 
 ### 2. Main-stream automatic fallback
 The delegation loop reacts only to objective pre-answer failures. No semantic-quality inference, no replay after visible output, a tool call, or a thinking-overflow commit.
 
 ---
 
-## 7. Terminal work and multi-work routing
+## 6. Final step and execution contracts
 
-Covers explicit compound implementation requests — "find X, then fix it" — where the terminal deliverable (a mutation) is harder than its own inspect phase. Ordinary intents are unaffected: this machinery only engages for `implement`-dimension turns whose terminal classification is compound and discount-eligible.
+### Final step and capability band (`work-phase.ts`)
 
-### Terminal classification (`terminal-classifier.ts`)
-
-A pure, deterministic structural classifier — separate from the keyword/semantic dimension classifiers — extracts one `TerminalAssessment` per entry: `kind` (same vocabulary as `Dimension`), `complexity` (`trivial`|`routine`|`moderate`|`hard`|`frontier`), `scope` (`bounded`|`open-ended`), `compound`, `confidence`, and `discountEligible`. `compound` requires an explicit prerequisite → sequence → mutation structure (e.g. "investigate the race condition, then fix it"); anything defaulted (complexity or scope inferred rather than matched) withholds `discountEligible` — the inspect-phase discount is a licence, so only unambiguous evidence earns it.
-
-### Terminal requirement and capability band (`work-phase.ts`)
+A ready `hand_off_context` or `reopen_work` declares the final step: `kind` (the deliverable), `complexity` (`trivial`|`routine`|`moderate`|`hard`|`frontier`), and `scope` (`bounded`|`open-ended`). Within an entry a stronger declaration replaces a weaker one, never the reverse (`withStrongerTerminal`).
 
 ```
 requirement = clamp01(KIND_BASE[kind] + 0.5 × COMPLEXITY[complexity] + (scope === 'open-ended' ? 0.1 : 0))
 ```
 
-| Band | Requirement | Floor |
+| Band | Requirement | Minimum |
 |---|---|---|
 | `economy` | < 0.30 | none |
 | `standard` | < 0.50 | 0.45 |
 | `strong` | < 0.75 | 0.70 |
 | `frontier` | ≥ 0.75 | 0.85 |
 
-### Phase lifecycle
-
-Each intent owns one `WorkPhase`: `answer` (lightweight), `inspect` (gather, or an engaged compound implementation's opening phase), `reason` (plan/review), `mutate` (implement, or a compound implementation once it has left `inspect`). Multi-work only *engages* — granting the inspect-phase discount — when the terminal kind is compound-eligible implement, band is `strong` or `frontier`, confidence isn't low, and the resolved dimension is `implement`. Once engaged, phase advances `inspect` → `mutate` when a stronger routing owner takes over (the resolved dimension changes away from `implement`) — never automatically downward, and never once the turn leaves `inspect`.
-
-### Scoring policy (`scorer.ts`)
-
-An engaged intent supplies a request-local `MultiWorkScoringPolicy` — `terminalFloor` (the terminal band's floor) and `inspectFloor` (one band below, while still in `inspect`) — instead of the ordinary live tier/promotion parameters. This is the *only* place quality can be measured below terminal preference: a bounded, deterministic economic promotion for the inspect phase, not an uncertainty downgrade. Every scored candidate also carries `CandidateCapabilityMeta` (`taskRatio`, `clearsTerminalFloor`, `viaInspectPromotion`) so the caller knows, per candidate, whether it actually clears the terminal floor or only the inspect floor.
-
-### Materializing served capability (`delegation.ts`)
-
-Capability is evaluated for the *candidate that actually serves* the turn, not the top-ranked pick — fallback can serve a weaker sibling. `ServedCapabilityMeta` (provider invocation, terminal floor, whether any candidate in the scoring set ever cleared it, and the served candidate's own capability) is materialized before decision state is published, so the mutation gate always reads settled evidence for the invocation that is actually streaming.
-
-### Mutation gate (`mutation-gate.ts`)
-
-Pure, fail-open, invocation-bounded state transitions gating `edit`/`write` tool calls. While engaged and still in `inspect`, a mutation call is blocked once per provider invocation unless served capability already clears the terminal floor (`clearsTerminalFloor === true`) or is genuinely unknown (`'unknown'` proceeds — unmeasured is not proof of insufficiency, and blocking on it would wait forever). A later invocation after a block always escapes — one bounded handoff, not a hard veto, since the router cannot guarantee a stronger model exists. Missing or incoherent served-capability evidence fails open immediately rather than stalling the turn. A blocked call returns as an error tool result, prompting the agent to request another provider turn (per Pi's tool-call/tool-result contract).
+The band only raises minimums: a plan or review handoff takes the higher of its rubric requirement and the band minimum. A `gather` entry whose final step is `strong` or `frontier` gets its one `hand_off_context` reminder on its first tool result rather than its first edit.
 
 ### Execution contract (`execution-contract.ts`, `execution-contract-tool.ts`)
 
-The explicit `plan`/`review` → `implement` handoff. The serving model calls `commit_execution` with the remaining work as a closed program: `edit`/`create` steps (path and exact change), `delete` steps, and `verify` steps (`test`/`typecheck`/`lint`/`build`), at most 12 steps, no glob paths. The tool is registered once and always active: changing the provider tool list mid-session rebuilds the prompt head and loses the prompt cache on most provider APIs. It declines without state changes outside `router/auto`, outside a `plan`/`review` decision, or when a high-confidence verdict says the deliverable is a plan or review. Guidance that lives only in the prompt head is easy for a model to lose in a long context, so under the same conditions the result of the entry's first native `edit`/`write` without a plan gets one appended reminder to consider the tool. Appending to a tool result keeps the transcript prefix and prompt cache intact; each reminder is logged as a `nudge` record, so nudges without a later `accept` count missed handoffs.
+The explicit `plan`/`review` → `implement` handoff. The serving model calls `commit_execution` with the remaining work as a closed program: `edit`/`create` steps (path and exact change), `delete` steps, and `verify` steps (`test`/`typecheck`/`lint`/`build`), at most 12 steps, no glob paths. The tool is registered once and always active: changing the provider tool list mid-session rebuilds the prompt head and loses the prompt cache on most provider APIs. It declines without state changes outside `router/auto` or outside a `plan`/`review` decision. Guidance that lives only in the prompt head is easy for a model to lose in a long context, so under the same conditions the result of the entry's first native `edit`/`write` without a plan gets one appended reminder to consider the tool. Appending to a tool result keeps the transcript prefix and prompt cache intact; each reminder is logged as a `nudge` record, so nudges without a later `accept` count missed handoffs.
 
 The router, not the model, values the plan (`execution-difficulty.ts`). The submitter only describes the remaining work: `remainingWork` rates five criteria from 1 (easiest) to 5 (hardest) — open decisions, spread, verification, knowledge needed beyond the listed files, and coupling. A model asked whether work is easy tends to answer confidently whatever the truth; a description on fixed scales, weighted by the router, can be checked against outcomes and refitted. The requirement is 30% plus a lookup on open decisions (level 5 alone reaches 90% and keeps the submitter), up to 8 points per other criterion, and up to 4 points per measured fact: files, directories, existing lines of the edit/delete targets, and fix commits touching the targets in the last 180 days (`git log`). An unscored criterion counts as level 5; a failed measurement counts halfway, so neither lowers the requirement. Commits, test targets, and step count are logged but not weighted. The requirement maps to a band (`economy` < 45%, `standard` < 70%, `strong` < 85%, otherwise the submitter keeps the plan). The plan's shape only raises that band: more than 2 files or 4 steps needs `standard`, more than 5 files or 8 steps keeps the submitter, and so does an edit/delete target that does not exist. Each executor model already excluded in the task raises the band one step. A releasing band routes the next invocations as `implement` with the executor implement minimum replacing the 85% tier-0 ratio, and both incumbent minimums stand down so a cheaper executor can win on score. A contract that keeps the submitter still routes as `implement`, with both incumbent minimums in force. The weights are hand-set; every contract logs its rubric, measurements, and outcome so they can be fitted instead.
 
 A contract is executed when a native `edit`/`write` has succeeded on every declared edit/create target, or when its executor has used `2 × steps + 4` provider invocations (Bash writes and deletions are never attributed, so the budget ends such plans). The executor is the first model other than the submitter that serves an invocation of a released plan. A released plan can still be served by its submitter alone: it may win on score, or serve as a fallback. A plan another model executed routes the rest of the entry as `review` with the submitter as the incumbent and its task type as the thinking minimum: a finished plan can be wrong in ways no break detects, and only the submitter can judge the work against its intent. Switching on the invocation after the last declared edit is the only point the router can guarantee: once a model answers with text alone, Pi's loop ends and no invocation remains to hand back. Verify steps after the last declared edit therefore run under review. A plan only its submitter served continues as `implement`. The first verifier run after execution is recorded as `pass`/`fail`. A new `commit_execution` during review is **rework**: it strikes the executor like a break, and the revised plan keeps the original task type. The contract ends with its entry — when Pi's run settles, or when a queued entry starts — and is labelled `clean` (no edits during review), `fixed` (the submitter edited), `rework`, `broken`, or `unfinished` (still active); one `outcome` record is logged.
 
-The contract breaks when the executor edits (native `edit`/`write`) a file outside its declared targets, calls `commit_execution` again, or arms an objective trajectory handoff. The breaking call is never blocked: reading files, running commands, and Bash writes are not attributed to a target. The next invocation routes at the submitter's task type with the submitter as the incumbent and its task type as the thinking minimum; a pending trajectory handoff still owns that pick. The contract is then cleared and the submitter may submit a revised plan. Each executor model gets two strikes (breaks or reworks) per task; after the second it is excluded at every effort and on every provider, and later executors must also have measured implement quality strictly above the strongest excluded executor, so repeated handoffs end at the submitter after at most three exclusions. Strikes and exclusions survive thin continuations; an active contract does not.
-
-### Assessor v2 contract (`assessment-prompt.ts`)
-
-`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. The assessor returns the `{ kind, complexity, scope, compound, confidence, reasoning }` shape as defined by the terminal classifier (`ParsedAssessment`/`RoutingAssessment`). Successful verdicts are adopted under the entry caps in §1 and recorded as `assessment-metric` entries. A high-confidence `plan`/`review` `kind` rejects an execution contract; `complexity`/`compound` do not gate it. The separate deterministic terminal classification supplies the multi-work band, and there is no automatic verify-phase down-routing.
+The contract breaks when the executor edits (native `edit`/`write`) a file outside its declared targets, calls `commit_execution` again, or arms an objective trajectory handoff. The breaking call is never blocked: reading files, running commands, and Bash writes are not attributed to a target. The next invocation routes at the submitter's task type with the submitter as the incumbent and its task type as the thinking minimum; a pending trajectory handoff still owns that pick. The contract is then cleared and the submitter may submit a revised plan. Each executor model gets two strikes (breaks or reworks) per task; after the second it is excluded at every effort and on every provider, and later executors must also have measured implement quality strictly above the strongest excluded executor, so repeated handoffs end at the submitter after at most three exclusions. Strikes and exclusions carry to later entries on the same work item, including a reopen of it; an active contract does not.
 
 ### Decision surfacing
 
-`RoutingDecision.multiWork` (a `MultiWorkRoutingMeta`) is present only for engaged intents. `/router-status` and `/router-why` (`formatDecisionDetail` in `ui.ts`) print terminal kind/complexity/band and phase/invocation, the actual served capability ratio (or `unknown` without a measured ratio), and a gate line only when a block/escape actually occurred. Decisions without engaged multi-work metadata can still display `editing` after an identified mutation call; their task type changes only through an accepted execution contract, whose state `/router-why` prints on the `plan:` line — band and executor minimum, why the submitter keeps it, who executed it, or why it broke — and `excluded:` once an executor model is excluded.
+`/router-status` and `/router-why` (`formatDecisionDetail` in `ui.ts`) print the task type and its cause. A decision can display `editing` after an identified mutation call; its task type changes only through an accepted handoff or execution contract, whose state `/router-why` prints on the `plan:` line — band and executor minimum, why the submitter keeps it, who executed it, or why it broke — and `excluded:` once an executor model is excluded.
 
 ---
 
@@ -291,7 +242,7 @@ Work-item lifecycle is independent of task type and execution-contract state. `c
 
   Active and completed work reminders use `withGatheringNote`: delegated-request content only, never system sections or Pi transcript entries. `complete_work` and `reopen_work` are registered once and execute sequentially so later tool calls in their batch see the new status. `agent_before_settle` appends at most one hidden reminder per entry and kind, and continues once. While the entry collects context and the router has refused a handoff or a call from it, the reminder asks for `hand_off_context`; a direct answer with no refusal, or one declared through the tool, settles as it is. Otherwise, when the entry's execution contract is executed, or the entry changed files without a contract, and `complete_work` was not accepted, the reminder asks for `complete_work`. The context reminder comes first; no completion reminder runs while context is still being collected. Pi computes the event's `canContinue` before any entry is added, so it is false right after a final reply; the router does not check it, and Pi checks the context again after applying the entries. The router appends its entry to the drafts of earlier handlers, because a handler's entries replace them. The reminder starts with `[pi8-settle]`, which turn classification always excludes, so the continuation keeps the entry's intent key, and `withGatheringNote` keeps its note on the entry's own message. A second settle of the same kind, an error, or an abort does not continue. Each reminder logs a `settle-nudge` work-lifecycle record with its kind (`context` or `completion`). `agent_settled` logs once per entry whether each reminder was followed — any accepted `hand_off_context` outcome (ready, declared answer, or `needs-user`), or an accepted `complete_work` — as `settle-followed` or `settle-ignored`, and closes the entry's logs. It changes no work state. No `replyPending` state is needed: tool-result continuations retain the intent key. Direct answers stream immediately without a declaration-triggered retry; failed-attempt buffering and the no-replay-after-visible-output rule remain independent of work lifecycle.
 
-## 8. Data flow
+## 7. Data flow
 
 ### Benchmarks
 
@@ -310,23 +261,22 @@ Benchmark slugs are fuzzy-matched against Pi's live registry model IDs. Manual o
 ### Session state & lifecycle
 
 Routing state is encapsulated into instantiable domain aggregates:
-- `RouterSession`: Root session container owning session generation, last decision/served model, candidate expansion cache, embedding tallies, and domain sub-objects. Cleared on `session_start` or test resets.
+- `RouterSession`: Root session container owning session generation, last decision/served model, candidate expansion cache, and domain sub-objects. Cleared on `session_start` or test resets.
 - `BlacklistState`: Encapsulates model and provider runtime exclusions, as well as session glob patterns with case-insensitive normalization.
-- `AssessmentState`: Tracks assessor spend, input/output usage EMA, and per-model strike counts.
-- `IntentState`: Manages cached routing intent across tool loops, depth-latch generation, latch veto intent key, and compound work-phase state.
+- `IntentState`: Manages cached routing intent across tool loops and the entry's work-phase state.
 - `RuntimeBindings`: Stores Pi's `ExtensionContext`, active `modelRegistry`, and provider registration signature. Persists across `session_start` resets and clears only on extension shutdown or reload.
 
 ### Decision log
 
-Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, assessment verdicts, `assessment-metric` records, and `execution-contract` records (accept/reject/break/nudge/execute/outcome with band, executor minimum, rubric levels, measured counts, outcome label, reject code, and model keys; never plan paths or change text). Cause values: `heuristic`, `continuation-context`, `router-consult`, `execution-contract`, `embedding-classify`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `context-depth`, `self-healing-gap`, `manual-override`, `resume`, `semi-hold`.
+Append-only per-session sidecar next to the Pi transcript (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; ephemeral sessions without a persisted session file share `~/.pi/agent/pi8/decisions.jsonl`): dimension, chosen model, cause, fallback chain, capability-gate diagnostics, `investigation-handoff` records (context handoffs), `work-lifecycle` records, and `execution-contract` records (accept/reject/break/nudge/execute/outcome with band, executor minimum, rubric levels, measured counts, outcome label, reject code, and model keys; never plan paths or change text). Cause values: `heuristic`, `continuation-context`, `router-consult`, `execution-contract`, `investigation`, `investigation-handoff`, `incumbent`, `work-context`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `self-healing-gap`, `manual-override`, `resume`, `semi-hold`. Readers still accept causes that older records carry.
 
 ### Timing log
 
-Per-step millisecond timing (opt-in via the `debug` config): registry wait, classification, per-candidate auth/stream attempts, turn totals. Written as a per-session `*.router-debug.log` sidecar (`/tmp/pi8-debug.log` when ephemeral).
+Per-step millisecond timing (opt-in via the `debug` config): registry wait, scoring, per-candidate auth/stream attempts, turn totals. Written as a per-session `*.router-debug.log` sidecar (`/tmp/pi8-debug.log` when ephemeral).
 
 ---
 
-## 9. Configuration reference
+## 8. Configuration reference
 
 Options in `~/.pi/agent/pi8/config.json`:
 
@@ -335,13 +285,6 @@ Options in `~/.pi/agent/pi8/config.json`:
 | `artificialAnalysisApiKey` | — | Saved by `/router-sync` |
 | `models` | `[]` (all) | Allowlist: provider/id glob patterns (`*` wildcards, case-insensitive; a bare provider name means `provider/*`) |
 | `blacklist` | `[]` | Persisted exclude patterns, same syntax as `models` |
-| `consultRouter` | `true` | Master switch for semantic assessment; `false` dispatches no assessment request |
-| `consultModel` | — | Optional assessor model override |
-| `assessmentDeadlineMs` | `1500` | End-to-end assessor budget |
-| `assessmentMaxInputChars` | `6000` | Assessor input cap |
-| `assessorQualityRatio` | `0.5` | Assessor competence floor |
-| `depthEscalation` | `true` | Auto-raise on deep context |
-| `depthEscalationTokens` | `32768` | Context-token threshold |
 | `prompt` | `true` | TUI notification on model switch |
 | `semi` | `false` | Ask before switching away from the last served model |
 | `switchMargin` | `0.15` | Incumbent cache-preservation cap; `0` disables the bonus |
@@ -349,16 +292,12 @@ Options in `~/.pi/agent/pi8/config.json`:
 | `debug` | `false` | Timing log path or `true` |
 | `syntheticPrefixes` | `[]` | Literal prefixes marking synthetic messages |
 | `dimensionWeights` | per-dimension defaults | Override `{quality, cost, speed}` per dimension |
-| `lowConfidenceThreshold` | `0.15` | Classifier confidence below which uncertainty handling applies |
-| `sources` | — | Benchmark source selection |
-| `consultRouterAgent` | — | Legacy input alias; use `consultRouter` (canonical) for new configs |
-| `embeddingClassifier` | `false` | Local E5-small classifier for prompts without keyword evidence; up-only; needs optional `onnxruntime-node` and `@xenova/transformers` |
-| `embeddingDeadlineMs` | `5000` | Model load + inference budget; on expiry the keyword result stands |
-| `embeddingMinConfidence` | `0.15` | Minimum top-two prototype margin before the embedding verdict applies |
+| `sources` | `['artificial-analysis', 'benchlm']` | Benchmark source selection |
+| `baselineModel` | — | Model `/router-report` compares routed spend against |
 
 ---
 
-## 10. Non-goals
+## 9. Non-goals
 
 - Semantic answer grading or automatic retries on perceived quality
 - Replaying after visible text or a tool call, or replacing a running child in-place
@@ -367,7 +306,7 @@ Options in `~/.pi/agent/pi8/config.json`:
 
 ---
 
-## 11. Development
+## 10. Development
 
 ```bash
 npm run check   # tsc --noEmit + vitest run
@@ -375,10 +314,8 @@ npm run check   # tsc --noEmit + vitest run
 
 Core modules:
 - `scorer.ts` — pure scoring, `pickBest`, capability tiers, effort resolution (no I/O)
-- `classifier.ts` — pure keyword classification (no I/O)
-- `consult.ts` — assessment dispatch: streaming model call, parse, timeout
 - `delegation.ts` — fallback loop: auth, retries, circuit breaker, timeouts
-- `provider.ts` — orchestrator: registry wait, classify/escalate/consult, score, delegate; also owns `buildSubagentProviderAuthFilter`, the 3s per-provider credential probe
+- `provider.ts` — orchestrator: registry wait, entry phase and escalation, score, delegate; also owns `buildSubagentProviderAuthFilter`, the 3s per-provider credential probe
 - `index.ts` — hook wiring; runs the credential probe before role assignment
 - `adapters/` — benchmark data sources (currently only `artificial-analysis.ts`)
 - `subagents.ts` — role injection (no probe of its own)

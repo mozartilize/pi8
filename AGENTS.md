@@ -1,6 +1,6 @@
 # AGENTS.md — pi8
 
-A Pi extension registering a synthetic `router/auto` provider: it classifies each turn, scores candidates from Pi's model registry against synced benchmark data, and delegates the stream with a fallback chain. It stays in-process — no external gateway or daemon — and takes benchmark data from APIs rather than scraping. User-facing behavior is in `README.md`.
+A Pi extension registering a synthetic `router/auto` provider: it resolves each turn's task type from router state and the model's accepted declarations, scores candidates from Pi's model registry against synced benchmark data, and delegates the stream with a fallback chain. It stays in-process — no external gateway or daemon — and takes benchmark data from APIs rather than scraping. User-facing behavior is in `README.md`.
 
 ## What belongs here
 
