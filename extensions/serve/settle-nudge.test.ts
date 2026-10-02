@@ -67,9 +67,19 @@ describe('settle nudge', () => {
     expect(reminder(settleNudge(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${COMPLETION_SETTLE_TEXT}`);
   });
 
+  it('reminds about completion when a model served the entry\'s plan or review handoff', () => {
+    for (const deliverable of ['plan', 'review'] as const) {
+      const session = ready({ contract: undefined, contextStatus: 'served', deliverable });
+      expect(reminder(settleNudge(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${COMPLETION_SETTLE_TEXT}`);
+    }
+  });
+
   it('does not remind about completion without evidence that the requested work was done', () => {
     for (const session of [
       ready({ contract: undefined }),
+      ready({ contract: undefined, contextStatus: 'served', deliverable: 'implement' }),
+      ready({ contract: undefined, deliverable: 'review' }),
+      ready({ contract: { status: 'active' } as WorkPhaseState['contract'], contextStatus: 'served', deliverable: 'plan' }),
       ready({ contract: { status: 'active' } as WorkPhaseState['contract'], observedMutationTools: 1 }),
       ready({ contract: { status: 'broken' } as WorkPhaseState['contract'], observedMutationTools: 1 }),
       ready({ completion: { workItemId: 'w_1', status: 'done' } }),
@@ -92,10 +102,19 @@ describe('settle nudge', () => {
     }
   });
 
-  it('lets a direct answer settle while collecting context when nothing was refused', () => {
-    const session = ready({ contextStatus: 'acquiring' });
-    expect(settleNudge(settle(), session)).toBeUndefined();
-    expect(session.getWorkPhaseState()?.contextSettleNudged).toBeUndefined();
+  it('lets a direct answer to a gather or lightweight request settle when nothing was refused', () => {
+    for (const deliverable of ['gather', 'lightweight'] as const) {
+      const session = ready({ contextStatus: 'acquiring', deliverable });
+      expect(settleNudge(settle(), session)).toBeUndefined();
+      expect(session.getWorkPhaseState()?.contextSettleNudged).toBeUndefined();
+    }
+  });
+
+  it('reminds about hand_off_context when a request of any other type settles undeclared', () => {
+    for (const deliverable of ['implement', 'plan', 'review', undefined] as const) {
+      const session = ready({ contextStatus: 'acquiring', deliverable });
+      expect(reminder(settleNudge(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${CONTEXT_SETTLE_TEXT}`);
+    }
   });
 
   it('reminds once about hand_off_context after a refusal, before any completion reminder', () => {

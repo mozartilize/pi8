@@ -22,8 +22,8 @@ import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { RouterSession } from './router-session-state.js';
 
 export const CONTEXT_SETTLE_TEXT = [
-  'Router: you did not call hand_off_context for this request, and the router refused a call or a handoff from you.',
-  'If the request needs changes or a decision, call hand_off_context now.',
+  'Router: you did not call hand_off_context for this request.',
+  'If the request needs changes, a plan, a review, or a decision, call hand_off_context now.',
   'If your reply fully answered a question, do not call it.',
 ].join('\n');
 
@@ -35,13 +35,16 @@ export const COMPLETION_SETTLE_TEXT = [
 ].join('\n');
 
 /**
- * A direct answer while collecting context is normal; only a refused attempt
- * to act shows that the model wanted a boundary it never declared. A declared
- * direct answer stays in collecting context but owes nothing more.
+ * A direct answer while collecting context is normal only for a request typed
+ * `gather` or `lightweight`. Any other type, or a refused attempt to act,
+ * shows a boundary the model never declared: a plan, review, or change written
+ * by the gathering model skips that type's minimum. A declared direct answer
+ * stays in collecting context but owes nothing more.
  */
 function owesHandoff(state: WorkPhaseState): boolean {
-  return state.contextStatus === 'acquiring' && !state.contextSettleNudged
-    && state.contextAnswer === undefined && (state.contextDenials ?? 0) > 0;
+  if (state.contextStatus !== 'acquiring' || state.contextSettleNudged || state.contextAnswer !== undefined) return false;
+  const directAnswer = state.deliverable === 'gather' || state.deliverable === 'lightweight';
+  return !directAnswer || (state.contextDenials ?? 0) > 0;
 }
 
 /** Every accepted `hand_off_context` outcome: ready, a declared direct answer, or a question to the user. */
@@ -70,15 +73,18 @@ function logSettle(
 
 /**
  * Work that spans entries is open by design, so only evidence that this
- * entry did the requested work earns a reminder: its plan ran, or it changed
- * files without a plan. A running or broken plan is not finished work.
+ * entry did the requested work earns a reminder: its plan ran, it changed
+ * files without a plan, or a model served its plan or review handoff, whose
+ * reply is the requested work. A running or broken plan is not finished work.
  */
 function owesCompletion(state: WorkPhaseState, session: RouterSession): boolean {
   if (state.completion || state.completionSettleNudged) return false;
   const status = state.contextStatus;
   if (status === 'acquiring' || status === 'clarification-only' || status === 'ready-pending') return false;
   const contract = state.contract?.status;
-  const didWork = contract === 'executed' || (contract === undefined && state.observedMutationTools > 0);
+  const servedReasoning = status === 'served' && (state.deliverable === 'plan' || state.deliverable === 'review');
+  const didWork = contract === 'executed'
+    || (contract === undefined && (state.observedMutationTools > 0 || servedReasoning));
   return didWork && activeWorkItem(session.context.getLedger()) !== undefined;
 }
 

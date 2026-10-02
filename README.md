@@ -78,7 +78,7 @@ Completion closes the current work item but keeps the model and conversation. On
 
 Until the handoff, the mutation gate blocks file changes, execution plans, and subagent calls. It uses the router's best-effort mutation detector, not a shell sandbox. Superseded work stays terminal. The work-choice catalog and reminders are added only to delegated requests, not the system prompt or Pi transcript. Answers stream without a retry just because a handoff declaration is missing.
 
-Before a run ends, the router can add one hidden reminder and continue once. It reminds the model to call `hand_off_context` if the router refused a handoff or a call while collecting context. It reminds the model to call `complete_work` if the entry ran its plan or changed files and did not complete the work. If the model still does not call the tool, the context stays unresolved and the work stays open.
+Before a run ends, the router can add one hidden reminder and continue once. It reminds the model to call `hand_off_context` if collecting context ends without one and the request is not a `gather` or `lightweight` question, or the router refused a handoff or a call. It reminds the model to call `complete_work` if the entry ran its plan, changed files, or delivered the plan or review it was handed, and did not complete the work. If the model still does not call the tool, the context stays unresolved and the work stays open.
 
 ## Commands
 
