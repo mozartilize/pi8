@@ -17,10 +17,14 @@ export function completedWorkNote(state: WorkPhaseState): string {
       'Do not change files or start a subagent before that boundary.' + workChoiceNote(state);
 }
 
-/** User-requested work defines completion; optional suggestions never extend it. */
+/**
+ * User-requested work defines completion; optional suggestions never extend it.
+ * The entry keeps these bytes after complete_work succeeds, so the cached
+ * prefix holds; the text must stay true in that state too.
+ */
 export const activeWorkNote =
-  'Router: this work item stays open until you call complete_work. ' +
-  'Call complete_work when the user\'s request is complete, before your final response. ' +
+  'Router: call complete_work once, when the user\'s request for this work item is complete, ' +
+  'before your final response. After it succeeds, give your final response. ' +
   'Your own suggestions, next steps, offers to do more, or reported limitations do not keep the work open. ' +
   'Leave it open only if part of the request is incomplete, you need the user\'s answer to finish, ' +
   'or a test or build you ran for the request failed and remains unfixed. ' +

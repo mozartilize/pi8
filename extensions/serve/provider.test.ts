@@ -2270,16 +2270,17 @@ describe('context acquisition', () => {
           expect(gateCompletedWorkToolCall({ toolName: 'edit', input: {} }, harness.session)?.block).toBe(true);
         });
 
-        it('hands off to the same done item as reopen, then removes the first-look restriction', async () => {
+        it('refuses a handoff to the completed item it owns and points to reopen_work, without a refusal count', async () => {
           const { session, workItemId } = await completed();
           await session.routeTurn('add the pending adjustment to this migration');
+          const before = harness.session.getWorkPhaseState()!;
           const topicId = harness.session.context.getLedger().items.get(workItemId)!.topic.id;
-          expect((await submitPrepared({ ...handoff(1, 'implement'), workItemId, topicId })).accepted).toBe(true);
-          expect(harness.session.getWorkPhaseState()?.contextResolution?.relation).toBe('reopen');
-          expect(harness.session.getWorkPhaseState()?.firstLook).toBeUndefined();
-          expect(harness.session.context.getLedger().activeWorkItemId).toBe(workItemId);
-          await session.routeTurnAgainWithSameUserEntry();
-          expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, harness.session)).toBeUndefined();
+          const result = await submitPrepared({ ...handoff(1, 'implement'), workItemId, topicId });
+          expect(result).toMatchObject({ accepted: false, text: expect.stringContaining('reopen_work') });
+          expect(harness.session.getWorkPhaseState()).toMatchObject({ firstLook: { workItemId } });
+          expect(harness.session.getWorkPhaseState()?.contextDenials).toBe(before.contextDenials);
+          expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
+          expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
         });
 
         it('hands off unrelated work to a new item without reopening the completed one', async () => {

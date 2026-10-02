@@ -85,7 +85,7 @@ import { carryPhaseAcrossTree } from './serve/context-resolution.js';
 import { registerRoutingContextTool } from './serve/routing-context-tool.js';
 import { registerCompleteWorkTool } from './serve/complete-work-tool.js';
 import { registerReopenWorkTool } from './serve/reopen-work-tool.js';
-import { completionSettleNudge } from './serve/completion-settle.js';
+import { logSettleOutcomes, settleNudge } from './serve/settle-nudge.js';
 import { gateCompletedWorkToolCall } from './serve/completed-work-gate.js';
 import {
   closeContextOnSettle,
@@ -664,18 +664,19 @@ export default async function autoModelRouterExtension(
 
   pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels, session));
 
-  // A missing complete_work can still be declared, so that reminder runs here.
-  // agent_settled only records how the entry ended.
+  // A missing hand_off_context or complete_work can still be declared, so
+  // those reminders run here. agent_settled only records how the entry ended.
   pi.on('agent_before_settle', (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
     try {
-      return completionSettleNudge(event, session);
+      return settleNudge(event, session);
     } catch {
       return undefined;
     }
   });
 
   pi.on('agent_settled', () => {
+    logSettleOutcomes(session);
     closeContextOnSettle(session);
     closeContractOnSettle(session);
   });

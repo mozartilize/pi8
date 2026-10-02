@@ -119,6 +119,7 @@ const REJECTIONS = {
   'missing-work-title': 'Context not handed off: give a short workItemTitle for NEW_WORK_ITEM.',
   'missing-topic-title': 'Context not handed off: give a short topicTitle for NEW_TOPIC.',
   'stale-entry': 'Context not handed off: this request is no longer the active entry.',
+  'use-reopen-work': 'Context not handed off: this is the completed work item you own. For more changes to it, call reopen_work.',
   'not-recorded': 'Context not handed off: the router could not record the handoff. Call it again.',
   internal: 'Context not handed off: internal router error. Call it again, or reply to the user.',
 } as const;
@@ -237,7 +238,8 @@ function reject(
   let text: string = REJECTIONS[code] + detail;
   if (state && served) {
     log(state, served, 'reject', { rejectReason: code });
-    if (code !== 'not-recorded' && code !== 'internal' && code !== 'already-handed-off') {
+    // A redirect to reopen_work names the right tool; it is not a failed context.
+    if (code !== 'not-recorded' && code !== 'internal' && code !== 'already-handed-off' && code !== 'use-reopen-work') {
       const next = countContextRefusal(session, state, served);
       if (next !== state && next.contextStatus === 'clarification-only') text += ` ${CLARIFICATION_TEXT}`;
     }
@@ -269,7 +271,7 @@ export function submitContextHandoff(
     if (!opened.acquiring) return reject(session, 'not-acquiring', state, served);
     if (!filled(params.question)) return reject(session, 'missing-question', state, served);
     const reason = member(NEEDS_USER_REASONS, params.reason);
-    session.commitWorkPhaseState({ ...state, contextStatus: 'clarification-only' });
+    session.commitWorkPhaseState({ ...state, contextStatus: 'clarification-only', contextNeedsUser: true });
     log(state, served, 'needs-user', reason ? { rejectReason: reason } : {});
     return { accepted: true, text: `Context handed back to the user. ${CLARIFICATION_TEXT}` };
   }
@@ -302,6 +304,12 @@ export function submitContextHandoff(
   }
   if (selection && session.getSessionGeneration() !== selection.generation) {
     return reject(session, 'stale-entry', state, served);
+  }
+  // The completed item this model owns has one reopen protocol, reopen_work;
+  // a handoff still reopens any other done item.
+  const owned = state.firstLook?.workItemId ?? state.completion?.workItemId;
+  if (owned && selection?.plan.workItemId === owned && selection.plan.resolution.relation === 'reopen') {
+    return reject(session, 'use-reopen-work', state, served);
   }
   if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
   const terminal = withStrongerTerminal(state, { kind: deliverable, complexity, scope });

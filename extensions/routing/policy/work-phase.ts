@@ -62,6 +62,8 @@ export interface WorkPhaseState {
   deniedAtInvocation?: number;
   /** The entry's one clarification request was dispatched. */
   clarificationDispatched?: boolean;
+  /** The model handed the request back to the user; other paths to clarification-only are refusals or the budget. */
+  contextNeedsUser?: boolean;
   /** Normalized payload of the accepted handoff; the same payload again is idempotent. */
   handoffKey?: string;
   /** The one acquisition reminder for this entry was already appended. */
@@ -84,8 +86,12 @@ export interface WorkPhaseState {
   firstLook?: { workItemId: string };
   /** The entry completed its work item; no change runs for the rest of the entry until a reopen. */
   completion?: { workItemId: string; status: 'done' | 'superseded' };
+  /** This entry already got its one settle reminder to call hand_off_context. */
+  contextSettleNudged?: boolean;
   /** This entry already got its one settle reminder to call complete_work. */
   completionSettleNudged?: boolean;
+  /** The outcome of this entry's settle reminders was logged. */
+  settleOutcomeLogged?: boolean;
 }
 
 const clamp = (value: number): number => Math.max(0, Math.min(1, value));

@@ -250,6 +250,15 @@ describe('decision log', () => {
     expect(() => appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'gate' }, join(blocker, 'sub'))).not.toThrow();
   });
 
+  it('records the kind of a settle reminder and its outcome', () => {
+    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-nudge', nudge: 'context' }, dir);
+    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-ignored', nudge: 'context' }, dir);
+    expect(readRecentEntries(2, dir).map((record) => record.workLifecycle)).toEqual([
+      { action: 'settle-nudge', nudge: 'context' },
+      { action: 'settle-ignored', nudge: 'context' },
+    ]);
+  });
+
   it('reads an unversioned record as written', () => {
     writeFileSync(join(dir, DECISION_LOG_FILE), JSON.stringify({ ts: 1, dimension: 'plan', chosen: 'a/b' }) + '\n');
     expect(readRecentEntries(10, dir)[0]).toEqual({ ts: 1, dimension: 'plan', chosen: 'a/b' });

@@ -132,6 +132,7 @@ export interface DecisionLogEntry {
     rejectReason?: string;
     status?: 'done' | 'superseded';
     deliverable?: Dimension;
+    nudge?: SettleNudgeKind;
   };
   /** Set on `kind: 'execution-contract'` records only. */
   executionContract?: {
@@ -292,13 +293,22 @@ export interface WorkLifecycleSignal {
    * `complete-*` and `reopen-*` mark `complete_work` and `reopen_work`
    * calls; `first-look` an entry a completed item's model served first;
    * `gate` a change refused because the work item is complete.
+   * `settle-nudge` marks a hidden settle reminder of kind `nudge`; when the
+   * run settles, `settle-followed` or `settle-ignored` records whether the
+   * model then declared the boundary.
    */
-  action: 'complete-accept' | 'complete-reject' | 'reopen-accept' | 'reopen-reject' | 'first-look' | 'gate';
+  action:
+    | 'complete-accept' | 'complete-reject' | 'reopen-accept' | 'reopen-reject' | 'first-look' | 'gate'
+    | 'settle-nudge' | 'settle-followed' | 'settle-ignored';
   workItemId?: string;
   rejectReason?: string;
   status?: 'done' | 'superseded';
   deliverable?: Dimension;
+  nudge?: SettleNudgeKind;
 }
+
+/** The boundary a settle reminder asks for: `hand_off_context` or `complete_work`. */
+export type SettleNudgeKind = 'context' | 'completion';
 
 /** Append a work lifecycle transition. Best-effort; never throws into the tool path. */
 export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBase?: string): void {
@@ -323,6 +333,7 @@ export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBa
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
         ...(signal.status ? { status: signal.status } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
+        ...(signal.nudge ? { nudge: signal.nudge } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

@@ -23,6 +23,8 @@ import {
   owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { isMutationCall } from '../routing/policy/mutation-detector.js';
+import { ROUTER_SETTLE_PREFIX } from '../routing/policy/continuation.js';
+import { classifyProvenance } from '../routing/context/message-provenance.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { ContextReason } from '../routing/context/types.js';
 import type { RouterSession } from './router-session-state.js';
@@ -164,13 +166,15 @@ export const CLARIFICATION_NOTE = `Router: ${CLARIFICATION_TEXT}`;
  * fixed position with the same bytes on every invocation of the phase, so
  * the prompt prefix — and its cache — stays identical, and no later message
  * is rewritten. A note at the tail would move on every invocation and
- * rewrite the history after its old position.
+ * rewrite the history after its old position. A router settle reminder is
+ * user-role too, but it is not the entry's message: the note stays before it.
  */
 export function withGatheringNote(context: Context, note: string): Context {
   const messages = context.messages ?? [];
   let index = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i]?.role === 'user') {
+    const message = messages[i];
+    if (message?.role === 'user' && classifyProvenance(message, [ROUTER_SETTLE_PREFIX]) !== 'synthetic-known') {
       index = i;
       break;
     }
