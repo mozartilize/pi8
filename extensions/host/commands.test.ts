@@ -127,7 +127,7 @@ describe('/router-manual', () => {
     await handlers.get('router-manual')!('alpha/first', ctx);
     expect(session.getManualModel()).toBe('alpha/first');
     expect(messages.at(-1)).toContain('No fallback to other models.');
-    session.armTrajectoryEscalation(
+    session.setPendingTrajectoryEscalation(
       { escalate: true, tfi: 1, signals: [] },
       'alpha/first',
       'implement',

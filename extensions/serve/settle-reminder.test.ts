@@ -5,11 +5,11 @@ import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { ROUTER_SETTLE_PREFIX } from '../routing/policy/continuation.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import { RouterSession } from './router-session-state.js';
-import { COMPLETION_SETTLE_TEXT, CONTEXT_SETTLE_TEXT, logSettleOutcomes, settleNudge } from './settle-nudge.js';
+import { COMPLETION_SETTLE_TEXT, CONTEXT_SETTLE_TEXT, logSettleOutcomes, settleReminder } from './settle-reminder.js';
 
 vi.mock('../host/decisionlog.js', () => ({ appendWorkLifecycleSignal: vi.fn() }));
 const logged = vi.mocked(appendWorkLifecycleSignal);
-const actions = () => logged.mock.calls.map(([signal]) => [signal.action, signal.nudge]);
+const actions = () => logged.mock.calls.map(([signal]) => [signal.action, signal.reminder]);
 beforeEach(() => logged.mockClear());
 
 const executed = { status: 'executed' } as WorkPhaseState['contract'];
@@ -37,40 +37,40 @@ function settle(
     Pick<AgentBeforeSettleEvent, 'outcome' | 'entries'>;
 }
 
-function reminder(result: ReturnType<typeof settleNudge>) {
+function reminder(result: ReturnType<typeof settleReminder>) {
   const message = result?.entries?.at(-1);
   return message && 'content' in message ? message.content : undefined;
 }
 
-describe('settle nudge', () => {
+describe('settle reminder', () => {
   it('continues once after a final reply when this entry executed its plan and did not complete the work', () => {
     const session = ready();
-    const result = settleNudge(settle(), session);
+    const result = settleReminder(settle(), session);
     expect(result?.continue).toBe(true);
     expect(result?.entries?.[0]).toMatchObject({ type: 'custom_message', customType: 'pi8-settle', display: false });
     expect(reminder(result)).toBe(`${ROUTER_SETTLE_PREFIX}\n${COMPLETION_SETTLE_TEXT}`);
-    expect(session.getWorkPhaseState()?.completionSettleNudged).toBe(true);
-    expect(logged.mock.calls[0]?.[0]).toMatchObject({ action: 'settle-nudge', nudge: 'completion', workItemId: 'w_1' });
+    expect(session.getWorkPhaseState()?.completionSettleReminded).toBe(true);
+    expect(logged.mock.calls[0]?.[0]).toMatchObject({ action: 'settle-reminder', reminder: 'completion', workItemId: 'w_1' });
     expect(session.context.getLedger().items.get('w_1')?.status).toBe('active');
-    expect(settleNudge(settle(), session)).toBeUndefined();
+    expect(settleReminder(settle(), session)).toBeUndefined();
   });
 
   it('keeps the drafts of earlier handlers', () => {
     const draft = { type: 'custom_message', customType: 'other', content: 'x', display: false } as const;
-    const result = settleNudge(settle('completed', [draft]), ready());
+    const result = settleReminder(settle('completed', [draft]), ready());
     expect(result?.entries).toHaveLength(2);
     expect(result?.entries?.[0]).toBe(draft);
   });
 
   it('reminds about completion when the entry changed files without a plan', () => {
     const session = ready({ contract: undefined, observedMutationTools: 2 });
-    expect(reminder(settleNudge(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${COMPLETION_SETTLE_TEXT}`);
+    expect(reminder(settleReminder(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${COMPLETION_SETTLE_TEXT}`);
   });
 
   it('reminds about completion when a model served the entry\'s plan or review handoff', () => {
     for (const deliverable of ['plan', 'review'] as const) {
       const session = ready({ contract: undefined, contextStatus: 'served', deliverable });
-      expect(reminder(settleNudge(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${COMPLETION_SETTLE_TEXT}`);
+      expect(reminder(settleReminder(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${COMPLETION_SETTLE_TEXT}`);
     }
   });
 
@@ -86,50 +86,50 @@ describe('settle nudge', () => {
       ready({ contextStatus: 'ready-pending' }),
       ready({ contextStatus: 'clarification-only' }),
     ]) {
-      expect(settleNudge(settle(), session)).toBeUndefined();
-      expect(session.getWorkPhaseState()?.completionSettleNudged).toBeUndefined();
+      expect(settleReminder(settle(), session)).toBeUndefined();
+      expect(session.getWorkPhaseState()?.completionSettleReminded).toBeUndefined();
     }
     const closed = ready();
     closed.context.append({ v: 1, op: 'work-close', workItemId: 'w_1', status: 'done', sourceEntryId: 'u1' });
-    expect(settleNudge(settle(), closed)).toBeUndefined();
+    expect(settleReminder(settle(), closed)).toBeUndefined();
   });
 
   it('does nothing after an error or an abort', () => {
     for (const outcome of ['error', 'aborted'] as const) {
       const session = ready({ contextStatus: 'acquiring', contextDenials: 1 });
-      expect(settleNudge(settle(outcome), session)).toBeUndefined();
-      expect(session.getWorkPhaseState()?.contextSettleNudged).toBeUndefined();
+      expect(settleReminder(settle(outcome), session)).toBeUndefined();
+      expect(session.getWorkPhaseState()?.contextSettleReminded).toBeUndefined();
     }
   });
 
   it('lets a direct answer to a gather or lightweight request settle when nothing was refused', () => {
     for (const deliverable of ['gather', 'lightweight'] as const) {
       const session = ready({ contextStatus: 'acquiring', deliverable });
-      expect(settleNudge(settle(), session)).toBeUndefined();
-      expect(session.getWorkPhaseState()?.contextSettleNudged).toBeUndefined();
+      expect(settleReminder(settle(), session)).toBeUndefined();
+      expect(session.getWorkPhaseState()?.contextSettleReminded).toBeUndefined();
     }
   });
 
   it('reminds about hand_off_context when a request of any other type settles undeclared', () => {
     for (const deliverable of ['implement', 'plan', 'review', undefined] as const) {
       const session = ready({ contextStatus: 'acquiring', deliverable });
-      expect(reminder(settleNudge(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${CONTEXT_SETTLE_TEXT}`);
+      expect(reminder(settleReminder(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${CONTEXT_SETTLE_TEXT}`);
     }
   });
 
   it('reminds once about hand_off_context after a refusal, before any completion reminder', () => {
     const session = ready({ contextStatus: 'acquiring', contextDenials: 1 });
-    expect(reminder(settleNudge(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${CONTEXT_SETTLE_TEXT}`);
-    expect(session.getWorkPhaseState()).toMatchObject({ contextSettleNudged: true });
-    expect(session.getWorkPhaseState()?.completionSettleNudged).toBeUndefined();
+    expect(reminder(settleReminder(settle(), session))).toBe(`${ROUTER_SETTLE_PREFIX}\n${CONTEXT_SETTLE_TEXT}`);
+    expect(session.getWorkPhaseState()).toMatchObject({ contextSettleReminded: true });
+    expect(session.getWorkPhaseState()?.completionSettleReminded).toBeUndefined();
     // Still collecting context: no second reminder of either kind.
-    expect(settleNudge(settle(), session)).toBeUndefined();
-    expect(actions()).toEqual([['settle-nudge', 'context']]);
+    expect(settleReminder(settle(), session)).toBeUndefined();
+    expect(actions()).toEqual([['settle-reminder', 'context']]);
   });
 
   it('does not remind about hand_off_context after a declared direct answer', () => {
     const session = ready({ contextStatus: 'acquiring', contextDenials: 1, contextAnswer: 'gather' });
-    expect(settleNudge(settle(), session)).toBeUndefined();
+    expect(settleReminder(settle(), session)).toBeUndefined();
   });
 });
 
@@ -137,22 +137,22 @@ describe('settle outcomes', () => {
   it('records each declared handoff outcome as followed', () => {
     for (const declared of [{ handoffKey: 'k' }, { contextAnswer: 'gather' as const }, { contextNeedsUser: true }]) {
       logged.mockClear();
-      logSettleOutcomes(ready({ contextSettleNudged: true, ...declared }));
+      logSettleOutcomes(ready({ contextSettleReminded: true, ...declared }));
       expect(actions()).toEqual([['settle-followed', 'context']]);
     }
   });
 
   it('records an ignored reminder, once per entry', () => {
-    const session = ready({ contextStatus: 'clarification-only', contextSettleNudged: true });
+    const session = ready({ contextStatus: 'clarification-only', contextSettleReminded: true });
     logSettleOutcomes(session);
     logSettleOutcomes(session);
     expect(actions()).toEqual([['settle-ignored', 'context']]);
   });
 
   it('records the completion reminder against its work item', () => {
-    logSettleOutcomes(ready({ completionSettleNudged: true }));
-    logSettleOutcomes(ready({ completionSettleNudged: true, completion: { workItemId: 'w_1', status: 'done' } }));
-    expect(logged.mock.calls.map(([signal]) => [signal.action, signal.nudge, signal.workItemId])).toEqual([
+    logSettleOutcomes(ready({ completionSettleReminded: true }));
+    logSettleOutcomes(ready({ completionSettleReminded: true, completion: { workItemId: 'w_1', status: 'done' } }));
+    expect(logged.mock.calls.map(([signal]) => [signal.action, signal.reminder, signal.workItemId])).toEqual([
       ['settle-ignored', 'completion', 'w_1'],
       ['settle-followed', 'completion', 'w_1'],
     ]);

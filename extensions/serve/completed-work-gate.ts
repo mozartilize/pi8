@@ -31,7 +31,7 @@ export const activeWorkNote =
   'For different work, call hand_off_context.';
 
 /**
- * A completed item's first look and the rest of an entry that completed it
+ * The entry after a completed item and the rest of an entry that completed it
  * have the same restriction. Refusals do not spend the acquisition budget:
  * the model may still answer a question about completed work directly.
  * Mutation detection has the same best-effort limits as the rest of routing.
@@ -43,7 +43,7 @@ export function gateCompletedWorkToolCall(
   try {
     const state = session.getWorkPhaseState();
     if (!state || session.getLastDecision()?.intentKey !== state.intentKey) return undefined;
-    const workItemId = state.completion?.workItemId ?? state.firstLook?.workItemId;
+    const workItemId = state.completion?.workItemId ?? state.priorCompletion?.workItemId;
     if (!workItemId) return undefined;
     if (event.toolName !== EXECUTION_CONTRACT_TOOL && event.toolName !== 'subagent'
       && !isMutationCall(event.toolName, event.input)) return undefined;

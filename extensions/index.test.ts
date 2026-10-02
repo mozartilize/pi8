@@ -6,8 +6,8 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 import type { RegistryModelInfo } from './routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role, type RoutingDecision } from './types.js';
 
-import { CONTRACT_GATE, CONTRACT_NUDGE } from './serve/execution-contract-tool.js';
-import { CONTEXT_HANDOFF_NUDGE } from './serve/gathering-gate.js';
+import { CONTRACT_GATE, CONTRACT_REMINDER } from './serve/execution-contract-tool.js';
+import { CONTEXT_HANDOFF_REMINDER } from './serve/gathering-gate.js';
 import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
@@ -273,7 +273,7 @@ describe('registry-only role routing', () => {
       expect(calls()).toBe(before);
     });
 
-    it('re-arms the credential sweep when the user switches TO router/auto', async () => {
+    it('restarts the credential sweep when the user switches TO router/auto', async () => {
       const handlers = new Map<string, (...args: any[]) => unknown>();
       const pi = {
         on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -291,7 +291,7 @@ describe('registry-only role routing', () => {
       await tick();
 
       // The session_start gate skipped the sweep; switching into the router
-      // must re-arm it so subagent role routing is populated mid-session.
+      // must restart it so subagent role routing is populated mid-session.
       expect(calls()).toBe(before + 1);
     });
 
@@ -1016,7 +1016,7 @@ describe('mutation observation hooks', () => {
     const toolCall = handlers.get('tool_call')!;
     defaultRouterSession.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'intent-a' });
     for (const marker of [
-      { firstLook: { workItemId: 'w_1' } },
+      { priorCompletion: { workItemId: 'w_1' } },
       { completion: { workItemId: 'w_1', status: 'done' as const } },
     ]) {
       defaultRouterSession.commitWorkPhaseState(entryState(marker));
@@ -1041,7 +1041,7 @@ describe('mutation observation hooks', () => {
   it('does not flush trajectory on turn_start when the session model is concrete', async () => {
     const handlers = await makeToolHandlers();
     const turnStart = handlers.get('turn_start')!;
-    const flush = vi.spyOn(defaultRouterSession, 'flushAndArmUnresolvedTrajectory');
+    const flush = vi.spyOn(defaultRouterSession, 'flushAndSetUnresolvedTrajectory');
     const models = [registryModel('alpha/cheap')];
     await turnStart({}, contextWithRegistry(models, { provider: 'openai-codex', id: 'gpt-5.3' }));
     expect(flush).not.toHaveBeenCalled();
@@ -1051,7 +1051,7 @@ describe('mutation observation hooks', () => {
   it('flushes unresolved trajectory on turn_start when router/auto is active', async () => {
     const handlers = await makeToolHandlers();
     const turnStart = handlers.get('turn_start')!;
-    const flush = vi.spyOn(defaultRouterSession, 'flushAndArmUnresolvedTrajectory');
+    const flush = vi.spyOn(defaultRouterSession, 'flushAndSetUnresolvedTrajectory');
     const models = [registryModel('alpha/cheap')];
     await turnStart({}, contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID }));
     expect(flush).toHaveBeenCalledTimes(1);
@@ -1452,7 +1452,7 @@ describe('mutation observation hooks', () => {
     expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, routerAutoCtx))
       .toBeUndefined();
     const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
-    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTEXT_HANDOFF_NUDGE]);
+    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTEXT_HANDOFF_REMINDER]);
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
 
     investigating({ deliverable: 'plan', contextStatus: 'served' });
@@ -1488,7 +1488,7 @@ describe('mutation observation hooks', () => {
 
     expect(await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx)).toBeUndefined();
     const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
-    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTRACT_NUDGE]);
+    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTRACT_REMINDER]);
     expect(await toolResult({ toolName: 'write', toolCallId: 'w1', content }, routerAutoCtx)).toBeUndefined();
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, concreteCtx)).toBeUndefined();
   });
@@ -1519,8 +1519,8 @@ describe('mutation observation hooks', () => {
       scoredReason: { ...scoredReason, details: [{ kind: 'incumbent-model' as const }] },
     });
     const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
-    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTRACT_NUDGE]);
-    expect(CONTRACT_NUDGE).toContain('if the user asked for this change');
+    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTRACT_REMINDER]);
+    expect(CONTRACT_REMINDER).toContain('if the user asked for this change');
   });
 
   function planEntry(over: Partial<WorkPhaseState> = {}, decision: Partial<RoutingDecision> = {}) {
@@ -1557,7 +1557,7 @@ describe('mutation observation hooks', () => {
     // The stop was the entry's one reminder.
     const content = [{ type: 'text', text: 'edited' }];
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
-    expect(gateRecords('executionContract')).toEqual([{ action: 'nudge' }]);
+    expect(gateRecords('executionContract')).toEqual([{ action: 'reminder' }]);
   });
 
   it('stops a high-confidence shell write of a review entry without a plan', async () => {
@@ -1594,7 +1594,7 @@ describe('mutation observation hooks', () => {
 
     planEntry();
     expect(await toolCall({ toolName: 'edit', toolCallId: 'e5', input: { path: 'src/a.ts' } }, concreteCtx)).toBeUndefined();
-    expect(defaultRouterSession.getWorkPhaseState()?.contractNudged).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()?.contractReminded).toBeUndefined();
   });
 
   it('refuses every call outside the allowed tools until the handoff, and ends acquisition at the second refusal', async () => {

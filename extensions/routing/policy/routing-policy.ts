@@ -52,9 +52,9 @@ export interface RoutingPolicyInput {
   incumbentRegistryId?: string;
   /**
    * The dimension the previous decision resolved at. When the incumbent model
-   * stays sticky within a task, this carries forward as an up-only effort
+   * keeps serving a task, this carries forward as an up-only effort
    * minimum so a cheap-phrased same-task follow-up cannot serve the strong
-   * incumbent at a shallow thinking level. It stands down on the same
+   * incumbent at a shallow thinking level. It is skipped on the same
    * sanctioned moves as the incumbent capability minimum.
    */
   incumbentResolvedDimension?: Dimension;
@@ -73,7 +73,7 @@ export interface RoutingPolicyInput {
   handoffMinimum?: number;
   /**
    * True while a handoff boundary has not yet been served: both incumbent
-   * minimums stand down so the scorer may pick a cheaper or stronger model
+   * minimums are skipped so the scorer may pick a cheaper or stronger model
    * for the new phase. Once a model serves the phase, it is the incumbent.
    */
   handoffPending?: boolean;
@@ -164,7 +164,7 @@ function applyTrajectoryRepick(
 }
 
 /**
- * Incumbent capability floor. The served model is sticky within one task: a
+ * Incumbent capability floor. The served model keeps serving one task: a
  * per-invocation rescore must not fall below the incumbent's known
  * capability at the routed dimension. Select the first already-scored chain
  * candidate that meets that minimum, which may be a cheaper model. An
@@ -176,9 +176,9 @@ function applyIncumbentModelFloor(
   candidates: Candidate[],
   dimension: Dimension,
   incumbentRegistryId: string | undefined,
-  standsDown: boolean,
+  skip: boolean,
 ): void {
-  if (incumbentRegistryId == null || incumbentRegistryId === decision.chosen || standsDown) {
+  if (incumbentRegistryId == null || incumbentRegistryId === decision.chosen || skip) {
     return;
   }
   const incumbentCandidate = candidates.find((c) => candidateKey(c) === incumbentRegistryId);
@@ -218,11 +218,11 @@ function applyIncumbentEffortFloor(
   decision: RoutingDecision,
   dimension: Dimension,
   incumbentResolvedDimension: Dimension | undefined,
-  standsDown: boolean,
+  skip: boolean,
 ): void {
   if (
     incumbentResolvedDimension == null ||
-    standsDown ||
+    skip ||
     DIMENSION_STRENGTH[incumbentResolvedDimension] <= DIMENSION_STRENGTH[dimension]
   ) {
     return;
@@ -342,15 +342,15 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   decision = trajectory.decision;
   cause = trajectory.cause;
 
-  // The minimums stand down only for sanctioned moves: an applied trajectory
+  // The minimums are skipped only for sanctioned moves: an applied trajectory
   // handoff owns the model (its repick excludes the source, so the floor must
   // not restore it); a handoff boundary until a model serves the new phase;
-  // and a recorded move to other work at entry start. Classifier confidence and cheap wording never count
+  // and a recorded move to other work at entry start. Cheap wording never counts
   // as a work change, and tool-loop invocations keep the serving model's
   // minimums even when the entry began as new work.
   const changedWork = !sameIntentAsLast &&
     (workRelation === 'new' || workRelation === 'resume' || workRelation === 'reopen' || workRelation === 'switch');
-  const incumbentFloorStandsDown =
+  const skipIncumbentMinimums =
     trajectory.applied || changedWork || handoffPending === true;
 
   // Incumbent capability floor.
@@ -359,7 +359,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     candidates,
     dimension,
     incumbentRegistryId,
-    incumbentFloorStandsDown,
+    skipIncumbentMinimums,
   );
 
   // Incumbent effort floor.
@@ -367,7 +367,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     decision,
     dimension,
     incumbentResolvedDimension,
-    incumbentFloorStandsDown,
+    skipIncumbentMinimums,
   );
 
   // Metadata and reason suffixes.

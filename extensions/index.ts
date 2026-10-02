@@ -67,7 +67,7 @@ import { clearRouterStatus, renderRouterStatus } from './host/ui.js';
 import {
   gateContractMutation,
   handleContractToolCall,
-  nudgeContractOnEdit,
+  remindContractOnEdit,
   registerExecutionContractTool,
   closeContractOnSettle,
   trackContractToolResult,
@@ -85,12 +85,12 @@ import { carryPhaseAcrossTree } from './serve/context-resolution.js';
 import { registerRoutingContextTool } from './serve/routing-context-tool.js';
 import { registerCompleteWorkTool } from './serve/complete-work-tool.js';
 import { registerReopenWorkTool } from './serve/reopen-work-tool.js';
-import { logSettleOutcomes, settleNudge } from './serve/settle-nudge.js';
+import { logSettleOutcomes, settleReminder } from './serve/settle-reminder.js';
 import { gateCompletedWorkToolCall } from './serve/completed-work-gate.js';
 import {
   closeContextOnSettle,
   gateContextToolCall,
-  nudgeContextHandoff,
+  remindContextHandoff,
   observeContextRead,
 } from './serve/gathering-gate.js';
 import { registerContextHandoffTool } from './serve/context-handoff-tool.js';
@@ -125,7 +125,7 @@ function isOfflineMode(): boolean {
  * can trigger a network token refresh for OAuth providers (pi#7508). It must
  * only run when the router actually owns the session AND the user did not
  * request offline mode. Concrete-model sessions skip this sweep; switching
- * to router/auto re-arms it via model_select.
+ * to router/auto restarts it via model_select.
  */
 function shouldRunAuthSweep(model: { provider?: string; id?: string } | undefined): boolean {
   if (isOfflineMode()) return false;
@@ -333,7 +333,7 @@ function handleModelSelect(
     clearRouterStatus(ctx);
     return;
   }
-  // Switching TO router/auto mid-session re-arms subagent role routing that
+  // Switching TO router/auto mid-session restarts subagent role routing that
   // the session_start gate skipped in a concrete-model session. Detached and
   // generation-guarded: a slow probe sweep must never block the switch, and
   // a stale refresh cannot overwrite a newer one.
@@ -401,12 +401,12 @@ function handleTurnStart(
     model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
     ...session.blacklist.getDebugState(),
   });
-  // Trajectory arming belongs only to router/auto sessions. Provider
+  // Setting a pending trajectory handoff belongs only to router/auto sessions. Provider
   // registration below stays ungated so a later switch to router/auto
   // can still find the synthetic model.
   if (isRouterAutoActive(ctx?.model)) {
     try {
-      session.flushAndArmUnresolvedTrajectory();
+      session.flushAndSetUnresolvedTrajectory();
     } catch {
       // ignore
     }
@@ -602,7 +602,7 @@ function handleTrajectoryToolResult(event: ToolResultEvent, session: RouterSessi
       invocation,
     );
     if (!decision) return;
-    session.armTrajectoryEscalation(
+    session.setPendingTrajectoryEscalation(
       decision,
       session.servedTrajectoryKey(),
       session.getLastDecision()?.dimension,
@@ -669,7 +669,7 @@ export default async function autoModelRouterExtension(
   pi.on('agent_before_settle', (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
     try {
-      return settleNudge(event, session);
+      return settleReminder(event, session);
     } catch {
       return undefined;
     }
@@ -717,7 +717,7 @@ export default async function autoModelRouterExtension(
       handleContractToolCall(event, ctx, session);
       const flushed = session.noteTrajectoryToolCall(event.toolName, event.toolCallId, event.input);
       if (flushed) {
-        session.armTrajectoryEscalation(
+        session.setPendingTrajectoryEscalation(
           flushed,
           session.servedTrajectoryKey(),
           session.getLastDecision()?.dimension,
@@ -750,8 +750,8 @@ export default async function autoModelRouterExtension(
       ctx,
       session,
     );
-    const nudge = nudgeContractOnEdit(event, session) ?? nudgeContextHandoff(event, session);
+    const reminder = remindContractOnEdit(event, session) ?? remindContextHandoff(event, session);
     await observeContextGrounding(event, ctx, session);
-    return nudge;
+    return reminder;
   });
 }

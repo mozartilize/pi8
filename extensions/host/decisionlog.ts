@@ -132,7 +132,7 @@ export interface DecisionLogEntry {
     rejectReason?: string;
     status?: 'done' | 'superseded';
     deliverable?: Dimension;
-    nudge?: SettleNudgeKind;
+    reminder?: SettleReminderKind;
   };
   /** Set on `kind: 'execution-contract'` records only. */
   executionContract?: {
@@ -180,10 +180,10 @@ export interface ExecutionContractSignal {
    */
   served: string;
   /**
-   * `nudge` marks a plan/review change attempted without a plan: a missed handoff.
+   * `reminder` marks a plan/review change attempted without a plan: a missed handoff.
    * `outcome` closes a contract with the label its features are fitted against.
    */
-  action: 'accept' | 'reject' | 'break' | 'nudge' | 'execute' | 'outcome';
+  action: 'accept' | 'reject' | 'break' | 'reminder' | 'execute' | 'outcome';
   rejectReason?: string;
   outcome?: ContractOutcome;
   meta?: ExecutionContractMeta;
@@ -231,7 +231,7 @@ export interface ContextHandoffSignal {
   /** Model that handed off, was declined, was reminded, or owns the phase. */
   served: string;
   /**
-   * `nudge` marks a reminder to hand off; `deny` a call refused while
+   * `reminder` marks a reminder to hand off; `deny` a call refused while
    * collecting context. `needs-user` and `budget-exhausted` mark collecting
    * context ending in a question to the user: the model asked for it, or the
    * entry spent its requests or refusals. `served` marks the first invocation
@@ -239,7 +239,7 @@ export interface ContextHandoffSignal {
    * handoff and `no-handoff` owed context that was never handed off.
    */
   action:
-    | 'accept' | 'answer' | 'reject' | 'nudge' | 'deny' | 'needs-user' | 'budget-exhausted'
+    | 'accept' | 'answer' | 'reject' | 'reminder' | 'deny' | 'needs-user' | 'budget-exhausted'
     | 'served' | 'phase-end' | 'no-handoff';
   rejectReason?: string;
   handoff?: ReasoningHandoffMeta;
@@ -291,24 +291,24 @@ export interface WorkLifecycleSignal {
   served: string;
   /**
    * `complete-*` and `reopen-*` mark `complete_work` and `reopen_work`
-   * calls; `first-look` an entry a completed item's model served first;
+   * calls; `prior-completion` an entry that a completed item's model served;
    * `gate` a change refused because the work item is complete.
-   * `settle-nudge` marks a hidden settle reminder of kind `nudge`; when the
+   * `settle-reminder` marks a hidden settle reminder, and `reminder` names its kind; when the
    * run settles, `settle-followed` or `settle-ignored` records whether the
    * model then declared the boundary.
    */
   action:
-    | 'complete-accept' | 'complete-reject' | 'reopen-accept' | 'reopen-reject' | 'first-look' | 'gate'
-    | 'settle-nudge' | 'settle-followed' | 'settle-ignored';
+    | 'complete-accept' | 'complete-reject' | 'reopen-accept' | 'reopen-reject' | 'prior-completion' | 'gate'
+    | 'settle-reminder' | 'settle-followed' | 'settle-ignored';
   workItemId?: string;
   rejectReason?: string;
   status?: 'done' | 'superseded';
   deliverable?: Dimension;
-  nudge?: SettleNudgeKind;
+  reminder?: SettleReminderKind;
 }
 
 /** The boundary a settle reminder asks for: `hand_off_context` or `complete_work`. */
-export type SettleNudgeKind = 'context' | 'completion';
+export type SettleReminderKind = 'context' | 'completion';
 
 /** Append a work lifecycle transition. Best-effort; never throws into the tool path. */
 export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBase?: string): void {
@@ -333,7 +333,7 @@ export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBa
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
         ...(signal.status ? { status: signal.status } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
-        ...(signal.nudge ? { nudge: signal.nudge } : {}),
+        ...(signal.reminder ? { reminder: signal.reminder } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

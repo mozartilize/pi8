@@ -317,7 +317,7 @@ export interface RoutingDecision {
   dimension: Dimension;
   /**
    * Effort floor applied when serving, when it must outrank the routed
-   * dimension's own floor. The incumbent model is sticky within a task, so a
+   * dimension's own floor. The incumbent model keeps serving a task, so a
    * cheap-phrased same-task follow-up keeps the strong model — but its routed
    * dimension (and thus its effort floor) can classify low. This carries the
    * incumbent's resolved dimension forward as an up-only effort floor so the

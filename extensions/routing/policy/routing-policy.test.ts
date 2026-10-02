@@ -648,7 +648,7 @@ describe('incumbent capability floor', () => {
     expect(result.decision.effortFloorDimension).toBeUndefined();
   });
 
-  it('stands down on a side question placed outside the current work', () => {
+  it('skips the incumbent minimums on a side question placed outside the current work', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,
@@ -690,7 +690,7 @@ describe('incumbent capability floor', () => {
     expect(result.decision.reason).toContain('[kept current model: stronger for this task]');
   });
 
-  it('stands down for an applied trajectory handoff and never restores the excluded source', () => {
+  it('skips the incumbent minimums for an applied trajectory handoff and never restores the excluded source', () => {
     const result = resolveRoutingDecision(
       makePolicyInput({
         candidates: benchmarkCandidates,

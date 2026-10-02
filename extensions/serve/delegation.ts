@@ -911,11 +911,11 @@ async function runCandidateAttempt(
   const controller = new AttemptController(ctx, candidate);
   let requestReady = false;
   let deadline: ReturnType<typeof setTimeout> | undefined;
-  const armDeadline = (ms: number, message: string): void => {
+  const startDeadline = (ms: number, message: string): void => {
     clearTimeout(deadline);
     deadline = setTimeout(() => attemptAbort.abort(new Error(message)), ms);
   };
-  const armOutputDeadline = (): void => armDeadline(
+  const startOutputDeadline = (): void => startDeadline(
     firstEventTimeoutMs,
     `no response within ${Math.round(firstEventTimeoutMs / 1000)}s: ${candidate.candidateId}`,
   );
@@ -927,7 +927,7 @@ async function runCandidateAttempt(
     try {
       attemptAbort.signal.throwIfAborted();
       ctx.opts.onRequest?.();
-      armDeadline(authResolveTimeoutMs, `credential lookup timed out: ${candidate.candidateId}`);
+      startDeadline(authResolveTimeoutMs, `credential lookup timed out: ${candidate.candidateId}`);
       const delegatedStream = ctx.opts.registry.streamSimple(
         candidate.chosen,
         context,
@@ -943,7 +943,7 @@ async function runCandidateAttempt(
             attemptAbort.signal.throwIfAborted();
             requestReady = true;
             debugLog('attempt.auth', { candidate: candidate.candidateId, ms: streamTimer(), outcome: 'ok' });
-            armOutputDeadline();
+            startOutputDeadline();
             return headers;
           },
         },
@@ -966,7 +966,7 @@ async function runCandidateAttempt(
 
         const disposition = controller.accept(step.value);
         if (controller.meaningfulOutputReceived) clearTimeout(deadline);
-        else if (step.value.type === 'thinking_delta') armOutputDeadline();
+        else if (step.value.type === 'thinking_delta') startOutputDeadline();
         if (disposition.kind === 'continue') continue;
         failure = disposition.kind === 'trajectory'
           ? { kind: 'trajectory', message: `trajectory reasoning-loop: ${candidate.candidateId}` }
@@ -1135,7 +1135,7 @@ export async function runDelegationLoop(
   // remaining chain was already context/vision-guarded at routing time, so no
   // context estimate is needed here.
   const escOpts: ScoreOpts = { estimatedContextTokens: 0 };
-  session.flushAndArmUnresolvedTrajectory();
+  session.flushAndSetUnresolvedTrajectory();
 
   let success = false;
   let lastError: string | undefined;
@@ -1325,7 +1325,7 @@ export async function runDelegationLoop(
     }
     lastAttemptedId = candidateId;
 
-    // A sticky incumbent held on a cheap-classified follow-up carries the
+    // An incumbent held on a cheap follow-up carries the
     // incumbent's resolved dimension as an up-only effort floor, so the
     // served thinking level cannot drop below what the incumbent ran at.
     const effortFloorDimension = decision.effortFloorDimension ?? decision.dimension;

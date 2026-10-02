@@ -37,7 +37,7 @@ export interface WorkPhaseState {
   /** The previous work item's penalties, applied only if this entry's handoff continues that item. */
   priorWork?: PriorWork;
   /** The one handoff reminder for this entry was already appended. */
-  contractNudged?: boolean;
+  contractReminded?: boolean;
   /** Files the entry's tools looked at, most recent first; router-observed, never inherited. */
   readPaths?: string[];
   /** Context → planning/review handoff for this entry; never inherited. */
@@ -67,7 +67,7 @@ export interface WorkPhaseState {
   /** Normalized payload of the accepted handoff; the same payload again is idempotent. */
   handoffKey?: string;
   /** The one acquisition reminder for this entry was already appended. */
-  contextNudged?: boolean;
+  contextReminded?: boolean;
   /** The entry's acquisition outcome was logged. */
   contextClosed?: boolean;
   /** The entry's work-context resolution; set once per entry. */
@@ -83,13 +83,13 @@ export interface WorkPhaseState {
    * answer about the completed work, but changes nothing until it reopens
    * the item or hands off; either boundary clears this. Entry-local.
    */
-  firstLook?: { workItemId: string };
+  priorCompletion?: { workItemId: string };
   /** The entry completed its work item; no change runs for the rest of the entry until a reopen. */
   completion?: { workItemId: string; status: 'done' | 'superseded' };
   /** This entry already got its one settle reminder to call hand_off_context. */
-  contextSettleNudged?: boolean;
+  contextSettleReminded?: boolean;
   /** This entry already got its one settle reminder to call complete_work. */
-  completionSettleNudged?: boolean;
+  completionSettleReminded?: boolean;
   /** The outcome of this entry's settle reminders was logged. */
   settleOutcomeLogged?: boolean;
 }

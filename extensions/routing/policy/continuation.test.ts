@@ -54,7 +54,7 @@ describe('getTurnClassificationInput', () => {
 
     it('keeps the entry key when a settle reminder arrives as a timestamped user message', () => {
       const first = getTurnClassificationInput(baseMessages);
-      const nudged = getTurnClassificationInput([
+      const reminded = getTurnClassificationInput([
         ...baseMessages,
         {
           role: 'user',
@@ -63,9 +63,9 @@ describe('getTurnClassificationInput', () => {
         },
       ] as unknown as Message[]);
 
-      expect(nudged.key).toBe(first.key);
-      expect(nudged.promptText).toBe('ok go for it');
-      expect(nudged.provenanceCounts['synthetic-known']).toBe(1);
+      expect(reminded.key).toBe(first.key);
+      expect(reminded.promptText).toBe('ok go for it');
+      expect(reminded.provenanceCounts['synthetic-known']).toBe(1);
     });
 
     it('ignores an ephemeral no-timestamp user injection for the key and ordinal', () => {

@@ -317,7 +317,7 @@ export class RouterSession {
    * The auto decision in effect just before the pin was engaged. `/router-manual
    * resume` reuses this (chosen model + fallback chain) for the next user entry
    * instead of recomputing. Captured at pin time because a manual turn overwrites
-   * `decision`; held while pinned, then armed by `resumeManual()` and consumed by
+   * `decision`; held while pinned, then scheduled by `resumeManual()` and consumed by
    * `resolveResumeDecision()`. `resumeIntentKey` scopes the one-shot to a single
    * user entry so tool-loop continuations reuse it but the next entry recomputes.
    */
@@ -436,10 +436,10 @@ export class RouterSession {
   }
 
   /**
-   * Leave manual mode and arm a one-shot reuse of the pre-pin auto decision.
-   * Returns whether a pin (or an armed snapshot) was active. Clears the pin and,
+   * Leave manual mode and schedule a one-shot reuse of the pre-pin auto decision.
+   * Returns whether a pin (or a scheduled snapshot) was active. Clears the pin and,
    * like leaving manual mode generally, discards pin-owned trajectory evidence so
-   * auto routing cannot act on it. `resumeSnapshot` is retained (now armed) and
+   * auto routing cannot act on it. `resumeSnapshot` is retained (now scheduled) and
    * `resumeIntentKey` is reset so the next user entry captures the one-shot.
    */
   resumeManual(): boolean {
@@ -452,7 +452,7 @@ export class RouterSession {
 
   /**
    * The decision `resume` should serve this invocation, or undefined to recompute.
-   * Armed only while no pin is active. The first invocation binds the one-shot to
+   * Scheduled only while no pin is active. The first invocation binds the one-shot to
    * the current user entry; same-entry tool-loop continuations reuse it; the first
    * invocation of a new entry expires it and returns undefined.
    */
@@ -627,13 +627,13 @@ export class RouterSession {
 
   /**
    * Complete a tool batch whose remaining calls never produced results
-   * (blocked preflights from this extension or another) and arm pending
+   * (blocked preflights from this extension or another) and set a pending
    * escalation from that evidence before the next routing peek.
    */
-  flushAndArmUnresolvedTrajectory(): void {
+  flushAndSetUnresolvedTrajectory(): void {
     const decision = this.abandonUnresolvedTrajectoryCalls();
     if (!decision) return;
-    this.armTrajectoryEscalation(
+    this.setPendingTrajectoryEscalation(
       decision,
       this.servedTrajectoryKey(),
       this.getLastDecision()?.dimension,
@@ -641,13 +641,13 @@ export class RouterSession {
     );
   }
 
-  armTrajectoryEscalation(
+  setPendingTrajectoryEscalation(
     decision: StruggleDecision,
     fromModel: string | undefined,
     dimension: Dimension | undefined,
     preOutput: boolean,
   ): void {
-    this.trajectory.maybeArmPending(decision, fromModel, dimension, preOutput);
+    this.trajectory.maybeSetPending(decision, fromModel, dimension, preOutput);
   }
 
   peekPendingTrajectoryEscalation(): PendingTrajectoryEscalation | undefined {

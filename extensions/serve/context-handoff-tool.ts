@@ -307,7 +307,7 @@ export function submitContextHandoff(
   }
   // The completed item this model owns has one reopen protocol, reopen_work;
   // a handoff still reopens any other done item.
-  const owned = state.firstLook?.workItemId ?? state.completion?.workItemId;
+  const owned = state.priorCompletion?.workItemId ?? state.completion?.workItemId;
   if (owned && selection?.plan.workItemId === owned && selection.plan.resolution.relation === 'reopen') {
     return reject(session, 'use-reopen-work', state, served);
   }
@@ -358,7 +358,7 @@ export function submitContextHandoff(
     if (cached?.key === state.intentKey) session.setCachedIntent({ ...cached, context: selected, dimension: deliverable });
   }
   const next = acceptContextHandoff(materialized, { deliverable, key, ...(reasoning ? { reasoning } : {}) });
-  session.commitWorkPhaseState({ ...next, firstLook: undefined, completion: undefined });
+  session.commitWorkPhaseState({ ...next, priorCompletion: undefined, completion: undefined });
   log(state, served, 'accept', {
     ...(next.reasoningHandoff ? { handoff: next.reasoningHandoff } : {}),
     deliverable,

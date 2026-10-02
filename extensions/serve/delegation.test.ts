@@ -910,7 +910,7 @@ describe('runDelegationLoop fallback policy', () => {
 
   it('a single thinking token does not disable the answer deadline', async () => {
     // R5 liveness: thinking keeps a reasoning-stall deadline alive but must not
-    // disarm it outright — a provider that emits one thinking token then hangs
+    // cancel it outright — a provider that emits one thinking token then hangs
     // still times out and falls over instead of blocking the turn forever.
     setDelegationTimeouts({ firstEventMs: 40, authMs: 500 });
     const thinkThenHang: AsyncIterable<unknown> = {

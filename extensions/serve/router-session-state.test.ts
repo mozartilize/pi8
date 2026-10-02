@@ -23,7 +23,7 @@ describe('router session state', () => {
   it('drops pinned-model trajectory escalation when resuming to auto', () => {
     const session = new RouterSession();
     session.setManualModel('provider/model');
-    session.armTrajectoryEscalation(
+    session.setPendingTrajectoryEscalation(
       { escalate: true, tfi: 1, signals: [] },
       'provider/model',
       'implement',
@@ -38,7 +38,7 @@ describe('router session state', () => {
     // Without an active pin there is nothing to resume, so unrelated auto-mode
     // trajectory evidence is preserved.
     const automatic = new RouterSession();
-    automatic.armTrajectoryEscalation(
+    automatic.setPendingTrajectoryEscalation(
       { escalate: true, tfi: 1, signals: [] },
       'provider/model',
       'implement',
@@ -212,8 +212,8 @@ describe('RouterSession independent instances', () => {
   });
 });
 
-describe('trajectory flush-and-arm', () => {
-  it('arms pending escalation from a blocked-sibling batch at the provider boundary', () => {
+describe('trajectory flush-and-set', () => {
+  it('sets a pending escalation from a blocked-sibling batch at the provider boundary', () => {
     const session = new RouterSession();
     session.setLastDecision(routingDecision(['test/weak:low']));
     session.setLastServed({
@@ -236,7 +236,7 @@ describe('trajectory flush-and-arm', () => {
     session.noteTrajectoryToolCall('read', 'r4', { path: 'a.ts' });
     expect(session.observeTrajectory(sameRead('r4'), 4)).toBeUndefined();
     expect(session.peekPendingTrajectoryEscalation()).toBeUndefined();
-    session.flushAndArmUnresolvedTrajectory();
+    session.flushAndSetUnresolvedTrajectory();
     expect(session.peekPendingTrajectoryEscalation()?.fromModel).toBe('test/weak:low');
   });
 });
@@ -262,7 +262,7 @@ describe('trajectory evidence ownership', () => {
     session.observeTrajectory(sameRead('r2'), 2);
     session.observeTrajectory(sameRead('r3'), 3);
     const decision = session.observeTrajectory(sameRead('r4'), 4);
-    session.armTrajectoryEscalation(decision!, session.servedTrajectoryKey(), 'implement', false);
+    session.setPendingTrajectoryEscalation(decision!, session.servedTrajectoryKey(), 'implement', false);
     expect(session.peekPendingTrajectoryEscalation()?.fromModel).toBe('test/weak:low');
   });
 
@@ -272,7 +272,7 @@ describe('trajectory evidence ownership', () => {
     session.bindTrajectoryIntent('intent-a');
     serve(session, 'test/weak', 'low');
     for (const id of ['r1', 'r2', 'r3', 'r4']) session.observeTrajectory(sameRead(id), 1);
-    session.armTrajectoryEscalation(
+    session.setPendingTrajectoryEscalation(
       session.observeTrajectory(sameRead('r5'), 5)!,
       session.servedTrajectoryKey(),
       'implement',
@@ -283,7 +283,7 @@ describe('trajectory evidence ownership', () => {
     // The handoff served: evidence from here on describes the new capability.
     serve(session, 'test/strong', 'high');
     const decision = session.observeTrajectory(sameRead('r6'), 6);
-    session.armTrajectoryEscalation(decision!, session.servedTrajectoryKey(), 'implement', false);
+    session.setPendingTrajectoryEscalation(decision!, session.servedTrajectoryKey(), 'implement', false);
     expect(session.peekPendingTrajectoryEscalation()).toBeUndefined();
   });
 

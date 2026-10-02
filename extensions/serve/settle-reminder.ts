@@ -14,7 +14,7 @@
  * invalid continuation itself.
  */
 import type { AgentBeforeSettleEvent, AgentBeforeSettleEventResult } from '@earendil-works/pi-coding-agent';
-import { appendWorkLifecycleSignal, type SettleNudgeKind, type WorkLifecycleSignal } from '../host/decisionlog.js';
+import { appendWorkLifecycleSignal, type SettleReminderKind, type WorkLifecycleSignal } from '../host/decisionlog.js';
 import { servedKey } from '../host/ui.js';
 import { activeWorkItem } from '../routing/context/ledger.js';
 import { ROUTER_SETTLE_PREFIX } from '../routing/policy/continuation.js';
@@ -42,7 +42,7 @@ export const COMPLETION_SETTLE_TEXT = [
  * stays in collecting context but owes nothing more.
  */
 function owesHandoff(state: WorkPhaseState): boolean {
-  if (state.contextStatus !== 'acquiring' || state.contextSettleNudged || state.contextAnswer !== undefined) return false;
+  if (state.contextStatus !== 'acquiring' || state.contextSettleReminded || state.contextAnswer !== undefined) return false;
   const directAnswer = state.deliverable === 'gather' || state.deliverable === 'lightweight';
   return !directAnswer || (state.contextDenials ?? 0) > 0;
 }
@@ -56,17 +56,17 @@ function logSettle(
   state: WorkPhaseState,
   session: RouterSession,
   action: Extract<WorkLifecycleSignal['action'], `settle-${string}`>,
-  nudge: SettleNudgeKind,
+  reminder: SettleReminderKind,
 ): void {
   const served = session.getLastServed();
-  const workItemId = nudge === 'completion'
+  const workItemId = reminder === 'completion'
     ? state.completion?.workItemId ?? session.context.getLedger().activeWorkItemId
     : undefined;
   appendWorkLifecycleSignal({
     intentKey: state.intentKey,
     served: served ? servedKey(served) : 'unknown/unknown',
     action,
-    nudge,
+    reminder,
     ...(workItemId ? { workItemId } : {}),
   });
 }
@@ -78,7 +78,7 @@ function logSettle(
  * reply is the requested work. A running or broken plan is not finished work.
  */
 function owesCompletion(state: WorkPhaseState, session: RouterSession): boolean {
-  if (state.completion || state.completionSettleNudged) return false;
+  if (state.completion || state.completionSettleReminded) return false;
   const status = state.contextStatus;
   if (status === 'acquiring' || status === 'clarification-only' || status === 'ready-pending') return false;
   const contract = state.contract?.status;
@@ -89,7 +89,7 @@ function owesCompletion(state: WorkPhaseState, session: RouterSession): boolean 
 }
 
 /** Collecting context comes first: no completion reminder while it is still owed. */
-export function settleNudge(
+export function settleReminder(
   event: Pick<AgentBeforeSettleEvent, 'outcome' | 'entries'>,
   session: RouterSession,
 ): AgentBeforeSettleEventResult | undefined {
@@ -98,12 +98,12 @@ export function settleNudge(
   if (!state) return undefined;
   let text: string;
   if (owesHandoff(state)) {
-    session.commitWorkPhaseState({ ...state, contextSettleNudged: true });
-    logSettle(state, session, 'settle-nudge', 'context');
+    session.commitWorkPhaseState({ ...state, contextSettleReminded: true });
+    logSettle(state, session, 'settle-reminder', 'context');
     text = CONTEXT_SETTLE_TEXT;
   } else if (owesCompletion(state, session)) {
-    session.commitWorkPhaseState({ ...state, completionSettleNudged: true });
-    logSettle(state, session, 'settle-nudge', 'completion');
+    session.commitWorkPhaseState({ ...state, completionSettleReminded: true });
+    logSettle(state, session, 'settle-reminder', 'completion');
     text = COMPLETION_SETTLE_TEXT;
   } else {
     return undefined;
@@ -127,11 +127,11 @@ export function settleNudge(
 export function logSettleOutcomes(session: RouterSession): void {
   try {
     const state = session.getWorkPhaseState();
-    if (!state || state.settleOutcomeLogged || !(state.contextSettleNudged || state.completionSettleNudged)) return;
-    if (state.contextSettleNudged) {
+    if (!state || state.settleOutcomeLogged || !(state.contextSettleReminded || state.completionSettleReminded)) return;
+    if (state.contextSettleReminded) {
       logSettle(state, session, declaredHandoff(state) ? 'settle-followed' : 'settle-ignored', 'context');
     }
-    if (state.completionSettleNudged) {
+    if (state.completionSettleReminded) {
       logSettle(state, session, state.completion ? 'settle-followed' : 'settle-ignored', 'completion');
     }
     session.commitWorkPhaseState({ ...state, settleOutcomeLogged: true });

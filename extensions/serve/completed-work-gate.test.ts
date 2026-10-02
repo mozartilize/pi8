@@ -16,7 +16,7 @@ function sessionFor(over: Partial<WorkPhaseState>): RouterSession {
 beforeEach(() => vi.clearAllMocks());
 
 for (const [label, marker] of [
-  ['first look', { firstLook: { workItemId: 'w_1' } }],
+  ['completed before this entry', { priorCompletion: { workItemId: 'w_1' } }],
   ['completed in this entry', { completion: { workItemId: 'w_1', status: 'done' as const } }],
 ] as const) {
   describe(label, () => {
@@ -42,7 +42,7 @@ for (const [label, marker] of [
 
 it('does not restrict an open entry or a stale entry marker', () => {
   expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, sessionFor({}))).toBeUndefined();
-  const session = sessionFor({ firstLook: { workItemId: 'w_1' } });
+  const session = sessionFor({ priorCompletion: { workItemId: 'w_1' } });
   session.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'newer' });
   expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, session)).toBeUndefined();
 });

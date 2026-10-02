@@ -126,7 +126,7 @@ function executionContractParameters() {
  * minimums raised above what the work needs. A plan/review entry's first
  * change is stopped instead (`CONTRACT_GATE`), which uses up this reminder.
  */
-export const CONTRACT_NUDGE =
+export const CONTRACT_REMINDER =
   `Router note: if the user asked for this change and the remaining work is fully decided, call ` +
   `${EXECUTION_CONTRACT_TOOL} with the remaining steps so the router can choose the executor. Otherwise continue.`;
 
@@ -637,7 +637,7 @@ export function trackContractToolResult(
  * reminder on a tool result comes after the change is made, and no tool call
  * can be forced; the stopped change returns `CONTRACT_GATE` as its error.
  * Once per entry, so a model the handoff does not fit is never stuck. The
- * task type does not change. Logged as a `nudge`.
+ * task type does not change. Logged as a `reminder`.
  */
 export function gateContractMutation(
   event: Pick<ToolCallEvent, 'toolName' | 'input'>,
@@ -649,15 +649,15 @@ export function gateContractMutation(
     const last = session.getLastDecision();
     if (!state || !last || last.intentKey !== state.intentKey) return undefined;
     if (last.dimension !== 'plan' && last.dimension !== 'review') return undefined;
-    if (state.contract || state.contractNudged || session.getManualModel() != null) return undefined;
+    if (state.contract || state.contractReminded || session.getManualModel() != null) return undefined;
     const lastServed = session.getLastServed();
     const served = lastServed ? servedKey(lastServed) : undefined;
     if (handoffInapplicable(last, state, served)) return undefined;
-    session.commitWorkPhaseState({ ...state, contractNudged: true });
+    session.commitWorkPhaseState({ ...state, contractReminded: true });
     appendExecutionContractSignal({
       intentKey: state.intentKey,
       served: served ?? 'unknown/unknown',
-      action: 'nudge',
+      action: 'reminder',
     });
     return { block: true, reason: CONTRACT_GATE };
   } catch {
@@ -670,9 +670,9 @@ export function gateContractMutation(
  * Remind the model of the handoff where it matters: on the result of the first
  * native edit/write in a plan/review entry that has no plan. The note is
  * appended to the tool result, so the transcript prefix and prompt cache stay
- * intact, and it is logged as a `nudge` so missed handoffs can be counted.
+ * intact, and it is logged as a `reminder` so missed handoffs can be counted.
  */
-export function nudgeContractOnEdit(
+export function remindContractOnEdit(
   event: Pick<ToolResultEvent, 'toolName' | 'content'>,
   session: RouterSession,
 ): ToolResultEventResult | undefined {
@@ -683,15 +683,15 @@ export function nudgeContractOnEdit(
     if (!state || !last || last.intentKey !== state.intentKey) return undefined;
     const lastServed = session.getLastServed();
     const served = lastServed ? servedKey(lastServed) : undefined;
-    if (state.contract || state.contractNudged || handoffInapplicable(last, state, served)) return undefined;
+    if (state.contract || state.contractReminded || handoffInapplicable(last, state, served)) return undefined;
     if (last.dimension === 'implement' && !implementRaisedByIncumbent(last)) return undefined;
-    session.commitWorkPhaseState({ ...state, contractNudged: true });
+    session.commitWorkPhaseState({ ...state, contractReminded: true });
     appendExecutionContractSignal({
       intentKey: state.intentKey,
       served: served ?? 'unknown/unknown',
-      action: 'nudge',
+      action: 'reminder',
     });
-    return { content: [...(event.content ?? []), { type: 'text', text: CONTRACT_NUDGE }] };
+    return { content: [...(event.content ?? []), { type: 'text', text: CONTRACT_REMINDER }] };
   } catch {
     // A reminder failure must never change the tool result.
     return undefined;

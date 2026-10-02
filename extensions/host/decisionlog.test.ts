@@ -208,8 +208,8 @@ describe('decision log', () => {
       routerOwned: true,
       usage: { inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheWrite: 0 },
     }, dir);
-    appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
-    appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
+    appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
+    appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
     appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'complete-accept', workItemId: 'w_1', status: 'done' }, dir);
 
     const records = readRecentEntries(10, dir);
@@ -225,9 +225,9 @@ describe('decision log', () => {
       routerOwned: true,
       usage: { inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheWrite: 0 },
     }, dir);
-    appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
-    appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'nudge' }, dir);
-    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'first-look', workItemId: 'w_1' }, dir);
+    appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
+    appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
+    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'prior-completion', workItemId: 'w_1' }, dir);
 
     const [decision, ...others] = readRecentEntries(10, dir);
     for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
@@ -251,11 +251,11 @@ describe('decision log', () => {
   });
 
   it('records the kind of a settle reminder and its outcome', () => {
-    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-nudge', nudge: 'context' }, dir);
-    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-ignored', nudge: 'context' }, dir);
+    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-reminder', reminder: 'context' }, dir);
+    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-ignored', reminder: 'context' }, dir);
     expect(readRecentEntries(2, dir).map((record) => record.workLifecycle)).toEqual([
-      { action: 'settle-nudge', nudge: 'context' },
-      { action: 'settle-ignored', nudge: 'context' },
+      { action: 'settle-reminder', reminder: 'context' },
+      { action: 'settle-ignored', reminder: 'context' },
     ]);
   });
 

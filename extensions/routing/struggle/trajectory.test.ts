@@ -137,7 +137,7 @@ describe('TrajectoryState', () => {
     expect(decision?.signals.find((s) => s.kind === 'aor')?.severity).toBe('none');
   });
 
-  it('does not re-arm the same pending fingerprint', () => {
+  it('does not set the same pending fingerprint again', () => {
     const fail = 'FAILED tests/test_policy.py::test_escalates_same_failure';
     const state = new TrajectoryState();
     state.observeToolResult(pytest(fail), 1);
@@ -146,10 +146,10 @@ describe('TrajectoryState', () => {
     state.observeToolResult(edit('a.ts', '--- a\n+++ b\n-x\n+y\n', 'x', 'y'), 4);
     const decision = state.observeToolResult(pytest(fail), 5);
     expect(decision).toBeDefined();
-    state.maybeArmPending(decision!, 'test/weak:low', 'implement', false);
+    state.maybeSetPending(decision!, 'test/weak:low', 'implement', false);
     expect(state.peekPending()?.fromModel).toBe('test/weak:low');
     state.consumePending();
-    state.maybeArmPending(decision!, 'test/weak:low', 'implement', false);
+    state.maybeSetPending(decision!, 'test/weak:low', 'implement', false);
     expect(state.peekPending()).toBeUndefined();
   });
 
@@ -241,11 +241,11 @@ describe('TrajectoryState', () => {
     state.observeToolResult(read('a.ts', 'v1'), 1);
     state.observeToolResult(read('a.ts', 'v1'), 2);
     state.observeToolResult(read('a.ts', 'v1'), 3);
-    const armed = state.observeToolResult(read('a.ts', 'v1'), 4);
-    state.maybeArmPending(armed!, 'test/weak:low', 'implement', false);
+    const pending = state.observeToolResult(read('a.ts', 'v1'), 4);
+    state.maybeSetPending(pending!, 'test/weak:low', 'implement', false);
     expect(state.peekPending()).toBeDefined();
     const progress = state.observeToolResult(read('b.ts', 'new'), 4);
-    state.maybeArmPending(progress!, 'test/weak:low', 'implement', false);
+    state.maybeSetPending(progress!, 'test/weak:low', 'implement', false);
     expect(state.peekPending()).toBeUndefined();
   });
 
@@ -309,16 +309,16 @@ describe('TrajectoryState evidence ownership', () => {
   it('does not let one owner\'s struggle condemn the next one', () => {
     const state = new TrajectoryState();
     state.bindOwner('alpha/weak');
-    const armed = driveFailurePersistence(state);
-    expect(armed?.escalate).toBe(true);
-    state.maybeArmPending(armed!, 'alpha/weak', 'implement', false);
+    const pending = driveFailurePersistence(state);
+    expect(pending?.escalate).toBe(true);
+    state.maybeSetPending(pending!, 'alpha/weak', 'implement', false);
     expect(state.peekPending()?.fromModel).toBe('alpha/weak');
 
     state.bindOwner('beta/strong');
     expect(state.peekPending()).toBeUndefined();
     const neutral = state.observeToolResult(read('fresh.ts', 'new evidence'), 20);
     expect(neutral?.escalate).toBe(false);
-    state.maybeArmPending(neutral!, 'beta/strong', 'implement', false);
+    state.maybeSetPending(neutral!, 'beta/strong', 'implement', false);
     expect(state.peekPending()).toBeUndefined();
   });
 
@@ -329,20 +329,20 @@ describe('TrajectoryState evidence ownership', () => {
     state.bindOwner('beta/strong');
 
     const halfway = state.observeToolResult(pytest(PYTEST_FAIL), 20);
-    state.maybeArmPending(halfway!, 'beta/strong', 'implement', false);
+    state.maybeSetPending(halfway!, 'beta/strong', 'implement', false);
     expect(state.peekPending()).toBeUndefined();
 
     const earned = driveFailurePersistence(state, PYTEST_FAIL, 21);
     expect(earned?.escalate).toBe(true);
-    state.maybeArmPending(earned!, 'beta/strong', 'implement', false);
+    state.maybeSetPending(earned!, 'beta/strong', 'implement', false);
     expect(state.peekPending()?.fromModel).toBe('beta/strong');
   });
 
   it('treats a higher effort on the same model as a distinct owner', () => {
     const state = new TrajectoryState();
     state.bindOwner('alpha/model:medium');
-    const armed = driveFailurePersistence(state);
-    state.maybeArmPending(armed!, 'alpha/model:medium', 'implement', false);
+    const pending = driveFailurePersistence(state);
+    state.maybeSetPending(pending!, 'alpha/model:medium', 'implement', false);
     expect(state.peekPending()).toBeDefined();
 
     state.bindOwner('alpha/model:high');
@@ -351,11 +351,11 @@ describe('TrajectoryState evidence ownership', () => {
     expect(state.peekPending()).toBeUndefined();
   });
 
-  it('refuses to arm a model that does not own the evidence', () => {
+  it('refuses to set a pending handoff for a model that does not own the evidence', () => {
     const state = new TrajectoryState();
     state.bindOwner('alpha/weak');
-    const armed = driveFailurePersistence(state);
-    state.maybeArmPending(armed!, 'beta/strong', 'implement', false);
+    const pending = driveFailurePersistence(state);
+    state.maybeSetPending(pending!, 'beta/strong', 'implement', false);
     expect(state.peekPending()).toBeUndefined();
   });
 

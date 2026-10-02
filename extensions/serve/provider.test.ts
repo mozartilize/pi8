@@ -2063,7 +2063,7 @@ describe('context acquisition', () => {
       await submitPrepared(handoff(1));
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       const served = harness.session.getLastServed()!;
-      harness.session.armTrajectoryEscalation(
+      harness.session.setPendingTrajectoryEscalation(
         { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
         served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId,
         'plan',
@@ -2259,7 +2259,7 @@ describe('context acquisition', () => {
           const decision = await session.routeTurn('explain the migration tradeoffs');
           expect(decision?.chosen).toBe('beta/strong');
           expect(harness.streamedModels()).toHaveLength(count + 1);
-          expect(harness.session.getWorkPhaseState()).toMatchObject({ firstLook: { workItemId } });
+          expect(harness.session.getWorkPhaseState()).toMatchObject({ priorCompletion: { workItemId } });
           expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
           expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
           expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
@@ -2277,7 +2277,7 @@ describe('context acquisition', () => {
           const topicId = harness.session.context.getLedger().items.get(workItemId)!.topic.id;
           const result = await submitPrepared({ ...handoff(1, 'implement'), workItemId, topicId });
           expect(result).toMatchObject({ accepted: false, text: expect.stringContaining('reopen_work') });
-          expect(harness.session.getWorkPhaseState()).toMatchObject({ firstLook: { workItemId } });
+          expect(harness.session.getWorkPhaseState()).toMatchObject({ priorCompletion: { workItemId } });
           expect(harness.session.getWorkPhaseState()?.contextDenials).toBe(before.contextDenials);
           expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
           expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
@@ -2290,19 +2290,19 @@ describe('context acquisition', () => {
           const ledger = harness.session.context.getLedger();
           expect(ledger.activeWorkItemId).not.toBe(workItemId);
           expect(ledger.items.get(workItemId)?.status).toBe('done');
-          expect(harness.session.getWorkPhaseState()?.firstLook).toBeUndefined();
+          expect(harness.session.getWorkPhaseState()?.priorCompletion).toBeUndefined();
           await session.routeTurnAgainWithSameUserEntry();
           expect(harness.session.context.getIncumbent()?.workItemId).toBe(ledger.activeWorkItemId);
         });
 
-        it('keeps completed ownership and the first-look gate after a fallback answers', async () => {
+        it('keeps completed ownership and the completed-work gate after a fallback answers', async () => {
           const { session, workItemId } = await completed();
           await session.routeTurn('explain what the migration does', { failModels: ['beta/strong'] });
           const incumbent = harness.session.context.getIncumbent()!;
           expect(incumbent.registryId).not.toBe('beta/strong');
           expect(incumbent.workItemId).toBe(workItemId);
           await session.routeTurn('make another change to it');
-          expect(harness.session.getWorkPhaseState()?.firstLook).toEqual({ workItemId });
+          expect(harness.session.getWorkPhaseState()?.priorCompletion).toEqual({ workItemId });
           expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, harness.session)?.block).toBe(true);
           expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
         });
@@ -2311,7 +2311,7 @@ describe('context acquisition', () => {
           const { session } = await completed();
           harness.session.context.recordIncumbent({ registryId: 'beta/strong' }, 'plan', 'legacy');
           await session.routeTurn('a follow-up question');
-          expect(harness.session.getWorkPhaseState()?.firstLook).toBeUndefined();
+          expect(harness.session.getWorkPhaseState()?.priorCompletion).toBeUndefined();
         });
       });
 
@@ -2402,7 +2402,7 @@ describe('context acquisition', () => {
       expect(executing?.cause).toBe('execution-contract');
       expect(executing?.chosen).toBe('alpha/cheap');
       expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'active', band: 'economy', release: true });
-      // The executor stays sticky for the rest of the entry.
+      // The executor keeps serving the rest of the entry.
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
     });
 
@@ -2544,7 +2544,7 @@ describe('context acquisition', () => {
       const session = await planned();
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
-      harness.session.armTrajectoryEscalation(
+      harness.session.setPendingTrajectoryEscalation(
         { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
         'alpha/cheap',
         'implement',
@@ -2785,7 +2785,7 @@ describe('trajectory capability escalation', () => {
     const fromModel = served?.registryId
       ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
       : harness.session.getLastDecision()?.chosen;
-    harness.session.armTrajectoryEscalation(
+    harness.session.setPendingTrajectoryEscalation(
       {
         escalate: true,
         tfi: 1,
@@ -2868,21 +2868,21 @@ describe('trajectory capability escalation', () => {
       tfi: 1,
       signals: [{ kind: 'aor' as const, severity: 'severe' as const, evidenceIds: ['a:o'], evidenceCount: 1 }],
     };
-    harness.session.armTrajectoryEscalation(
+    harness.session.setPendingTrajectoryEscalation(
       pending,
       fromModel,
       harness.session.getLastDecision()?.dimension,
       false,
     );
-    const armed = harness.session.peekPendingTrajectoryEscalation();
-    expect(armed).toBeDefined();
+    const stored = harness.session.peekPendingTrajectoryEscalation();
+    expect(stored).toBeDefined();
     harness.outStream.events = [];
     harness.outStream.ended = false;
     vi.mocked(streamSimple).mockClear();
     harness.scriptReply([{ type: 'text_delta', delta: 'recovered' }, { type: 'done' }]);
     await harness.serve(context);
     expect(harness.getProviderState().lastDecision?.chosen).toBe('delta/cheap');
-    expect(harness.session.peekPendingTrajectoryEscalation()).toBe(armed);
+    expect(harness.session.peekPendingTrajectoryEscalation()).toBe(stored);
   });
 });
 
@@ -2918,12 +2918,12 @@ describe('no-stronger escalation gate', () => {
   function makeUi(over: Partial<{ select: ReturnType<typeof vi.fn>; notify: ReturnType<typeof vi.fn> }> = {}) {
     return { select: vi.fn(async () => undefined), input: vi.fn(async () => undefined), notify: vi.fn(), ...over };
   }
-  function armStruggle(harness: Awaited<ReturnType<typeof setupProviderTest>>): void {
+  function setPendingStruggle(harness: Awaited<ReturnType<typeof setupProviderTest>>): void {
     const served = harness.session.getLastServed();
     const fromModel = served?.registryId
       ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
       : harness.session.getLastDecision()?.chosen;
-    harness.session.armTrajectoryEscalation(
+    harness.session.setPendingTrajectoryEscalation(
       { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
       fromModel,
       harness.session.getLastDecision()?.dimension,
@@ -2939,7 +2939,7 @@ describe('no-stronger escalation gate', () => {
     const harness = await soloHarness({ semi: true }, ui);
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
     await harness.serve(context);
-    armStruggle(harness);
+    setPendingStruggle(harness);
     harness.scriptReply([{ type: 'text_delta', delta: 'should not run' }, { type: 'done' }]);
     await harness.serve(context);
 
@@ -2955,7 +2955,7 @@ describe('no-stronger escalation gate', () => {
     const harness = await soloHarness({ semi: true }, ui);
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
     await harness.serve(context);
-    armStruggle(harness);
+    setPendingStruggle(harness);
     harness.scriptReply([{ type: 'text_delta', delta: 'kept going' }, { type: 'done' }]);
     await harness.serve(context);
 
@@ -2968,7 +2968,7 @@ describe('no-stronger escalation gate', () => {
     const harness = await soloHarness({ semi: false }, ui);
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
     await harness.serve(context);
-    armStruggle(harness);
+    setPendingStruggle(harness);
     harness.scriptReply([{ type: 'text_delta', delta: 'kept going' }, { type: 'done' }]);
     await harness.serve(context);
 

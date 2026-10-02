@@ -155,7 +155,7 @@ export class TrajectoryState {
     if (this.pendingResults.size > 0) {
       // Results already arrived for the previous batch. A new call means that
       // batch is closed; missing siblings were blocked preflights (ours or
-      // another extension's). The caller must arm from the returned
+      // another extension's). The caller must set the pending handoff from the returned
       // decision — cycles are applied here, but pending escalation is not.
       flushed = this.abandonUnresolvedCalls();
     }
@@ -188,7 +188,7 @@ export class TrajectoryState {
     return pending;
   }
 
-  maybeArmPending(
+  maybeSetPending(
     decision: StruggleDecision,
     fromModel: string | undefined,
     dimension: Dimension | undefined,

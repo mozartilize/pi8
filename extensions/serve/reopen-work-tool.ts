@@ -110,7 +110,7 @@ type Target = { item: WorkItem } | { code: RejectCode };
 
 /**
  * The one item this tool can reopen. An active item, including one this
- * entry already reopened, is not it. A first look must be the completed
+ * entry already reopened, is not it. After completion, it must be the completed
  * incumbent's item. Work this entry itself completed is that item.
  */
 function reopenTarget(session: RouterSession, state: WorkPhaseState): Target {
@@ -125,7 +125,7 @@ function reopenTarget(session: RouterSession, state: WorkPhaseState): Target {
     if (item.status !== 'done') return { code: 'active-work' };
     return { item };
   }
-  const looked = state.firstLook?.workItemId;
+  const looked = state.priorCompletion?.workItemId;
   if (!looked) return { code: 'no-completed-work' };
   const held = completedIncumbent(ledger);
   if (held?.workItem.id === looked) return { item: held.workItem };
@@ -202,7 +202,7 @@ function openForRepick(state: WorkPhaseState): WorkPhaseState {
   delete open.contextStatus;
   delete open.reasoningHandoff;
   delete open.handoffKey;
-  delete open.firstLook;
+  delete open.priorCompletion;
   delete open.completion;
   delete open.pendingIdentity;
   delete open.provisionalGrounding;

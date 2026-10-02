@@ -64,13 +64,13 @@ describe('message-provenance', () => {
   it('documents that a custom message is indistinguishable from user input', () => {
     // convertToLlm drops `customType` (messages.js:70-77). A custom message
     // with user-shaped text is unrecoverable; fail open to `user`.
-    const nudge = user('Continue where you left off after compaction.');
-    expect(classifyProvenance(nudge)).toBe('user');
+    const reminder = user('Continue where you left off after compaction.');
+    expect(classifyProvenance(reminder)).toBe('user');
   });
 
   it('recognises an explicitly configured integration prefix as synthetic-known', () => {
-    const nudge = user('[pi-context] resume after compaction');
-    expect(classifyProvenance(nudge, ['[pi-context]'])).toBe('synthetic-known');
+    const reminder = user('[pi-context] resume after compaction');
+    expect(classifyProvenance(reminder, ['[pi-context]'])).toBe('synthetic-known');
   });
 
   it('never infers synthetic-known without a configured prefix', () => {

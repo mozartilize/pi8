@@ -26,7 +26,7 @@ function doneSession(over: Partial<WorkPhaseState> = {}, incumbentWorkItem = tru
   session.context.append({ v: 1, op: 'work-close', workItemId: 'w_1', status: 'done', sourceEntryId: 'u1' });
   session.commitWorkPhaseState({
     intentKey: 'entry', deliverable: 'implement', providerInvocation: 1, observedMutationTools: 0,
-    firstLook: { workItemId: 'w_1' }, ...over,
+    priorCompletion: { workItemId: 'w_1' }, ...over,
   });
   session.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'entry', dimension: 'implement' });
   session.setLastServed({ registryId: 'a/model', viaFallback: false, accumulatedCost: 0 });
@@ -54,7 +54,7 @@ describe('reopen_work', () => {
       contractStrikes: { 'a/model': 2 },
       contextResolution: { relation: 'reopen', workItemId: 'w_1', deliverable: 'implement' },
     });
-    expect(session.getWorkPhaseState()?.firstLook).toBeUndefined();
+    expect(session.getWorkPhaseState()?.priorCompletion).toBeUndefined();
     expect(session.getCachedIntent()).toMatchObject({ dimension: 'implement', context: { resolution: { relation: 'reopen' } } });
     expect(persisted).toHaveLength(1);
     expect(persisted[0]).toMatchObject({ op: 'context-commit', events: [
@@ -69,7 +69,7 @@ describe('reopen_work', () => {
 
   it('forces a new repick when this entry already served, including a plan minimum', () => {
     const session = doneSession({
-      firstLook: undefined,
+      priorCompletion: undefined,
       completion: { workItemId: 'w_1', status: 'done' },
       contextStatus: 'served',
       reasoningHandoff: {
@@ -131,7 +131,7 @@ describe('reopen_work', () => {
     const active = new RouterSession();
     active.context.append(createEvent(workItem('w_1', 't_1'), 'u1'));
     active.context.append(activateEvent('w_1', 'u1'));
-    active.commitWorkPhaseState({ intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0, firstLook: { workItemId: 'w_1' } });
+    active.commitWorkPhaseState({ intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0, priorCompletion: { workItemId: 'w_1' } });
     active.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'entry' });
     active.setLastServed({ registryId: 'a/model', viaFallback: false, accumulatedCost: 0 });
     expect(submitReopenWork(SHAPE, AUTO, active).accepted).toBe(false);
@@ -148,8 +148,8 @@ describe('reopen_work', () => {
     expect(submitReopenWork(SHAPE, AUTO, session).accepted).toBe(false);
     expect(session.context.getLedger().items.get('w_1')?.status).toBe('done');
     expect(session.getWorkPhaseState()?.contextStatus).toBeUndefined();
-    // The first look, and with it the completed-work mutation gate, stays.
-    expect(session.getWorkPhaseState()?.firstLook).toEqual({ workItemId: 'w_1' });
+    // The prior completion, and with it the completed-work mutation gate, stays.
+    expect(session.getWorkPhaseState()?.priorCompletion).toEqual({ workItemId: 'w_1' });
   });
 
   it('registers one sequential tool that does not take a work item id', () => {

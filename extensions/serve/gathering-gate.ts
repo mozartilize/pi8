@@ -189,7 +189,7 @@ export function withGatheringNote(context: Context, note: string): Context {
 }
 
 /** Appended once per `gather` entry that may turn into planning, to its first edit/write result. */
-export const CONTEXT_HANDOFF_NUDGE =
+export const CONTEXT_HANDOFF_REMINDER =
   `Router note: if your findings show that something must be decided or changed, call ` +
   `${CONTEXT_HANDOFF_TOOL} with them so the router chooses the next step. Otherwise continue.`;
 
@@ -206,25 +206,25 @@ function currentEntry(session: RouterSession): WorkPhaseState | undefined {
  * - an entry acquiring owed context, or a `gather` entry whose final step
  *   needs a strong model: on its first tool result;
  * - any other `gather` entry: on its first native edit/write result.
- * Each reminder is logged as a `nudge`.
+ * Each reminder is logged as a `reminder`.
  */
-export function nudgeContextHandoff(
+export function remindContextHandoff(
   event: Pick<ToolResultEvent, 'toolName' | 'content'>,
   session: RouterSession,
 ): ToolResultEventResult | undefined {
   try {
     if (event.toolName === CONTEXT_HANDOFF_TOOL) return undefined;
     const state = currentEntry(session);
-    if (!state || state.contextNudged || state.reasoningHandoff) return undefined;
+    if (!state || state.contextReminded || state.reasoningHandoff) return undefined;
     const acquiring = state.contextStatus === 'acquiring';
     if (!acquiring && (state.contextStatus != null || session.getLastDecision()?.dimension !== 'gather')) return undefined;
     const strongFinalStep = state.terminalBand === 'strong' || state.terminalBand === 'frontier';
     const anyResult = acquiring || strongFinalStep;
     if (!anyResult && event.toolName !== 'edit' && event.toolName !== 'write') return undefined;
-    session.commitWorkPhaseState({ ...state, contextNudged: true });
+    session.commitWorkPhaseState({ ...state, contextReminded: true });
     const lastServed = session.getLastServed();
-    logContextHandoff(state, lastServed ? servedKey(lastServed) : 'unknown/unknown', 'nudge');
-    const text = acquiring ? `Router note: ${owedNote(state)} Call ${CONTEXT_HANDOFF_TOOL} when you have it.` : CONTEXT_HANDOFF_NUDGE;
+    logContextHandoff(state, lastServed ? servedKey(lastServed) : 'unknown/unknown', 'reminder');
+    const text = acquiring ? `Router note: ${owedNote(state)} Call ${CONTEXT_HANDOFF_TOOL} when you have it.` : CONTEXT_HANDOFF_REMINDER;
     return { content: [...(event.content ?? []), { type: 'text', text }] };
   } catch {
     // A reminder failure must never change the tool result.

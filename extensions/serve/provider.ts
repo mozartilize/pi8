@@ -542,7 +542,7 @@ function advanceWorkPhase(args: {
     };
     if (args.session.context.getIncumbent()) workPhaseState = { ...workPhaseState, incumbentServes: true };
     const completed = completedIncumbent(args.session.context.getLedger());
-    if (completed) workPhaseState = { ...workPhaseState, firstLook: { workItemId: completed.workItem.id } };
+    if (completed) workPhaseState = { ...workPhaseState, priorCompletion: { workItemId: completed.workItem.id } };
     if (args.pendingIdentity) workPhaseState = { ...workPhaseState, pendingIdentity: args.pendingIdentity };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
@@ -698,9 +698,9 @@ async function prepareRouterTurn(args: {
 
   session.bindTrajectoryIntent(measured.turnInput.key);
   // Blocked preflights never emit tool_result. Finalize that batch
-  // here, before peeking, so a sibling's evidence can arm this
+  // here, before peeking, so a sibling's evidence can set a pending handoff for this
   // invocation rather than stalling behind an impossible result.
-  session.flushAndArmUnresolvedTrajectory();
+  session.flushAndSetUnresolvedTrajectory();
 
   const trajectoryEscalation = session.peekPendingTrajectoryEscalation();
 
@@ -933,7 +933,7 @@ function scoreRouterTurn(args: {
   const routedDimension = reviewing ? 'review' : implementing ? 'implement' : phase.dimension;
   const routedCause = reviewing || implementing ? 'execution-contract' : phase.cause ?? baseCause;
   // The reasoning phase is scored at its handoff's minimum; its incumbent
-  // minimums stand down once, until a model serves the phase. A recovery
+  // minimums are skipped once, until a model serves the phase. A recovery
   // entry keeps its deliverable's strength: no rubric discounts it.
   const reasoning = routedDimension === entry?.reasoningHandoff?.target ? entry.reasoningHandoff : undefined;
   const pendingBoundary = entry?.contextStatus === 'ready-pending' && !handBack;
@@ -1148,7 +1148,7 @@ async function delegateRouterTurn(args: {
   const entry = current?.intentKey === intentKey ? current : undefined;
   const acquiring = entry?.contextStatus === 'acquiring';
   const clarifying = entry?.contextStatus === 'clarification-only';
-  const workNote = entry?.firstLook ? completedWorkNote(entry)
+  const workNote = entry?.priorCompletion ? completedWorkNote(entry)
     : entry && (session.context.getLedger().activeWorkItemId || entry.completion) ? activeWorkNote : undefined;
   let delegatedContext = entry && (acquiring || clarifying)
     ? withGatheringNote(context, gatheringNote(entry))
@@ -1212,11 +1212,11 @@ async function delegateRouterTurn(args: {
       if (status === 'acquiring' || status === 'clarification-only') return;
       if (session.getManualModel() || session.getSemiHold(intentKey)) return;
       const state = session.getWorkPhaseState();
-      const ownedWork = state?.workItemId ?? state?.completion?.workItemId ?? state?.firstLook?.workItemId;
+      const ownedWork = state?.workItemId ?? state?.completion?.workItemId ?? state?.priorCompletion?.workItemId;
       const workItemId = incumbentWorkItem(session.context.getLedger(), lastServed.registryId, ownedWork);
       session.context.recordIncumbent(lastServed, decision.dimension, session.context.getEntrySource() ?? intentKey, workItemId);
-      if (state?.firstLook && state.providerInvocation === 1) {
-        appendWorkLifecycleSignal({ intentKey, served: servedKey(lastServed), action: 'first-look', workItemId: state.firstLook.workItemId });
+      if (state?.priorCompletion && state.providerInvocation === 1) {
+        appendWorkLifecycleSignal({ intentKey, served: servedKey(lastServed), action: 'prior-completion', workItemId: state.priorCompletion.workItemId });
       }
     } catch {
       // A lost record only means the next entry is routed afresh.
