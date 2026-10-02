@@ -8,7 +8,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { stat } from 'node:fs/promises';
 import type { Context, UserMessage } from '@earendil-works/pi-ai';
-import { appendContextHandoffSignal, type InvestigationHandoffSignal } from '../host/decisionlog.js';
+import { appendContextHandoffSignal, type ContextHandoffSignal } from '../host/decisionlog.js';
 import { servedKey } from '../host/ui.js';
 import { EXECUTION_CONTRACT_TOOL } from '../routing/policy/execution-contract.js';
 import {
@@ -34,8 +34,8 @@ import { ROUTING_CONTEXT_TOOL } from './routing-context-tool.js';
 export function logContextHandoff(
   state: WorkPhaseState,
   served: string,
-  action: InvestigationHandoffSignal['action'],
-  extra: Partial<InvestigationHandoffSignal> = {},
+  action: ContextHandoffSignal['action'],
+  extra: Partial<ContextHandoffSignal> = {},
 ): void {
   const contextReasons = owedContext(state);
   appendContextHandoffSignal({
@@ -251,7 +251,7 @@ export function gateContextToolCall(
   try {
     const state = currentEntry(session);
     restricted = acquisitionRestricted(state);
-    if (!state || !restricted || acquisitionAllows(state.contextStatus, event.toolName, event.input)) {
+    if (!state || !restricted || acquisitionAllows(state.contextStatus, event.toolName)) {
       return undefined;
     }
     const lastServed = session.getLastServed();

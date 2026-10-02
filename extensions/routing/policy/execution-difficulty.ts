@@ -1,7 +1,7 @@
 /**
  * Residual difficulty of a handoff: the task-axis ratio the next phase's
  * model must reach before the router hands it the work. An execution
- * contract values its remaining implementation; an investigation handoff
+ * contract values its remaining implementation; a context handoff
  * values the planning or review it leaves.
  *
  * The handing-off model describes the remaining work on a fixed rubric; the

@@ -1829,7 +1829,7 @@ describe('context acquisition', () => {
     expect(harness.session.context.getLedger().items.size).toBe(0);
   });
 
-  describe('investigation handoff', () => {
+  describe('context handoff', () => {
     const PLAN_PROMPT = 'design the architecture and plan the migration roadmap for this system';
     const routerCtx = { cwd: '/repo', model: { provider: 'router', id: 'auto' } } as never;
     const handoff = (alternatives: number, deliverable = 'plan') => ({

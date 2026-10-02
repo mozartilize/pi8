@@ -98,20 +98,19 @@ describe('handoff boundary', () => {
 });
 
 describe('restricted tools', () => {
-  it('allows only exact trusted readers, the question tool, the handoff, and routing_context updates', () => {
+  it('allows only exact trusted readers, the question tool, the handoff, and routing_context', () => {
     for (const tool of ['read', 'grep', 'find', 'ls', 'tilth_read', 'tilth_search', 'ask_user_question', 'hand_off_context']) {
-      expect(acquisitionAllows('acquiring', tool, {})).toBe(true);
+      expect(acquisitionAllows('acquiring', tool)).toBe(true);
     }
     for (const tool of ['edit', 'write', 'bash', 'ctx_execute', 'ctx_execute_file', 'subagent', 'commit_execution', 'read_file', 'mcp']) {
-      expect(acquisitionAllows('acquiring', tool, { path: 'a.ts' })).toBe(false);
+      expect(acquisitionAllows('acquiring', tool)).toBe(false);
     }
-    expect(acquisitionAllows('acquiring', 'routing_context', { op: 'update' })).toBe(true);
-    expect(acquisitionAllows('acquiring', 'routing_context', { op: 'close' })).toBe(false);
-    expect(acquisitionAllows('clarification-only', 'read', {})).toBe(false);
-    expect(acquisitionAllows('clarification-only', 'hand_off_context', {})).toBe(false);
-    expect(acquisitionAllows('acquiring', 'ffgrep', {})).toBe(false);
-    expect(acquisitionAllows('acquiring', 'reopen_work', {})).toBe(false);
-    expect(acquisitionAllows('ready-pending', 'reopen_work', {})).toBe(true);
+    expect(acquisitionAllows('acquiring', 'routing_context')).toBe(true);
+    expect(acquisitionAllows('clarification-only', 'read')).toBe(false);
+    expect(acquisitionAllows('clarification-only', 'hand_off_context')).toBe(false);
+    expect(acquisitionAllows('acquiring', 'ffgrep')).toBe(false);
+    expect(acquisitionAllows('acquiring', 'reopen_work')).toBe(false);
+    expect(acquisitionAllows('ready-pending', 'reopen_work')).toBe(true);
   });
 
   it('restricts until a model serves the next phase', () => {

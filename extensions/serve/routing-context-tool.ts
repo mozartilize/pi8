@@ -7,10 +7,12 @@
  * ids are validated here, never enumerated in the schema. It is sequential,
  * so tools after it in the same batch see its effect.
  *
- * The model may describe work (titles, summary, anchors, blocked/done); the
- * router owns every routing fact: which model serves, what context a request
- * owes and whether it is in hand, and which work an entry belongs to. Every entry point fails open,
- * and a rejected call changes nothing.
+ * The model may describe work (titles, summary, anchors); the router owns
+ * every routing fact: which model serves, what context a request owes and
+ * whether it is in hand, and which work an entry belongs to. A work item's
+ * status changes only at a lifecycle boundary — hand_off_context,
+ * complete_work, reopen_work — which records it. Every entry point fails
+ * open, and a rejected call changes nothing.
  */
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Type } from '@earendil-works/pi-ai';
@@ -20,16 +22,15 @@ import { normalizeAnchorPath } from '../routing/context/anchors.js';
 import { CONTEXT_LIMITS, activeWorkItem, getWorkItem } from '../routing/context/ledger.js';
 import { RESERVED_IDS, type AnchorKind, type AnchorRole, type WorkItemAnchor, type WorkItemPatch } from '../routing/context/types.js';
 import { currentSourceEntry } from './context-grounding.js';
-import { submitCompleteWork } from './complete-work-tool.js';
 import type { RouterSession } from './router-session-state.js';
 
 export const ROUTING_CONTEXT_TOOL = 'routing_context';
 
 const DESCRIPTION =
   'Keep the router\'s record of this session\'s work current. op="update": when you learn a better title, ' +
-  'a short summary, anchors (the files, symbols, or issues the work is about, with their role), or that the ' +
-  'work is blocked. op="close": mark an earlier work item done or superseded. To end the current work, call ' +
-  'complete_work instead. It records metadata only: it never changes which model serves, and never stop other work to call it.';
+  'a short summary, or anchors (the files, symbols, or issues the work is about, with their role). ' +
+  'To end the current work, call complete_work. It records metadata only: it never changes which model serves, ' +
+  'and never stop other work to call it.';
 
 const ANCHOR_KINDS: readonly AnchorKind[] = ['path', 'symbol', 'issue', 'requirement', 'other'];
 const ANCHOR_ROLES: readonly AnchorRole[] = ['requirement', 'design', 'implementation', 'test', 'reference'];
@@ -38,7 +39,7 @@ const ANCHOR_ROLES: readonly AnchorRole[] = ['requirement', 'design', 'implement
 function routingContextParameters() {
   const literals = <T extends string>(values: readonly T[]) => Type.Union(values.map((value) => Type.Literal(value)));
   return Type.Object({
-    op: literals(['update', 'close'] as const),
+    op: literals(['update'] as const),
     topicId: Type.Optional(Type.String({ description: 'A topic id the router assigned; with only a title, renames that topic.' })),
     workItemId: Type.Optional(Type.String({ description: 'A work item id the router assigned. Defaults to the active work item.' })),
     title: Type.Optional(Type.String({ description: 'Short title of the work item (of the topic, when only topicId is given).' })),
@@ -48,7 +49,6 @@ function routingContextParameters() {
       value: Type.String({ description: 'File path relative to the working directory, symbol, or issue id.' }),
       role: Type.Optional(literals(ANCHOR_ROLES)),
     }), { description: 'What the work is about.' })),
-    status: Type.Optional(literals(['active', 'blocked', 'done', 'superseded'] as const)),
   });
 }
 
@@ -63,6 +63,7 @@ export interface RoutingContextParams {
   title?: unknown;
   summary?: unknown;
   anchors?: unknown;
+  /** Not in the schema: a status change is a lifecycle boundary, refused here. */
   status?: unknown;
 }
 
@@ -113,6 +114,9 @@ function update(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'cwd' 
   if (present(params.relation) || present(params.deliverable) || present(params.prerequisite)) {
     return reject('routing_context update cannot set relation, deliverable, or the context a request owes; the router resolves those for each request.');
   }
+  if (present(params.status)) {
+    return reject('routing_context update cannot change a status. To end the current work, call complete_work. Nothing changed.');
+  }
   const ledger = session.context.getLedger();
   const topicOnly = typeof params.topicId === 'string' && !present(params.workItemId);
   const item = topicOnly
@@ -125,16 +129,8 @@ function update(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'cwd' 
   const title = text(params.title, topicOnly ? CONTEXT_LIMITS.topicTitle : CONTEXT_LIMITS.workTitle, 'title');
   const summary = text(params.summary, CONTEXT_LIMITS.summary, 'summary');
   for (const field of [title, summary]) if (typeof field === 'object') return reject(`routing_context update: ${field.error}. Nothing changed.`);
-  if (topicOnly && (present(params.summary) || present(params.anchors) || present(params.status))) {
+  if (topicOnly && (present(params.summary) || present(params.anchors))) {
     return reject('routing_context update: a topic takes a title only. Nothing changed.');
-  }
-  if (present(params.status) && params.status !== 'active' && params.status !== 'blocked') {
-    return reject('routing_context update: status is active or blocked; use op="close" for done or superseded. Nothing changed.');
-  }
-  // A closed item changes status only through its lifecycle boundary, which
-  // records the reopen; a metadata update never revives it.
-  if (present(params.status) && !topicOnly && (item.status === 'done' || item.status === 'superseded')) {
-    return reject(`routing_context update: work item ${item.id} is ${item.status}; its status does not change here. Nothing changed.`);
   }
   const anchors = present(params.anchors) ? parseAnchors(params.anchors, ctx.cwd) : undefined;
   if (typeof anchors === 'string') return reject(`routing_context update: ${anchors}. Nothing changed.`);
@@ -145,7 +141,6 @@ function update(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'cwd' 
         ...(title ? { title: title as string } : {}),
         ...(summary ? { summary: summary as string } : {}),
         ...(anchors && anchors.length > 0 ? { anchors } : {}),
-        ...(present(params.status) ? { status: params.status as 'active' | 'blocked' } : {}),
       };
   if (Object.keys(patch).length === 0) return reject('routing_context update: nothing to change.');
   const sourceEntryId = currentSourceEntry(ctx, session);
@@ -156,36 +151,6 @@ function update(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'cwd' 
   return { accepted: true, text: `Recorded (${topicOnly ? item.topic.id : item.id}).`, details: { accepted: true, workItemId: item.id } };
 }
 
-function close(params: RoutingContextParams, ctx: Pick<ExtensionContext, 'model' | 'sessionManager'>, session: RouterSession): RoutingContextResult {
-  if (params.status !== 'done' && params.status !== 'superseded') {
-    return reject('routing_context close needs status "done" or "superseded". Nothing changed.');
-  }
-  // The model sees no work item ids unless a result told it one, so the
-  // active item is the default, as for update.
-  const ledger = session.context.getLedger();
-  const item = present(params.workItemId)
-    ? (typeof params.workItemId === 'string' && !RESERVED_IDS.has(params.workItemId) ? getWorkItem(ledger, params.workItemId) : undefined)
-    : activeWorkItem(ledger);
-  if (!item) return reject('routing_context close: no such work item. Nothing changed.');
-  if (item.status === 'superseded' && params.status === 'done') {
-    return reject('routing_context close: superseded work stays terminal. Choose NEW_WORK_ITEM to return to it. Nothing changed.');
-  }
-  // Ending the active item is a lifecycle boundary: it takes the same checks
-  // and record as complete_work, so this op cannot bypass them.
-  if (item.id === ledger.activeWorkItemId) {
-    const completed = submitCompleteWork({ outcome: params.status }, ctx, session);
-    return completed.accepted
-      ? { accepted: true, text: `Closed ${item.id} (${params.status}).`, details: { accepted: true, workItemId: item.id } }
-      : reject(`routing_context close: ${completed.text}`);
-  }
-  const sourceEntryId = currentSourceEntry(ctx, session);
-  if (!sourceEntryId) return reject('routing_context close: no request is in progress. Nothing changed.');
-  if (!session.context.append({ v: 1, op: 'work-close', workItemId: item.id, status: params.status, sourceEntryId })) {
-    return reject('routing_context close: the session did not record it. Nothing changed.');
-  }
-  return { accepted: true, text: `Closed ${item.id} (${params.status}).`, details: { accepted: true, workItemId: item.id } };
-}
-
 /** Validate and apply one call. */
 export function submitRoutingContext(
   params: RoutingContextParams | undefined,
@@ -193,14 +158,10 @@ export function submitRoutingContext(
   session: RouterSession,
 ): RoutingContextResult {
   if (!ctx || !isRouterAuto(ctx)) return reject(`${ROUTING_CONTEXT_TOOL} has no effect: the session model is not router/auto.`);
-  switch (params?.op) {
-    case 'update':
-      return update(params, ctx, session);
-    case 'close':
-      return close(params, ctx, session);
-    default:
-      return reject('routing_context: op is "update" or "close".');
+  if (params?.op !== 'update') {
+    return reject('routing_context: op is "update". To end the current work, call complete_work. Nothing changed.');
   }
+  return update(params, ctx, session);
 }
 
 export function registerRoutingContextTool(pi: ExtensionAPI, session: RouterSession): void {

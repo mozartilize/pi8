@@ -448,7 +448,7 @@ export async function prepareHandoffFacts(
     const item = getWorkItem(session.context.getLedger(), opened.state.workItemId);
     const check = contextCheck(['referenced-artifact'], item);
     if (item && 'freshPaths' in check) {
-      // This handoff is the accepted investigation that closes a directory reference.
+      // This handoff is the accepted context handoff that closes a directory reference.
       facts.unmet = await unmetArtifactPaths(ctx.cwd, { ...item, openContext: [] }, check.freshPaths);
       if (facts.unmet.length > 0) return facts;
     }

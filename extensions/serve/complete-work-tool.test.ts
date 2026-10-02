@@ -101,8 +101,10 @@ describe('complete_work', () => {
   it('leaves the item active and the entry open when the branch does not record it', () => {
     const session = servingSession();
     session.context.bindPersistence(() => { throw new Error('disk full'); });
+    const incumbent = session.context.getLedger().incumbent;
     expect(submitCompleteWork({ outcome: 'done' }, AUTO, session)).toMatchObject({ accepted: false });
     expect(session.context.getLedger().activeWorkItemId).toBe('w_1');
+    expect(session.context.getLedger().incumbent).toBe(incumbent);
     expect(session.getWorkPhaseState()?.completion).toBeUndefined();
   });
 

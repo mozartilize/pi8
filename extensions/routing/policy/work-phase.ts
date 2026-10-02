@@ -127,7 +127,7 @@ export function withStrongerTerminal(state: WorkPhaseState, terminal: TerminalAs
  * What an entry leaves to a branch it is not on, after `/tree`: the task type
  * and final step, kept only as conservative minimums, with `deliverable` as
  * the task type. They establish no work identity. Strikes, excluded
- * executors, contracts, handoffs, and investigation state belong to the
+ * executors, contracts, handoffs, and context-collection state belong to the
  * entries of the branch Pi left.
  */
 export function carryAcrossBranch(state: WorkPhaseState, deliverable: Dimension | undefined): WorkPhaseState {

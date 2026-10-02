@@ -110,7 +110,7 @@ export interface DecisionLogEntry {
   intentKey?: string;
   /** Set on `kind: 'investigation-handoff'` records only. */
   investigationHandoff?: {
-    action: InvestigationHandoffSignal['action'];
+    action: ContextHandoffSignal['action'];
     /** Router-authored reject code, never the findings. */
     rejectReason?: string;
     handoff?: ReasoningHandoffMeta;
@@ -120,7 +120,7 @@ export interface DecisionLogEntry {
   };
   /** The entry's work-context resolution: tier, ids, categories; never titles. */
   workContext?: WorkContextMeta;
-  /** Routed phase records: the deliverable behind an investigation, and the join to the previous entry's handoff. */
+  /** Routed phase records: the deliverable behind collecting context, and the join to the previous entry's handoff. */
   deliverable?: string;
   reasoningHandoff?: ReasoningHandoffMeta;
   previousHandoffId?: string;
@@ -223,10 +223,10 @@ export function appendExecutionContractSignal(
 }
 
 /**
- * One investigation → planning/review handoff transition. Model keys, codes,
+ * One context handoff transition. Model keys, codes,
  * rubric levels and counts only: never the findings, the question, or paths.
  */
-export interface InvestigationHandoffSignal {
+export interface ContextHandoffSignal {
   intentKey: string;
   /** Model that handed off, was declined, was reminded, or owns the phase. */
   served: string;
@@ -249,7 +249,7 @@ export interface InvestigationHandoffSignal {
 
 /** Append a context handoff transition. Best-effort; never throws into the tool path. */
 export function appendContextHandoffSignal(
-  signal: InvestigationHandoffSignal,
+  signal: ContextHandoffSignal,
   storageBase?: string,
 ): void {
   try {
@@ -264,7 +264,7 @@ export function appendContextHandoffSignal(
       served: signal.served,
       viaFallback: false,
       cause: 'investigation-handoff',
-      reason: `investigation handoff ${signal.action}`,
+      reason: `context handoff ${signal.action}`,
       chain: [signal.served],
       intentKey: signal.intentKey,
       investigationHandoff: {

@@ -4,8 +4,6 @@ import { ROUTING_CONTEXT_TOOL, registerRoutingContextTool, submitRoutingContext 
 import { RouterSession } from './router-session-state.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import { SessionTree } from '../test-support/session-tree.js';
-import { routingDecision } from '../test-support/router-fixtures.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 
 function setup() {
   const tree = new SessionTree();
@@ -70,7 +68,10 @@ describe('routing_context update', () => {
     ['an oversized summary', { op: 'update', summary: 'x'.repeat(1201) }],
     ['too many anchors', { op: 'update', anchors: Array.from({ length: 33 }, (_, i) => ({ kind: 'symbol', value: `s${i}` })) }],
     ['a path outside the working directory', { op: 'update', anchors: [{ kind: 'path', value: '/etc/passwd' }] }],
-    ['a close status', { op: 'update', status: 'done' }],
+    ['an active status', { op: 'update', title: 'x', status: 'active' }],
+    ['a blocked status', { op: 'update', title: 'x', status: 'blocked' }],
+    ['a done status', { op: 'update', title: 'x', status: 'done' }],
+    ['a superseded status', { op: 'update', title: 'x', status: 'superseded' }],
     ['nothing to change', { op: 'update' }],
   ])('rejects %s without changing the ledger', (_label, params) => {
     const { session, ctx } = setup();
@@ -79,97 +80,32 @@ describe('routing_context update', () => {
     expect(session.context.getLedger()).toBe(before);
   });
 
-  it.each(['done', 'superseded'] as const)('never changes the status of a %s item, but still describes it', (status) => {
+  it.each(['done', 'superseded'] as const)('still describes a %s item', (status) => {
     const { session, ctx } = setup();
-    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status }, ctx, session).accepted).toBe(true);
-    const before = session.context.getLedger();
-    for (const next of ['active', 'blocked']) {
-      expect(submitRoutingContext({ op: 'update', workItemId: 'w_2', status: next }, ctx, session).accepted).toBe(false);
-    }
-    expect(session.context.getLedger()).toBe(before);
+    session.context.append({ v: 1, op: 'work-close', workItemId: 'w_2', status, sourceEntryId: 'u0' });
     expect(submitRoutingContext({ op: 'update', workItemId: 'w_2', title: 'Renamed' }, ctx, session).accepted).toBe(true);
     expect(session.context.getLedger().items.get('w_2')).toMatchObject({ status, title: 'Renamed' });
   });
 });
 
-/** A request the router is serving, as complete_work requires to end the active item. */
-function routed(session: RouterSession, over: Partial<WorkPhaseState> = {}): RouterSession {
-  session.commitWorkPhaseState({ intentKey: 'entry', deliverable: 'implement', providerInvocation: 1, observedMutationTools: 0, ...over });
-  session.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'entry', dimension: 'implement' });
-  session.setLastServed({ registryId: 'a/model', viaFallback: false, accumulatedCost: 0 });
-  return session;
-}
-
-describe('routing_context close', () => {
-  it('ends the active item as a recorded completion of the routed request', () => {
-    const { session, ctx } = setup();
-    routed(session);
-    expect(submitRoutingContext({ op: 'close', workItemId: 'w_1', status: 'done' }, ctx, session).accepted).toBe(true);
-    expect(session.context.getLedger().items.get('w_1')?.status).toBe('done');
-    expect(session.context.getLedger().activeWorkItemId).toBeUndefined();
-    expect(session.getWorkPhaseState()?.completion).toEqual({ workItemId: 'w_1', status: 'done' });
-  });
-
-  it('takes the completion checks for the active item: no request in progress, or an unfinished plan', () => {
-    const { session, ctx } = setup();
-    expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session).accepted).toBe(false);
-    routed(session, { contract: { status: 'active' } as never });
-    expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session).accepted).toBe(false);
-    expect(session.context.getLedger().items.get('w_1')?.status).toBe('active');
-  });
-
-  it('closes an earlier item without a routed request', () => {
-    const { session, ctx } = setup();
-    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status: 'superseded' }, ctx, session).accepted).toBe(true);
-    expect(session.context.getLedger().items.get('w_2')?.status).toBe('superseded');
-    expect(session.context.getLedger().activeWorkItemId).toBe('w_1');
-  });
-
-  it('closes the active item when no id is given', () => {
-    const { session, ctx } = setup();
-    routed(session);
-    const result = submitRoutingContext({ op: 'close', status: 'superseded' }, ctx, session);
-    expect(result).toMatchObject({ accepted: true, details: { workItemId: 'w_1' } });
-    expect(session.context.getLedger().items.get('w_1')?.status).toBe('superseded');
-    expect(session.context.getLedger().items.get('w_2')?.status).toBe('active');
-  });
-
-  it('cannot turn superseded work into reopenable done work', () => {
-    const { session, ctx } = setup();
-    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status: 'superseded' }, ctx, session).accepted).toBe(true);
-    const before = session.context.getLedger();
-    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status: 'done' }, ctx, session).accepted).toBe(false);
-    expect(session.context.getLedger()).toBe(before);
-  });
-
-  it('rejects an unknown or reserved item, a missing status, or no active item without changing the ledger', () => {
+describe('routing_context status changes', () => {
+  it('has no close op: ending work is complete_work, and the ledger does not change', () => {
     const { session, ctx } = setup();
     const before = session.context.getLedger();
-    expect(submitRoutingContext({ op: 'close', workItemId: 'w_9', status: 'done' }, ctx, session).accepted).toBe(false);
-    expect(submitRoutingContext({ op: 'close', workItemId: 'UNKNOWN', status: 'done' }, ctx, session).accepted).toBe(false);
-    expect(submitRoutingContext({ op: 'close', workItemId: 'w_1' }, ctx, session).accepted).toBe(false);
+    for (const params of [{ op: 'close', status: 'done' }, { op: 'close', workItemId: 'w_2', status: 'superseded' }]) {
+      expect(submitRoutingContext(params, ctx, session)).toMatchObject({ accepted: false, text: expect.stringContaining('complete_work') });
+    }
     expect(session.context.getLedger()).toBe(before);
-
-    routed(session);
-    submitRoutingContext({ op: 'close', status: 'done' }, ctx, session);
-    const closed = session.context.getLedger();
-    expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session).accepted).toBe(false);
-    expect(session.context.getLedger()).toBe(closed);
   });
 });
 
 describe('routing_context when the session does not record it', () => {
-  it('rejects update and close and leaves the ledger as it was', () => {
+  it('rejects an update and leaves the ledger as it was', () => {
     const { session, ctx } = setup();
     session.context.bindPersistence(() => { throw new Error('disk full'); });
     const before = session.context.getLedger();
     expect(submitRoutingContext({ op: 'update', title: 'CSV export' }, ctx, session))
       .toMatchObject({ accepted: false, text: expect.stringContaining('did not record') });
-    expect(submitRoutingContext({ op: 'close', workItemId: 'w_2', status: 'done' }, ctx, session))
-      .toMatchObject({ accepted: false, text: expect.stringContaining('did not record') });
-    routed(session);
-    expect(submitRoutingContext({ op: 'close', status: 'done' }, ctx, session))
-      .toMatchObject({ accepted: false, text: expect.stringContaining('could not record') });
     expect(session.context.getLedger()).toBe(before);
   });
 });
@@ -182,7 +118,7 @@ describe('routing_context outside its scope', () => {
     expect(result.text).toContain('has no effect');
   });
 
-  it('rejects any op other than update or close without changing the ledger', () => {
+  it('rejects any op other than update without changing the ledger', () => {
     const { session, ctx } = setup();
     const before = session.context.getLedger();
     expect(submitRoutingContext({ op: 'resolve', topicId: 't_1', workItemId: 'w_1', relation: 'continue' }, ctx, session).accepted).toBe(false);

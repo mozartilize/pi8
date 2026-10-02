@@ -184,7 +184,7 @@ export interface ReasoningEvidence {
   fixCommits?: number;
 }
 
-/** An accepted investigation → planning/review handoff, as routing and logs see it. */
+/** An accepted context handoff to a plan or review, as routing and logs see it. */
 export interface ReasoningHandoffMeta {
   /** Joins the handoff to later records; the intent key of the entry that accepted it. */
   id: string;
@@ -355,7 +355,7 @@ export interface RoutingDecision {
   executionContract?: ExecutionContractMeta;
   /** The task type the entry owes when the routed phase is collecting context before it. */
   deliverable?: Dimension;
-  /** Investigation handoff that shaped this invocation. */
+  /** Context handoff that shaped this invocation. */
   reasoningHandoff?: ReasoningHandoffMeta;
   /** Handoff of the previous entry, on the first decision of the entry after it. */
   previousHandoffId?: string;

@@ -418,7 +418,7 @@ export function isExcludedExecutor(state: WorkPhaseState | undefined, key: strin
 export function contractMeta(state: WorkPhaseState): ExecutionContractMeta | undefined {
   const contract = state.contract;
   if (!contract) return undefined;
-  // A plan made from a handed-off investigation, in this entry or the one
+  // A plan made from a context handoff, in this entry or the one
   // after it, joins its outcome to that handoff.
   const handoffId = state.reasoningHandoff?.id ?? state.previousHandoffId;
   return {

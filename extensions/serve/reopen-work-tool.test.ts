@@ -148,6 +148,8 @@ describe('reopen_work', () => {
     expect(submitReopenWork(SHAPE, AUTO, session).accepted).toBe(false);
     expect(session.context.getLedger().items.get('w_1')?.status).toBe('done');
     expect(session.getWorkPhaseState()?.contextStatus).toBeUndefined();
+    // The first look, and with it the completed-work mutation gate, stays.
+    expect(session.getWorkPhaseState()?.firstLook).toEqual({ workItemId: 'w_1' });
   });
 
   it('registers one sequential tool that does not take a work item id', () => {

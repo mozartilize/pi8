@@ -488,7 +488,7 @@ export function submitExecutionContract(
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },
   });
-  // The investigation handoff this plan came from records that it led to one.
+  // The context handoff this plan came from records that it led to one.
   const next = accepted.reasoningHandoff && !accepted.reasoningHandoff.contractAccepted
     ? { ...accepted, reasoningHandoff: { ...accepted.reasoningHandoff, contractAccepted: true } }
     : accepted;

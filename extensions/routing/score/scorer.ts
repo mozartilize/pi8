@@ -469,8 +469,8 @@ export interface ScoreOpts {
   warmPrefixTokens?: ReadonlyMap<string, number>;
   /**
    * Task-axis ratio an accepted handoff requires of the next phase's model:
-   * the executor of an execution contract, or the planner or reviewer of an
-   * investigation. Replaces the live frontier ratio and disables promotion;
+   * the executor of an execution contract, or the planner or reviewer after a
+   * context handoff. Replaces the live frontier ratio and disables promotion;
    * its absence selects the live tier/promotion constants unchanged.
    */
   handoffMinimum?: number;

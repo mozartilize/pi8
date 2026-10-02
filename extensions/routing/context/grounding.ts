@@ -215,7 +215,7 @@ export async function isFresh(cwd: string | undefined, artifact: GroundedArtifac
 
 /**
  * Referenced files require fresh grounding on this item. Directories are
- * investigation scopes, not file content: only an accepted investigation
+ * handoff scopes, not file content: only an accepted context handoff
  * closes that obligation. It never substitutes for a file's hash evidence.
  * No referenced path means nothing here proves the context in hand.
  */

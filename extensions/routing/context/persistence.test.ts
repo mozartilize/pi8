@@ -93,6 +93,52 @@ describe('branch reconstruction', () => {
     expect(rebuildLedger(t.getBranch()).incumbent).toBeUndefined();
   });
 
+  it('follows completion and reopen along the selected branch, and a fork before completion never sees it', () => {
+    const t = new SessionTree();
+    const u1 = t.user('implement the exporter');
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'context-commit', sourceEntryId: u1,
+      events: [createEvent(workItem('w_1'), u1), activateEvent('w_1', u1)] });
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'incumbent', served: { registryId: 'a/opus' }, dimension: 'implement', workItemId: 'w_1', sourceEntryId: u1 });
+    const beforeCompletion = t.getLeafId();
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'context-commit', sourceEntryId: u1, events: [
+      { v: 1, op: 'work-close', workItemId: 'w_1', status: 'done', sourceEntryId: u1 },
+      { v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'work-complete', handoffId: u1, sourceEntryId: u1 },
+    ] });
+    const completed = t.getLeafId();
+    const u2 = t.user('fix the retry branch too');
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'context-commit', sourceEntryId: u2, events: [
+      { v: 1, op: 'work-update', workItemId: 'w_1', patch: { status: 'active' }, sourceEntryId: u2 },
+      activateEvent('w_1', u2),
+      { v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'work-reopen', handoffId: u2, sourceEntryId: u2 },
+    ] });
+    const reopened = t.getLeafId();
+    const boundaries = () => branchEvents(t.getBranch()).flatMap((e) => (e.op === 'boundary' ? [e.boundary] : []));
+
+    t.navigate(beforeCompletion);
+    let ledger = rebuildLedger(t.getBranch());
+    expect(ledger.items.get('w_1')?.status).toBe('active');
+    expect(ledger.activeWorkItemId).toBe('w_1');
+
+    t.navigate(completed);
+    ledger = rebuildLedger(t.getBranch());
+    expect(ledger.items.get('w_1')?.status).toBe('done');
+    expect(ledger.activeWorkItemId).toBeUndefined();
+    expect(ledger.incumbent).toMatchObject({ registryId: 'a/opus', workItemId: 'w_1' });
+
+    t.navigate(reopened);
+    ledger = rebuildLedger(t.getBranch());
+    expect(ledger.items.get('w_1')?.status).toBe('active');
+    expect(ledger.activeWorkItemId).toBe('w_1');
+    expect(boundaries()).toEqual(['work-complete', 'work-reopen']);
+
+    // A fork from before completion holds neither later boundary.
+    t.navigate(beforeCompletion);
+    t.user('try another exporter design');
+    ledger = rebuildLedger(t.getBranch());
+    expect(ledger.items.get('w_1')?.status).toBe('active');
+    expect(boundaries()).toEqual([]);
+  });
+
   it('skips other extensions\' entries and malformed ledger entries', () => {
     const t = new SessionTree();
     const u = t.user('hi');
