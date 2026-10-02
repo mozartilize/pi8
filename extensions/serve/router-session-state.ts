@@ -10,6 +10,7 @@
  * default instance; otherwise state crosses sessions. Async writes must check
  * the session generation before publishing results from an earlier session.
  */
+import { loadModelHistory, type ModelHistory } from '../bench/model-history.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type {
   Candidate,
@@ -17,6 +18,7 @@ import type {
   Dimension,
   RoutingDecision,
 } from '../types.js';
+import { checkPlaywright, type PlaywrightCheck } from '../adapters/artificial-analysis-site.js';
 import { debugLog } from '../host/debuglog.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
@@ -248,6 +250,11 @@ export class RoutingContextState {
  * Runtime extension context & model registry bindings that survive session resets.
  */
 export class RuntimeBindings {
+  constructor(
+    /** Whether Chromium for Playwright is installed; `router/auto` routes only when it is. */
+    readonly checkBrowser: () => Promise<PlaywrightCheck> = checkPlaywright,
+  ) {}
+
   private lastContext: ExtensionContext | undefined;
   private currentRegistry: ExtensionContext['modelRegistry'] | undefined;
   private lastRegModels = '';
@@ -293,6 +300,7 @@ export class RouterSession {
   private readonly trajectory = new TrajectoryState();
 
   private sessionGen = 0;
+  private history: { entry: string; data: ModelHistory } | undefined;
   private decision: RoutingDecision | undefined;
   private chosenRegistryId: string | undefined;
   private served: ServedInfo | undefined;
@@ -335,6 +343,11 @@ export class RouterSession {
   ) {
     this.blacklist = blacklist;
     this.intent = intent;
+  }
+
+  getModelHistory(entry: string): ModelHistory {
+    if (this.history?.entry !== entry) this.history = { entry, data: loadModelHistory() };
+    return this.history.data;
   }
 
   getSessionGeneration(): number {
@@ -664,6 +677,7 @@ export class RouterSession {
    */
   reset(): void {
     this.sessionGen += 1;
+    this.history = undefined;
     this.decision = undefined;
     this.chosenRegistryId = undefined;
     this.previousServed = undefined;

@@ -69,7 +69,7 @@ const benchmarkCandidates: Candidate[] = [
       registryId: 'bench/cheap',
       benchSlug: 'cheap',
       active: true,
-      quality: { intelligence: 65, coding: 60 },
+      quality: { intelligence: 30, coding: 60, agenticCoding: 30, knowledge: 10, research: 0.4 },
       priceInputPer1M: 0.5,
       priceOutputPer1M: 2.0,
       source: 'aa',
@@ -83,7 +83,7 @@ const benchmarkCandidates: Candidate[] = [
       registryId: 'bench/strong',
       benchSlug: 'strong',
       active: true,
-      quality: { intelligence: 90, coding: 88, },
+      quality: { intelligence: 55, coding: 78, agenticCoding: 50, knowledge: 30, research: 0.6 },
       priceInputPer1M: 15.0,
       priceOutputPer1M: 75.0,
       source: 'aa',
@@ -116,6 +116,23 @@ function makePolicyInput(overrides: Partial<RoutingPolicyInput> = {}): RoutingPo
 // ─── Cause precedence table ──────────────────────────────────────────
 
 describe('resolveRoutingDecision', () => {
+  it.each([
+    [-10, 0.38, 'p/suitable'],
+    [10, undefined, 'p/incumbent'],
+  ] as const)('keeps uncertain incumbent strength but not a measured minimum failure: %s, %s', (knowledge, research, expected) => {
+    const incumbent = candidate('p/incumbent', { bench: {
+      ...benchRow('incumbent'), quality: { intelligence: 40, knowledge, research },
+    } });
+    const suitable = candidate('p/suitable', { bench: {
+      ...benchRow('suitable'), quality: { intelligence: 35, knowledge: 10, research: 0.5 },
+    } });
+    const { decision } = resolveRoutingDecision(makePolicyInput({
+      candidates: [incumbent, suitable], baseDimension: 'plan', incumbentRegistryId: 'p/incumbent',
+    }));
+    expect(decision.chosen).toBe(expected);
+    expect(new Set(decision.fallbackChain)).toEqual(new Set(['p/suitable', 'p/incumbent']));
+  });
+
   it('renders typed policy details without changing the logged reason format', () => {
     const { decision } = resolveRoutingDecision(makePolicyInput({
       estimatedContextTokens: 150_000,

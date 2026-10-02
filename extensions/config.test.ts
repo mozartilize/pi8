@@ -124,6 +124,7 @@ it('drops malformed values and clamps routing policy to documented defaults', ()
   const config = loadConfig();
   expect(config.switchMargin).toBe(DEFAULT_SWITCH_MARGIN);
   expect(config).not.toHaveProperty('lowConfidenceThreshold');
+  expect(config).not.toHaveProperty('sources');
   expect(config.models).toEqual(['alpha/*']);
   expect(config.blacklist).toEqual(['*/broken']);
   expect(config.dimensionWeights.implement).toEqual({
@@ -156,7 +157,7 @@ describe('malformed config values are normalized to defaults', () => {
     writeFileSync(getConfigPath(), '[]', 'utf8');
     // Must return the default config, not treat the array as an object.
     const config = loadConfig();
-    expect(config.sources).toEqual(['artificial-analysis', 'benchlm']);
+    expect(config.switchMargin).toBe(DEFAULT_SWITCH_MARGIN);
   });
 
   it('rejects a top-level string as config', () => {
@@ -168,7 +169,7 @@ describe('malformed config values are normalized to defaults', () => {
   it('rejects a top-level number as config', () => {
     writeFileSync(getConfigPath(), '42', 'utf8');
     const config = loadConfig();
-    expect(config.sources).toEqual(['artificial-analysis', 'benchlm']);
+    expect(config.switchMargin).toBe(DEFAULT_SWITCH_MARGIN);
   });
 
   it('coerces a non-boolean prompt to true (default on)', () => {

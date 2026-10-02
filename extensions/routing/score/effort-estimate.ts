@@ -35,8 +35,8 @@ const LEVELS: readonly ModelThinkingLevel[] = [
   'max',
 ];
 
-type QualityAxis = 'intelligence' | 'coding' | 'agenticCoding';
-const AXES: readonly QualityAxis[] = ['intelligence', 'coding', 'agenticCoding'];
+type LadderAxis = 'intelligence' | 'coding' | 'agenticCoding';
+const AXES: readonly LadderAxis[] = ['intelligence', 'coding', 'agenticCoding'];
 
 /** Percentile of observed drops used as the per-step estimate. */
 const DROP_PERCENTILE = 0.9;
@@ -48,7 +48,7 @@ const DROP_PERCENTILE = 0.9;
  */
 const MIN_SAMPLE = 8;
 
-export type EffortDrops = Partial<Record<QualityAxis, number>>;
+export type EffortDrops = Partial<Record<LadderAxis, number>>;
 
 interface EstimatedQuality {
   quality: BenchModel['quality'];
@@ -78,7 +78,7 @@ export function effortDropsPerStep(rows: readonly BenchModel[]): EffortDrops {
     byModel.set(row.registryId, perModel);
   }
 
-  const drops: Record<QualityAxis, number[]> = {
+  const drops: Record<LadderAxis, number[]> = {
     intelligence: [],
     coding: [],
     agenticCoding: [],
@@ -157,10 +157,14 @@ export function completeMeasuredRow(
   drops: EffortDrops,
 ): BenchModel | undefined {
   const result = estimateQuality(row.effort, measured, drops, row.quality);
-  // Knowledge is measured on its own signed scale and is never estimated, but
-  // an effort-labelled knowledge-only row still represents real evidence at
-  // that exact level and must remain a distinct routable candidate.
-  if (!AXES.some((axis) => result.quality[axis] != null) && result.quality.knowledge == null) {
+  // Knowledge and research are never estimated, but an effort-labelled row
+  // with only those axes is still real evidence at that exact level and must
+  // remain a distinct routable candidate.
+  if (
+    !AXES.some((axis) => result.quality[axis] != null)
+    && result.quality.knowledge == null
+    && result.quality.research == null
+  ) {
     return undefined;
   }
   if (!result.estimated) return row;

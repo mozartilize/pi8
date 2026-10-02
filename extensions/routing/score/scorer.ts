@@ -6,9 +6,13 @@
  *
  * No I/O. No registry access. Testable with fixture tables.
  */
+import { identityKey } from '../../bench/matcher.js';
 import type {
+  BenchModel,
   Candidate,
   Dimension,
+  ExactQuality,
+  QualityAxis,
   QualityExclusionReason,
   RoutingDecision,
   ScoreWeights,
@@ -75,33 +79,16 @@ export function parseCandidateKey(key: string): ParsedCandidateKey {
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 /**
- * Ranking projection: maps a candidate's benchmark quality to the dimension's
- * preferred measurement axis. Falls back when the primary axis is missing so
- * every measured model sorts on real data instead of collapsing to the
- * unknown-quality default.
- *
- * `review` falls back from `coding` to `intelligence` because a model
- * measured on only one axis should still rank on evidence. This means a model
- * with `intelligence` but no direct `coding` measurement can receive a real
- * `qualityNorm` for ranking while simultaneously being tier 1 (unknown) for
- * eligibility — see `taskAxis` for the contrasting rule.
+ * Ranking axis: the measurement a candidate's quality credit is read from.
+ * Plan, review, and gather rank on intelligence; implementation ranks on the
+ * agentic index and falls back to coding so a model measured on coding only
+ * still ranks on evidence (it stays in the unknown-capability tier, because
+ * its minimum is set on the agentic index).
  */
 function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension): number | undefined {
-  switch (dim) {
-    case 'lightweight':
-    case 'gather':
-      return b.quality.intelligence;
-    case 'plan':
-      // Only `intelligence` is used: quality axes from different benchmark
-      // sources are on different raw scales and must never be blended inside
-      // one request-local ratio — doing so silently demotes a frontier model
-      // measured by only one source.
-      return b.quality.intelligence;
-    case 'implement':
-      return b.quality.agenticCoding ?? b.quality.coding;
-    case 'review':
-      return b.quality.coding ?? b.quality.intelligence;
-  }
+  return dim === 'implement'
+    ? b.quality.agenticCoding ?? b.quality.coding
+    : b.quality.intelligence;
 }
 
 /**
@@ -114,212 +101,118 @@ export function capabilityForDimension(c: Candidate, dim: Dimension): number | u
   return c.bench ? qualityForDimension(c.bench, dim) : undefined;
 }
 
-/** Live task-axis floor: a candidate must reach 85% of the strongest peer. */
-export const FRONTIER_QUALITY_RATIO = 0.85;
+type Minimums = Readonly<Partial<Record<QualityAxis, number>>>;
 
 /**
- * Absolute task floor for bounded economic promotion. Price can only relax the
- * frontier floor down to this measured capability threshold.
+ * Fixed capability minimums for a task type, on Artificial Analysis
+ * Intelligence Index v4.3 scales, calibrated on 2026-10-02 against the models
+ * the router serves. AA rescales its indexes between versions: a new version
+ * needs a new calibration here.
+ *
+ * - gather: intelligence 20 keeps out mini and non-reasoning variants.
+ * - plan, review: intelligence 30; Omniscience 0, so the model states facts
+ *   right at least as often as wrong; AA-Briefcase rubric 0.35, so its work
+ *   from many source files holds up when checked.
+ * - implement: agentic index 30.
+ * - lightweight: none; trivial work goes to the cheapest model.
  */
-export const ECONOMY_QUALITY_RATIO = 0.7;
-
-/** Minimum broad capability required for implementation and review work. */
-export const SANITY_QUALITY_RATIO = 0.45;
+const CAPABILITY_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
+  lightweight: {},
+  gather: { intelligence: 20 },
+  plan: { intelligence: 30, knowledge: 0, research: 0.35 },
+  review: { intelligence: 30, knowledge: 0, research: 0.35 },
+  implement: { agenticCoding: 30 },
+};
 
 /**
- * AA-Omniscience's meaningful zero: correct answers equal incorrect answers.
- * A negative expected factual utility is unsafe for judgment-heavy work even
- * when broad capability benchmarks are strong.
+ * Strongest value measured on each axis when `CAPABILITY_MINIMUMS` was
+ * calibrated. A handoff requirement is a share of these, so the difficulty
+ * scale means the same in every request, whatever models the pool holds.
  */
-export const KNOWLEDGE_QUALITY_FLOOR = 0;
+export const AXIS_REFERENCE: Readonly<Record<Exclude<QualityAxis, 'knowledge'>, number>> = {
+  intelligence: 57.6,
+  coding: 78.3,
+  agenticCoding: 56.5,
+  research: 0.61,
+  longContext: 1,
+  visionReasoning: 1,
+};
+
+/** The strongest handoff requirement: the work keeps a model near the reference. */
+export const FRONTIER_REQUIREMENT = 0.85;
 
 /**
- * Eligibility axis: the measurement the dimension's work directly depends on.
- * Deliberately does NOT fall back — eligibility requires direct evidence on
- * the work's axis. Contrast with `qualityForDimension`, which falls back so
- * ranking can use whatever measurement exists.
+ * The minimums a candidate must meet. Without a handoff, the task type's
+ * fixed minimums. A handoff requirement replaces each axis with that share of
+ * the reference, on the same axes. The Omniscience minimum does not scale:
+ * zero is where wrong answers start to outnumber right ones, not a level of
+ * strength.
  */
-function taskAxis(c: Candidate, dimension: Dimension): number | undefined {
-  const quality = c.bench?.quality;
-  if (!quality) return undefined;
-  switch (dimension) {
-    case 'lightweight':
-    case 'gather':
-      return quality.intelligence;
-    case 'plan':
-      // See the identical note in qualityForDimension: the cross-source
-      // blending prohibition applies to eligibility gates, not just ranking.
-      return quality.intelligence;
-    case 'implement':
-      return quality.agenticCoding ?? quality.coding;
-    case 'review':
-      return quality.coding;
-  }
-}
-
-/** Broad capability is a sanity check for coding work, not a second frontier. */
-function generalAxis(c: Candidate): number | undefined {
-  const quality = c.bench?.quality;
-  // Same cross-source blending prohibition as taskAxis and qualityForDimension.
-  return quality?.intelligence;
-}
-
-/** A request-local capability projection used for eligibility and tie-breaking. */
-export interface RelativeQuality {
-  taskRatio: number;
-  generalRatio?: number;
-  bottleneck: number;
-  mean: number;
-}
-
-const needsGeneralSanity = (dimension: Dimension): boolean =>
-  dimension === 'implement' || dimension === 'review';
-
-/**
- * Normalize task and, where relevant, general capability against the strongest
- * request-local peers. Benchmarks use different scales, so relative gaps are
- * more durable than absolute index values.
- */
-export function relativeQualities(
-  candidates: readonly Candidate[],
-  dimension: Dimension,
-): Map<string, RelativeQuality> {
-  const tasks = new Map<string, number>();
-  const generals = new Map<string, number>();
-  for (const c of candidates) {
-    const task = taskAxis(c, dimension);
-    if (task != null) tasks.set(candidateKey(c), task);
-    if (needsGeneralSanity(dimension)) {
-      const general = generalAxis(c);
-      if (general != null) generals.set(candidateKey(c), general);
-    }
-  }
-
-  const result = new Map<string, RelativeQuality>();
-  if (tasks.size === 0) return result;
-  const taskMaximum = Math.max(...tasks.values());
-  const generalMaximum = generals.size > 0 ? Math.max(...generals.values()) : undefined;
-
-  for (const [candidateKey, task] of tasks) {
-    const taskRatio = taskMaximum > 0 ? clamp(task / taskMaximum, 0, 1) : 1;
-    const general = generals.get(candidateKey);
-    const generalRatio = general == null || generalMaximum == null
-      ? undefined
-      : generalMaximum > 0 ? clamp(general / generalMaximum, 0, 1) : 1;
-    const ratios = generalRatio == null ? [taskRatio] : [taskRatio, generalRatio];
-    result.set(candidateKey, {
-      taskRatio,
-      ...(generalRatio == null ? {} : { generalRatio }),
-      bottleneck: Math.min(...ratios),
-      mean: ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length,
-    });
-  }
-  return result;
+function minimumsFor(dimension: Dimension, requirement?: number): Minimums {
+  const fixed = CAPABILITY_MINIMUMS[dimension];
+  if (requirement == null) return fixed;
+  return Object.fromEntries(
+    (Object.keys(fixed) as QualityAxis[]).map((axis) => [
+      axis,
+      axis === 'knowledge' ? fixed.knowledge : clamp(requirement, 0, 1) * AXIS_REFERENCE[axis],
+    ]),
+  );
 }
 
 /**
- * Capability tiers, served in ascending order. Every tier stays in the fallback
+ * Capability tiers, served in ascending order: 0 meets every minimum, 1 lacks
+ * a measurement, 2 measured below a minimum. Every tier stays in the fallback
  * chain: a capability judgement controls the preferred model, never objective
  * failure recovery.
  */
 type QualityTier = 0 | 1 | 2;
-
-interface TierPolicy {
-  /** Minimum task-axis ratio a known candidate must reach to stay in tier 0. */
-  qualityRatio: number;
-  /** Absolute AA-Omniscience floor when factual reliability is task-critical. */
-  knowledgeFloor?: number;
-  /** Whether unknown capability ranks with the eligible group or behind it. */
-  unknownQualityTier: 'eligible' | 'after-known';
-  /** Whether trivial work is also gated on the capability floor. */
-  applyFloorToLightweight: boolean;
-}
-
-/**
- * The single live selection policy. Unknown quality follows known eligible
- * candidates but remains ahead of measured weak ones; trivial work is ungated.
- */
-const LIVE_TIER_POLICY: TierPolicy = {
-  qualityRatio: FRONTIER_QUALITY_RATIO,
-  unknownQualityTier: 'after-known',
-  applyFloorToLightweight: false,
-};
-
-/**
- * Price divisor for the bounded promotion band (§8.2): a below-floor
- * candidate must be at least this much cheaper than the cheapest normal
- * tier-0 candidate to earn a relaxed capability judgment.
- */
-export const PROMOTION_PRICE_DIVISOR = 4;
 
 interface Eligibility {
   tier: QualityTier;
   excludedReason?: QualityExclusionReason;
 }
 
-const unknownEligibility = (policy: TierPolicy): Eligibility => ({
-  tier: policy.unknownQualityTier === 'eligible' ? 0 : 1,
-  excludedReason: 'unknown-quality',
-});
-
 /**
- * Knowledge must describe the effort delegation will actually serve. A lower
- * nominal entry can be raised by the dimension floor (e.g. low reaches
- * medium on plan), so use an exact-effort sibling's measurement before the
- * entry's own.
+ * Exact-effort axes at the effort delegation will serve. The task type's
+ * effort minimum can raise a candidate's own effort (low serves at medium for
+ * a plan), and these axes are never estimated across efforts, so another
+ * effort's measurement never stands in for the served one.
  */
-function effectiveKnowledge(
+function servedExactQuality(
   candidate: Candidate,
   candidates: readonly Candidate[],
   dimension: Dimension,
-): number | undefined {
-  const floor = MIN_THINKING_BY_DIMENSION[dimension];
-  const effectiveEffort = candidate.effort != null
+): ExactQuality {
+  const exact = (quality: BenchModel['quality'] = {}): ExactQuality => ({
+    knowledge: quality.knowledge, research: quality.research,
+    longContext: quality.longContext, visionReasoning: quality.visionReasoning,
+  });
+  const own = exact(candidate.bench?.quality);
+  const minimum = MIN_THINKING_BY_DIMENSION[dimension];
+  const served = candidate.effort != null
     ? levelFrom(clampEffortToFloor(candidate.effort, dimension), candidate)
-    : floor === 'off' ? undefined : levelFrom(floor, candidate);
-  if (effectiveEffort != null) {
-    const retained = candidate.knowledgeByEffort?.[effectiveEffort];
-    if (retained != null) return retained;
-    const exact = candidates.find((peer) =>
-      peer.registryId === candidate.registryId
-      && peer.effort === effectiveEffort
-      && peer.bench?.quality.knowledge != null,
-    );
-    if (exact?.bench?.quality.knowledge != null) return exact.bench.quality.knowledge;
-    // A nominal-effort measurement cannot stand in for a higher effort chosen
-    // by the dimension floor; knowledge is never extrapolated across levels.
-    if (candidate.effort != null && candidate.effort !== effectiveEffort) return undefined;
-  }
-  // No named effective effort means delegation uses the model's fixed/default
-  // mode. A model-wide score describes that mode directly, including reasoning
-  // models without effort controls; this is not cross-effort extrapolation.
-  return candidate.bench?.quality.knowledge;
+    : minimum === 'off' ? undefined : levelFrom(minimum, candidate);
+  if (served == null || served === candidate.effort) return own;
+  const retained = candidate.exactQualityByEffort?.[served];
+  if (retained) return exact(retained);
+  const sibling = candidates.find((peer) => peer.registryId === candidate.registryId && peer.effort === served);
+  if (sibling) return exact(sibling.bench?.quality);
+  return candidate.effort == null ? own : exact();
 }
 
-function eligibilityOf(
-  relative: RelativeQuality | undefined,
-  dimension: Dimension,
-  policy: TierPolicy,
-  knowledge: number | undefined,
-): Eligibility {
-  if (dimension === 'lightweight' && !policy.applyFloorToLightweight) return { tier: 0 };
-  // A known failure on any required axis remains measured weak even when a
-  // different required axis is missing. Uncertainty cannot erase evidence.
-  if (policy.knowledgeFloor != null && knowledge != null && knowledge < policy.knowledgeFloor) {
-    return { tier: 2, excludedReason: 'below-knowledge-floor' };
+/**
+ * A measured value below any minimum is tier 2 even when another axis is
+ * unmeasured: uncertainty cannot erase evidence. A missing measurement
+ * otherwise is tier 1, behind every candidate that meets the minimums.
+ */
+function eligibilityOf(quality: BenchModel['quality'] | undefined, minimums: Minimums): Eligibility {
+  let unmeasured = false;
+  for (const [axis, minimum] of Object.entries(minimums) as Array<[QualityAxis, number]>) {
+    const value = quality?.[axis];
+    if (value == null || !Number.isFinite(value)) unmeasured = true;
+    else if (value < minimum) return { tier: 2, excludedReason: `below-${axis}-minimum` };
   }
-  if (!relative) return unknownEligibility(policy);
-  if (relative.taskRatio < policy.qualityRatio) {
-    return { tier: 2, excludedReason: 'below-task-floor' };
-  }
-  if (needsGeneralSanity(dimension)) {
-    if (relative.generalRatio == null) return unknownEligibility(policy);
-    if (relative.generalRatio < SANITY_QUALITY_RATIO) {
-      return { tier: 2, excludedReason: 'below-sanity-floor' };
-    }
-  }
-  if (policy.knowledgeFloor != null && knowledge == null) return unknownEligibility(policy);
-  return { tier: 0 };
+  return unmeasured ? { tier: 1, excludedReason: 'unknown-quality' } : { tier: 0 };
 }
 
 // ─── Cost estimation helpers ─────────────────────────────────────────
@@ -407,7 +300,7 @@ export function costSignal(candidates: readonly Candidate[]): 'task' | 'per-1m' 
  * scale: shifting by the cheapest positive price keeps logs finite,
  * scale-invariant, and makes free strictly better than every paid candidate.
  */
-export function logCostUtilities(
+export function logUtilities(
   costs: readonly (number | undefined)[],
 ): (number | undefined)[] {
   const known = costs.filter(
@@ -458,7 +351,7 @@ export interface ScoreOpts {
   isSubagentSpawn?: boolean;
   /** Required vision support (from image attachments). */
   needsVision?: boolean;
-  /** Maximum incumbent-retention bonus for mid-session model switches. */
+  /** Maximum prompt-cache credit for a candidate. */
   switchMargin?: number;
   /**
    * Tokens each candidate key's own prompt cache still holds for this
@@ -468,15 +361,19 @@ export interface ScoreOpts {
    */
   warmPrefixTokens?: ReadonlyMap<string, number>;
   /**
-   * Task-axis ratio an accepted handoff requires of the next phase's model:
-   * the executor of an execution contract, or the planner or reviewer after a
-   * context handoff. Replaces the live frontier ratio and disables promotion;
-   * its absence selects the live tier/promotion constants unchanged.
+   * Requirement an accepted handoff sets for the next phase's model: the
+   * executor of an execution contract, or the planner or reviewer after a
+   * context handoff. The candidate must meet that share of each axis's
+   * reference strength (`minimumsFor`), and quality above it earns no
+   * credit; absent applies the task type's fixed minimums.
    */
   handoffMinimum?: number;
+  /** Measured compliance preference, bounded and applied inside capability tiers only. */
+  protocolPenalties?: ReadonlyMap<string, number>;
 }
 
 export interface ScoredCandidate extends Candidate {
+  protocolPenalty?: number;
   score: number;
   qualityComponent: number;
   costComponent: number;
@@ -780,134 +677,27 @@ export function applyCandidateGuards(
 
 /**
  * Capability is an eligibility gate, not another weighted component: price
- * and speed may rank comparable models, but cannot offset a material quality
- * gap. Lower tiers stay in the chain as objective fallbacks.
- *
- * `handoffMinimum` changes only which parameters feed this single
- * eligibility/promotion implementation; its absence selects the current live
- * constants unchanged. Knowledge is task-critical for planning/review.
- * Activate its floor only when the scoring pool has at least one measurement:
- * absent coverage is uncertainty, not proof that every model is weak.
+ * and speed may rank comparable models, but cannot offset a missed minimum.
+ * Lower tiers stay in the chain as objective fallbacks.
  */
 function computeEligibility(
   filtered: Candidate[],
   dimension: Dimension,
-  opts: ScoreOpts,
-) {
-  const knowledgeCritical = dimension === 'plan' || dimension === 'review';
-  const knowledgeByCandidate = new Map(filtered.map((candidate) => [
-    candidateKey(candidate),
-    effectiveKnowledge(candidate, filtered, dimension),
+  minimums: Minimums,
+): Map<string, Eligibility> {
+  return new Map(filtered.map((c) => [
+    candidateKey(c),
+    eligibilityOf(
+      c.bench && { ...c.bench.quality, ...servedExactQuality(c, filtered, dimension) },
+      minimums,
+    ),
   ]));
-  const knowledgeAvailable = [...knowledgeByCandidate.values()].some((value) => value != null);
-  const activeTierPolicy: TierPolicy = {
-    ...LIVE_TIER_POLICY,
-    ...(opts.handoffMinimum != null ? { qualityRatio: opts.handoffMinimum } : {}),
-    ...(knowledgeCritical && knowledgeAvailable ? { knowledgeFloor: KNOWLEDGE_QUALITY_FLOOR } : {}),
-  };
-  // A handoff minimum already is the sanctioned relaxation for the work
-  // handed off; promoting below it would let price override the router's
-  // valuation of that work.
-  const activePromotionPolicy = opts.handoffMinimum != null
-    ? { enabled: false, qualityRatio: opts.handoffMinimum }
-    : {
-        enabled: dimension === 'gather' || dimension === 'implement' || dimension === 'review',
-        qualityRatio: ECONOMY_QUALITY_RATIO,
-      };
-
-  const relative = relativeQualities(filtered, dimension);
-  const eligibility = new Map<string, Eligibility>(
-    filtered.map((c) => [
-      candidateKey(c),
-      eligibilityOf(
-        relative.get(candidateKey(c)),
-        dimension,
-        activeTierPolicy,
-        knowledgeByCandidate.get(candidateKey(c)),
-      ),
-    ]),
-  );
-  return {
-    knowledgeByCandidate,
-    activeTierPolicy,
-    activePromotionPolicy,
-    relative,
-    eligibility,
-  };
 }
 
 /**
- * A near-frontier candidate may earn tier 0 only when economics provide a
- * material benefit and no cheaper peer already offers at least its task axis.
- * Plan is pure judgment, so its frontier remains intentionally unrelaxed.
- * Promotion relaxes the capability floor on economic grounds; an estimated
- * row already claims capability it was never measured at, so promotion stays
- * measured-evidence only (`qualityEstimated !== true`).
- */
-function applyEconomicPromotion(
-  filtered: Candidate[],
-  dimension: Dimension,
-  eligibility: Map<string, Eligibility>,
-  relative: ReturnType<typeof relativeQualities>,
-  knowledgeByCandidate: Map<string, number | undefined>,
-  activeTierPolicy: TierPolicy,
-  activePromotionPolicy: {
-    enabled: boolean;
-    qualityRatio: number;
-  },
-  costOf: (c: Candidate) => number | undefined,
-): void {
-  if (!activePromotionPolicy.enabled) return;
-  const eligiblePrices = filtered
-    .filter((c) => eligibility.get(candidateKey(c))?.tier === 0 && relative.has(candidateKey(c)))
-    .map(costOf)
-    .filter((price): price is number => price != null);
-  const cheapestEligiblePrice = eligiblePrices.length > 0 ? Math.min(...eligiblePrices) : undefined;
-  if (cheapestEligiblePrice == null) return;
-
-  for (const c of filtered) {
-    const current = eligibility.get(candidateKey(c))!;
-    const quality = relative.get(candidateKey(c));
-    const price = costOf(c);
-    const task = taskAxis(c, dimension);
-    const sanitySatisfied = !needsGeneralSanity(dimension)
-      || (quality?.generalRatio != null && quality.generalRatio >= SANITY_QUALITY_RATIO);
-    const knowledge = knowledgeByCandidate.get(candidateKey(c));
-    const knowledgeSatisfied = activeTierPolicy.knowledgeFloor == null
-      || (knowledge != null && knowledge >= activeTierPolicy.knowledgeFloor);
-    const dominated = task == null || price == null || filtered.some((peer) => {
-      if (candidateKey(peer) === candidateKey(c)) return false;
-      // A sibling provider entry of the same benchmark row is a substitute,
-      // not a competitor: promoting only the cheapest copy pushes the
-      // identical model on every other provider below unknown-quality
-      // candidates in the fallback chain, which is the opposite of what a
-      // cheap-and-capable finding should do. Effort variants of one model
-      // are NOT siblings — their rows are different measurements.
-      if (peer.bench?.benchSlug != null && peer.bench.benchSlug === c.bench?.benchSlug) return false;
-      const peerTask = taskAxis(peer, dimension);
-      const peerPrice = costOf(peer);
-      return peerTask != null && peerTask >= task && peerPrice != null && peerPrice < price;
-    });
-    if (
-      current.tier === 2
-      && quality != null
-      && c.bench?.qualityEstimated !== true
-      && quality.taskRatio >= activePromotionPolicy.qualityRatio
-      && sanitySatisfied
-      && knowledgeSatisfied
-      && price != null
-      && price <= cheapestEligiblePrice / PROMOTION_PRICE_DIVISOR
-      && !dominated
-    ) {
-      eligibility.set(candidateKey(c), { tier: 0, excludedReason: 'promoted' });
-    }
-  }
-}
-
-/**
- * Score all candidates. Cost is meaningful only among candidates in the same
- * capability tier; weaker fallback prices must not distort the preferred
- * tier. Economic promotion continues to compare raw prices on `costOf`.
+ * Score all candidates. Cost and time per task are meaningful only among
+ * candidates in the same capability tier; weaker fallback values must not
+ * distort the preferred tier.
  */
 function scoreWithinTiers(
   filtered: Candidate[],
@@ -916,171 +706,100 @@ function scoreWithinTiers(
   opts: ScoreOpts,
   eligibility: Map<string, Eligibility>,
   costOf: (c: Candidate) => number | undefined,
+  speedBasis: 'task' | 'tps',
+  minimums: Minimums,
 ): ScoredCandidate[] {
   const costUtilities = new Map<string, number | undefined>();
+  const timeUtilities = new Map<string, number | undefined>();
   for (const tier of [0, 1, 2] as const) {
     const peers = filtered.filter((candidate) => eligibility.get(candidateKey(candidate))!.tier === tier);
-    const utilities = logCostUtilities(peers.map(costOf));
+    const costs = logUtilities(peers.map(costOf));
+    const times = speedBasis === 'task' ? logUtilities(peers.map((c) => c.bench?.timePerTaskSeconds)) : [];
     peers.forEach((candidate, index) => {
-      costUtilities.set(candidateKey(candidate), utilities[index]);
+      costUtilities.set(candidateKey(candidate), costs[index]);
+      timeUtilities.set(candidateKey(candidate), times[index]);
     });
   }
 
   // A handoff minimum states how much capability the handed-off work needs.
   // Quality above it earns no credit, so among candidates that clear it the
-  // economic components — cost, speed, and the incumbent's cache credit —
-  // decide; otherwise a quality-heavy task weighting would pick the strongest
-  // model whatever the minimum says.
-  const qualityCeiling = handoffQualityCeiling(filtered, dimension, opts.handoffMinimum);
+  // economic components — cost, speed, and the cache credit — decide;
+  // otherwise a quality-heavy task weighting would pick the strongest model
+  // whatever the minimum says. The ceiling is the minimum on the ranking axis.
+  const rankingMinimum = minimums[dimension === 'implement' ? 'agenticCoding' : 'intelligence'];
+  const qualityCeiling = opts.handoffMinimum != null && rankingMinimum != null
+    ? clamp(rankingMinimum / 100, 0, 1) * weights.quality
+    : undefined;
   return filtered.map((c) => {
     const s = scoreCandidate(c, dimension, weights, opts);
-    if (qualityCeiling != null) {
-      s.qualityComponent = Math.min(s.qualityComponent, qualityCeiling * weights.quality);
-    }
+    if (qualityCeiling != null) s.qualityComponent = Math.min(s.qualityComponent, qualityCeiling);
     s.excludedReason = eligibility.get(candidateKey(s))?.excludedReason;
     const costUtility = costUtilities.get(candidateKey(c));
     s.costComponent = costUtility == null ? 0 : costUtility * weights.cost;
+    if (speedBasis === 'task') s.speedComponent = (timeUtilities.get(candidateKey(c)) ?? 0) * weights.speed;
     s.score = s.qualityComponent + s.costComponent + s.speedComponent;
     return s;
   });
 }
 
 /**
- * Normalized quality the handoff minimum asks for, if any. It is taken on the
- * task axis that gates eligibility: a ranking-axis fallback (review ranks a
- * model without a coding score on intelligence) is a different scale and must
- * not move the point where credit stops.
- */
-function handoffQualityCeiling(
-  filtered: Candidate[],
-  dimension: Dimension,
-  handoffMinimum: number | undefined,
-): number | undefined {
-  if (handoffMinimum == null) return undefined;
-  const measured = filtered.flatMap((c) => {
-    const quality = taskAxis(c, dimension);
-    return quality == null ? [] : [clamp(quality / 100, 0, 1)];
-  });
-  return measured.length === 0 ? undefined : handoffMinimum * Math.max(...measured);
-}
-
-/**
- * A mid-session switch away from the incumbent must beat it on the merits,
- * priced by the cache the incumbent's OWN registry economics say would
- * actually be lost. When the incumbent's registry entry does not publish
- * enough pricing to compute a real loss, no retention credit is granted —
- * an unpriced incumbent is scored on ordinary quality/cost/speed merits.
- *
- * A full model change preserves none of the cache (credit 0); the exact
- * incumbent match preserves all of it. A same-model effort change keeps all
- * of it only where effort shares the model's cache; elsewhere each effort
- * level has its own cache (OpenAI reports `reasoning_effort_changed`, and
- * top-level Anthropic effort invalidates the message blocks), so the credit
- * covers only the prefix that level's cache still holds from a recent serve.
- * A same-model candidate with no measured effort is the model's default call
- * shape and keeps the full credit like an exact incumbent match.
+ * Cache credit prices the warm prefix a candidate can reuse. The incumbent
+ * keeps the whole conversation; other keys keep only their own warm prefix.
+ * Effort changes share the whole prefix only where the provider supports it.
+ * Missing registry cache prices earn no credit. Subagent spawns have no
+ * conversation cache to retain.
  */
 function applySwitchBonus(scored: ScoredCandidate[], opts: ScoreOpts): void {
-  if (!opts.incumbentRegistryId || opts.isSubagentSpawn) return;
+  if (opts.isSubagentSpawn) return;
   const margin = clamp(opts.switchMargin ?? DEFAULT_SWITCH_MARGIN, 0, 1);
-  const incumbent = parseCandidateKey(opts.incumbentRegistryId);
+  const incumbent = opts.incumbentRegistryId ? parseCandidateKey(opts.incumbentRegistryId) : undefined;
   const incumbentScored = scored.find((s) => candidateKey(s) === opts.incumbentRegistryId);
   const total = Math.max(1, opts.estimatedContextTokens);
 
-  const incumbentCost = incumbentScored?.cost;
-  // A non-finite or negative cost field is garbage the registry never emits,
-  // but if one slips through it must not poison the score: NaN
-  // propagates through Math.max/Math.min and would surface as a `scored NaN`
-  // decision. Fall back to `input` only when `cacheWrite` is unusable, and
-  // drop retention credit entirely unless both endpoints are real prices.
-  const cacheWrite = incumbentCost?.cacheWrite;
-  const writeBasis = isNonNegativeFinite(cacheWrite) ? cacheWrite : incumbentCost?.input;
-  const cacheRead = incumbentCost?.cacheRead;
-  const perTokenLoss = isNonNegativeFinite(writeBasis) && isNonNegativeFinite(cacheRead)
-    ? Math.max(0, writeBasis - cacheRead)
-    : undefined;
-
-  if (perTokenLoss == null) return;
-  const modelChangeBonus = Math.min(total * perTokenLoss, margin);
+  const loss = (candidate: ScoredCandidate): number | undefined => {
+    const cost = candidate.cost;
+    const write = isNonNegativeFinite(cost?.cacheWrite) ? cost.cacheWrite : cost?.input;
+    return isNonNegativeFinite(write) && isNonNegativeFinite(cost?.cacheRead)
+      ? Math.max(0, write - cost.cacheRead)
+      : undefined;
+  };
+  const incumbentLoss = incumbentScored && loss(incumbentScored);
   for (const s of scored) {
     const key = candidateKey(s);
-    if (key === opts.incumbentRegistryId) {
-      s.score += modelChangeBonus;
-      s.switched = false;
-      continue;
-    }
     const p = parseCandidateKey(key);
-    if (p.provider !== incumbent.provider || p.id !== incumbent.id) continue;
-    if (p.effort == null || s.effortSharesCache) {
-      s.score += modelChangeBonus;
-      continue;
-    }
-    const warm = clamp(opts.warmPrefixTokens?.get(key) ?? 0, 0, total);
-    s.score += Math.min(warm * perTokenLoss, margin);
+    const sameModel = incumbent && p.provider === incumbent.provider && p.id === incumbent.id;
+    const keepsFullPrefix = key === opts.incumbentRegistryId || (sameModel && (p.effort == null || s.effortSharesCache));
+    const tokens = keepsFullPrefix ? total : clamp(opts.warmPrefixTokens?.get(key) ?? 0, 0, total);
+    const perTokenLoss = keepsFullPrefix ? incumbentLoss : loss(s);
+    if (perTokenLoss != null) s.score += Math.min(tokens * perTokenLoss, margin);
+    if (key === opts.incumbentRegistryId) s.switched = false;
   }
 }
 
 /**
  * Sort by economics inside each capability tier, then keep every weaker
- * model behind the eligible group for delegation fallback. After an
- * asymmetric promotion `top` is no longer `scored[0]`; the delegation loop
- * serves fallbackChain[0], so the chain MUST lead with the promoted pick.
- * Keep `chosen === fallbackChain[0]`.
+ * model behind the eligible group for delegation fallback. The delegation
+ * loop serves `fallbackChain[0]`, which is `chosen`.
  */
 function assembleDecision(
   scored: ScoredCandidate[],
   dimension: Dimension,
   eligibility: Map<string, Eligibility>,
-  relative: ReturnType<typeof relativeQualities>,
   costBasis: 'task' | 'per-1m',
+  speedBasis: 'task' | 'tps',
 ): RoutingDecision {
   const compareScore = (a: ScoredCandidate, b: ScoredCandidate): number => {
     if (b.score !== a.score) return b.score - a.score;
-    if (b.qualityComponent !== a.qualityComponent) {
-      return b.qualityComponent - a.qualityComponent;
-    }
-    const ra = relative.get(candidateKey(a));
-    const rb = relative.get(candidateKey(b));
-    if (ra && rb) {
-      if (rb.bottleneck !== ra.bottleneck) return rb.bottleneck - ra.bottleneck;
-      if (rb.mean !== ra.mean) return rb.mean - ra.mean;
-    }
-    const speedA = a.bench?.outputSpeedTps ?? 0;
-    const speedB = b.bench?.outputSpeedTps ?? 0;
+    if (b.qualityComponent !== a.qualityComponent) return b.qualityComponent - a.qualityComponent;
+    const speedA = speedBasis === 'task' ? -(a.bench?.timePerTaskSeconds ?? Infinity) : a.bench?.outputSpeedTps ?? 0;
+    const speedB = speedBasis === 'task' ? -(b.bench?.timePerTaskSeconds ?? Infinity) : b.bench?.outputSpeedTps ?? 0;
     if (speedB !== speedA) return speedB - speedA;
     return candidateKey(a).localeCompare(candidateKey(b));
   };
-  scored.sort((a, b) => (eligibility.get(candidateKey(a))!.tier - eligibility.get(candidateKey(b))!.tier) || compareScore(a, b));
+  const tierOf = (s: ScoredCandidate): number => eligibility.get(candidateKey(s))!.tier;
+  scored.sort((a, b) => (tierOf(a) - tierOf(b)) || compareScore(a, b));
 
-  let top = scored[0];
-  let routedUp = false;
-
-  // Structural no-op for plan/review: tier strictly dominates the sort, so a
-  // tier-0 candidate always sorts to `top` when one exists. Tier 0 for
-  // plan/review requires `taskAxis`, and `qualityForDimension` is defined
-  // whenever `taskAxis` is (superset relation), so this body runs only when no
-  // tier-0 candidate exists — in which case the search below returns undefined
-  // and `top` is left unchanged. Kept for `routedUp` bookkeeping and as a
-  // documented invariant, not an active promotion path.
-  if (dimension === 'plan' || dimension === 'review') {
-    if (!top.bench || qualityForDimension(top.bench, dimension) == null) {
-      routedUp = true;
-      const known = scored.find(
-        (s) => eligibility.get(candidateKey(s))!.tier === 0 && s.bench && qualityForDimension(s.bench, dimension) != null,
-      );
-      if (known && candidateKey(known) !== candidateKey(top)) {
-        top = known;
-      }
-    }
-  }
-
-  const fallbackChain = scored.map((s) => candidateKey(s));
-  const topIndex = fallbackChain.indexOf(candidateKey(top));
-  if (topIndex > 0) {
-    fallbackChain.splice(topIndex, 1);
-    fallbackChain.unshift(candidateKey(top));
-  }
-
+  const top = scored[0]!;
   const candidateDiagnostics = scored
     .filter((candidate) => candidate.excludedReason != null)
     .map((s) => ({ candidateKey: candidateKey(s), excludedReason: s.excludedReason }));
@@ -1091,9 +810,17 @@ function assembleDecision(
     cost: top.costComponent,
     speed: top.speedComponent,
     costBasis,
-    upgraded: routedUp,
     details: [],
   };
+  const withoutPenalty = [...scored].sort((a, b) => (tierOf(a) - tierOf(b)) || compareScore(
+    { ...a, score: a.score + (a.protocolPenalty ?? 0) },
+    { ...b, score: b.score + (b.protocolPenalty ?? 0) },
+  ))[0]!;
+  if (candidateKey(withoutPenalty) !== candidateKey(top)) {
+    scoredReason.details.push({ kind: 'protocol-penalty', model: candidateKey(withoutPenalty), penalty: withoutPenalty.protocolPenalty!, changed: true });
+  } else if (top.protocolPenalty) {
+    scoredReason.details.push({ kind: 'protocol-penalty', model: candidateKey(top), penalty: top.protocolPenalty, changed: false });
+  }
   return {
     dimension,
     chosen: candidateKey(top),
@@ -1101,8 +828,20 @@ function assembleDecision(
     scoredReason,
     ...(candidateDiagnostics.length > 0 ? { candidateDiagnostics } : {}),
     cause: 'heuristic',
-    fallbackChain,
+    fallbackChain: scored.map((s) => candidateKey(s)),
   };
+}
+
+/**
+ * Which speed scale a pickBest call compares on: measured time per task when
+ * every candidate in the pool that can win carries it, else output tokens per
+ * second. Like cost, the two scales are never mixed in one pick.
+ */
+function speedSignal(candidates: readonly Candidate[]): 'task' | 'tps' {
+  return candidates.length > 0
+    && candidates.every((c) => isNonNegativeFinite(c.bench?.timePerTaskSeconds))
+    ? 'task'
+    : 'tps';
 }
 
 // ─── pickBest ─────────────────────────────────────────────────────────
@@ -1114,41 +853,29 @@ export function pickBest(
   opts: ScoreOpts = { estimatedContextTokens: 0 },
 ): RoutingDecision {
   const filtered = applyCandidateGuards(candidates, opts);
-  const {
-    knowledgeByCandidate,
-    activeTierPolicy,
-    activePromotionPolicy,
-    relative,
-    eligibility,
-  } = computeEligibility(filtered, dimension, opts);
+  const minimums: Minimums = {
+    ...minimumsFor(dimension, opts.handoffMinimum),
+    // Below these conservative correctness minimums, the model has measured
+    // weak ability on the input shape. Missing measurements remain unknown.
+    ...(opts.estimatedContextTokens >= 64_000 ? { longContext: 0.30 } : {}),
+    ...(opts.needsVision ? { visionReasoning: 0.30 } : {}),
+  };
+  const eligibility = computeEligibility(filtered, dimension, minimums);
 
-  // Request-local cost scale, chosen once for this pickBest call. Task cost is
-  // used only when every candidate in the pool that can actually win carries
-  // it; otherwise that pool compares on blended $/1M. Scoped to the
-  // pre-promotion tier-0 pool (not the full filtered set) so a low-quality
-  // candidate that never competes for the win — tier 2, e.g. a below-floor
-  // model missing costPerTask — can't blind an otherwise task-cost-covered
-  // competitive group to effort-aware pricing (same-model higher-effort
-  // variants share the same $/1M rate, so a per-1M fallback can't tell them
-  // apart even though costPerTask does).
+  // Request-local cost and speed scales, chosen once for this call from the
+  // tier-0 pool: a tier-2 candidate missing task cost or time never competes
+  // for the win, so it must not blind the competitive group to effort-aware
+  // measurements (same-model effort variants share one $/1M rate, but not
+  // one cost or time per task).
   const tierZeroPool = filtered.filter((c) => eligibility.get(candidateKey(c))?.tier === 0);
-  const costBasis = costSignal(tierZeroPool.length > 0 ? tierZeroPool : filtered);
+  const pool = tierZeroPool.length > 0 ? tierZeroPool : filtered;
+  const costBasis = costSignal(pool);
   const costOf = (c: Candidate): number | undefined => {
     const cost = costBasis === 'task' ? c.bench?.costPerTask : blendedPricePer1M(c);
     return isNonNegativeFinite(cost) ? cost : undefined;
   };
 
-  applyEconomicPromotion(
-    filtered,
-    dimension,
-    eligibility,
-    relative,
-    knowledgeByCandidate,
-    activeTierPolicy,
-    activePromotionPolicy,
-    costOf,
-  );
-
+  const speedBasis = speedSignal(pool);
   const scored = scoreWithinTiers(
     filtered,
     dimension,
@@ -1156,15 +883,16 @@ export function pickBest(
     opts,
     eligibility,
     costOf,
+    speedBasis,
+    minimums,
   );
   applySwitchBonus(scored, opts);
-  return assembleDecision(
-    scored,
-    dimension,
-    eligibility,
-    relative,
-    costBasis,
-  );
+  for (const candidate of scored) {
+    const raw = opts.protocolPenalties?.get(identityKey(candidate.registryId));
+    const penalty = isNonNegativeFinite(raw) ? Math.min(raw, opts.switchMargin ?? DEFAULT_SWITCH_MARGIN) : 0;
+    if (penalty > 0) { candidate.protocolPenalty = penalty; candidate.score -= penalty; }
+  }
+  return assembleDecision(scored, dimension, eligibility, costBasis, speedBasis);
 }
 
 const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];

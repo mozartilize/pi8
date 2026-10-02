@@ -6,7 +6,6 @@ export interface ScoredReason {
   cost: number;
   speed: number;
   costBasis: 'task' | 'per-1m';
-  upgraded: boolean;
   details: ReasonDetail[];
 }
 
@@ -16,7 +15,8 @@ export type ReasonDetail =
   | { kind: 'incumbent-effort' }
   | { kind: 'context-pressure' }
   | { kind: 'no-data' }
-  | { kind: 'trajectory'; fromModel: string };
+  | { kind: 'trajectory'; fromModel: string }
+  | { kind: 'protocol-penalty'; model: string; penalty: number; changed: boolean };
 
 function renderDetail(detail: ReasonDetail): string {
   switch (detail.kind) {
@@ -26,12 +26,13 @@ function renderDetail(detail: ReasonDetail): string {
     case 'context-pressure': return 'context nearly full: prefer a fresh planner subagent';
     case 'no-data': return 'no benchmark quality data';
     case 'trajectory': return `${detail.fromModel} struggled: stronger model`;
+    case 'protocol-penalty': return `protocol penalty ${detail.penalty.toFixed(3)} on ${detail.model}${detail.changed ? ': changed preference' : ''}`;
   }
 }
 
 export function renderScoredReason(reason: ScoredReason): string {
-  const { score, quality, cost, speed, costBasis, upgraded, details } = reason;
-  return `score ${score.toFixed(3)} (quality ${quality.toFixed(2)}, cost ${cost.toFixed(2)}, speed ${speed.toFixed(2)}) [cost ${costBasis === 'task' ? 'per task' : 'per 1M tokens'}]${upgraded ? ' [upgraded]' : ''}${details.map((detail) => ` [${renderDetail(detail)}]`).join('')}`;
+  const { score, quality, cost, speed, costBasis, details } = reason;
+  return `score ${score.toFixed(3)} (quality ${quality.toFixed(2)}, cost ${cost.toFixed(2)}, speed ${speed.toFixed(2)}) [cost ${costBasis === 'task' ? 'per task' : 'per 1M tokens'}]${details.map((detail) => ` [${renderDetail(detail)}]`).join('')}`;
 }
 
 export function addReasonDetail(decision: RoutingDecision, detail: ReasonDetail): void {

@@ -256,110 +256,29 @@ describe('candidate expansion — model × measured effort', () => {
     expect(candidates[0]?.bench?.quality.intelligence).toBe(60);
   });
 
-  it('applies model-wide knowledge to every supported reasoning effort', () => {
+  it('does not copy unlabelled knowledge into measured effort rows', () => {
     const model = registryModel('p/model', {
-      reasoning: true,
-      thinkingLevelMap: {
-        off: null,
-        minimal: null,
-        low: 'low',
-        medium: 'medium',
-        high: 'high',
-        xhigh: 'xhigh',
-        max: 'max',
-      },
+      reasoning: true, thinkingLevelMap: { low: 'low', medium: 'medium', high: 'high', max: 'max' },
     });
-    const modelWideKnowledge: BenchModel = {
-      ...benchRow('max', 0),
-      benchSlug: 'model',
-      effort: undefined,
-      quality: { knowledge: -11.2 },
-      source: 'benchlm',
-    };
-
     const candidates = expandModelCandidates(model, [
-      benchRow('high', 50),
+      { ...benchRow('high', 50), quality: { intelligence: 50, knowledge: 10, research: 0.4 } },
       benchRow('max', 60),
-      modelWideKnowledge,
+      { ...benchRow('max', 0), effort: undefined, quality: { knowledge: -11.2 } },
     ]);
     const byEffort = new Map(candidates.map((candidate) => [candidate.effort, candidate]));
-
-    expect(byEffort.get('max')?.bench?.quality.knowledge).toBe(-11.2);
-    expect(byEffort.get('high')?.bench?.quality.knowledge).toBe(-11.2);
-    expect(byEffort.get('high')?.knowledgeByEffort).toEqual({
-      low: -11.2,
-      medium: -11.2,
-      high: -11.2,
-      xhigh: -11.2,
-      max: -11.2,
-    });
+    expect(byEffort.get('max')?.bench?.quality.knowledge).toBeUndefined();
+    expect(byEffort.get('high')?.bench?.quality.knowledge).toBe(10);
+    expect(byEffort.get('high')?.exactQualityByEffort).toEqual({ high: { knowledge: 10, research: 0.4 } });
   });
 
-  it('serves an unlabelled flagship knowledge-only row at max', () => {
-    const model = registryModel('p/model', {
-      reasoning: true,
-      thinkingLevelMap: {
-        off: null,
-        minimal: null,
-        low: 'low',
-        medium: 'medium',
-        high: 'high',
-        xhigh: 'xhigh',
-        max: 'max',
-      },
-    });
-    const row: BenchModel = {
-      ...benchRow('max', 0),
-      effort: undefined,
-      quality: { knowledge: -11.2 },
-      source: 'benchlm',
-    };
-
-    const candidates = expandModelCandidates(model, [row]);
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.effort).toBe('max');
-    expect(candidates[0]?.bench?.quality).toEqual({ knowledge: -11.2 });
-    expect(candidates[0]?.knowledgeByEffort).toEqual({
-      low: -11.2,
-      medium: -11.2,
-      high: -11.2,
-      xhigh: -11.2,
-      max: -11.2,
-    });
-  });
-
-  it('prefers an exact effort knowledge score over the model-wide score', () => {
-    const model = registryModel('p/model', {
-      reasoning: true,
-      thinkingLevelMap: {
-        off: null,
-        minimal: null,
-        low: 'low',
-        medium: 'medium',
-        high: 'high',
-        xhigh: 'xhigh',
-        max: 'max',
-      },
-    });
+  it('keeps an unlabelled knowledge-only row at the model default effort', () => {
+    const model = registryModel('p/model', { reasoning: true });
     const candidates = expandModelCandidates(model, [
-      { ...benchRow('high', 50), quality: { intelligence: 50, knowledge: -9.7 } },
-      benchRow('max', 60),
-      {
-        ...benchRow('max', 0),
-        effort: undefined,
-        quality: { knowledge: -11.2 },
-        source: 'benchlm',
-      },
+      { ...benchRow('max', 0), effort: undefined, quality: { knowledge: -11.2 } },
     ]);
-
-    expect(candidates[0]?.knowledgeByEffort).toEqual({
-      low: -11.2,
-      medium: -11.2,
-      high: -9.7,
-      xhigh: -11.2,
-      max: -11.2,
-    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.effort).toBeUndefined();
+    expect(candidates[0]?.bench?.quality).toEqual({ knowledge: -11.2 });
   });
 
   it('keeps effort-labelled knowledge-only rows distinct', () => {
@@ -368,8 +287,8 @@ describe('candidate expansion — model × measured effort', () => {
       thinkingLevelMap: { off: 'off', high: 'high', max: 'max' },
     });
     const rows = [
-      { ...benchRow('high', 0), quality: { knowledge: -9.7 }, source: 'benchlm' },
-      { ...benchRow('max', 0), quality: { knowledge: -10 }, source: 'benchlm' },
+      { ...benchRow('high', 0), quality: { knowledge: -9.7 }, source: 'artificial-analysis' },
+      { ...benchRow('max', 0), quality: { knowledge: -10 }, source: 'artificial-analysis' },
     ];
 
     const candidates = expandModelCandidates(model, rows);
@@ -377,8 +296,8 @@ describe('candidate expansion — model × measured effort', () => {
     expect(candidates.map((candidate) => candidate.effort)).toEqual(['high', 'max']);
     expect(candidates.map((candidate) => candidate.bench?.quality.knowledge)).toEqual([-9.7, -10]);
     expect(candidates.every((candidate) =>
-      candidate.knowledgeByEffort?.high === -9.7
-      && candidate.knowledgeByEffort.max === -10,
+      candidate.exactQualityByEffort?.high?.knowledge === -9.7
+      && candidate.exactQualityByEffort.max?.knowledge === -10,
     )).toBe(true);
   });
 });
@@ -489,6 +408,26 @@ describe('provider auth filtering', () => {
       { provider: 'router', id: 'auto' },
     ]);
     expect(filter('router')).toBe(false);
+  });
+});
+
+describe('Chromium setup prerequisite', () => {
+  it('returns one setup error and never delegates when the browser is missing', async () => {
+    const harness = await setupProviderTest({ dir: temp.path, browser: { ready: false, message: 'Install Chromium with playwright-core install --no-shell chromium' } });
+    await harness.serve({ messages: [{ role: 'user', content: 'hi' }] } as Context);
+    expect(harness.outStream.events.filter(event => event.type === 'error')).toHaveLength(1);
+    expect(JSON.stringify(harness.outStream.events)).toContain('playwright-core install --no-shell chromium');
+    expect(harness.streamedModels()).toEqual([]);
+  });
+
+  it('collects counts only for a successful serve', async () => {
+    const harness = await setupProviderTest({ dir: temp.path });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve({ systemPrompt: 'shared prompt', messages: [{ role: 'user', content: 'secret request' }] } as Context);
+    const { loadModelHistory } = await import('../bench/model-history.js');
+    expect([...loadModelHistory().stats.values()].reduce((n, stats) => n + stats.entries, 0)).toBeGreaterThan(0);
+    const { readFileSync } = await import('node:fs');
+    expect(readFileSync(join(temp.path, 'model-events.jsonl'), 'utf8')).not.toContain('secret request');
   });
 });
 
@@ -1438,7 +1377,7 @@ describe('provider auth filtering', () => {
       aliases: {},
       models: [
         { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 99, coding: 99, agenticCoding: 99, } },
-        { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 50, coding: 50, agenticCoding: 50, } },
+        { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 19, coding: 19, agenticCoding: 19 } },
       ],
     }));
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
@@ -1718,7 +1657,7 @@ describe('context acquisition', () => {
           registryId: 'alpha/cheap',
           benchSlug: 'alpha-cheap',
           active: true,
-          quality: { intelligence: 0.5, coding: 0.5, agenticCoding: 0.5 },
+          quality: { intelligence: 30, coding: 60, agenticCoding: 29, knowledge: 10, research: 0.32 },
           priceInputPer1M: 0.1,
           priceOutputPer1M: 0.2,
           source: 'test',
@@ -1727,7 +1666,7 @@ describe('context acquisition', () => {
           registryId: 'beta/strong',
           benchSlug: 'beta-strong',
           active: true,
-          quality: { intelligence: 0.9, coding: 0.9, agenticCoding: 0.9 },
+          quality: { intelligence: 55, coding: 78, agenticCoding: 55, knowledge: 30, research: 0.61 },
           priceInputPer1M: 2,
           priceOutputPer1M: 8,
           source: 'test',
@@ -2365,13 +2304,13 @@ describe('context acquisition', () => {
       return session;
     }
 
-    async function resolvedImplementation(session: Session, prompt: string): Promise<RoutingDecision | undefined> {
+    async function resolvedImplementation(session: Session, prompt: string, complexity = 'trivial'): Promise<RoutingDecision | undefined> {
       const incumbent = harness.session.context.getIncumbent();
       const first = await session.routeTurn(prompt);
       // With no incumbent the entry collects context; an incumbent serves it and hands off.
       if (incumbent) expect(first?.chosen.startsWith(incumbent.registryId)).toBe(true);
       else expect(first?.dimension).toBe('gather');
-      const params = { outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded', workItemId: 'NEW_WORK_ITEM',
+      const params = { outcome: 'ready', deliverable: 'implement', complexity, scope: 'bounded', workItemId: 'NEW_WORK_ITEM',
         topicId: 'NEW_TOPIC', topicTitle: 'Implementation', workItemTitle: 'Requested change',
         findings: 'read the request', question: 'implement the change' };
       const facts = await prepareHandoffFacts(params, routerCtx, harness.session,
@@ -2419,7 +2358,7 @@ describe('context acquisition', () => {
 
     it('hands a plan off from an implement entry, and returns a break to implementation', async () => {
       const session = await planned();
-      const implementing = await resolvedImplementation(session, 'implement a function to parse the pending adjustment payload');
+      const implementing = await resolvedImplementation(session, 'implement a function to parse the pending adjustment payload', 'hard');
       expect(implementing?.dimension).toBe('implement');
       expect(implementing?.chosen).toBe('beta/strong');
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);

@@ -1,7 +1,10 @@
 /**
- * Benchmark sync orchestration.
+ * Benchmark sync: fetch the Artificial Analysis rows, bind them to registry
+ * models, and replace the store. A failed fetch, or a sync that binds no
+ * registry model, keeps the previous store.
  */
-import type { BenchModel, ExtensionContext, SyncResult } from '../types.js';
+import { AXIS_REFERENCE } from '../routing/score/scorer.js';
+import type { ExtensionContext, SyncResult } from '../types.js';
 import {
   loadStore,
   saveStore,
@@ -11,117 +14,72 @@ import {
 } from './store.js';
 import { resolveRows } from './matcher.js';
 import { loadConfig } from '../config.js';
-import { getEnabledAdapters, buildAdapterConfig, type AdapterName } from '../adapters/index.js';
+import { SOURCE, fetchAndNormalize } from '../adapters/artificial-analysis.js';
+
+/** Precedence: explicit argument > environment > persisted config. */
+function resolveApiKey(explicit: string | undefined): string | undefined {
+  if (explicit) return explicit;
+  if (process.env.ARTIFICIAL_ANALYSIS_API_KEY) return process.env.ARTIFICIAL_ANALYSIS_API_KEY;
+  try {
+    return loadConfig().artificialAnalysisApiKey;
+  } catch {
+    // An unreadable config reads as a missing key, which the result reports.
+    return undefined;
+  }
+}
+
+const failure = (source: string, error: string, fetched = 0): SyncResult =>
+  ({ source, ok: false, fetched, matched: 0, unresolved: fetched, error });
 
 export async function syncBenchmarks(
   ctx: ExtensionContext,
-  opts: {
-    sources?: AdapterName[];
-    apiKey?: string;
-    onProgress?: (result: SyncResult) => void;
-  } = {},
+  opts: { apiKey?: string } = {},
 ): Promise<SyncResult[]> {
-  const config = buildAdapterConfig(ctx);
-  if (opts.apiKey) {
-    config['artificial-analysis'].apiKey = opts.apiKey;
+  const apiKey = resolveApiKey(opts.apiKey);
+  if (!apiKey) {
+    return [failure(
+      SOURCE,
+      'No Artificial Analysis API key. Get a free key at https://artificialanalysis.ai/ and run `/router-sync <key>`, or set ARTIFICIAL_ANALYSIS_API_KEY.',
+    )];
   }
-  const sourceNames = opts.sources ?? (loadConfig().sources as AdapterName[]);
-  const adapters = getEnabledAdapters(sourceNames as AdapterName[], config);
-  if (adapters.length === 0) {
+  const store = loadStore() ?? emptyStore();
+  const previousActive = store.models.filter((m) => m.active).length;
+
+  let rows;
+  try {
+    rows = await fetchAndNormalize({ apiKey });
+  } catch (error) {
     return [
-      {
-        source: sourceNames.join(', ') || 'none',
-        ok: false,
-        fetched: 0,
-        matched: 0,
-        unresolved: 0,
-        error:
-          'No benchmark source is usable. Set an Artificial Analysis API key (free at https://artificialanalysis.ai/) via ARTIFICIAL_ANALYSIS_API_KEY or `/router-sync <key>`.',
-      },
+      failure(SOURCE, error instanceof Error ? error.message : String(error)),
+      failure('store', `Sync failed; keeping the previous ${previousActive} active rows.`),
     ];
   }
-  const registryModels = registryModelsFromCtx(ctx);
 
-  const store = loadStore() ?? emptyStore();
-  let combinedRows: Omit<BenchModel, 'registryId' | 'active'>[] = [];
-  const results: SyncResult[] = [];
-
-  for (const adapter of adapters) {
-    let fetched = 0;
-    let matched = 0;
-    let error: string | undefined;
-    try {
-      const rows = await adapter.fetch(config);
-      fetched = rows.length;
-      combinedRows = combinedRows.concat(rows);
-      const resolved = resolveRows(rows, registryModels, store.aliases);
-      matched = resolved.filter((r) => r.active).length;
-      const unresolved = fetched - matched;
-      results.push({
-        source: adapter.name,
-        ok: true,
-        fetched,
-        matched,
-        unresolved,
-      });
-      opts.onProgress?.(results[results.length - 1]);
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-      results.push({
-        source: adapter.name,
-        ok: false,
-        fetched: 0,
-        matched: 0,
-        unresolved: 0,
-        error,
-      });
-      opts.onProgress?.(results[results.length - 1]);
-    }
-  }
-
-  const failed = results.filter((result) => !result.ok);
-  if (failed.length > 0) {
-    results.push({
-      source: 'store',
-      ok: false,
-      fetched: combinedRows.length,
-      matched: 0,
-      unresolved: combinedRows.length,
-      error: `Sync was partial; keeping the previous ${store.models.filter((m) => m.active).length} active rows.`,
-    });
-    return results;
-  }
-
-  const resolved = resolveRows(combinedRows, registryModels, store.aliases);
-  const merged = mergeBenchRows(resolved);
-
-  // Never replace usable data with nothing: a source outage would otherwise
-  // silently wipe the store and drop the router back into price-only mode.
-  const activeCount = merged.filter((m) => m.active).length;
-  const previousActive = store.models.filter((m) => m.active).length;
-  if (activeCount === 0 && previousActive > 0) {
-    results.push({
-      source: 'store',
-      ok: false,
-      fetched: combinedRows.length,
-      matched: 0,
-      unresolved: combinedRows.length,
-      error: `Sync matched 0 registry models; keeping the previous ${previousActive} to avoid wiping the store.`,
-    });
-    return results;
-  }
-
-  const nextStore: typeof store = {
-    ...store,
-    version: 2,
-    syncedAt: Date.now(),
-    models: merged,
+  const merged = mergeBenchRows(resolveRows(rows, registryModelsFromCtx(ctx), store.aliases));
+  const matched = merged.filter((m) => m.active).length;
+  const fetched: SyncResult = {
+    source: SOURCE,
+    ok: true,
+    fetched: rows.length,
+    matched,
+    unresolved: merged.length - matched,
   };
-  saveStore(nextStore);
+  // Never replace usable data with nothing: a source change that binds no
+  // registry model would otherwise wipe the store.
+  if (matched === 0 && previousActive > 0) {
+    return [
+      fetched,
+      failure('store', `Sync matched 0 registry models; keeping the previous ${previousActive} to avoid wiping the store.`, rows.length),
+    ];
+  }
 
-  // Sync refreshes the benchmark store only; role models are injected per
-  // spawn (see subagents.ts / index.ts tool_call handler).
-  return results;
+  const max = Math.max(0, ...merged.filter(row => row.active).map(row => row.quality.intelligence ?? 0));
+  const notices: string[] = [];
+  if (max > 0 && Math.abs(max / AXIS_REFERENCE.intelligence - 1) > 0.15) notices.push('intelligence maximum differs by over 15% from calibration; review capability minimums');
+  if (rows.indexVersion && rows.indexVersion.replace(/^v/, '') !== '4.3') notices.push(`AA index version ${rows.indexVersion} differs from calibration 4.3`);
+  if (notices.length) fetched.error = `Notice: ${notices.join('; ')}`;
+  saveStore({ ...store, version: 2, indexVersion: rows.indexVersion, syncedAt: Date.now(), models: merged });
+  return [fetched];
 }
 
 export function syncSummary(results: SyncResult[]): string {

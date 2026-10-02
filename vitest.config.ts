@@ -7,6 +7,7 @@ import { defineConfig } from 'vitest/config';
 // since Vitest does not consult it for test discovery.
 export default defineConfig({
   test: {
+    setupFiles: ['extensions/test-support/isolate-router-dir.ts'],
     exclude: [
       '**/node_modules/**',
       '**/dist/**',

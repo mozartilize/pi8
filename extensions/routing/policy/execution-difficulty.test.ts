@@ -13,7 +13,7 @@ import {
   reasoningMinimum,
   reasoningRequirement,
 } from './execution-difficulty.js';
-import { FRONTIER_QUALITY_RATIO, pickBest } from '../score/scorer.js';
+import { FRONTIER_REQUIREMENT, pickBest } from '../score/scorer.js';
 import { benchRow, candidate } from '../../test-support/router-fixtures.js';
 
 const EASY: ExecutionRubric = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
@@ -134,12 +134,12 @@ describe('reasoning requirement', () => {
     expect(reasoningRequirement(R_EASY, stale)).toBe(REASONING_BASE_REQUIREMENT);
   });
 
-  it('stays within [base, 1] and caps its minimum at the frontier ratio', () => {
+  it('stays within [base, 1] and caps its minimum at the frontier requirement', () => {
     const hardest = parseReasoningRubric({});
     const requirement = reasoningRequirement(hardest, { applicable: true, files: 20, directories: 20 });
     expect(requirement).toBeLessThanOrEqual(1);
-    expect(requirement).toBeGreaterThan(FRONTIER_QUALITY_RATIO);
-    expect(reasoningMinimum(requirement)).toBe(FRONTIER_QUALITY_RATIO);
+    expect(requirement).toBeGreaterThan(FRONTIER_REQUIREMENT);
+    expect(reasoningMinimum(requirement)).toBe(FRONTIER_REQUIREMENT);
     expect(reasoningMinimum(0.5)).toBe(0.5);
   });
 
@@ -153,18 +153,18 @@ describe('reasoning requirement', () => {
 // pool: dense on the plan axis, with price steps of up to 40x. Rewrite this
 // table together with the weights when the real pool changes shape.
 describe('reasoning minimum against a dense priced pool', () => {
-  const model = (id: string, intelligence: number, blendedPrice: number) => candidate(`pool/${id}`, {
-    bench: benchRow(`pool/${id}`, { quality: { intelligence, coding: intelligence, agenticCoding: intelligence } }),
+  const model = (id: string, intelligence: number, research: number, blendedPrice: number) => candidate(`pool/${id}`, {
+    bench: benchRow(`pool/${id}`, { quality: { intelligence, knowledge: 20, research } }),
     cost: { input: blendedPrice, output: blendedPrice, cacheRead: 0, cacheWrite: 0 },
   });
   const pool = [
-    model('luna', 64.8, 0.38),
-    model('sonnet', 66.3, 7.6),
-    model('flash', 71.0, 2.85),
-    model('grok', 80.6, 4.8),
-    model('sol', 82.5, 7.6),
-    model('astra', 91.5, 38),
-    model('opus', 100, 15.2),
+    model('routine', 25, 0.25, 0.38),
+    model('sonnet', 30, 0.33, 7.6),
+    model('flash', 35, 0.37, 2.85),
+    model('grok', 44, 0.49, 4.8),
+    model('sol', 50, 0.52, 7.6),
+    model('astra', 55, 0.55, 38),
+    model('opus', 57.6, 0.61, 15.2),
   ];
   const winner = (rubric: Partial<ReasoningRubric>) => {
     const minimum = reasoningMinimum(reasoningRequirement({ ...R_EASY, ...rubric }, R_QUIET));
@@ -172,13 +172,13 @@ describe('reasoning minimum against a dense priced pool', () => {
   };
 
   it.each([
-    ['all 1', {}, 'pool/luna'],
-    ['all 2', { alternatives: 2, stakes: 2, spread: 2, knowledge: 2, uncertainty: 2 }, 'pool/luna'],
-    ['alternatives 3', { alternatives: 3 }, 'pool/luna'],
-    ['alternatives 3, stakes 4, others 2', { alternatives: 3, stakes: 4, spread: 2, knowledge: 2, uncertainty: 2 }, 'pool/flash'],
+    ['all 1', {}, 'pool/routine'],
+    ['all 2', { alternatives: 2, stakes: 2, spread: 2, knowledge: 2, uncertainty: 2 }, 'pool/flash'],
+    ['alternatives 3', { alternatives: 3 }, 'pool/flash'],
+    ['alternatives 3, stakes 4, others 2', { alternatives: 3, stakes: 4, spread: 2, knowledge: 2, uncertainty: 2 }, 'pool/grok'],
     ['all 3', { alternatives: 3, stakes: 3, spread: 3, knowledge: 3, uncertainty: 3 }, 'pool/grok'],
     ['alternatives 4', { alternatives: 4 }, 'pool/grok'],
-    ['alternatives 5', { alternatives: 5 }, 'pool/opus'],
+    ['alternatives 5', { alternatives: 5 }, 'pool/sol'],
   ] as const)('%s → %s', (_label, rubric, expected) => {
     expect(winner(rubric)).toBe(expected);
   });

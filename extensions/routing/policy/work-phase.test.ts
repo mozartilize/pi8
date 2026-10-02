@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   capabilityBandFor,
   carryAcrossBranch,
-  floorForBand,
+  bandRequirement,
   penaltiesOf,
   withContinuedPenalties,
   boundaryQualifiers,
@@ -35,9 +35,9 @@ describe('terminal capability math', () => {
     expect(terminalRequirement(terminal())).toBeCloseTo(0.775);
     expect(capabilityBandFor(terminalRequirement(terminal()))).toBe('frontier');
     expect(capabilityBandFor(terminalRequirement(terminal({ complexity: 'moderate' })))).toBe('strong');
-    expect(floorForBand('standard')).toBe(0.45);
-    expect(floorForBand('strong')).toBe(0.70);
-    expect(floorForBand('frontier')).toBe(0.85);
+    expect(bandRequirement('standard')).toBe(0.45);
+    expect(bandRequirement('strong')).toBe(0.70);
+    expect(bandRequirement('frontier')).toBe(0.85);
   });
 });
 
@@ -107,13 +107,12 @@ describe('carryAcrossBranch', () => {
 });
 
 describe('phase boundary qualifiers', () => {
-  it('keeps the first-tier chain candidates, promoted ones included', () => {
+  it('keeps only the first-tier chain candidates', () => {
     expect(boundaryQualifiers({
       fallbackChain: ['a/x:high', 'b/y:max', 'c/z', 'd/w:low'],
       candidateDiagnostics: [
-        { candidateKey: 'b/y:max', excludedReason: 'below-task-floor' },
+        { candidateKey: 'b/y:max', excludedReason: 'below-intelligence-minimum' },
         { candidateKey: 'c/z', excludedReason: 'unknown-quality' },
-        { candidateKey: 'd/w:low', excludedReason: 'promoted' },
       ],
     })).toEqual(['a/x:high', 'd/w:low']);
   });

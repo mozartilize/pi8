@@ -29,12 +29,20 @@ export interface BenchModel {
     coding?: number;
     agenticCoding?: number;
     /**
-     * BenchLM's AA-Omniscience Index: 100 * (correct - incorrect) / questions.
-     * Zero is the meaningful reliability boundary where correct and incorrect
-     * answers balance; negative values mean wrong answers outnumber correct
-     * ones. It remains separate from intelligence/coding ratios.
+     * AA-Omniscience Index: 100 * (correct - incorrect) / questions, closed
+     * book. Zero is where correct and incorrect answers balance; negative
+     * values mean wrong answers outnumber correct ones.
      */
     knowledge?: number;
+    /**
+     * AA-Briefcase rubric pass rate in [0, 1]: the share of rubric checks the
+     * deliverables pass on multi-week knowledge-work projects with thousands
+     * of input files. Work from sources, checked for correctness.
+     */
+    research?: number;
+    /** LCR and MMMU-Pro correctness fractions in [0, 1]. */
+    longContext?: number;
+    visionReasoning?: number;
   };
   priceInputPer1M?: number;
   priceOutputPer1M?: number;
@@ -48,15 +56,16 @@ export interface BenchModel {
   /** Reasoning-effort level the row was measured at; absent when the source published none. */
   effort?: ModelThinkingLevel;
   /**
-   * True when `quality` was estimated by stepping down the effort ladder from
-   * a measured row of the same model rather than published by the source. The
-   * estimate is a conservative lower bound, but it is still not an
-   * observation: mechanisms that relax a floor (economic promotion) require
-   * measured evidence and must check this flag.
+   * True when `quality` is an estimate, not an observation: Artificial
+   * Analysis estimated the index, its provenance is unknown, or the router stepped it down the effort
+   * ladder from a measured row of the same model. A claim that one model is
+   * strictly stronger than another requires measured evidence.
    */
   qualityEstimated?: boolean;
   /** Measured cost per task (AA intelligence-index cost block); absent when unpublished. */
   costPerTask?: number;
+  /** Measured wall time per Intelligence Index task in seconds; absent when unpublished. */
+  timePerTaskSeconds?: number;
   /** Prefer registry value; adapter value is fallback. */
   contextWindow?: number;
   /** Which source produced this row. */
@@ -64,6 +73,8 @@ export interface BenchModel {
 }
 
 export interface BenchmarkStore {
+  /** AA index scale the synchronized measurements use. */
+  indexVersion?: string;
   /** 2 = effort-aware identity; v1 stores are discarded on load (effort lost). */
   version: 2;
   syncedAt: number; // epoch ms
@@ -78,15 +89,16 @@ export interface ScoreWeights {
   speed: number;
 }
 
-export type QualityExclusionReason =
-  | 'below-task-floor'
-  | 'below-sanity-floor'
-  | 'below-knowledge-floor'
-  | 'unknown-quality'
-  | 'promoted';
+/** One benchmark axis a capability minimum is set on. */
+export type QualityAxis = keyof BenchModel['quality'];
+
+/** Axes measured at one exact effort and never estimated across efforts. */
+export type ExactQuality = Pick<BenchModel['quality'], 'knowledge' | 'research' | 'longContext' | 'visionReasoning'>;
+
+export type QualityExclusionReason = `below-${QualityAxis}-minimum` | 'unknown-quality';
 
 export interface CandidateDiagnostic {
-  /** Candidate key (`provider/id` or `provider/id:effort`) that was demoted/promoted. */
+  /** Candidate key (`provider/id` or `provider/id:effort`) that left the first capability tier. */
   candidateKey: string;
   excludedReason?: QualityExclusionReason;
 }
@@ -104,12 +116,13 @@ export interface Candidate {
    */
   effort?: ModelThinkingLevel;
   /**
-   * Factual-reliability evidence applicable at each reasoning effort. BenchLM
-   * publishes AA-Omniscience as a model-wide score, so it applies to every
-   * supported reasoning level; exact effort-labelled rows override it.
-   * Every sibling retains the map so filtering cannot erase serving evidence.
+   * Exact-effort measurements of this model at each effort it was measured
+   * at. Delegation may serve a higher effort than the candidate's own (the
+   * task type's effort minimum), and these axes are never estimated across
+   * efforts, so eligibility reads them at the served effort. Every sibling
+   * keeps the map so filtering cannot erase serving evidence.
    */
-  knowledgeByEffort?: Partial<Record<ModelThinkingLevel, number>>;
+  exactQualityByEffort?: Partial<Record<ModelThinkingLevel, ExactQuality>>;
   contextWindow?: number;
   maxTokens?: number;
   /** Whether the registry claims vision support (from input array). */
@@ -191,7 +204,7 @@ export interface ReasoningHandoffMeta {
   /** Served key of the model that called the tool. */
   requester: string;
   target: 'plan' | 'review';
-  /** Plan/review-axis ratio the reasoning phase needs, at most the frontier ratio. */
+  /** Requirement the reasoning phase needs, at most the frontier requirement. */
   minimum: number;
   /** Requirement before the cap. */
   requirement: number;
@@ -241,7 +254,7 @@ export interface ExecutionContractMeta {
   band: CapabilityBand;
   /** False when the submitting model keeps executing the plan. */
   release: boolean;
-  /** Implement-axis ratio the executor must reach; absent when the submitter keeps the plan. */
+  /** Implementation requirement the executor must meet; absent when the submitter keeps the plan. */
   minimum?: number;
   /** Requirement computed from the rubric and measurements, before band minimums. */
   requirement: number;
@@ -439,10 +452,12 @@ export const ROUTER_PROVIDER_ID = 'router';
 export const AUTO_MODEL_ID = 'auto';
 
 export interface AutoRouterConfig {
+  /** Collect global counts and use exact-prefix cache credit; default true. */
+  reputation?: boolean;
+  /** Unset means compliance collection only until weights are fitted. */
+  reputationWeights?: { reminder: number; ignored: number };
   /** Free API key for artificialanalysis.ai (optional but recommended). */
   artificialAnalysisApiKey?: string;
-  /** Which sources to sync. */
-  sources: string[];
   /** Quality/cost/speed weights per dimension. */
   dimensionWeights: Record<Dimension, ScoreWeights>;
   /** Maximum incumbent-retention bonus for mid-session switching. */

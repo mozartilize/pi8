@@ -90,11 +90,14 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
 };
 
 const EXCLUSION_LABELS: Readonly<Record<QualityExclusionReason, [label: string, text: string]>> = {
-  'below-task-floor': ['demoted', 'too weak for this task type'],
-  'below-sanity-floor': ['demoted', 'weak general ability'],
-  'below-knowledge-floor': ['demoted', 'general-knowledge score below the minimum'],
+  'below-intelligence-minimum': ['demoted', 'intelligence score below the minimum for this task type'],
+  'below-coding-minimum': ['demoted', 'coding score below the minimum for this task type'],
+  'below-agenticCoding-minimum': ['demoted', 'agentic coding score below the minimum for this task type'],
+  'below-knowledge-minimum': ['demoted', 'states facts wrong more often than right'],
+  'below-research-minimum': ['demoted', 'work from sources fails too many checks'],
+  'below-longContext-minimum': ['demoted', 'long-context score below the minimum'],
+  'below-visionReasoning-minimum': ['demoted', 'visual reasoning score below the minimum'],
   'unknown-quality': ['demoted', 'no benchmark data for this task'],
-  promoted: ['promoted', 'much cheaper and strong enough'],
 };
 
 /** Plain-language context reason, as the user reads it. */

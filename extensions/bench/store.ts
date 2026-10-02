@@ -38,13 +38,9 @@ export const DEFAULT_BENCHMARK_ALIASES: Readonly<Record<string, string>> = {
   'gpt-5-1-codex': 'opencode/gpt-5.1-codex-max',
   'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
   'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
-  // benchlm slugs where the version digit is dropped (`claude-fable` = Claude
-  // Fable 5) or letter/number order differs (`kimi-3` vs registry `kimi-k3`).
-  // The matcher binds every provider copy of the target identity, so the
-  // anchor provider is arbitrary.
-  'claude-fable': 'opencode/claude-fable-5',
-  'kimi-3': 'opencode/kimi-k3',
-  'kimi-2-6': 'opencode/kimi-k2.6',
+  // Word order differs from the registry (`claude-sonnet-4`). The matcher
+  // binds every provider copy of the target identity, so the anchor provider
+  // is arbitrary.
   'claude-4-sonnet': 'opencode/claude-sonnet-4',
 };
 
@@ -117,6 +113,9 @@ function sanitizeBenchModel(value: unknown): BenchModel | undefined {
     coding: optionalFinite(quality.coding),
     agenticCoding: optionalFinite(quality.agenticCoding),
     knowledge: optionalFinite(quality.knowledge),
+    research: optionalFinite(quality.research),
+    longContext: optionalFinite(quality.longContext),
+    visionReasoning: optionalFinite(quality.visionReasoning),
   });
   const base: Omit<BenchModel, 'quality'> & { quality: BenchModel['quality'] } = {
     registryId: row.registryId,
@@ -134,7 +133,9 @@ function sanitizeBenchModel(value: unknown): BenchModel | undefined {
       latencyMsTtft: optionalFinite(row.latencyMsTtft),
       latencyMsTtfa: optionalFinite(row.latencyMsTtfa),
       effort: isModelThinkingLevel(row.effort) ? row.effort : undefined,
+      qualityEstimated: row.qualityEstimated === true ? true : undefined,
       costPerTask: optionalFinite(row.costPerTask),
+      timePerTaskSeconds: optionalFinite(row.timePerTaskSeconds),
       contextWindow: optionalFinite(row.contextWindow),
     }),
   };
@@ -219,11 +220,15 @@ export const mergeActiveBenchRows = (models: BenchModel[]): BenchModel[] => {
       coding: rows.map((r) => r.quality.coding).find((v) => v !== undefined),
       agenticCoding: rows.map((r) => r.quality.agenticCoding).find((v) => v !== undefined),
       knowledge: rows.map((r) => r.quality.knowledge).find((v) => v !== undefined),
+      research: rows.map((r) => r.quality.research).find((v) => v !== undefined),
+      longContext: rows.map((r) => r.quality.longContext).find((v) => v !== undefined),
+      visionReasoning: rows.map((r) => r.quality.visionReasoning).find((v) => v !== undefined),
     };
     const nonEmpty = rows.find((r) => Object.values(r.quality).some((v) => v !== undefined)) ?? rows[0];
     result.push({
       ...nonEmpty,
       quality,
+      qualityEstimated: rows.some(row => row.qualityEstimated) || undefined,
     });
   }
   return result;

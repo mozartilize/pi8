@@ -1,6 +1,7 @@
 /**
- * Residual difficulty of a handoff: the task-axis ratio the next phase's
- * model must reach before the router hands it the work. An execution
+ * Residual difficulty of a handoff: the requirement the next phase's model
+ * must meet before the router hands it the work, as a share of each axis's
+ * reference strength (`AXIS_REFERENCE` in scorer.ts). An execution
  * contract values its remaining implementation; a context handoff
  * values the planning or review it leaves.
  *
@@ -25,7 +26,7 @@ import type {
   ReasoningRubric,
   RubricCriterion,
 } from '../../types.js';
-import { FRONTIER_QUALITY_RATIO } from '../score/scorer.js';
+import { FRONTIER_REQUIREMENT } from '../score/scorer.js';
 
 export const RUBRIC_CRITERIA: readonly RubricCriterion[] = ['openDecisions', 'spread', 'verification', 'knowledge', 'coupling'];
 
@@ -35,7 +36,7 @@ export const BASE_REQUIREMENT = 0.30;
 /**
  * Added per `openDecisions` level. Open decisions are what a weaker executor
  * gets wrong, so this criterion dominates: level 5 (design choices remain)
- * alone exceeds the frontier ratio and keeps the submitter.
+ * alone exceeds the frontier requirement and keeps the submitter.
  */
 const OPEN_DECISION_STEPS = [0, 0.10, 0.25, 0.42, 0.60] as const;
 /** Maximum added by each other rubric criterion at level 5. */
@@ -80,7 +81,7 @@ function measuredTerms(measured: WeightedFacts): number[] {
   ];
 }
 
-/** Implement-axis ratio, in [BASE_REQUIREMENT, 1], an executor must reach. */
+/** Implementation requirement, in [BASE_REQUIREMENT, 1], an executor must meet. */
 export function executionRequirement(rubric: ExecutionRubric, measured: MeasuredFeatures): number {
   const rubricTerm = OPEN_DECISION_STEPS[rubric.openDecisions - 1]! +
     RUBRIC_CRITERIA
@@ -100,7 +101,7 @@ export const REASONING_BASE_REQUIREMENT = 0.40;
  * planner gets wrong, so this criterion dominates. The levels sit on the price
  * steps of a dense pool: an obvious approach stays with the cheapest capable
  * models, a behaviour or interface choice (level 4) needs a mid-price one, and
- * a real design decision (level 5) reaches the frontier ratio.
+ * a real design decision (level 5) reaches the frontier requirement.
  */
 const ALTERNATIVE_STEPS = [0, 0.06, 0.18, 0.34, 0.46] as const;
 /** Maximum added by each other reasoning criterion at level 5. */
@@ -114,7 +115,7 @@ export function parseReasoningRubric(input: unknown): ReasoningRubric {
 }
 
 /**
- * Plan- or review-axis ratio, in [REASONING_BASE_REQUIREMENT, 1], the
+ * Plan or review requirement, in [REASONING_BASE_REQUIREMENT, 1], the
  * reasoning phase needs. Evidence that is not applicable (no file backs the
  * handoff) adds nothing; applicable evidence whose measurement failed adds
  * the maximum.
@@ -130,9 +131,9 @@ export function reasoningRequirement(rubric: ReasoningRubric, evidence: Reasonin
   return Math.min(1, REASONING_BASE_REQUIREMENT + rubricTerm + measuredTerm);
 }
 
-/** The requirement as a tier-0 ratio: never above what an ordinary plan asks. */
+/** The requirement as a handoff minimum: never above what an ordinary plan asks. */
 export function reasoningMinimum(requirement: number): number {
-  return Math.min(requirement, FRONTIER_QUALITY_RATIO);
+  return Math.min(requirement, FRONTIER_REQUIREMENT);
 }
 
 /** Band whose executor minimum covers `requirement`; `frontier` keeps the submitter. */

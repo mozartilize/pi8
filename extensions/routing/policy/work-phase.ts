@@ -8,7 +8,8 @@ import { MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
 const COMPLEXITY = { trivial: 0, routine: 0.25, moderate: 0.5, hard: 0.75, frontier: 1 } as const;
-const FLOOR = { economy: undefined, standard: 0.45, strong: 0.70, frontier: 0.85 } as const;
+/** Handoff requirement each band asks for; economy asks for none. */
+const BAND_REQUIREMENT = { economy: undefined, standard: 0.45, strong: 0.70, frontier: 0.85 } as const;
 
 /** Execution penalties of one work item, carried until an entry continues it. */
 export interface PriorWork {
@@ -111,8 +112,8 @@ export function capabilityBandFor(requirement: number): CapabilityBand {
   return 'frontier';
 }
 
-export function floorForBand(band: CapabilityBand | undefined): number | undefined {
-  return band == null ? undefined : FLOOR[band];
+export function bandRequirement(band: CapabilityBand | undefined): number | undefined {
+  return band == null ? undefined : BAND_REQUIREMENT[band];
 }
 
 /** `state` with `terminal` as its final step when that one asks for more. */
@@ -189,7 +190,7 @@ export function boundaryQualifiers(decision: {
   candidateDiagnostics?: ReadonlyArray<{ candidateKey: string; excludedReason?: string }>;
 }): string[] {
   const excluded = new Set((decision.candidateDiagnostics ?? [])
-    .filter((diagnostic) => diagnostic.excludedReason != null && diagnostic.excludedReason !== 'promoted')
+    .filter((diagnostic) => diagnostic.excludedReason != null)
     .map((diagnostic) => diagnostic.candidateKey));
   return decision.fallbackChain.filter((key) => !excluded.has(key));
 }

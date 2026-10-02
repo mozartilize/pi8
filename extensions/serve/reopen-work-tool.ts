@@ -23,7 +23,7 @@ import type { EntryResolution, GroundedArtifact, WorkItem } from '../routing/con
 import { CONVERSATION_EVIDENCE, acceptContextHandoff } from '../routing/policy/context-acquisition.js';
 import { parseReasoningRubric, reasoningMinimum, reasoningRequirement } from '../routing/policy/execution-difficulty.js';
 import { REOPEN_WORK_TOOL, completedIncumbent } from '../routing/policy/work-completion.js';
-import { floorForBand, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { bandRequirement, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { PendingIdentity } from './context-resolution.js';
 import { closeContractEntry } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -268,7 +268,7 @@ export function submitReopenWork(
   if (deliverable === 'plan' || deliverable === 'review') {
     const rubric = parseReasoningRubric(params?.difficulty);
     const requirement = reasoningRequirement(rubric, CONVERSATION_EVIDENCE);
-    minimum = Math.max(reasoningMinimum(requirement), floorForBand(continued.terminalBand) ?? 0);
+    minimum = Math.max(reasoningMinimum(requirement), bandRequirement(continued.terminalBand) ?? 0);
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence: CONVERSATION_EVIDENCE };
   }
   const resolution: EntryResolution = {

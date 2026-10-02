@@ -37,12 +37,15 @@ const DECISION: RoutingDecision = {
 
 describe('decision log', () => {
   let dir: string;
+  let previousRouterDir: string | undefined;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'ar-decisionlog-'));
+    previousRouterDir = process.env.PI8_DIR;
   });
   afterEach(() => {
-    delete process.env.PI8_DIR;
+    if (previousRouterDir === undefined) delete process.env.PI8_DIR;
+    else process.env.PI8_DIR = previousRouterDir;
     setSessionFile(undefined);
     setDecisionLogBase(undefined);
     rmSync(dir, { recursive: true, force: true });
@@ -183,8 +186,8 @@ describe('decision log', () => {
         suggestion: 'offload planning',
       },
       candidateDiagnostics: [
-        { candidateKey: 'cheap/model', excludedReason: 'promoted' },
-        { candidateKey: 'weak/model', excludedReason: 'below-task-floor' },
+        { candidateKey: 'cheap/model', excludedReason: 'unknown-quality' },
+        { candidateKey: 'weak/model', excludedReason: 'below-intelligence-minimum' },
       ],
     };
     appendDecision(
@@ -195,8 +198,8 @@ describe('decision log', () => {
     const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
     expect(entry.contextPressure.usageRatio).toBe(0.71);
     expect(entry.candidateDiagnostics).toEqual([
-      { candidateKey: 'cheap/model', excludedReason: 'promoted' },
-      { candidateKey: 'weak/model', excludedReason: 'below-task-floor' },
+      { candidateKey: 'cheap/model', excludedReason: 'unknown-quality' },
+      { candidateKey: 'weak/model', excludedReason: 'below-intelligence-minimum' },
     ]);
   });
 

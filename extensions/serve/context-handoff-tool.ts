@@ -38,7 +38,7 @@ import {
   reasoningMinimum,
   reasoningRequirement,
 } from '../routing/policy/execution-difficulty.js';
-import { floorForBand, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { bandRequirement, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
@@ -322,7 +322,7 @@ export function submitContextHandoff(
     // The final step's band only raises the rubric's minimum; see withStrongerTerminal.
     const minimum = Math.max(
       reasoningMinimum(requirement),
-      floorForBand(terminal.terminalBand) ?? 0,
+      bandRequirement(terminal.terminalBand) ?? 0,
     );
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence };
   }

@@ -4,10 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { AA_FETCH_TIMEOUT_MS, fetchRaw, normalize, unwrap } from './artificial-analysis.js';
+import { parseSiteModels } from './artificial-analysis-site.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixture = join(__dirname, '../../fixtures/aa-sample.json');
 const payload = JSON.parse(readFileSync(fixture, 'utf8'));
+const site = parseSiteModels(JSON.parse(readFileSync(join(__dirname, '../../fixtures/aa-site-sample.json'), 'utf8')));
 
 describe('artificial-analysis adapter', () => {
   it('attaches a finite timeout to API requests', async () => {
@@ -64,8 +66,8 @@ describe('artificial-analysis adapter', () => {
       expect(flash?.latencyMsTtft).toBeCloseTo(22420, 0);
     });
 
-    // The effort parse is pinned against the six observed AA name formats
-    // plus one unrecognized label, which must fail closed (undefined).
+    // The effort parse is pinned against the observed AA name formats. The
+    // effort may sit in any comma segment, not only the last one.
     it.each([
       ['GPT-5.6 Luna (low)', 'low'],
       ['GPT-5.6 Luna (high)', 'high'],
@@ -73,8 +75,10 @@ describe('artificial-analysis adapter', () => {
       ['Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)', 'xhigh'],
       ['Claude Opus 5 (Adaptive Reasoning, Medium Effort)', 'medium'],
       ['DeepSeek V4 Flash (Non-reasoning)', 'off'],
-      // L2: non-reasoning as last segment of a multi-part label
       ['Claude Haiku 4 (Adaptive Reasoning, Non-reasoning)', 'off'],
+      ['Claude Fable 5.1 (Adaptive Reasoning, Low Effort, Default Fallback)', 'low'],
+      ['Claude Opus 5.5 (Adaptive Reasoning, Max Effort, Default Fallback)', 'max'],
+      ['HyperNova 60B 2605 (high, based on gpt-oss-120b)', 'high'],
     ] as const)('parses effort label %s → %s', (name, effort) => {
       const [row] = normalize([{ slug: 'x', name }]);
       expect(row?.effort).toBe(effort);
@@ -137,5 +141,27 @@ describe('artificial-analysis adapter', () => {
       'ignores a row with non-string identifiers: %j',
       (row) => expect(normalize([row as never])).toEqual([]),
     );
+  });
+  describe('join with the models page', () => {
+    const joined = normalize(unwrap(payload).rows, site);
+
+    it('adds page metrics to the API row with the same slug and effort', () => {
+      // The API names the row "(Adaptive Reasoning, Max Effort)", the page "(max)".
+      const lunaMax = joined.find((r) => r.benchSlug === 'gpt-5-6-luna');
+      expect(lunaMax?.quality).toMatchObject({ knowledge: -10.283333333333333, research: 0.3797979797979798 });
+      expect(lunaMax?.timePerTaskSeconds).toBeCloseTo(324.89, 2);
+      expect(lunaMax?.qualityEstimated).toBeUndefined();
+    });
+
+    it('marks an index AA estimated as estimated quality', () => {
+      expect(joined.find((r) => r.benchSlug === 'glm-4-5v')?.qualityEstimated).toBe(true);
+    });
+
+    it('leaves a row whose effort differs from the page row without page metrics', () => {
+      // The page lists DeepSeek V4 Pro at max effort; a high-effort API row must not take its values.
+      const [highOnly] = normalize([{ slug: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro (high)' }], site);
+      expect(highOnly?.quality.knowledge).toBeUndefined();
+      expect(highOnly?.quality.research).toBeUndefined();
+    });
   });
 });

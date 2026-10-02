@@ -4,7 +4,7 @@ import { addReasonDetail, renderScoredReason, type ScoredReason } from './decisi
 
 const base: ScoredReason = {
   score: 0.8124, quality: 0.55, cost: 0.21, speed: 0.05,
-  costBasis: 'task', upgraded: false, details: [],
+  costBasis: 'task', details: [],
 };
 
 function decision(scoredReason?: ScoredReason): RoutingDecision {

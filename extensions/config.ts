@@ -17,8 +17,9 @@ export function getConfigPath(): string {
 }
 
 export interface PersistedConfig {
+  reputation?: boolean;
+  reputationWeights?: { reminder: number; ignored: number };
   artificialAnalysisApiKey?: string;
-  sources?: string[];
   dimensionWeights?: Partial<Record<Dimension, { quality: number; cost: number; speed: number }>>;
   switchMargin?: number;
   /**
@@ -119,6 +120,14 @@ function readPersisted(path: string): PersistedConfig {
   return {};
 }
 
+function normalizeReputationWeights(raw: unknown): { reminder: number; ignored: number } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  const valid = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1;
+  return valid(value.reminder) && valid(value.ignored)
+    ? { reminder: value.reminder, ignored: value.ignored } : undefined;
+}
+
 export function loadConfig(): AutoRouterConfig {
   const persisted = readPersisted(getConfigPath());
 
@@ -127,7 +136,6 @@ export function loadConfig(): AutoRouterConfig {
       typeof persisted.artificialAnalysisApiKey === 'string'
         ? persisted.artificialAnalysisApiKey
         : undefined,
-    sources: stringList(persisted.sources) ?? ['artificial-analysis', 'benchlm'],
     dimensionWeights: normalizeDimensionWeights(persisted.dimensionWeights),
     switchMargin: finiteInRange(persisted.switchMargin, DEFAULT_SWITCH_MARGIN, 0, 1),
     baselineModel:
@@ -150,6 +158,8 @@ export function loadConfig(): AutoRouterConfig {
       typeof persisted.debug === 'boolean' || typeof persisted.debug === 'string'
         ? persisted.debug
         : undefined,
+    reputation: typeof persisted.reputation === 'boolean' ? persisted.reputation : true,
+    reputationWeights: normalizeReputationWeights(persisted.reputationWeights),
     syntheticPrefixes: stringList(persisted.syntheticPrefixes)?.filter(
       (p) => p.length <= 200,
     ) ?? [],
@@ -161,6 +171,7 @@ export function loadConfig(): AutoRouterConfig {
  * values cannot look like live configuration.
  */
 const REMOVED_CONFIG_KEYS = [
+  'sources',
   'escalationToken',
   'escalationTool',
   'escalationTtlTurns',

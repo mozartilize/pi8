@@ -9,6 +9,8 @@
  * by entering context acquisition so the serving model can inspect the
  * session and call `hand_off_context`.
  */
+import { appendModelEvent, compliancePenalties, sharedPrefixCredits } from '../bench/model-history.js';
+import { modelEventEntry, modelEventSession } from '../host/decisionlog.js';
 import { createHash } from 'node:crypto';
 import {
   createAssistantMessageEventStream,
@@ -277,59 +279,28 @@ export function expandModelCandidates(
   const qualityBearing = (r: BenchModel): boolean =>
     Object.values(r.quality).some((v) => v !== undefined);
 
-  const modelWideKnowledge = rows.find(
-    (row) => row.effort == null && row.quality.knowledge != null,
-  )?.quality.knowledge;
-  const supportedReasoningLevels = MODEL_THINKING_LEVELS.filter(
-    (level) => level !== 'off' && isThinkingSupportedByRegistryModel(rm, level),
-  );
-  const modelWideKnowledgeByEffort: Candidate['knowledgeByEffort'] = {};
-  if (modelWideKnowledge != null) {
-    for (const level of supportedReasoningLevels) {
-      modelWideKnowledgeByEffort[level] = modelWideKnowledge;
-    }
-  }
-  const rawLabelled = rows.filter(
+  const labelled = rows.filter(
     (r): r is BenchModel & { effort: ModelThinkingLevel } =>
       r.effort != null,
   );
-  if (rawLabelled.length === 0) {
-    const fallback = rows.find(qualityBearing) ?? rows[0];
-    // BenchLM's unlabelled Omniscience entry represents the flagship run. If
-    // max is serveable, preserve that evidence/serving contract explicitly;
-    // otherwise keep the ordinary effort-less fallback.
-    const flagship = fallback && modelWideKnowledge != null
-      && isThinkingSupportedByRegistryModel(rm, 'max')
-      ? {
-          ...fallback,
-          effort: 'max' as const,
-          quality: { ...fallback.quality, knowledge: modelWideKnowledge },
-        }
-      : fallback;
-    const candidate = buildCandidate(rm, flagship);
-    return Object.keys(modelWideKnowledgeByEffort).length > 0
-      ? [{ ...candidate, knowledgeByEffort: modelWideKnowledgeByEffort }]
-      : [candidate];
+  if (labelled.length === 0) {
+    return [buildCandidate(rm, rows.find(qualityBearing) ?? rows[0])];
   }
 
-  // AA-Omniscience measures model-level factual reliability rather than a
-  // reasoning-effort curve. Apply an unlabelled model-wide score to every
-  // reasoning level; exact effort-labelled scores remain authoritative.
-  const labelled = rawLabelled.map((row) =>
-    row.effort !== 'off' && row.quality.knowledge == null && modelWideKnowledge != null
-      ? { ...row, quality: { ...row.quality, knowledge: modelWideKnowledge } }
-      : row,
-  );
-  const knowledgeByEffort: Candidate['knowledgeByEffort'] = {
-    ...modelWideKnowledgeByEffort,
-  };
+  const exactQualityByEffort: NonNullable<Candidate['exactQualityByEffort']> = {};
   for (const row of labelled) {
-    if (row.quality.knowledge != null) knowledgeByEffort[row.effort] = row.quality.knowledge;
+    const { knowledge, research, longContext, visionReasoning } = row.quality;
+    if (knowledge != null || research != null || longContext != null || visionReasoning != null) {
+      exactQualityByEffort[row.effort] = {
+        ...(knowledge != null ? { knowledge } : {}),
+        ...(research != null ? { research } : {}),
+        ...(longContext != null ? { longContext } : {}),
+        ...(visionReasoning != null ? { visionReasoning } : {}),
+      };
+    }
   }
-  const hasEffortKnowledge = Object.keys(knowledgeByEffort).length > 0;
-  const attachKnowledge = (candidate: Candidate): Candidate => hasEffortKnowledge
-    ? { ...candidate, knowledgeByEffort }
-    : candidate;
+  const attachExactQuality = (candidate: Candidate): Candidate =>
+    Object.keys(exactQualityByEffort).length > 0 ? { ...candidate, exactQualityByEffort } : candidate;
 
   const byLevel = new Map(labelled.map((row) => [row.effort, row]));
   const supported = MODEL_THINKING_LEVELS.filter(
@@ -345,13 +316,13 @@ export function expandModelCandidates(
         : estimateRow(level, labelled, drops);
     })
     .filter((row): row is BenchModel => row != null)
-    .map((row) => attachKnowledge(buildCandidate(rm, row)));
+    .map((row) => attachExactQuality(buildCandidate(rm, row)));
   if (supported.length > 0) return supported;
   // All measured efforts are unsupported by this model's thinkingLevelMap, or
   // the source supplied only quality-empty rows. Keep the model routable with
   // an effort-less candidate, preferring any row the scorer can actually use.
   const fallback = labelled.find(qualityBearing) ?? labelled[0];
-  return [attachKnowledge(buildCandidate(rm, { ...fallback, effort: undefined }))];
+  return [attachExactQuality(buildCandidate(rm, { ...fallback, effort: undefined }))];
 }
 
 // ─── Turn-callback stages ────────────────────────────────────────────
@@ -360,7 +331,7 @@ export function expandModelCandidates(
 function promptHeadIdentity(context: Context): string {
   const hash = createHash('sha256');
   hash.update(extractSystemPrompt(context) ?? '');
-  for (const tool of context.tools ?? []) hash.update(`\0${tool.name}\0${tool.description}`);
+  for (const tool of context.tools ?? []) hash.update(`\0${tool.name}\0${tool.description}\0${JSON.stringify(tool.parameters)}`);
   return hash.digest('hex');
 }
 
@@ -639,6 +610,7 @@ function noRoutableCandidates(session: RouterSession): RouterTurnOutcome {
 }
 
 interface PreparedTurn {
+  cacheHead: { identity: string; tokens: number };
   registry: ModelRegistry;
   extensionContext: ExtensionContext | undefined;
   config: AutoRouterConfig;
@@ -716,6 +688,7 @@ async function prepareRouterTurn(args: {
   return {
     kind: 'ready',
     prepared: {
+      cacheHead: { identity: promptHeadIdentity(context), tokens: estimateTokenCount((extractSystemPrompt(context) ?? '') + JSON.stringify(context.tools ?? [])) },
       registry,
       extensionContext,
       config,
@@ -954,6 +927,13 @@ function scoreRouterTurn(args: {
   const execution = contractActive && contract.release
     ? executorPool(routableCandidates, session.getWorkPhaseState(), contract)
     : undefined;
+  const warm = session.warmPrefixTokens(Date.now(), estContextTokens, PROMPT_CACHE_TTL_MS);
+  const history = config.reputation === false ? undefined : session.getModelHistory(turnInput.key);
+  if (history) {
+    for (const [key, tokens] of sharedPrefixCredits(history, prepared.cacheHead.identity, prepared.cacheHead.tokens, modelEventSession())) {
+      warm.set(key, Math.max(warm.get(key) ?? 0, tokens));
+    }
+  }
   const policy = resolveRoutingDecision({
     candidates: execution?.pool ?? routableCandidates,
     baseDimension: routedDimension,
@@ -962,7 +942,8 @@ function scoreRouterTurn(args: {
     userReasoning: requestedReasoning as ThinkingLevel | undefined,
     userReasoningOverride,
     estimatedContextTokens: estContextTokens,
-    warmPrefixTokens: session.warmPrefixTokens(Date.now(), estContextTokens, PROMPT_CACHE_TTL_MS),
+    warmPrefixTokens: warm,
+    protocolPenalties: history ? compliancePenalties(history, config.reputationWeights, config.switchMargin) : undefined,
     needsVision,
     incumbentRegistryId,
     incumbentResolvedDimension: handBack?.submitterDimension ??
@@ -1266,6 +1247,13 @@ async function delegateRouterTurn(args: {
   const result = await runDelegationLoop(delegationOptions, stream);
   if (result.success && session.getSessionGeneration() === delegationSessionGeneration) {
     recordServedWork(session, session.getWorkPhaseState()?.workItemId);
+    const actual = session.getLastServed();
+    if (config.reputation !== false && actual) {
+      appendModelEvent({
+        kind: 'served', model: servedKey(actual), entry: modelEventEntry(intentKey), session: modelEventSession(),
+        prefix: prepared.cacheHead.identity, prefixTokens: prepared.cacheHead.tokens,
+      });
+    }
   }
 
   if (
@@ -1812,6 +1800,11 @@ async function runRouterTurn(args: {
   stream: AssistantMessageEventStream;
 }): Promise<RouterTurnOutcome> {
   const { context, options, pi, session, runtime, turnTimer, stream } = args;
+
+  if (!session.getManualModel()) {
+    const browser = await runtime.checkBrowser();
+    if (!browser.ready) return { kind: 'terminal', reason: 'error', message: browser.message };
+  }
 
   const preparation = await prepareRouterTurn({ context, session, runtime });
   if (preparation.kind !== 'ready') return preparation;

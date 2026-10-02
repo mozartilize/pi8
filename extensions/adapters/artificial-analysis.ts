@@ -1,5 +1,6 @@
 /**
- * Adapter for the Artificial Analysis Data API (free tier).
+ * Artificial Analysis benchmark rows: the Data API (free tier) joined with the
+ * models page (artificial-analysis-site.ts).
  *
  *   GET https://artificialanalysis.ai/api/v2/language/models/free
  *   Header: x-api-key
@@ -9,12 +10,13 @@
  *   { tier, intelligence_index_version, pagination: {...}, data: [ ... ] }
  *
  * and each row nests its metrics under `evaluations` / `pricing` /
- * `performance`. An earlier version of this adapter assumed a flat top-level
- * array with flat keys, so it threw on the envelope and (had it not thrown)
- * would have read every metric as undefined.
+ * `performance`. The API carries the indexes, prices, and speed; the page
+ * adds Omniscience, AA-Briefcase, time per task, and whether AA estimated the
+ * index. Both sides share the slug and the effort label in the display name.
  */
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import type { BenchModel } from '../types.js';
+import { fetchSiteModels, type AASiteModel } from './artificial-analysis-site.js';
 
 export const SOURCE = 'artificial-analysis' as const;
 
@@ -101,7 +103,7 @@ export function unwrap(payload: unknown): { rows: AARawModel[]; pagination?: AAP
   );
 }
 
-export async function fetchRaw(config: AAConfig): Promise<AARawModel[]> {
+export async function fetchRaw(config: AAConfig): Promise<AARawModel[] & { indexVersion?: string }> {
   if (!config.apiKey) {
     throw new Error(
       'No artificialanalysis.ai API key configured. Get a free key at https://artificialanalysis.ai/ and run `/router-sync <key>`.',
@@ -148,25 +150,23 @@ const EFFORT_LABELS: ReadonlySet<string> = new Set([
  * Parse the reasoning-effort label out of the display name's parenthetical.
  *
  * AA formats it as free text: `GPT-5.6 Luna (low)`, `Claude Opus 5 (Adaptive
- * Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)`. The parse
- * fails closed: an unrecognized label yields undefined (unknown effort, never
- * promoted) rather than a guess. Check incoming labels after each benchmark
- * re-sync so supported effort levels do not silently become unknown.
+ * Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)`, `Claude
+ * Opus 5.5 (Adaptive Reasoning, Max Effort, Default Fallback)`, `HyperNova
+ * 60B (high, based on gpt-oss-120b)`. The effort can sit in any comma
+ * segment, so the first segment that is a non-reasoning label or
+ * `<level>[ effort]` wins. The parse fails closed: no such segment yields
+ * undefined (unknown effort, never inferred) rather than a guess.
  */
 export function parseEffort(name: string | undefined): ModelThinkingLevel | undefined {
-  if (!name) return undefined;
-  const match = /\(([^)]*)\)/.exec(name);
-  if (!match) return undefined;
-  const label = match[1]!.trim().toLowerCase();
-  if (/^non[\s-]?reasoning$/.test(label)) return 'off';
-  // Multi-part labels like "Adaptive Reasoning, Xhigh Effort" carry the effort
-  // in the final comma segment. Also check the last segment for the
-  // non-reasoning pattern so "(Adaptive Reasoning, Non-reasoning)" resolves.
-  const segments = label.split(',').map((s) => s.trim()).filter(Boolean);
-  const last = segments[segments.length - 1] ?? '';
-  if (/^non[\s-]?reasoning$/.test(last)) return 'off';
-  const effort = last.replace(/\s+effort$/, '');
-  return EFFORT_LABELS.has(effort) ? (effort as ModelThinkingLevel) : undefined;
+  const label = name && /\(([^)]*)\)/.exec(name)?.[1];
+  if (!label) return undefined;
+  for (const segment of label.toLowerCase().split(',')) {
+    const text = segment.trim();
+    if (/^non[\s-]?reasoning$/.test(text)) return 'off';
+    const effort = text.replace(/\s+effort$/, '');
+    if (EFFORT_LABELS.has(effort)) return effort as ModelThinkingLevel;
+  }
+  return undefined;
 }
 
 function asNumber(v: unknown): number | undefined {
@@ -181,7 +181,14 @@ function asSlug(model: AARawModel): string | undefined {
   return undefined;
 }
 
-export function normalize(raw: AARawModel[]): Omit<BenchModel, 'registryId' | 'active'>[] {
+const joinKey = (slug: string, name: string | undefined): string =>
+  `${slug}\u0000${parseEffort(name) ?? ''}`;
+
+export function normalize(
+  raw: AARawModel[],
+  site: readonly AASiteModel[] = [],
+): Omit<BenchModel, 'registryId' | 'active'>[] {
+  const siteByKey = new Map(site.map((row) => [joinKey(row.slug, row.name), row]));
   return raw
     .filter((m) => asSlug(m))
     .map((m) => {
@@ -190,20 +197,23 @@ export function normalize(raw: AARawModel[]): Omit<BenchModel, 'registryId' | 'a
       const perf = m.performance ?? {};
       const ttftSeconds = asNumber(perf.median_time_to_first_token_seconds);
       const ttfaSeconds = asNumber(perf.median_time_to_first_answer_token_seconds);
-      const coding = asNumber(ev.artificial_analysis_coding_index);
+      const slug = asSlug(m) as string;
+      const page = siteByKey.get(joinKey(slug, m.name));
       return {
         // AA reports a display name; the fuzzy matcher normalizes it against
         // the registry, so prefer the stable slug.
-        benchSlug: asSlug(m) as string,
+        benchSlug: slug,
         quality: {
           intelligence: asNumber(ev.artificial_analysis_intelligence_index),
-          coding,
+          coding: asNumber(ev.artificial_analysis_coding_index),
           // AA's agentic index is the closest analogue to agentic coding.
           agenticCoding: asNumber(ev.artificial_analysis_agentic_index),
-          // AA publishes no separate reasoning score; the scorer falls back to
-          // intelligence for the `plan` dimension when this is absent.
-          reasoning: undefined,
+          knowledge: page?.omniscience,
+          research: page?.briefcaseRubricPassRate,
+          longContext: page?.lcr,
+          visionReasoning: page?.mmmuPro,
         },
+        ...(page?.intelligenceIndexIsEstimated !== false ? { qualityEstimated: true } : {}),
         priceInputPer1M: asNumber(pricing.price_1m_input_tokens),
         priceOutputPer1M: asNumber(pricing.price_1m_output_tokens),
         outputSpeedTps: asNumber(perf.median_output_tokens_per_second),
@@ -213,14 +223,17 @@ export function normalize(raw: AARawModel[]): Omit<BenchModel, 'registryId' | 'a
         costPerTask: asNumber(
           m.artificial_analysis_intelligence_index_cost?.cost_per_task?.total_cost,
         ),
+        timePerTaskSeconds: page?.intelligenceIndexTimePerTask,
         contextWindow: asNumber(m.context_window),
         source: SOURCE,
       };
     });
 }
 
+/** Both halves are required: a missing page fails the sync like a failed API call. */
 export async function fetchAndNormalize(
   config: AAConfig,
-): Promise<Omit<BenchModel, 'registryId' | 'active'>[]> {
-  return normalize(await fetchRaw(config));
+): Promise<Array<Omit<BenchModel, 'registryId' | 'active'>> & { indexVersion?: string }> {
+  const [raw, site] = await Promise.all([fetchRaw(config), fetchSiteModels()]);
+  return Object.assign(normalize(raw, site), { indexVersion: raw.indexVersion });
 }

@@ -1,6 +1,7 @@
 /**
  * Slash commands for the auto model router.
  */
+import { loadModelHistory, compliancePenalties, modelHistoryReady } from '../bench/model-history.js';
 import {
   ModelSelectorComponent,
   type ExtensionAPI,
@@ -10,9 +11,9 @@ import type { Model } from '@earendil-works/pi-ai';
 import { resolveManualModel } from '../serve/manual-model.js';
 
 import { saveApiKey, loadConfig, getConfigPath, saveBlacklist, saveSemi } from '../config.js';
+import { checkPlaywright } from '../adapters/artificial-analysis-site.js';
 import { buildModelFilter } from '../routing/policy/allowlist.js';
 import { syncBenchmarks, syncSummary } from '../bench/sync.js';
-import type { AdapterName } from '../adapters/index.js';
 import { ROLE_DIMENSIONS, ROUTER_PROVIDER_ID } from '../types.js';
 import { activeModels, isStale, loadStore, addAlias, saveStore } from '../bench/store.js';
 import {
@@ -232,27 +233,11 @@ async function handleSyncCommand(
   args: string,
   ctx: ExtensionCommandContext,
 ): Promise<void> {
-  const [sourceOrKey] = splitArgs(args);
-
-  const config = loadConfig();
-  let apiKey: string | undefined;
-  if (sourceOrKey) {
-    // If user provided a key, save it.
-    saveApiKey(sourceOrKey);
-    apiKey = sourceOrKey;
-  } else if (config.artificialAnalysisApiKey) {
-    apiKey = config.artificialAnalysisApiKey;
-  }
-
-  const results = await syncBenchmarks(ctx, {
-    apiKey,
-    sources: config.sources as AdapterName[],
-    onProgress: (r) => {
-      ctx.ui.notify(`${r.source}: ${r.ok ? 'ok' : 'failed'}`, r.ok ? 'info' : 'error');
-    },
-  });
-  const summary = syncSummary(results);
-  ctx.ui.notify(summary, results.some((r) => r.ok) ? 'info' : 'error');
+  const [apiKey] = splitArgs(args);
+  if (apiKey) saveApiKey(apiKey);
+  ctx.ui.notify('Syncing Artificial Analysis benchmark data…', 'info');
+  const results = await syncBenchmarks(ctx, { apiKey });
+  ctx.ui.notify(syncSummary(results), results.every((r) => r.ok) ? 'info' : 'error');
 }
 
 async function handleStatusCommand(
@@ -263,11 +248,25 @@ async function handleStatusCommand(
   const manualStatus = `Manual override: ${session.getManualModel() ?? 'none (auto routing)'}`;
   const semiStatus = `Semi-auto: ${loadConfig().semi ? 'on (ask before model switches)' : 'off'}`;
   const workContext = formatWorkContext(session.context.getLedger(), session.context.getBranchState());
+  const config = loadConfig();
+  const protocolHistory = config.reputation === false ? undefined : loadModelHistory();
+  const penalties = protocolHistory ? compliancePenalties(protocolHistory, config.reputationWeights, config.switchMargin) : new Map<string, number>();
+  const modelHistory = !protocolHistory ? ['Model history: disabled'] : [
+    `Model history: ${!modelHistoryReady(protocolHistory) ? 'collecting; global preference starts after 14 days' : config.reputationWeights ? 'compliance weights configured' : 'collecting compliance; no penalty weights configured'}`,
+    ...[...protocolHistory.stats].map(([model, stats]) =>
+      `  ${model}: ${stats.entries.toFixed(1)} decayed entries, ${stats.reminders.toFixed(1)} reminders, ${stats.followed.toFixed(1)} followed, ${stats.ignored.toFixed(1)} ignored; penalty ${(penalties.get(model) ?? 0).toFixed(3)}`),
+  ];
+  const browser = await checkPlaywright();
+  const browserStatus = browser.ready
+    ? ['Chromium for Playwright: ready']
+    : ['Chromium for Playwright: missing — router/auto does not route until it is installed.', browser.message];
   const store = loadStore();
   if (!store || !store.syncedAt) {
     const msg = [
       manualStatus,
       semiStatus,
+      ...browserStatus,
+      ...modelHistory,
       ...workContext,
       'Auto-router has no benchmark data — run `/router-sync <key>` with a free key from https://artificialanalysis.ai/.',
     ].join('\n');
@@ -287,6 +286,8 @@ async function handleStatusCommand(
   const lines = [
     manualStatus,
     semiStatus,
+    ...browserStatus,
+    ...modelHistory,
     ...workContext,
     `Synced: ${new Date(store.syncedAt).toISOString()}${stale ? ' (stale)' : ''}`,
     `Active models in store: ${active.length}`,
@@ -298,7 +299,7 @@ async function handleStatusCommand(
     lines.push('', 'No registry model matched a benchmark row — routing is price-only.');
     lines.push('Map one manually with `/router-fix <bench-slug> <provider/id>`.');
   }
-    lines.push('', ...formatDecisionDetail(lastDecision, lastServed));
+  lines.push('', ...formatDecisionDetail(lastDecision, lastServed));
   // M4: show recent routing history, surfacing any real fallbacks.
   // Only actual routing decisions belong here: secondary records join
   // decisions by intentKey offline, and letting them through would push real

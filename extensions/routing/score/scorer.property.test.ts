@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 
-import { pickBest, scoreCandidate, logCostUtilities, candidateKey } from './scorer.js';
+import { pickBest, scoreCandidate, logUtilities, candidateKey } from './scorer.js';
 import { candidate, benchRow } from '../../test-support/router-fixtures.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../../constants.js';
 import type { BenchModel, Candidate, Dimension, ScoreWeights } from '../../types.js';
@@ -144,15 +144,15 @@ describe('scorer property — numeric safety', () => {
   });
 });
 
-// ─── Invariant 5: logCostUtilities is monotonically decreasing in cost ──
+// ─── Invariant 5: logUtilities is monotonically decreasing in cost ──
 
-describe('logCostUtilities property', () => {
+describe('logUtilities property', () => {
   const validCost = (c: number | undefined): c is number => c != null && Number.isFinite(c) && c >= 0;
 
   it('maps every valid cost to a finite [0,1] utility and undefined otherwise', () => {
     fc.assert(
       fc.property(fc.array(weirdNum, { maxLength: 12 }), (costs) => {
-        const u = logCostUtilities(costs);
+        const u = logUtilities(costs);
         expect(u.length).toBe(costs.length);
         costs.forEach((c, i) => {
           if (validCost(c)) {
@@ -172,7 +172,7 @@ describe('logCostUtilities property', () => {
   it('assigns a cheaper cost a utility no lower than a dearer one', () => {
     fc.assert(
       fc.property(fc.array(weirdNum, { maxLength: 12 }), (costs) => {
-        const u = logCostUtilities(costs);
+        const u = logUtilities(costs);
         for (let i = 0; i < costs.length; i++) {
           for (let j = 0; j < costs.length; j++) {
             const ci = costs[i];
@@ -314,7 +314,7 @@ describe('scorer property — tier dominance', () => {
 /**
  * NOTE: the stronger phrasing "adding a strictly-worse candidate never changes
  * the winner" does NOT hold for this scorer, and asserting it would be a false
- * invariant. Cost utilities are normalized set-relative (`logCostUtilities`
+ * invariant. Cost utilities are normalized set-relative (`logUtilities`
  * rescales by the log-span of the tier's costs), so a very expensive addition
  * widens the span, compresses the cost advantage between the existing
  * candidates, and can flip the winner between two *originals* whose ranking

@@ -72,12 +72,8 @@ const isDatePart = (t: string): boolean => /^\d{2}$/.test(t);
  * rows. Other `-high` slugs are ordinary effort variants, stripped by
  * {@link EFFORT_SUFFIXES} with the level carried on the row.
  *
- * The `-max` entries are the benchlm naming of max-effort runs: benchlm
- * appends `-max` to the base slug (`deepseek-v4-pro-max`) where AA publishes
- * the bare base slug. `max` is deliberately absent from
- * {@link EFFORT_SUFFIXES} because it is a real tier token in model
- * identities (`qwen3.7-max`), so max-effort run variants are listed here
- * explicitly, matching only when the full slug unit is known.
+ * `max` is deliberately absent from {@link EFFORT_SUFFIXES} because it is a
+ * real tier token in model identities (`qwen3.7-max`).
  *
  * Keep this source-backed: a generic four-digit suffix may be part of a
  * registry model's identity. A stale list is not benign — every unrecognized
@@ -89,8 +85,6 @@ const isDatePart = (t: string): boolean => /^\d{2}$/.test(t);
 const BENCHMARK_RUN_VARIANTS = new Set([
   'deepseek-v4-flash-0420',
   'deepseek-v4-flash-0420-high',
-  'deepseek-v4-pro-max',
-  'deepseek-v4-flash-max',
   'o3-mini-high',
 ]);
 
@@ -194,8 +188,8 @@ export function resolveSlugAll(
 
   // 4. When the alias is the only thing naming the model, the row still
   // describes one underlying model — the alias target just spelled its name
-  // differently (e.g. benchlm's `claude-fable` for the registry's
-  // `claude-fable-5`). Bind every provider copy of the target's identity so
+  // differently (e.g. `claude-4-sonnet` for the registry's
+  // `claude-sonnet-4`). Bind every provider copy of the target's identity so
   // the one-to-many invariant holds for aliased models too. When identity
   // matching already bound siblings, the alias is a supplementary
   // provider-specific pin (e.g. a spark/free variant) and binds only its own

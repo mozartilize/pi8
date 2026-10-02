@@ -62,55 +62,50 @@ Sources publish rows only for the effort levels they measured, so a fully servea
 
 The per-step drop is derived from the store on each sync — the p90 of observed adjacent-level drops, computed per quality axis — rather than fixed. p90 rather than the median is the point: at the median an estimate lands above the true value roughly half the time, at p90 it under-shoots ~90% of the time, which is what lets an estimate compete for the pick at all. An axis with too few observations is left unestimated rather than extrapolated from noise.
 
-Estimated rows carry price and context window (registry facts that hold across effort levels) but never `costPerTask`, speed, or latency — those are per-run measurements of one specific level. Estimated quality is eligible on the normal capability floor, but **economic promotion requires measured evidence**: promotion relaxes the floor on price grounds, and relaxing it for inferred capability too would stack one inference on another.
+Estimated rows carry price and context window (registry facts that hold across effort levels) but never `costPerTask`, speed, or latency — those are per-run measurements of one specific level. Estimated quality can meet ordinary minimums, but it cannot prove a strictly stronger model. AA-estimated indexes also carry `qualityEstimated`; exact knowledge/research values are never estimated across efforts.
 
 ### Capability tiers
 
-Models are classified into three tiers based on capability relative to the strongest request-local peer:
+Tier 0 meets every fixed minimum, tier 1 lacks a measurement but has no measured failure, and tier 2 fails a measured minimum. Every tier stays in the fallback chain. Price, speed, cache credit and compliance preference rank only inside a tier; they cannot buy a weaker model into tier 0.
 
-| Tier | Criterion |
-|---|---|
-| 0 | Task-axis ratio ≥ frontier ratio (85%), and if `implement`/`review`: broad-capability ratio ≥ sanity floor (45%) |
-| 1 | Unknown quality (ranks behind tier-0 known but ahead of tier-2 weak) |
-| 2 | Below floor (weak on task axis or fails sanity) |
-
-Every tier stays in the fallback chain: a capability judgement controls the preferred model, never objective failure recovery.
-
-### Dimension-to-axis mapping
-
-| Dimension | Task axis (eligibility gate) | Quality axis (ranking) |
+| Task type | Required axes | Ranking axis |
 |---|---|---|
-| `lightweight` | intelligence (no floor applied) | intelligence |
-| `gather` | intelligence | intelligence |
-| `plan` | intelligence (never promoted) | intelligence |
-| `implement` | agenticCoding → coding (fallback) | agenticCoding → coding (fallback) |
-| `review` | coding → intelligence (ranking only) | coding → intelligence |
+| `lightweight` | none | intelligence |
+| `gather` | intelligence ≥ 20 | intelligence |
+| `plan`, `review` | intelligence ≥ 30, Omniscience ≥ 0, Briefcase rubric ≥ 0.35 | intelligence |
+| `implement` | agentic coding ≥ 30 | agentic coding, then coding |
 
-`implement` uses agentic-coding as primary axis (AA's `artificial_analysis_agentic_index`), falling back to coding when absent. Ranking axes fall back so every model sorts on real data; eligibility axes do not (requires direct evidence).
+Coding-only implementations remain unknown, not measured weak. Omniscience is a signed closed-book correctness index; Briefcase rubric is the share of deliverable checks passed on work from many source files. The Omniscience hallucination rate is not a gate: its wrong-answer penalty is already in the index. Exact-effort knowledge and research are read at the effort delegation will serve. They are never inferred from a different effort or broadcast from an unlabelled row.
 
-### Economic promotion (bounded)
+The table is calibrated on AA Intelligence Index v4.3 (2026-10-02). `/router-status` reports the synced index version and calibration; a sync reports a notice when its version differs or its intelligence maximum differs by more than 15% from the calibrated reference.
 
-A tier-2 candidate may earn tier 0 only when it clears **all** of:
+An accepted handoff replaces each gated axis's minimum with `requirement × AXIS_REFERENCE[axis]`. Fixed reference strengths are intelligence 57.6, coding 78.3, agentic coding 56.5 and Briefcase rubric 0.61. Omniscience stays at zero. Quality above the handoff minimum earns no additional credit, so price and speed choose among suitable executors. Reference strengths do not depend on the request pool.
 
-1. Task-axis ratio ≥ economy floor (70%)
-2. Sanity floor (if `implement`/`review`)
-3. Price ≤ cheapest tier-0 peer ÷ 4 (fourfold advantage)
-4. Not Pareto-dominated by a cheaper, equally-capable peer
-5. Non-sibling: a different provider of the same bench row doesn't count as a peer
+For context ≥ 64,000 estimated tokens, LCR correctness must be ≥ 0.30. Image requests need MMMU-Pro ≥ 0.30 as well as registry image support. Missing measurements become tier 1; measured failures become tier 2. These are capability judgements, not reasons to remove objective fallbacks.
 
-Promotion is evaluated for `gather`, `implement`, and `review` only. `plan` is never promoted and `lightweight` is ungated entirely.
+### Cost and speed signals
 
-### Cost signal
+Choose one scale per pick, from the tier-0 pool (or the filtered pool when no candidate meets all minimums). Cost uses `costPerTask` only with complete coverage; otherwise it uses blended registry `$/1M` (input × 0.25 + output × 0.75), with benchmark pricing as fallback. Free models without benchmark data earn no cost credit. Within each tier, lower cost gets logarithmic utility.
 
-Per-call cost basis: `costPerTask` when every candidate in the pre-promotion tier-0 pool carries it (the full filtered set when no candidate reaches tier 0); otherwise blended `$/1M` tokens (input×0.25 + output×0.75). Scoping to the pool that can actually win keeps a low-quality candidate missing task cost from forcing an otherwise covered set onto the coarser basis — which matters because effort variants of one model share a `$/1M` rate and are only distinguishable by task cost. Registry pricing is authoritative when present; benchmark pricing is a fallback. Free models with benchmark data are real (zero-cost is deliberate); free models without benchmark data are treated as unknown (no cost credit).
+Speed uses logarithmic time-per-task utility with complete preferred-pool coverage, otherwise registry output tokens/sec. Lower-tier gaps never erase the preferred pool's task-cost or time coverage. Estimated rows carry neither task cost nor task time.
 
-### Current-model cache preference
+### Prompt-cache preference
 
-The incumbent is the actually served (model, effort) variant when it is still in the routable candidate pool; otherwise the last scored choice is used. Its capability minimum chooses the first chain candidate with known task-axis quality at least as high as that incumbent's, rather than forcing that same model to serve. If the incumbent is absent from the scored chain (for example, insufficient context capacity), the minimum never restores it. Incumbent models receive a cache-preservation bonus priced from the incumbent's own registry economics, not a flat unitless rate: `perTokenLoss = cacheWrite (or input, if no cacheWrite) − cacheRead`, the dollar value of one warm cache token. An exact incumbent match credits `min(estContextTokens × perTokenLoss, switchMargin)` — the full conversation. A same-model effort change gets the full credit only where effort shares the model's cache: `anthropic-messages` models with `compat.supportsMidConvoEffort`, where pi-ai sends effort per message. Elsewhere effort is part of the cache key (OpenAI reports `reasoning_effort_changed`; a top-level Anthropic effort change invalidates at least the message blocks), and transcripts show about half of such changes reading no cache at all. There the credit is `min(warmTokens × perTokenLoss, switchMargin)`, where `warmTokens` is the context that exact (model, effort) key sent when it last served, if that was within 5 minutes and no compaction or tree navigation has rewritten the history since; a cold level gets zero. A same-model candidate with no measured effort (the model's default call shape) gets the full credit like an exact match. A different model gets zero credit — a model change has no cache entries to begin with. When the incumbent's registry entry doesn't publish enough pricing to compute `perTokenLoss` (no `cacheRead`, and no `cacheWrite`/`input`), no retention credit is granted at all. Capped by `switchMargin` (default 0.15). Applies only when the caller supplies an incumbent and does not set `isSubagentSpawn`; role injection supplies neither, so a subagent spawn never receives the bonus (no cache to lose).
+The exact incumbent can keep the full conversation prefix. An effort change shares it only when the provider supports per-message effort; otherwise it receives only its own recently served prefix. Other warm candidates receive credit for their own prefix too. Credit is `min(warmTokens × (cacheWrite or input − cacheRead), switchMargin)` using the candidate's published cache prices. Missing prices earn no credit; subagent spawns receive none. Compaction, tree navigation or a changed system prompt/tool schema clears session prefixes.
+
+After the two-week collection period, cross-session credit requires an identical prompt-head hash and the exact provider/model/effort key. Only the shared system prompt and tool prefix counts, never conversation tokens. Incremental hit estimates above background are 0.40 within five minutes and 0.30 within one hour; after an hour the credit is zero. These are conservative observational estimates, not guaranteed cache hits. Same-session events are excluded. Selection frequency never earns credit.
+
+### Global protocol counts
+
+`PI8_DIR/model-events.jsonl` stores small append-only records. Entry and session identities are opaque hashes; compliance groups the matcher identity across providers and efforts, while cache identity keeps both provider and effort. A session reads the global history once per user entry, not on every tool continuation. Folding ignores malformed records, old rule versions and events older than 90 days. The append-only file is not rewritten during sync: rewriting while other sessions append could lose their records.
+
+Entries and reminder episodes are deduplicated. A reminder outcome belongs to the model that received it; another model taking over or an interrupted continuation is not evidence of an ignored reminder. Counts decay with a 30-day half-life. Reminder-rate preference needs 30 effective entries; ignore-rate preference needs 10 completed episodes. Each uses a Wilson lower bound. The weighted penalty is capped by `switchMargin` and applies only within tiers.
+
+`reputation` defaults to true. Unset `reputationWeights` means collection only for compliance; fit the weights after at least two weeks of observations rather than supplying fixture-derived defaults. Positive rewards for execution outcomes are not used. `/router-status` shows decayed counts and penalties; `/router-why` records a penalty that changed the preferred candidate. Every history read/write fails open.
 
 ### Effort floor
 
-Minimum reasoning effort per dimension — a **floor**, not an assignment. A measured effort may raise it, never lower it:
+Minimum reasoning effort per dimension, not an assignment. A measured effort may raise it, never lower it:
 
 | Dimension | Min thinking |
 |---|---|
@@ -120,7 +115,7 @@ Minimum reasoning effort per dimension — a **floor**, not an assignment. A mea
 | `review` | high |
 | `plan` | max |
 
-The router-chosen effort uses an **up-only walk** (`levelFrom`) from the clamped floor — a gap in the `thinkingLevelMap` never resolves below the floor. Explicit user reasoning requests use a nearest-first walk to honour the user's choice as closely as possible.
+The router-chosen effort uses an **up-only walk** (`levelFrom`) from the clamped minimum — a gap in the `thinkingLevelMap` never resolves below the minimum. Explicit user reasoning requests use a nearest-first walk to honour the user's choice as closely as possible.
 
 ---
 
@@ -222,7 +217,7 @@ The band only raises minimums: a plan or review handoff takes the higher of its 
 
 The explicit `plan`/`review` → `implement` handoff. The serving model calls `commit_execution` with the remaining work as a closed program: `edit`/`create` steps (path and exact change), `delete` steps, and `verify` steps (`test`/`typecheck`/`lint`/`build`), at most 12 steps, no glob paths. The tool is registered once and always active: changing the provider tool list mid-session rebuilds the prompt head and loses the prompt cache on most provider APIs. It declines without state changes outside `router/auto` or outside a `plan`/`review` decision. Guidance that lives only in the prompt head is easy for a model to lose in a long context, so under the same conditions the result of the entry's first native `edit`/`write` without a plan gets one appended reminder to consider the tool. Appending to a tool result keeps the transcript prefix and prompt cache intact; each reminder is logged as a `reminder` record, so reminders without a later `accept` count missed handoffs.
 
-The router, not the model, values the plan (`execution-difficulty.ts`). The submitter only describes the remaining work: `remainingWork` rates five criteria from 1 (easiest) to 5 (hardest) — open decisions, spread, verification, knowledge needed beyond the listed files, and coupling. A model asked whether work is easy tends to answer confidently whatever the truth; a description on fixed scales, weighted by the router, can be checked against outcomes and refitted. The requirement is 30% plus a lookup on open decisions (level 5 alone reaches 90% and keeps the submitter), up to 8 points per other criterion, and up to 4 points per measured fact: files, directories, existing lines of the edit/delete targets, and fix commits touching the targets in the last 180 days (`git log`). An unscored criterion counts as level 5; a failed measurement counts halfway, so neither lowers the requirement. Commits, test targets, and step count are logged but not weighted. The requirement maps to a band (`economy` < 45%, `standard` < 70%, `strong` < 85%, otherwise the submitter keeps the plan). The plan's shape only raises that band: more than 2 files or 4 steps needs `standard`, more than 5 files or 8 steps keeps the submitter, and so does an edit/delete target that does not exist. Each executor model already excluded in the task raises the band one step. A releasing band routes the next invocations as `implement` with the executor implement minimum replacing the 85% tier-0 ratio, and both incumbent minimums are skipped so a cheaper executor can win on score. A contract that keeps the submitter still routes as `implement`, with both incumbent minimums in force. The weights are hand-set; every contract logs its rubric, measurements, and outcome so they can be fitted instead.
+The router, not the model, values the plan (`execution-difficulty.ts`). The submitter only describes the remaining work: `remainingWork` rates five criteria from 1 (easiest) to 5 (hardest) — open decisions, spread, verification, knowledge needed beyond the listed files, and coupling. A model asked whether work is easy tends to answer confidently whatever the truth; a description on fixed scales, weighted by the router, can be checked against outcomes and refitted. The requirement is 30% plus a lookup on open decisions (level 5 alone reaches 90% and keeps the submitter), up to 8 points per other criterion, and up to 4 points per measured fact: files, directories, existing lines of the edit/delete targets, and fix commits touching the targets in the last 180 days (`git log`). An unscored criterion counts as level 5; a failed measurement counts halfway, so neither lowers the requirement. Commits, test targets, and step count are logged but not weighted. The requirement maps to a band (`economy` < 45%, `standard` < 70%, `strong` < 85%, otherwise the submitter keeps the plan). The plan's shape only raises that band: more than 2 files or 4 steps needs `standard`, more than 5 files or 8 steps keeps the submitter, and so does an edit/delete target that does not exist. Each executor model already excluded in the task raises the band one step. A releasing band routes the next invocations as `implement` with the implementation minimum set from the fixed agentic reference, and both incumbent minimums are skipped so a cheaper executor can win on score. A contract that keeps the submitter still routes as `implement`, with both incumbent minimums in force. The weights are hand-set; every contract logs its rubric, measurements, and outcome so they can be fitted instead.
 
 A contract is executed when a native `edit`/`write` has succeeded on every declared edit/create target, or when its executor has used `2 × steps + 4` provider invocations (Bash writes and deletions are never attributed, so the budget ends such plans). The executor is the first model other than the submitter that serves an invocation of a released plan. A released plan can still be served by its submitter alone: it may win on score, or serve as a fallback. A plan another model executed routes the rest of the entry as `review` with the submitter as the incumbent and its task type as the thinking minimum: a finished plan can be wrong in ways no break detects, and only the submitter can judge the work against its intent. Switching on the invocation after the last declared edit is the only point the router can guarantee: once a model answers with text alone, Pi's loop ends and no invocation remains to hand back. Verify steps after the last declared edit therefore run under review. A plan only its submitter served continues as `implement`. The first verifier run after execution is recorded as `pass`/`fail`. A new `commit_execution` during review is **rework**: it strikes the executor like a break, and the revised plan keeps the original task type. The contract ends with its entry — when Pi's run settles, or when a queued entry starts — and is labelled `clean` (no edits during review), `fixed` (the submitter edited), `rework`, `broken`, or `unfinished` (still active); one `outcome` record is logged.
 
@@ -246,13 +241,13 @@ Work-item lifecycle is independent of task type and execution-contract state. `c
 
 ### Benchmarks
 
-The **Artificial Analysis** Data API (free tier, `x-api-key` header) provides the sole benchmark source. Rows carry `evaluations` (intelligence, coding, agentic indices), `pricing` ($/1M input/output), and `performance` (tokens/sec, TTFT, TTFA). Quality coverage is bounded by what Artificial Analysis publishes: a model with no matched row carries no quality signal and routes on registry metadata alone.
+The **Artificial Analysis** Data API (free tier, `x-api-key` header) and public models page form one benchmark source. The page is read in headless Chromium using `playwright-core`, capturing its decrypted models payload. Chromium installation is a user setup prerequisite for automatic turns; the install command names the exact resolved CLI. Selecting `router/auto` displays a warning when it is missing, and the provider emits one terminal setup error before delegation. Pi hooks cannot refuse the model selection itself. Manual pins and concrete-model sessions are not checked. Scrape failures keep the previous store. The page adds Omniscience, Briefcase rubric pass rate, LCR, MMMU-Pro, task time and the estimated-index flag to each API row by `(slug, parsed effort)`.  Rows carry `evaluations` (intelligence, coding, agentic indices), `pricing` ($/1M input/output), and `performance` (tokens/sec, TTFT, TTFA). Quality coverage is bounded by what Artificial Analysis publishes: a model with no matched row carries no quality signal and routes on registry metadata alone.
 
-**Effort labels** are parsed from the model name parenthetical: `GPT-5.6 Luna (low)`, `Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)` → `off`. The parse fails closed (unrecognized → undefined).
+**Effort labels** are parsed from the model name parenthetical: `GPT-5.6 Luna (low)`, `Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)` → `off`. The first recognized comma segment wins, including labels followed by "Default Fallback" or provenance text. The parse fails closed (unrecognized → undefined).
 
 **Run variants**: AA re-runs benchmarks under different configurations, suffixing slugs with `-<4 digits>` (e.g. `gpt-5-6-luna-low-1234`). These are stripped via an explicit variant list in `matcher.ts`. The variant list is explicit rather than a general stripping rule because generic suffix-stripping corrupts real model identities like `qwen3.7-max`.
 
-**Store format**: identity is `(registryId, effort)` — NUL-separated in storage, `provider/id:effort` in candidate keys. v2 stores discard v1 stores with a single warn line. Selected sources refresh as one transaction — a partial source outage preserves the previous store rather than stamping a partial dataset.
+**Store format**: identity is `(registryId, effort)` — NUL-separated in storage, `provider/id:effort` in candidate keys. v2 stores discard v1 stores with a single warn line. API and site refresh as one transaction; either failing preserves the previous store. The store also retains the AA index version when reported.
 
 ### Fuzzy matching
 
@@ -287,12 +282,13 @@ Options in `~/.pi/agent/pi8/config.json`:
 | `blacklist` | `[]` | Persisted exclude patterns, same syntax as `models` |
 | `prompt` | `true` | TUI notification on model switch |
 | `semi` | `false` | Ask before switching away from the last served model |
-| `switchMargin` | `0.15` | Incumbent cache-preservation cap; `0` disables the bonus |
+| `switchMargin` | `0.15` | Cap on prompt-cache credit and protocol penalty; `0` disables both |
 | `routerContextWindow` | served model's window | Context window advertised for `router/auto`. Pi tunes compaction to it, so `router/auto` advertises the window and output limit of the model that last served, and the largest routable window before any model has served. A lower value makes Pi compact earlier and keeps smaller-window models eligible longer. Values above the default are clamped to it. |
 | `debug` | `false` | Timing log path or `true` |
 | `syntheticPrefixes` | `[]` | Literal prefixes marking synthetic messages |
 | `dimensionWeights` | per-dimension defaults | Override `{quality, cost, speed}` per dimension |
-| `sources` | `['artificial-analysis', 'benchlm']` | Benchmark source selection |
+| `reputation` | `true` | Collect global model counts, use exact-prefix cross-session cache credit and configured compliance preference |
+| `reputationWeights` | unset | `{reminder, ignored}` nonnegative weights in [0, 1]; unset keeps compliance collection only. Fit from at least two weeks of observations |
 | `baselineModel` | — | Model `/router-report` compares routed spend against |
 
 ---
@@ -301,7 +297,7 @@ Options in `~/.pi/agent/pi8/config.json`:
 
 - Semantic answer grading or automatic retries on perceived quality
 - Replaying after visible text or a tool call, or replacing a running child in-place
-- Routing on remembered outcomes: execution-contract outcomes are logged for fitting the difficulty weights offline; at runtime only rework strikes within one task act on them
+- Rewarding popularity or remembered execution quality: execution-contract outcomes are logged for offline fitting; only within-task rework strikes and configured protocol-compliance preference affect runtime choices
 - Acting as a model gateway/proxy for non-Pi tools
 
 ---
@@ -309,7 +305,8 @@ Options in `~/.pi/agent/pi8/config.json`:
 ## 10. Development
 
 ```bash
-npm run check   # tsc --noEmit + vitest run
+npm run tsc
+timeout 120 npx vitest run
 ```
 
 Core modules:
@@ -317,5 +314,5 @@ Core modules:
 - `delegation.ts` — fallback loop: auth, retries, circuit breaker, timeouts
 - `provider.ts` — orchestrator: registry wait, entry phase and escalation, score, delegate; also owns `buildSubagentProviderAuthFilter`, the 3s per-provider credential probe
 - `index.ts` — hook wiring; runs the credential probe before role assignment
-- `adapters/` — benchmark data sources (currently only `artificial-analysis.ts`)
+- `adapters/` — benchmark data sources (`artificial-analysis.ts` joins API rows with `artificial-analysis-site.ts`)
 - `subagents.ts` — role injection (no probe of its own)

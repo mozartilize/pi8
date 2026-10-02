@@ -62,6 +62,7 @@ import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 import {
   appendSubagentGapSignal,
   appendSubagentSpend,
+  resetModelEventSession,
 } from './host/decisionlog.js';
 import { clearRouterStatus, renderRouterStatus } from './host/ui.js';
 import {
@@ -112,6 +113,21 @@ interface SubagentCallObservation {
  */
 function isRouterAutoActive(model: { provider?: string; id?: string } | undefined): boolean {
   return model?.provider === ROUTER_PROVIDER_ID && model?.id === AUTO_MODEL_ID;
+}
+
+/**
+ * Show the browser install command when `router/auto` becomes the session
+ * model and Chromium for Playwright is missing. Pi has no way to refuse the
+ * selection; the router's turns end with the same message until the install.
+ */
+function noticeMissingBrowser(ctx: ExtensionContext, runtime: RuntimeBindings): void {
+  void runtime.checkBrowser()
+    .then((browser) => {
+      if (!browser.ready) ctx.ui?.notify?.(browser.message, 'error');
+    })
+    .catch(() => {
+      // The check reports its own failures; a notice is advisory.
+    });
 }
 
 /** Matches Pi's own offline semantics (model-runtime.js: any non-empty value). */
@@ -241,6 +257,7 @@ async function handleSessionStart(
     session.addSessionBlacklistPatterns(loadConfig().blacklist ?? []);
     subagentCalls.clear();
     routingState.reset();
+    resetModelEventSession();
   } catch {
     // Session cleanup is best-effort and must not block startup.
   }
@@ -253,6 +270,9 @@ async function handleSessionStart(
   } catch {
     // Ephemeral / no session manager: logs fall back to the shared store.
   }
+  // A reassertion below selects router/auto through model_select, which
+  // gives the notice itself.
+  if (isRouterAutoActive(ctx?.model)) noticeMissingBrowser(ctx, runtime);
   try {
     registerAutoRouterProvider(pi, ctx, session, runtime);
     // Pi derives a resumed/restored session's "current model" from the
@@ -315,6 +335,7 @@ function handleModelSelect(
   ctx: ExtensionContext,
   refreshRoleModels: RoleModelRefresher,
   session: RouterSession,
+  runtime: RuntimeBindings,
 ): void {
   debugLog('lifecycle.model_select', {
     source: event.source,
@@ -338,6 +359,7 @@ function handleModelSelect(
   // generation-guarded: a slow probe sweep must never block the switch, and
   // a stale refresh cannot overwrite a newer one.
   if (event.model.id === AUTO_MODEL_ID) {
+    noticeMissingBrowser(ctx, runtime);
     // Pi applies the new model's thinking level during the switch; that is
     // not a user choice, so the next turn must not read it as one.
     session.setSyncedThinkingLevel(undefined);
@@ -629,8 +651,8 @@ export default async function autoModelRouterExtension(
   registerExecutionContractTool(pi, session);
   registerContextHandoffTool(pi, session);
   registerRoutingContextTool(pi, session);
-    registerCompleteWorkTool(pi, session);
-    registerReopenWorkTool(pi, session);
+  registerCompleteWorkTool(pi, session);
+  registerReopenWorkTool(pi, session);
   session.context.bindPersistence((event) => {
     if (typeof pi.appendEntry === 'function') pi.appendEntry(CONTEXT_ENTRY_TYPE, event);
   });
@@ -662,11 +684,13 @@ export default async function autoModelRouterExtension(
     });
   });
 
-  pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels, session));
+  pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels, session, runtime));
 
   // A missing hand_off_context or complete_work can still be declared, so
   // those reminders run here. agent_settled only records how the entry ended.
+  let completedSettlement = false;
   pi.on('agent_before_settle', (event, ctx) => {
+    completedSettlement = isRouterAutoActive(ctx?.model) && event.outcome === 'completed';
     if (!isRouterAutoActive(ctx?.model)) return;
     try {
       return settleReminder(event, session);
@@ -676,7 +700,9 @@ export default async function autoModelRouterExtension(
   });
 
   pi.on('agent_settled', () => {
-    logSettleOutcomes(session);
+    // An interrupted continuation is not evidence the model ignored its reminder.
+    if (completedSettlement) logSettleOutcomes(session);
+    completedSettlement = false;
     closeContextOnSettle(session);
     closeContractOnSettle(session);
   });

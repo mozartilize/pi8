@@ -4,13 +4,12 @@ import {
   pickEscalation,
   buildCandidate,
   blendedPricePer1M,
-  logCostUtilities,
+  logUtilities,
   buildRouterThinkingLevelMap,
   chooseThinkingLevel,
   clampEffortToFloor,
   levelFrom,
   resolveThinkingLevel,
-  relativeQualities,
   findSourceCandidate,
   isStrictlyStrongerCandidate,
   servedEffort,
@@ -25,7 +24,7 @@ const cheapModel = candidate('test/cheap', {
     registryId: 'test/cheap',
     benchSlug: 'cheap',
     active: true,
-    quality: { intelligence: 65, coding: 60 },
+    quality: { intelligence: 25, coding: 60, agenticCoding: 25, knowledge: 10, research: 0.4 },
     priceInputPer1M: 0.5,
     priceOutputPer1M: 2.0,
     outputSpeedTps: 50,
@@ -39,7 +38,7 @@ const midModel = candidate('test/mid', {
     registryId: 'test/mid',
     benchSlug: 'mid',
     active: true,
-    quality: { intelligence: 80, coding: 82 },
+    quality: { intelligence: 40, coding: 70, agenticCoding: 40, knowledge: 20, research: 0.5 },
     priceInputPer1M: 3.0,
     priceOutputPer1M: 15.0,
     outputSpeedTps: 80,
@@ -53,7 +52,7 @@ const expensiveModel = candidate('test/expensive', {
     registryId: 'test/expensive',
     benchSlug: 'expensive',
     active: true,
-    quality: { intelligence: 90, coding: 88, },
+    quality: { intelligence: 55, coding: 78, agenticCoding: 55, knowledge: 40, research: 0.6 },
     priceInputPer1M: 15.0,
     priceOutputPer1M: 75.0,
     outputSpeedTps: 40,
@@ -81,7 +80,7 @@ describe('scorer — effort-variant diagnostics (regression)', () => {
       bench: benchRow('test/model', {
         effort: 'low',
         benchSlug: 'model-low',
-        quality: { intelligence: 20 },
+        quality: { intelligence: 19 },
         priceInputPer1M: 0.1,
         priceOutputPer1M: 0.1,
       }),
@@ -102,25 +101,11 @@ describe('scorer — effort-variant diagnostics (regression)', () => {
     const decision = pickBest([frontier, low, max], 'gather');
     const diag = decision.candidateDiagnostics ?? [];
     const lowDiag = diag.find((d) => d.candidateKey === 'test/model:low');
-    expect(lowDiag?.excludedReason).toBe('below-task-floor');
+    expect(lowDiag?.excludedReason).toBe('below-intelligence-minimum');
     // The bare registryId must not appear as a diagnostic key.
     expect(diag.some((d) => d.candidateKey === 'test/model')).toBe(false);
   });
 
-  it('keys relative qualities per effort variant so variants do not collide', () => {
-    const a = candidate('test/m', {
-      bench: benchRow('test/m', { effort: 'low', quality: { intelligence: 40 } }),
-      effort: 'low',
-    });
-    const b = candidate('test/m', {
-      bench: benchRow('test/m', { effort: 'max', quality: { intelligence: 80 } }),
-      effort: 'max',
-    });
-    const rel = relativeQualities([a, b], 'gather');
-    expect(rel.get('test/m:low')?.taskRatio).toBeCloseTo(0.5, 5);
-    expect(rel.get('test/m:max')?.taskRatio).toBeCloseTo(1, 5);
-    expect(rel.size).toBe(2);
-  });
 });
 
 describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
@@ -267,7 +252,7 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
       effort: 'max',
     });
     const weak = candidate('test/b', {
-      bench: benchRow('test/b', { quality: { intelligence: 20 } }),
+      bench: benchRow('test/b', { quality: { intelligence: 19 } }),
       cost: { input: 0.1, output: 0.1 },
     });
     const decision = pickBest([medium, max, weak], 'gather');
@@ -1134,16 +1119,16 @@ describe('pickEscalation', () => {
 
 describe('scorer — log-cost normalization', () => {
   it('maps positive geometric steps evenly in log space', () => {
-    expect(logCostUtilities([1, 10, 100])).toEqual([1, 0.5, 0]);
+    expect(logUtilities([1, 10, 100])).toEqual([1, 0.5, 0]);
   });
 
   it('returns full utility when every known price is equal', () => {
-    expect(logCostUtilities([5, 5, undefined])).toEqual([1, 1, undefined]);
-    expect(logCostUtilities([0, 0])).toEqual([1, 1]);
+    expect(logUtilities([5, 5, undefined])).toEqual([1, 1, undefined]);
+    expect(logUtilities([0, 0])).toEqual([1, 1]);
   });
 
   it('makes free strictly best without sending zero through Math.log', () => {
-    const utilities = logCostUtilities([0, 1, 9]);
+    const utilities = logUtilities([0, 1, 9]);
     expect(utilities[0]).toBe(1);
     expect(utilities[1]).toBeGreaterThan(utilities[2]!);
     expect(utilities[1]).toBeLessThan(1);
@@ -1151,7 +1136,7 @@ describe('scorer — log-cost normalization', () => {
   });
 
   it('excludes unknown and invalid prices instead of treating them as free', () => {
-    expect(logCostUtilities([undefined, -1, Number.NaN, 2])).toEqual([
+    expect(logUtilities([undefined, -1, Number.NaN, 2])).toEqual([
       undefined,
       undefined,
       undefined,
@@ -1160,14 +1145,14 @@ describe('scorer — log-cost normalization', () => {
   });
 
   it('keeps distinct prices finite when their logarithms round equal', () => {
-    const utilities = logCostUtilities([999_999.999_999_997, 999_999.999_999_997_1]);
+    const utilities = logUtilities([999_999.999_999_997, 999_999.999_999_997_1]);
     expect(utilities.every((value) => value != null && Number.isFinite(value))).toBe(true);
     expect(utilities[0]!).toBeGreaterThanOrEqual(utilities[1]!);
   });
 
   it('is invariant to the price unit scale', () => {
-    const base = logCostUtilities([0, 1, 9, 81]);
-    const scaled = logCostUtilities([0, 1_000, 9_000, 81_000]);
+    const base = logUtilities([0, 1, 9, 81]);
+    const scaled = logUtilities([0, 1_000, 9_000, 81_000]);
     scaled.forEach((value, index) => expect(value).toBeCloseTo(base[index]!, 12));
   });
 });
@@ -1293,616 +1278,95 @@ describe('scorer — degraded mode (no benchmark data)', () => {
   });
 });
 
-describe('scorer — frontier eligibility', () => {
-  const frontier = candidate('test/frontier', {
-    bench: {
-      registryId: 'test/frontier',
-      benchSlug: 'frontier',
-      active: true,
-      quality: { intelligence: 54.8, coding: 74.9, agenticCoding: 44.9 },
-      outputSpeedTps: 20,
-      source: 'aa',
-    },
-    cost: { input: 10, output: 30 },
+describe('scorer — fixed capability minimums', () => {
+  const make = (id: string, quality: NonNullable<Candidate['bench']>['quality'], price = 1) =>
+    candidate(id, { bench: { ...benchRow(id), quality }, cost: { input: price, output: price } });
+  const reliable = { intelligence: 30, knowledge: 0, research: 0.35 };
+
+  it.each(['plan', 'review'] as const)('requires intelligence, Omniscience and Briefcase together for %s', (dimension) => {
+    const good = make('p/good', reliable, 20);
+    const luna = make('p/luna', { intelligence: 37, knowledge: -10, research: 0.38 }, 0);
+    const lacksResearch = make('p/no-research', { intelligence: 55, knowledge: 20 }, 0);
+    const weakResearch = make('p/weak-research', { intelligence: 55, knowledge: 20, research: 0.34 }, 0);
+    const weakIntelligence = make('p/weak-intelligence', { ...reliable, intelligence: 29 }, 0);
+    const result = pickBest([luna, weakResearch, weakIntelligence, lacksResearch, good], dimension);
+    expect(result.fallbackChain[0]).toBe('p/good');
+    expect(result.fallbackChain[1]).toBe('p/no-research');
+    expect(result.fallbackChain).toHaveLength(5);
+    expect(result.candidateDiagnostics).toEqual(expect.arrayContaining([
+      { candidateKey: 'p/luna', excludedReason: 'below-knowledge-minimum' },
+      { candidateKey: 'p/no-research', excludedReason: 'unknown-quality' },
+      { candidateKey: 'p/weak-research', excludedReason: 'below-research-minimum' },
+      { candidateKey: 'p/weak-intelligence', excludedReason: 'below-intelligence-minimum' },
+    ]));
   });
 
-  const freeFlash = candidate('test/deepseek-v4-flash-free', {
-    bench: {
-      registryId: 'test/deepseek-v4-flash-free',
-      benchSlug: 'deepseek-v4-flash-non-reasoning',
-      active: true,
-      quality: { intelligence: 28.7, coding: 69.1, agenticCoding: 45.7 },
-      outputSpeedTps: 106.83,
-      source: 'aa',
-    },
-    cost: { input: 0, output: 0 },
+  it.each(['plan', 'review'] as const)('does not let coding substitute for missing intelligence in %s', (dimension) => {
+    const good = make('p/good', reliable, 20);
+    const unknown = make('p/unknown', { coding: 100, knowledge: 0, research: 0.35 }, 0);
+    expect(pickBest([unknown, good], dimension).chosen).toBe('p/good');
   });
 
-  it('keeps a gather candidate below the intelligence frontier behind it', () => {
-    const decision = pickBest([freeFlash, frontier], 'gather', undefined, {
-      estimatedContextTokens: 100,
-    });
-    expect(decision.chosen).toBe('test/frontier');
-    expect(decision.fallbackChain.indexOf('test/frontier')).toBeLessThan(
-      decision.fallbackChain.indexOf('test/deepseek-v4-flash-free'),
-    );
+  it.each([
+    ['gather', { intelligence: 20 }, { intelligence: 19 }, 'below-intelligence-minimum'],
+    ['implement', { agenticCoding: 30 }, { agenticCoding: 29 }, 'below-agenticCoding-minimum'],
+  ] as const)('pins the inclusive %s minimum independently of the peer set', (dimension, pass, fail, reason) => {
+    const good = make('p/good', pass, 20);
+    const weak = make('p/weak', fail, 0);
+    const unknown = make('p/unknown', {}, 0);
+    const giant = make('p/giant', { intelligence: 100, agenticCoding: 100 }, 100);
+    for (const pool of [[weak, unknown, good], [giant, weak, unknown, good]]) {
+      const result = pickBest(pool, dimension);
+      expect(result.fallbackChain.indexOf('p/good')).toBeLessThan(result.fallbackChain.indexOf('p/unknown'));
+      expect(result.fallbackChain.indexOf('p/unknown')).toBeLessThan(result.fallbackChain.indexOf('p/weak'));
+      expect(result.candidateDiagnostics).toContainEqual({ candidateKey: 'p/weak', excludedReason: reason });
+    }
   });
 
-  it.each(['implement', 'review'] as const)(
-    'admits a cheaper specialist that clears the %s task axis and sanity floor',
-    (dimension) => {
-      const decision = pickBest([freeFlash, frontier], dimension, undefined, {
-        estimatedContextTokens: 100,
-      });
-      expect(decision.chosen).toBe('test/deepseek-v4-flash-free');
-      expect(decision.fallbackChain.indexOf('test/deepseek-v4-flash-free')).toBeLessThan(
-        decision.fallbackChain.indexOf('test/frontier'),
-      );
-    },
-  );
-
-  it('applies the floor to plan before economic weights', () => {
-    const planFrontier = candidate('test/plan-frontier', {
-      ...frontier,
-      registryId: 'test/plan-frontier',
-      bench: {
-        ...frontier.bench!,
-        registryId: 'test/plan-frontier',
-        quality: { intelligence: 35 },
-      },
-    });
-    const decision = pickBest(
-      [freeFlash, planFrontier],
-      'plan',
-      { quality: 0.5, cost: 0.5, speed: 0 },
-      { estimatedContextTokens: 100 },
-    );
-    expect(decision.chosen).toBe('test/plan-frontier');
-    expect(decision.fallbackChain.indexOf('test/plan-frontier')).toBeLessThan(
-      decision.fallbackChain.indexOf('test/deepseek-v4-flash-free'),
-    );
-  });
-
-  it('still lets a free model win lightweight work', () => {
-    const decision = pickBest([freeFlash, frontier], 'lightweight', undefined, {
-      estimatedContextTokens: 100,
-    });
-    expect(decision.chosen).toBe('test/deepseek-v4-flash-free');
-  });
-
-  it('keeps missing-quality candidates eligible while demoting known weak candidates', () => {
-    const unknown = candidate('test/unknown', {
-      bench: undefined,
-      cost: undefined,
-    });
-    const weakKnown = candidate('test/weak-known', {
-      ...freeFlash,
-      registryId: 'test/weak-known',
-      bench: { ...freeFlash.bench!, registryId: 'test/weak-known' },
-    });
-    const decision = pickBest([weakKnown, unknown, frontier], 'gather', undefined, {
-      estimatedContextTokens: 100,
-    });
-    expect(decision.fallbackChain.indexOf('test/unknown')).toBeLessThan(
-      decision.fallbackChain.indexOf('test/weak-known'),
-    );
-  });
-
-  it('keeps candidates with missing review quality eligible', () => {
-    const missingReviewQuality = candidate('test/missing-review-quality', {
-      bench: {
-        registryId: 'test/missing-review-quality',
-        benchSlug: 'missing-review-quality',
-        active: true,
-        quality: { intelligence: 28.7 },
-        source: 'aa',
-      },
-      cost: undefined,
-    });
-    const weakKnown = candidate('test/weak-review', {
-      bench: {
-        registryId: 'test/weak-review',
-        benchSlug: 'weak-review',
-        active: true,
-        quality: { intelligence: 28.7, coding: 50 },
-        source: 'aa',
-      },
-      cost: { input: 0, output: 0 },
-    });
-    const decision = pickBest(
-      [weakKnown, missingReviewQuality, frontier],
-      'review',
-      undefined,
-      { estimatedContextTokens: 100 },
-    );
-    expect(decision.fallbackChain.indexOf('test/missing-review-quality')).toBeLessThan(
-      decision.fallbackChain.indexOf('test/weak-review'),
-    );
-  });
-});
-
-describe('scorer — task-axis eligibility', () => {
-  const make = (
-    registryId: string,
-    quality: { intelligence?: number; coding?: number; agenticCoding?: number; reasoning?: number },
-    price: number,
-  ) => candidate(registryId, {
-    bench: benchRow(registryId, { quality, outputSpeedTps: 50 }),
-    cost: { input: price, output: price },
-  });
-
-  it('admits an implement specialist that clears task and sanity floors', () => {
-    const frontier = make('test/implement-frontier', { intelligence: 100, agenticCoding: 100 }, 20);
-    const specialist = make('test/implement-specialist', { intelligence: 50, agenticCoding: 90 }, 1);
-
-    expect(pickBest([frontier, specialist], 'implement').chosen).toBe('test/implement-specialist');
-  });
-
-  it('admits a review specialist that clears coding and sanity floors', () => {
-    const frontier = make('test/review-frontier', { intelligence: 100, agenticCoding: 100 }, 20);
-    const specialist = make('test/review-specialist', { intelligence: 50, coding: 90 }, 1);
-
-    expect(pickBest([frontier, specialist], 'review').chosen).toBe('test/review-specialist');
-  });
-
-  it.each(['implement', 'review'] as const)(
-    'demotes %s candidates below the general sanity floor',
-    (dimension) => {
-      const frontier = make(`test/${dimension}-frontier`, { intelligence: 100, coding: 100, agenticCoding: 100 }, 20);
-      const belowSanity = make(`test/${dimension}-below-sanity`, { intelligence: 44, coding: 90, agenticCoding: 90 }, 0);
-
-      const decision = pickBest([frontier, belowSanity], dimension);
-      expect(decision.fallbackChain.indexOf(frontier.registryId)).toBeLessThan(
-        decision.fallbackChain.indexOf(belowSanity.registryId),
-      );
-    },
-  );
-
-  it.each(['gather', 'plan'] as const)('does not apply a general sanity floor to %s', (dimension) => {
-    const frontier = make(`test/${dimension}-frontier`, { intelligence: 100, }, 20);
-    const lowerTask = make(`test/${dimension}-lower-task`, { intelligence: 50, }, 1);
-
-    expect(pickBest([frontier, lowerTask], dimension).chosen).toBe(frontier.registryId);
+  it('keeps coding-only implementations unknown, not weak', () => {
+    const codingOnly = make('p/coding', { coding: 78 }, 0);
+    const weak = make('p/weak', { agenticCoding: 5 }, 0);
+    const strong = make('p/strong', { agenticCoding: 30 }, 10);
+    expect(pickBest([weak, codingOnly, strong], 'implement').fallbackChain).toEqual(['p/strong', 'p/coding', 'p/weak']);
   });
 
   it('keeps lightweight work ungated', () => {
-    const frontier = make('test/lightweight-frontier', { intelligence: 100 }, 20);
-    const cheap = make('test/lightweight-cheap', { intelligence: 1 }, 0);
-
-    expect(pickBest([frontier, cheap], 'lightweight').chosen).toBe(cheap.registryId);
+    const cheap = make('p/cheap', {}, 0);
+    const expensive = make('p/expensive', { intelligence: 100 }, 20);
+    expect(pickBest([cheap, expensive], 'lightweight').chosen).toBe('p/cheap');
   });
 
-  it('plan eligibility uses only intelligence, never a second axis on a different scale', () => {
-    // Pins redundancy-report G3: quality axes from different benchmark
-    // sources (e.g. coding vs intelligence, or different raw scales) must
-    // never be blended inside one request-local ratio — a candidate measured
-    // only on the other source's scale would silently reset taskMaximum and
-    // could demote a frontier model measured only by intelligence. A
-    // weak-intelligence, strong-on-another-axis candidate must not outrank
-    // or gain eligibility from that other axis.
-    const frontier = make('test/plan-frontier', { intelligence: 100 }, 20);
-    const reasoningOutlier = make('test/plan-reasoning-outlier', { intelligence: 40, coding: 999 }, 1);
-
-    const decision = pickBest([frontier, reasoningOutlier], 'plan');
-    expect(decision.chosen).toBe('test/plan-frontier');
-    expect(decision.fallbackChain.indexOf('test/plan-frontier')).toBeLessThan(
-      decision.fallbackChain.indexOf('test/plan-reasoning-outlier'),
-    );
-  });
-});
-
-describe('scorer — promotion and tier ordering', () => {
-  const make = (
-    registryId: string,
-    quality: { intelligence?: number; coding?: number; agenticCoding?: number; reasoning?: number },
-    price: number | undefined,
-  ) => candidate(registryId, {
-    bench: benchRow(registryId, { quality, outputSpeedTps: 50 }),
-    cost: price == null ? undefined : { input: price, output: price },
+  it('does not let an estimated or measured weak model buy its way past a minimum', () => {
+    const good = make('p/good', { agenticCoding: 30 }, 100);
+    const weak = make('p/weak', { agenticCoding: 29 }, 0);
+    for (const estimated of [true, false]) {
+      weak.bench!.qualityEstimated = estimated;
+      expect(pickBest([weak, good], 'implement').chosen).toBe('p/good');
+    }
   });
 
-  it('promotes a cheap, Pareto-undominated candidate at the economy task floor', () => {
-    const frontier = make('test/promotion-frontier', { intelligence: 100 }, 20);
-    const promoted = make('test/promotion-candidate', { intelligence: 70 }, 1);
-
-    const decision = pickBest([frontier, promoted], 'gather');
-
-    expect(decision.chosen).toBe('test/promotion-candidate');
-    expect(decision.candidateDiagnostics).toContainEqual({
-      candidateKey: 'test/promotion-candidate',
-      excludedReason: 'promoted',
-    });
+  it('uses fixed reference strengths for a handoff, never the request maximum', () => {
+    const good = make('p/good', { intelligence: 30, knowledge: 0, research: 0.35 }, 1);
+    const weak = make('p/weak', { intelligence: 20, knowledge: 0, research: 0.35 }, 0);
+    const opts = { estimatedContextTokens: 100, handoffMinimum: 0.5 };
+    expect(pickBest([weak, good], 'plan', undefined, opts).chosen).toBe('p/good');
+    const giant = make('p/giant', { intelligence: 100, knowledge: 50, research: 1 }, 100);
+    expect(pickBest([giant, weak, good], 'plan', undefined, opts).chosen).toBe('p/good');
   });
 
-  it('prefers a measured candidate that clears a handoff minimum over a cheaper unknown one', () => {
-    const frontier = make('test/handoff-frontier', { intelligence: 100 }, 20);
-    const adequate = make('test/handoff-adequate', { intelligence: 66 }, 4);
-    const unknown = candidate('test/handoff-unknown', { bench: undefined, cost: { input: 0.1, output: 0.1 } });
-    const decision = pickBest([frontier, adequate, unknown], 'plan', undefined, {
-      estimatedContextTokens: 100,
-      handoffMinimum: 0.62,
-    });
-    expect(decision.chosen).toBe('test/handoff-adequate');
-    expect(decision.fallbackChain.indexOf('test/handoff-frontier'))
-      .toBeLessThan(decision.fallbackChain.indexOf('test/handoff-unknown'));
+  it.each(['plan', 'review', 'implement'] as const)('caps %s quality above a handoff minimum so cost decides among eligible peers', (dimension) => {
+    const cheap = make('p/cheap', { ...reliable, intelligence: 40, agenticCoding: 40, research: 0.4 }, 1);
+    const strong = make('p/strong', { intelligence: 55, knowledge: 40, research: 0.61, agenticCoding: 55 }, 100);
+    const result = pickBest([strong, cheap], dimension, undefined, { estimatedContextTokens: 100, handoffMinimum: 0.5 });
+    expect(result.chosen).toBe('p/cheap');
   });
 
-  it('gives no quality credit above a handoff minimum, so price decides among candidates that clear it', () => {
-    const strongest = make('test/handoff-strongest', { intelligence: 100 }, 3);
-    const cheaper = make('test/handoff-cheaper', { intelligence: 72 }, 1);
-    const below = make('test/handoff-below', { intelligence: 60 }, 0.1);
-    expect(pickBest([strongest, cheaper, below], 'plan').chosen).toBe('test/handoff-strongest');
-    const decision = pickBest([strongest, cheaper, below], 'plan', undefined, {
-      estimatedContextTokens: 100,
-      handoffMinimum: 0.7,
-    });
-    expect(decision.chosen).toBe('test/handoff-cheaper');
-    expect(decision.fallbackChain).toContain('test/handoff-below');
-  });
-
-  it('caps review quality at the handoff minimum on the axis that gates review', () => {
-    // A model without a coding score ranks on intelligence, which must not
-    // raise the ceiling the coding-gated minimum sets.
-    const stronger = make('test/review-stronger', { intelligence: 70, coding: 70 }, 1.2);
-    const adequate = make('test/review-adequate', { intelligence: 60, coding: 60 }, 1);
-    const pricey = make('test/review-pricey', { intelligence: 57, coding: 57 }, 20);
-    const broad = make('test/review-broad', { intelligence: 100, coding: undefined, agenticCoding: undefined }, 20);
-    const decision = pickBest([stronger, adequate, pricey, broad], 'review', undefined, {
-      estimatedContextTokens: 100,
-      handoffMinimum: 0.8,
-    });
-    expect(decision.chosen).toBe('test/review-adequate');
-  });
-
-  it('never promotes a candidate below an execution contract minimum', () => {
-    const frontier = make('test/promotion-frontier', { intelligence: 100, agenticCoding: 100 }, 20);
-    const cheap = make('test/promotion-candidate', { intelligence: 75, agenticCoding: 75 }, 1);
-    expect(pickBest([frontier, cheap], 'implement').chosen).toBe('test/promotion-candidate');
-    const decision = pickBest([frontier, cheap], 'implement', undefined, {
-      estimatedContextTokens: 100,
-      handoffMinimum: 0.80,
-    });
-    expect(decision.chosen).toBe('test/promotion-frontier');
-    expect(decision.candidateDiagnostics).not.toContainEqual(
-      expect.objectContaining({ candidateKey: 'test/promotion-candidate', excludedReason: 'promoted' }),
-    );
-  });
-
-  it('does not promote a candidate whose quality was estimated rather than measured', () => {
-    // Same shape as the promotion case above, but the cheap candidate's
-    // quality is an estimate. Promotion relaxes the capability floor on
-    // economic grounds; stacking that on inferred capability would let a
-    // variant win on evidence that was never observed.
-    const frontier = make('test/estimated-frontier', { intelligence: 100 }, 20);
-    const estimated = candidate('test/estimated-candidate', {
-      bench: benchRow('test/estimated-candidate', {
-        quality: { intelligence: 70 },
-        outputSpeedTps: 50,
-        qualityEstimated: true,
-      }),
-      cost: { input: 1, output: 1 },
-    });
-
-    const decision = pickBest([frontier, estimated], 'gather');
-
-    expect(decision.chosen).toBe('test/estimated-frontier');
-    expect(decision.candidateDiagnostics).toContainEqual({
-      candidateKey: 'test/estimated-candidate',
-      excludedReason: 'below-task-floor',
-    });
-  });
-
-  it('does not promote below-economy candidates, dominated candidates, or plan work', () => {
-    const frontier = make('test/no-promotion-frontier', { intelligence: 100 }, 20);
-    const belowEconomy = make('test/no-promotion-below-economy', { intelligence: 69 }, 0);
-    const dominated = make('test/no-promotion-dominated', { intelligence: 70 }, 1);
-    const cheaperPeer = make('test/no-promotion-cheaper-peer', { intelligence: 70 }, 0.5);
-
-    expect(pickBest([frontier, belowEconomy], 'gather').chosen).toBe(frontier.registryId);
-    expect(pickBest([frontier, dominated, cheaperPeer], 'gather').chosen).toBe(cheaperPeer.registryId);
-    const planFrontier = make('test/no-promotion-plan-frontier', { intelligence: 100, }, 20);
-    const planCandidate = make('test/no-promotion-plan-candidate', { intelligence: 70, }, 1);
-    expect(pickBest([planFrontier, planCandidate], 'plan').chosen).toBe(planFrontier.registryId);
-  });
-
-  it('does not promote a near-frontier candidate without a fourfold price advantage', () => {
-    const frontier = make('test/price-frontier', { intelligence: 100 }, 20);
-    const insufficientDiscount = make('test/price-insufficient-discount', { intelligence: 70 }, 6);
-
-    expect(pickBest([frontier, insufficientDiscount], 'gather').chosen).toBe(frontier.registryId);
-  });
-
-  it.each(['implement', 'review'] as const)(
-    'does not promote %s candidates below the sanity floor',
-    (dimension) => {
-      const frontier = make(`test/${dimension}-promotion-frontier`, {
-        intelligence: 100,
-        coding: 100,
-        agenticCoding: 100,
-      }, 20);
-      const belowSanity = make(`test/${dimension}-promotion-below-sanity`, {
-        intelligence: 44,
-        coding: 90,
-        agenticCoding: 90,
-      }, 1);
-
-      const decision = pickBest([frontier, belowSanity], dimension);
-      expect(decision.chosen).toBe(frontier.registryId);
-      expect(decision.candidateDiagnostics).toContainEqual({
-        candidateKey: belowSanity.registryId,
-        excludedReason: 'below-sanity-floor',
-      });
-    },
-  );
-
-  it('orders known eligible candidates before unknown quality and measured weak candidates', () => {
-    const frontier = make('test/tier-frontier', { intelligence: 100 }, 20);
-    const unknown = candidate('test/tier-unknown', {
-      bench: undefined,
-      cost: { input: 0, output: 0 },
-    });
-    const weak = make('test/tier-weak', { intelligence: 60 }, 0);
-
-    const decision = pickBest([weak, unknown, frontier], 'gather');
-
-    expect(decision.fallbackChain).toEqual([
-      'test/tier-frontier',
-      'test/tier-unknown',
-      'test/tier-weak',
-    ]);
-    expect(decision.candidateDiagnostics).toEqual(expect.arrayContaining([
-      { candidateKey: 'test/tier-unknown', excludedReason: 'unknown-quality' },
-      { candidateKey: 'test/tier-weak', excludedReason: 'below-task-floor' },
-    ]));
-  });
-  it('promotes every below-floor candidate that clears the economy ratio at a 4x price discount, never on plan', () => {
-    // Relational shape of the promotion set — not a snapshot of live-store
-    // measurements: a tier-2 candidate earns tier 0 when its task ratio
-    // clears ECONOMY_QUALITY_RATIO (0.7), its sanity is satisfied, and it is
-    // at least PROMOTION_PRICE_DIVISOR (4x) cheaper than the cheapest
-    // eligible candidate. Ratios are expressed directly so a benchmark
-    // re-sync cannot silently change what this test asserts.
-    const frontier = make('test/promotion-set-frontier', { intelligence: 100, agenticCoding: 100 }, 8);
-    const cheapImplement = make('test/promotion-set-cheap-implement', { intelligence: 100, agenticCoding: 84 }, 0.25);
-    const cheapGather = make('test/promotion-set-cheap-gather', { intelligence: 72 }, 1);
-    const cheaperGather = make('test/promotion-set-cheaper-gather', { intelligence: 74 }, 2);
-
-    // implement: task ratio 0.84 stays below the 0.85 task floor (tier 2) but
-    // clears the 0.7 economy floor; the 4x discount and satisfied sanity
-    // (intelligence 100) earn the relaxed judgment.
-    const implement = pickBest([frontier, cheapImplement], 'implement');
-    expect(implement.chosen).toBe(cheapImplement.registryId);
-    expect(implement.candidateDiagnostics).toContainEqual({
-      candidateKey: cheapImplement.registryId,
-      excludedReason: 'promoted',
-    });
-
-    // gather: every candidate clearing 0.7 at a 4x discount is promoted —
-    // each is independently undominated (neither cheap model undercuts the
-    // other on both task axis and price).
-    const gather = pickBest([frontier, cheapGather, cheaperGather], 'gather');
-    expect(gather.candidateDiagnostics).toEqual(expect.arrayContaining([
-      { candidateKey: cheapGather.registryId, excludedReason: 'promoted' },
-      { candidateKey: cheaperGather.registryId, excludedReason: 'promoted' },
-    ]));
-
-    // plan: the promotion loop never runs for plan — the frontier stays the
-    // pick and no candidate is relaxed upward.
-    const plan = pickBest([frontier, cheapGather, cheaperGather], 'plan');
-    expect(plan.chosen).toBe(frontier.registryId);
-    expect(plan.candidateDiagnostics).not.toContainEqual({
-      candidateKey: cheapGather.registryId,
-      excludedReason: 'promoted',
-    });
-  });
-
-  it('promotes every provider copy of a promotable benchmark row', () => {
-    // Two candidates at different providers that share the same benchSlug
-    // (same measured model).  The Pareto check must treat them as substitutes,
-    // not competitors: promoting only the cheapest copy pushes the identical
-    // model on the other provider below unknown-quality candidates in the
-    // fallback chain, defeating the purpose of a cheap-and-capable finding.
-    const sharedSlug = 'shared-model';
-    const frontier = candidate('test/frontier', {
-      bench: { registryId: 'test/frontier', benchSlug: 'frontier', active: true,
-        quality: { intelligence: 100, agenticCoding: 100 }, source: 'test' },
-      cost: { input: 20, output: 20 },
-    });
-    const freeCopy = candidate('cheap/model-free', {
-      bench: { registryId: 'cheap/model-free', benchSlug: sharedSlug, active: true,
-        quality: { intelligence: 50, agenticCoding: 70 }, source: 'test' },
-      cost: { input: 0, output: 0 },
-    });
-    const paidCopy = candidate('other/model', {
-      bench: { registryId: 'other/model', benchSlug: sharedSlug, active: true,
-        quality: { intelligence: 50, agenticCoding: 70 }, source: 'test' },
-      cost: { input: 1, output: 1 },
-    });
-
-    const decision = pickBest([frontier, freeCopy, paidCopy], 'implement');
-    const reasons = new Map(
-      (decision.candidateDiagnostics ?? []).map((d) => [d.candidateKey, d.excludedReason]),
-    );
-    expect(reasons.get('cheap/model-free')).toBe('promoted');
-    expect(reasons.get('other/model')).toBe('promoted');
-  });
-
-  it('still Pareto-dominates a genuinely different cheaper model', () => {
-    // When the cheaper peer has a DIFFERENT benchSlug it is genuinely
-    // different hardware, not just a different provider — it should still
-    // dominate.  (Contract test: the substitute exemption must not weaken
-    // ordinary Pareto dominance.)
-    const frontier = candidate('test/frontier', {
-      bench: { registryId: 'test/frontier', benchSlug: 'frontier', active: true,
-        quality: { intelligence: 100, agenticCoding: 100 }, source: 'test' },
-      cost: { input: 20, output: 20 },
-    });
-    const dominated = candidate('test/dominated', {
-      bench: { registryId: 'test/dominated', benchSlug: 'dominated', active: true,
-        quality: { intelligence: 70, agenticCoding: 70 }, source: 'test' },
-      cost: { input: 1, output: 1 },
-    });
-    const cheaperPeer = candidate('test/cheaper-peer', {
-      bench: { registryId: 'test/cheaper-peer', benchSlug: 'cheaper-peer', active: true,
-        quality: { intelligence: 70, agenticCoding: 70 }, source: 'test' },
-      cost: { input: 0.5, output: 0.5 },
-    });
-
-    const decision = pickBest([frontier, dominated, cheaperPeer], 'implement');
-    // The dominated model should NOT be promoted — the cheaper-peer reaches
-    // the same task axis at a lower price and has a different benchSlug, so
-    // it is a genuine dominator.
-    const reasons = new Map(
-      (decision.candidateDiagnostics ?? []).map((d) => [d.candidateKey, d.excludedReason]),
-    );
-    expect(reasons.get('test/cheaper-peer')).toBe('promoted');
-    // dominated is NOT promoted: cheaperPeer dominates it at same task axis
-    // with a lower price.
-    expect(reasons.get('test/dominated')).not.toBe('promoted');
-  });
-
-  it('pins the general-sanity boundary for implement at a fixed task axis', () => {
-    // Isolates the SANITY_QUALITY_RATIO (0.45) boundary: both candidates share
-    // the same task axis (0.86, above the 0.85 task floor), so the only
-    // difference is intelligence crossing the sanity floor. Direct ratios,
-    // not transcribed live-store measurements.
-    const frontier = make('test/sanity-boundary-frontier', { intelligence: 100, agenticCoding: 100 }, 8);
-    const clears = make('test/sanity-boundary-clears', { intelligence: 46, agenticCoding: 86 }, 0.25);
-    const fails = make('test/sanity-boundary-fails', { intelligence: 44, agenticCoding: 86 }, 0.25);
-
-    const clearsDecision = pickBest([frontier, clears], 'implement');
-    expect(clearsDecision.chosen).toBe(clears.registryId);
-    expect(clearsDecision.candidateDiagnostics ?? []).not.toContainEqual({
-      candidateKey: clears.registryId,
-      excludedReason: 'below-sanity-floor',
-    });
-
-    expect(pickBest([frontier, fails], 'implement').candidateDiagnostics).toContainEqual({
-      candidateKey: fails.registryId,
-      excludedReason: 'below-sanity-floor',
-    });
-  });
-
-  it('does not move a measured weak review candidate ahead of unknown-quality fallbacks', () => {
-    const unknown = candidate('test/review-unknown', {
-      bench: undefined,
-      cost: { input: 0, output: 0 },
-    });
-    const missingReviewAxis = candidate('test/review-missing-axis', {
-      bench: {
-        registryId: 'test/review-missing-axis',
-        benchSlug: 'review-missing-axis',
-        active: true,
-        quality: { intelligence: 100 },
-        source: 'test',
-      },
-      cost: { input: 1, output: 1 },
-    });
-    const belowSanity = make('test/review-below-sanity', { intelligence: 44, coding: 100 }, 2);
-
-    const decision = pickBest([unknown, missingReviewAxis, belowSanity], 'review');
-
-    expect(decision.fallbackChain.indexOf('test/review-unknown')).toBeLessThan(
-      decision.fallbackChain.indexOf('test/review-below-sanity'),
-    );
-    expect(decision.fallbackChain.indexOf('test/review-missing-axis')).toBeLessThan(
-      decision.fallbackChain.indexOf('test/review-below-sanity'),
-    );
-    expect(decision.chosen).not.toBe('test/review-below-sanity');
-  });
-});
-
-describe('scorer — relative quality (economy calculation core)', () => {
-  const q = (
-    registryId: string,
-    quality: { intelligence?: number; coding?: number; agenticCoding?: number; reasoning?: number },
-    overrides: Partial<Candidate> = {},
-  ) =>
-    candidate(registryId, {
-      bench: benchRow(registryId, { quality, outputSpeedTps: 50 }),
-      cost: { input: 1, output: 1 },
-      ...overrides,
-    });
-
-  it('normalizes each axis against the request-local maximum', () => {
-    const strong = q('test/strong', { intelligence: 100, agenticCoding: 100 });
-    const lopsided = q('test/lopsided', { intelligence: 50, agenticCoding: 100 });
-
-    const relative = relativeQualities([strong, lopsided], 'implement');
-
-    expect(relative.get('test/strong')).toEqual({
-      taskRatio: 1,
-      generalRatio: 1,
-      bottleneck: 1,
-      mean: 1,
-    });
-    expect(relative.get('test/lopsided')).toEqual({
-      taskRatio: 1,
-      generalRatio: 0.5,
-      bottleneck: 0.5,
-      mean: 0.75,
-    });
-  });
-
-  it('is request-local: the same candidate rescales against a different peer set', () => {
-    const mid = q('test/mid-axis', { intelligence: 50, agenticCoding: 50 });
-    const strong = q('test/strong', { intelligence: 100, agenticCoding: 100 });
-
-    expect(relativeQualities([mid], 'implement').get('test/mid-axis')).toEqual({
-      taskRatio: 1,
-      generalRatio: 1,
-      bottleneck: 1,
-      mean: 1,
-    });
-    expect(relativeQualities([mid, strong], 'implement').get('test/mid-axis')).toEqual({
-      taskRatio: 0.5,
-      generalRatio: 0.5,
-      bottleneck: 0.5,
-      mean: 0.5,
-    });
-  });
-
-  it('retains task evidence when a hard-dimension sanity axis is missing', () => {
-    const known = q('test/known', { intelligence: 80, agenticCoding: 80 });
-    const missingGeneral = candidate('test/missing-general', {
-      bench: benchRow('test/missing-general', {
-        quality: { agenticCoding: 80, intelligence: undefined },
-      }),
-    });
-    const noBench = candidate('test/no-bench', { bench: undefined });
-
-    const relative = relativeQualities([known, missingGeneral, noBench], 'implement');
-
-    expect(relative.has('test/known')).toBe(true);
-    expect(relative.get('test/missing-general')).toMatchObject({ taskRatio: 1 });
-    expect(relative.get('test/missing-general')?.generalRatio).toBeUndefined();
-    expect(relative.has('test/no-bench')).toBe(false);
-  });
-
-  it('projects lightweight onto the intelligence axis so the policy owns the floor', () => {
-    const a = q('test/a-light', { intelligence: 40 });
-    const b = q('test/b-light', { intelligence: 80 });
-
-    const relative = relativeQualities([a, b], 'lightweight');
-
-    expect(relative.get('test/a-light')).toEqual({ taskRatio: 0.5, bottleneck: 0.5, mean: 0.5 });
-    expect(relative.get('test/b-light')).toEqual({ taskRatio: 1, bottleneck: 1, mean: 1 });
-  });
-
-  it('breaks weighted-score ties by bottleneck before registry id', () => {
-    // Equal agenticCoding → equal qualityComponent; equal price/speed → equal
-    // cost/speed components. Only the general axis differs, so the weighted
-    // score ties and the relative-quality bottleneck must decide.
-    const weakGeneral = q('test/aaa-weak-general', { intelligence: 90, agenticCoding: 100 });
-    const strongGeneral = q('test/zzz-strong-general', { intelligence: 100, agenticCoding: 100 });
-
-    const decision = pickBest([weakGeneral, strongGeneral], 'implement', undefined, {
-      estimatedContextTokens: 100,
-    });
-
-    expect(decision.fallbackChain.indexOf('test/zzz-strong-general')).toBeLessThan(
-      decision.fallbackChain.indexOf('test/aaa-weak-general'),
-    );
+  it('orders weighted-score ties deterministically by measured quality and identity', () => {
+    const a = make('p/a', { intelligence: 30 });
+    const b = make('p/b', { intelligence: 40 });
+    const weights = { quality: 0, cost: 0, speed: 0 };
+    expect(pickBest([b, a], 'gather', weights).fallbackChain).toEqual(['p/a', 'p/b']);
+    expect(pickBest([a, b], 'gather', weights).fallbackChain).toEqual(['p/a', 'p/b']);
   });
 });
 
@@ -1918,12 +1382,12 @@ describe('scorer — AA-Omniscience reliability floor', () => {
 
   const reliable = make(
     'test/reliable',
-    { intelligence: 100, coding: 100, agenticCoding: 100, knowledge: 15.3 },
+    { intelligence: 100, coding: 100, agenticCoding: 100, knowledge: 15.3, research: 0.61 },
     8,
   );
   const unreliable = make(
     'test/unreliable',
-    { intelligence: 99, coding: 99, agenticCoding: 99, knowledge: -11.2 },
+    { intelligence: 99, coding: 99, agenticCoding: 99, knowledge: -11.2, research: 0.61 },
     0.01,
   );
 
@@ -1935,7 +1399,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
       expect(decision.chosen).toBe(reliable.registryId);
       expect(decision.candidateDiagnostics).toContainEqual({
         candidateKey: unreliable.registryId,
-        excludedReason: 'below-knowledge-floor',
+        excludedReason: 'below-knowledge-minimum',
       });
       expect(decision.fallbackChain).toContain(unreliable.registryId);
     },
@@ -1954,7 +1418,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
     );
     expect(decision.candidateDiagnostics).toEqual(expect.arrayContaining([
       { candidateKey: unknown.registryId, excludedReason: 'unknown-quality' },
-      { candidateKey: unreliable.registryId, excludedReason: 'below-knowledge-floor' },
+      { candidateKey: unreliable.registryId, excludedReason: 'below-knowledge-minimum' },
     ]));
   });
 
@@ -1966,7 +1430,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
     expect(decision.chosen).toBe(reliable.registryId);
     expect(decision.candidateDiagnostics).toContainEqual({
       candidateKey: unreliable.registryId,
-      excludedReason: 'below-knowledge-floor',
+      excludedReason: 'below-knowledge-minimum',
     });
   });
 
@@ -1974,7 +1438,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
     const negativeOnly = candidate('test/negative-only', {
       bench: {
         ...benchRow('test/negative-only'),
-        quality: { knowledge: -11.2 },
+        quality: { knowledge: -11.2, research: 0.61 },
       },
       cost: { input: 0.001, output: 0.001 },
     });
@@ -1982,7 +1446,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
 
     expect(decision.candidateDiagnostics).toContainEqual({
       candidateKey: negativeOnly.registryId,
-      excludedReason: 'below-knowledge-floor',
+      excludedReason: 'below-knowledge-minimum',
     });
   });
 
@@ -1991,7 +1455,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
       effort: 'low',
       reasoning: true,
       thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', max: 'max' },
-      knowledgeByEffort: { medium: -11.2 },
+      exactQualityByEffort: { medium: { knowledge: -11.2, research: 0.61 } },
       bench: benchRow('test/effort-bypass', {
         effort: 'low',
         benchSlug: 'effort-bypass-low',
@@ -2006,7 +1470,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
     expect(decision.chosen).toBe(reliable.registryId);
     expect(decision.candidateDiagnostics).toContainEqual({
       candidateKey: 'test/effort-bypass:low',
-      excludedReason: 'below-knowledge-floor',
+      excludedReason: 'below-knowledge-minimum',
     });
   });
 
@@ -2017,7 +1481,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
       thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', max: 'max' },
       bench: benchRow('test/effort-unknown-medium', {
         effort: 'low',
-        quality: { intelligence: 99, knowledge: 15.3 },
+        quality: { intelligence: 99, knowledge: 15.3, research: 0.61 },
       }),
       cost: { input: 0.001, output: 0.001 },
     });
@@ -2043,7 +1507,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
 
     expect(decision.candidateDiagnostics).toContainEqual({
       candidateKey: fixed.registryId,
-      excludedReason: 'below-knowledge-floor',
+      excludedReason: 'below-knowledge-minimum',
     });
   });
 
@@ -2053,7 +1517,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
     expect(decision.chosen).toBe(unreliable.registryId);
     expect(decision.candidateDiagnostics ?? []).not.toContainEqual({
       candidateKey: unreliable.registryId,
-      excludedReason: 'below-knowledge-floor',
+      excludedReason: 'below-knowledge-minimum',
     });
   });
 });

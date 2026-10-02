@@ -205,7 +205,7 @@ describe('resolveSlugAll — identity is preserved', () => {
       { provider: 'github-copilot', id: 'claude-fable-5' },
       { provider: 'opencode', id: 'claude-fable-5' },
     ];
-    // benchlm names Claude Fable 5 with the version digit dropped; the alias
+    // A source that names Claude Fable 5 without the version digit; the alias
     // target is arbitrary because the expansion binds all provider copies.
     const all = resolveSlugAll('claude-fable', reg, {
       'claude-fable': 'opencode/claude-fable-5',
@@ -230,18 +230,6 @@ describe('resolveSlugAll — identity is preserved', () => {
     // single provider pin and does not drag the .free copy in with the .pro
     // score.
     expect(all).toEqual(['opencode-go/mimo-v2.5', 'opencode-go/mimo-v2.5-pro']);
-  });
-
-  it('matches max-effort run variants to the base model across providers', () => {
-    const reg = [
-      { provider: 'deepseek', id: 'deepseek-v4-pro' },
-      { provider: 'opencode', id: 'deepseek-v4-pro' },
-      { provider: 'opencode', id: 'deepseek-v4-pro-lite' },
-    ];
-    expect(resolveSlugAll('deepseek-v4-pro-max', reg)).toEqual([
-      'deepseek/deepseek-v4-pro',
-      'opencode/deepseek-v4-pro',
-    ]);
   });
 
   it('strips :free suffix from openrouter-style model ids', () => {

@@ -206,20 +206,20 @@ describe('formatDecisionDetail', () => {
     expect(lines).toMatch(/no benchmark quality data/i);
   });
 
-  it('renders demoted and promoted candidates with their reasons', () => {
+  it('renders capability diagnostics with their reasons', () => {
     const lines = formatDecisionDetail(
       {
         ...decision,
         candidateDiagnostics: [
-          { candidateKey: 'cheap/model', excludedReason: 'promoted' },
-          { candidateKey: 'weak/model', excludedReason: 'below-task-floor' },
+          { candidateKey: 'cheap/model', excludedReason: 'unknown-quality' },
+          { candidateKey: 'weak/model', excludedReason: 'below-intelligence-minimum' },
         ],
       },
       { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
     ).join('\n');
 
-    expect(lines).toContain('promoted:   cheap/model (much cheaper and strong enough)');
-    expect(lines).toContain('demoted:    weak/model (too weak for this task type)');
+    expect(lines).toContain('demoted:    cheap/model (no benchmark data for this task)');
+    expect(lines).toContain('demoted:    weak/model (intelligence score below the minimum for this task type)');
   });
 
   it('adds advisory detail for context pressure', () => {

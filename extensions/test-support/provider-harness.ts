@@ -23,6 +23,7 @@ import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-a
 
 import type { BenchModel, RoutingDecision } from '../types.js';
 import type { ServedInfo } from '../host/ui.js';
+import type { PlaywrightCheck } from '../adapters/artificial-analysis-site.js';
 import { RouterSession, RuntimeBindings } from '../serve/router-session-state.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { registryModel } from './router-fixtures.js';
@@ -140,6 +141,8 @@ export interface ProviderHarnessOptions {
   models?: Array<ReturnType<typeof registryModel>>;
   /** Omit the router's own registry entry (auth-filter describes). */
   includeRouterModel?: boolean;
+  /** Browser check result; Chromium is ready unless a test says otherwise. */
+  browser?: PlaywrightCheck;
   /** Per-provider credential results; missing providers default to authed. */
   credentials?: Record<string, ResolvedRequestAuth | Error>;
   /** Config JSON written to `<dir>/config.json` before registration. */
@@ -235,7 +238,8 @@ export async function setupProviderTest(options: ProviderHarnessOptions): Promis
     ...options.pi,
   } as unknown as ExtensionAPI;
 
-  const runtime = new RuntimeBindings();
+  const browser = options.browser ?? { ready: true };
+  const runtime = new RuntimeBindings(async () => browser);
   const currentSession = defaultRouterSession;
 
   registerAutoRouterProvider(

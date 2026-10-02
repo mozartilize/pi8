@@ -1,15 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 
 import { syncBenchmarks, syncSummary } from './sync.js';
 import { loadStore, saveStore, emptyStore } from './store.js';
-import * as adapters from '../adapters/index.js';
+import * as aa from '../adapters/artificial-analysis.js';
 import type { ExtensionContext } from '../types.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 describe('syncBenchmarks', () => {
   let tmpDir: string;
@@ -42,40 +39,38 @@ describe('syncBenchmarks', () => {
     expect(join(homedir(), '.pi/agent/pi8')).not.toBe(tmpDir);
   });
 
-  it('reports a clear error when no source is usable', async () => {
-    // AA needs a key and the request excludes the keyless benchlm source.
-    const results = await syncBenchmarks(fakeCtx, { sources: ['artificial-analysis'] });
+  it('reports a clear error when no API key is configured', async () => {
+    vi.stubEnv('ARTIFICIAL_ANALYSIS_API_KEY', '');
+    const results = await syncBenchmarks(fakeCtx);
     expect(results[0].ok).toBe(false);
     expect(results[0].error).toMatch(/artificialanalysis/i);
   });
 
-  it('syncs the keyless benchlm source into the store', async () => {
-    const fixtureHtml = readFileSync(join(__dirname, '../../fixtures/benchlm-aaomniscience.html'), 'utf8');
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(fixtureHtml, { status: 200 })));
-    const ctx = {
-      modelRegistry: {
-        getAvailable: () => [
-          { provider: 'claude-bridge', id: 'claude-fable-5' },
-          { provider: 'github-copilot', id: 'claude-fable-5' },
-          { provider: 'opencode', id: 'claude-fable-5' },
-        ],
+  it('stores the joined API and page rows', async () => {
+    vi.spyOn(aa, 'fetchAndNormalize').mockResolvedValue([
+      {
+        benchSlug: 'claude-opus-4-6',
+        effort: 'max',
+        quality: { intelligence: 52, knowledge: 30, research: 0.5 },
+        qualityEstimated: true,
+        timePerTaskSeconds: 120,
+        source: 'artificial-analysis',
       },
-    } as unknown as ExtensionContext;
-
-    const results = await syncBenchmarks(ctx, { sources: ['benchlm'] });
-    expect(results[0]).toMatchObject({ source: 'benchlm', ok: true, matched: 3 });
-    const store = loadStore();
-    const fable = store?.models.filter((m) => m.benchSlug === 'claude-fable');
-    expect(fable?.map((m) => m.registryId).sort()).toEqual([
-      'claude-bridge/claude-fable-5',
-      'github-copilot/claude-fable-5',
-      'opencode/claude-fable-5',
     ]);
-    expect(fable?.every((m) => m.active && m.quality.knowledge === 40.2)).toBe(true);
-    expect(store?.syncedAt).toBeGreaterThan(0);
+    const results = await syncBenchmarks(fakeCtx, { apiKey: 'key' });
+    expect(results).toEqual([
+      expect.objectContaining({ source: 'artificial-analysis', ok: true, matched: 1 }),
+    ]);
+    const [row] = loadStore()!.models;
+    expect(row).toMatchObject({
+      registryId: 'anthropic/claude-opus-4-6-20260115',
+      quality: { intelligence: 52, knowledge: 30, research: 0.5 },
+      qualityEstimated: true,
+      timePerTaskSeconds: 120,
+    });
   });
 
-  it('preserves the previous store when a selected adapter fails', async () => {
+  it('keeps the previous store when the fetch fails', async () => {
     const previousStore = {
       ...emptyStore(),
       syncedAt: Date.now(),
@@ -87,44 +82,16 @@ describe('syncBenchmarks', () => {
           quality: { intelligence: 90 },
           source: 'previous',
         },
-        {
-          registryId: 'deepseek/deepseek-chat-v3',
-          benchSlug: 'previous-2',
-          active: true,
-          quality: { intelligence: 85 },
-          source: 'previous',
-        },
       ],
     };
     saveStore(previousStore);
+    vi.spyOn(aa, 'fetchAndNormalize').mockRejectedValue(new Error('Chromium for Playwright is not installed'));
 
-    const getEnabledAdaptersSpy = vi.spyOn(adapters, 'getEnabledAdapters').mockReturnValue([
-      {
-        name: 'successful' as any,
-        isAvailable: () => true,
-        fetch: async () => [
-          { benchSlug: 'claude-opus-4-6', quality: { intelligence: 92 }, source: 'successful' },
-        ],
-      },
-      {
-        name: 'failed' as any,
-        isAvailable: () => true,
-        fetch: async () => {
-          throw new Error('adapter outage');
-        },
-      },
-    ]);
+    const results = await syncBenchmarks(fakeCtx, { apiKey: 'key' });
 
-    const results = await syncBenchmarks(fakeCtx, { sources: ['successful', 'failed'] as any });
-
-    expect(results[0]).toMatchObject({ source: 'successful', ok: true });
-    expect(results[1]).toMatchObject({ source: 'failed', ok: false });
-    expect(results[2].source).toBe('store');
-    expect(results[2].ok).toBe(false);
-    expect(results[2].error).toMatch(/keeping (the )?previous/i);
+    expect(results[0]).toMatchObject({ source: 'artificial-analysis', ok: false, error: expect.stringMatching(/Chromium/) });
+    expect(results[1]).toMatchObject({ source: 'store', ok: false, error: expect.stringMatching(/keeping the previous 1/) });
     expect(loadStore()).toEqual(previousStore);
-
-    getEnabledAdaptersSpy.mockRestore();
   });
 
   it('keeps existing data when a sync matches nothing', async () => {
@@ -142,28 +109,15 @@ describe('syncBenchmarks', () => {
       ],
     };
     saveStore(previousStore);
-
-    // Every adapter succeeds, so the partial-sync branch is skipped: this
-    // exercises the zero-match guard specifically.
-    const spy = vi.spyOn(adapters, 'getEnabledAdapters').mockReturnValue([
-      {
-        name: 'unmatchable' as any,
-        isAvailable: () => true,
-        fetch: async () => [
-          { benchSlug: 'no-such-model-anywhere', quality: { intelligence: 99 }, source: 'unmatchable' },
-        ],
-      },
+    vi.spyOn(aa, 'fetchAndNormalize').mockResolvedValue([
+      { benchSlug: 'no-such-model-anywhere', quality: { intelligence: 99 }, source: 'artificial-analysis' },
     ]);
 
-    const results = await syncBenchmarks(fakeCtx, { sources: ['unmatchable'] as any });
+    const results = await syncBenchmarks(fakeCtx, { apiKey: 'key' });
 
-    expect(results[0]).toMatchObject({ source: 'unmatchable', ok: true, matched: 0 });
-    expect(results[1].source).toBe('store');
-    expect(results[1].ok).toBe(false);
-    expect(results[1].error).toMatch(/matched 0 registry models/i);
+    expect(results[0]).toMatchObject({ source: 'artificial-analysis', ok: true, matched: 0 });
+    expect(results[1]).toMatchObject({ source: 'store', ok: false, error: expect.stringMatching(/matched 0 registry models/i) });
     expect(loadStore()).toEqual(previousStore);
-
-    spy.mockRestore();
   });
 
   it('summary renders each result', () => {

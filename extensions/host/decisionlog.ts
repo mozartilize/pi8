@@ -1,16 +1,12 @@
 /**
- * Decision log (M4 substrate).
- *
- * Append-only JSONL of every routing decision. Cheap to write (one line per
- * turn) and the foundation for v2 learning (implicit session signals feeding a
- * Thompson-sampling bandit, per the LiteLLM adaptive_router findings).
- *
- * For now it captures *what actually happened*, including real fallbacks, so
- * `/router-status` can show routing history and we can later mine correction /
- * fallback patterns. The router NEVER reads this back in v1.
+ * Session sidecars preserve decision diagnostics. Global model preferences
+ * read the separate counts-only event log, never transcript text.
  */
+import { appendModelEvent, modelEntryId, type ModelEvent } from '../bench/model-history.js';
+import { loadConfig } from '../config.js';
 import { existsSync, mkdirSync, appendFileSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import type {
   ContractOutcome,
@@ -37,6 +33,8 @@ export const DECISION_LOG_SCHEMA_VERSION = 4;
 export const DECISION_SIDECAR_SUFFIX = 'router-decisions.jsonl';
 
 let decisionLogBaseOverride: string | undefined;
+const ephemeralLogScope = randomUUID();
+let ephemeralSessionGeneration = 0;
 
 /** Test/runtime seam; undefined preserves the normal user-scope path. */
 export function setDecisionLogBase(base?: string): void {
@@ -195,6 +193,7 @@ export function appendExecutionContractSignal(
   storageBase?: string,
 ): void {
   try {
+    if (signal.action === 'reminder') recordProtocolEvent(signal.intentKey, signal.served, 'reminder', 'contract', storageBase);
     const path = decisionLogPath(storageBase);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -253,6 +252,7 @@ export function appendContextHandoffSignal(
   storageBase?: string,
 ): void {
   try {
+    if (signal.action === 'reminder') recordProtocolEvent(signal.intentKey, signal.served, 'reminder', 'context', storageBase);
     const path = decisionLogPath(storageBase);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -311,8 +311,27 @@ export interface WorkLifecycleSignal {
 export type SettleReminderKind = 'context' | 'completion';
 
 /** Append a work lifecycle transition. Best-effort; never throws into the tool path. */
+/** Opaque namespace for counts; the log path itself never leaves this process. */
+/** Ephemeral sessions share a log file, not an entry namespace. */
+export function resetModelEventSession(): void { ephemeralSessionGeneration++; }
+export function modelEventSession(): string {
+  const scope = decisionLogBaseOverride || sessionSidecarPath(DECISION_SIDECAR_SUFFIX)
+    ? decisionLogPath() : `${ephemeralLogScope}:${ephemeralSessionGeneration}`;
+  return modelEntryId(scope, 'session');
+}
+export function modelEventEntry(intentKey: string): string { return modelEntryId(modelEventSession(), intentKey); }
+
+function recordProtocolEvent(intentKey: string, model: string, kind: ModelEvent['kind'], reminder: string, storageBase?: string): void {
+  if (loadConfig().reputation === false) return;
+  appendModelEvent({ kind, model, entry: modelEventEntry(intentKey), session: modelEventSession(), reminder }, storageBase);
+}
+
 export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBase?: string): void {
   try {
+    const kind = signal.action === 'settle-reminder' ? 'reminder'
+      : signal.action === 'settle-followed' ? 'followed'
+        : signal.action === 'settle-ignored' ? 'ignored' : undefined;
+    if (kind && signal.reminder) recordProtocolEvent(signal.intentKey, signal.served, kind, signal.reminder, storageBase);
     const path = decisionLogPath(storageBase);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

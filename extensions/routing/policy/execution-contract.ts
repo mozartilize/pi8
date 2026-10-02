@@ -7,7 +7,7 @@
  * contract is worth: the rubric and the router's own measurements set the
  * implement-axis minimum an executor must clear, the plan's shape sets the
  * lowest band that minimum may fall in, and a requirement at the frontier
- * ratio keeps the submitting model.
+ * requirement keeps the submitting model.
  *
  * A contract ends in one of three ways:
  * - broken: its executor edits an undeclared file, re-plans, or struggles; the
@@ -37,7 +37,7 @@ import type {
   MeasuredFeatures,
 } from '../../types.js';
 import { parseCandidateKey } from '../score/scorer.js';
-import { floorForBand, type WorkPhaseState } from './work-phase.js';
+import { bandRequirement, type WorkPhaseState } from './work-phase.js';
 import {
   BASE_REQUIREMENT,
   bandForRequirement,
@@ -87,7 +87,7 @@ export interface ExecutionContract {
   band: CapabilityBand;
   /** False when only the submitter executes the plan. */
   release: boolean;
-  /** Implement-axis ratio the executor must reach; undefined when not released. */
+  /** Implementation requirement the executor must meet; undefined when not released. */
   minimum?: number;
   /**
    * A released plan still releases the incumbent minimums: no invocation has
@@ -168,13 +168,13 @@ function maxBand(a: CapabilityBand, b: CapabilityBand): CapabilityBand {
 }
 
 /**
- * Lowest implement-axis ratio a band admits; undefined keeps the submitter.
- * The band table has no economy minimum; a contract still needs one, or the
- * scorer would fall back to its frontier ratio.
+ * Lowest implementation requirement a band admits; undefined keeps the
+ * submitter. The band table has no economy minimum; a contract still needs
+ * one, or the scorer would apply the full capability minimums.
  */
 export function executionMinimum(band: CapabilityBand): number | undefined {
   if (band === 'frontier') return undefined;
-  return band === 'economy' ? BASE_REQUIREMENT : floorForBand(band);
+  return band === 'economy' ? BASE_REQUIREMENT : bandRequirement(band);
 }
 
 /** Provider invocations an executor gets before the plan counts as executed. */

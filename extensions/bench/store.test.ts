@@ -49,9 +49,6 @@ describe('store', () => {
       'gpt-5-1-codex': 'opencode/gpt-5.1-codex-max',
       'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
       'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
-      'claude-fable': 'opencode/claude-fable-5',
-      'kimi-3': 'opencode/kimi-k3',
-      'kimi-2-6': 'opencode/kimi-k2.6',
       'claude-4-sonnet': 'opencode/claude-sonnet-4',
     });
   });
@@ -68,9 +65,6 @@ describe('store', () => {
       'gpt-5-1-codex': 'custom/gpt-5.1-codex',
       'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
       'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
-      'claude-fable': 'opencode/claude-fable-5',
-      'kimi-3': 'opencode/kimi-k3',
-      'kimi-2-6': 'opencode/kimi-k2.6',
       'claude-4-sonnet': 'opencode/claude-sonnet-4',
     });
   });
@@ -235,7 +229,7 @@ describe('store', () => {
         active: true,
         benchSlug: 'y',
         quality: { knowledge: 31.3 },
-        source: 'benchlm',
+        source: 'other',
       },
     ] as any;
     const merged = mergeBenchRows(rows);

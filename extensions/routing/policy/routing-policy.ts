@@ -48,6 +48,7 @@ export interface RoutingPolicyInput {
    * onto a recently served level is priced below a cold one.
    */
   warmPrefixTokens?: ReadonlyMap<string, number>;
+  protocolPenalties?: ReadonlyMap<string, number>;
   needsVision: boolean;
   incumbentRegistryId?: string;
   /**
@@ -66,7 +67,7 @@ export interface RoutingPolicyInput {
    */
   sameIntentAsLast?: boolean;
   /**
-   * Task-axis ratio an accepted handoff requires of the next phase's model
+   * Requirement an accepted handoff sets for the next phase's model
    * (see `ScoreOpts.handoffMinimum`). For an execution contract the caller has
    * already removed excluded executor models from `candidates`.
    */
@@ -168,8 +169,9 @@ function applyTrajectoryRepick(
  * per-invocation rescore must not fall below the incumbent's known
  * capability at the routed dimension. Select the first already-scored chain
  * candidate that meets that minimum, which may be a cheaper model. An
- * incumbent filtered out for context or vision never enters the chain, so
- * this cannot bypass a safety filter or capability tier.
+ * incumbent filtered out for context or vision never enters the chain.
+ * Missing measurements do not erase its measured capability minimum. A
+ * measured minimum failure cannot displace a candidate without such a failure.
  */
 function applyIncumbentModelFloor(
   decision: RoutingDecision,
@@ -188,10 +190,13 @@ function applyIncumbentModelFloor(
     const incumbentQuality = capabilityForDimension(incumbentCandidate, dimension);
     const chosenQuality = capabilityForDimension(chosenCandidate, dimension);
     if (incumbentQuality != null && chosenQuality != null && incumbentQuality > chosenQuality) {
+      const reasons = new Map((decision.candidateDiagnostics ?? []).map(d => [d.candidateKey, d.excludedReason]));
+      const tier = (key: string): number => reasons.get(key) === 'unknown-quality' ? 1 : reasons.get(key) ? 2 : 0;
+      const allowedTier = Math.max(1, tier(decision.chosen));
       const target = decision.fallbackChain.find((key) => {
         const candidate = candidates.find((c) => candidateKey(c) === key);
         const quality = candidate && capabilityForDimension(candidate, dimension);
-        return quality != null && quality >= incumbentQuality;
+        return tier(key) <= allowedTier && quality != null && quality >= incumbentQuality;
       });
       if (!target) return;
       const chain = decision.fallbackChain.slice();
@@ -322,6 +327,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     isSubagentSpawn: false,
     switchMargin: config.switchMargin,
     ...(warmPrefixTokens != null ? { warmPrefixTokens } : {}),
+    protocolPenalties: input.protocolPenalties,
   };
   const pickOpts: ScoreOpts = handoffMinimum != null
     ? { ...baseOpts, handoffMinimum }

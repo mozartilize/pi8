@@ -1513,7 +1513,7 @@ describe('mutation observation hooks', () => {
     const toolResult = handlers.get('tool_result')!;
     const content = [{ type: 'text', text: 'edited' }];
     defaultRouterSession.intent.commitWorkPhaseState(entryState());
-    const scoredReason = { score: 0.8, quality: 0.5, cost: 0.2, speed: 0.1, costBasis: 'per-1m' as const, upgraded: false };
+    const scoredReason = { score: 0.8, quality: 0.5, cost: 0.2, speed: 0.1, costBasis: 'per-1m' as const };
     defaultRouterSession.setLastDecision({
       ...routingDecision(['test/impl']), dimension: 'implement' as const, intentKey: 'intent-a',
       scoredReason: { ...scoredReason, details: [{ kind: 'incumbent-model' as const }] },
@@ -1588,7 +1588,7 @@ describe('mutation observation hooks', () => {
 
     planEntry({}, {
       dimension: 'implement',
-      scoredReason: { score: 0.8, quality: 0.5, cost: 0.2, speed: 0.1, costBasis: 'per-1m', upgraded: false, details: [{ kind: 'incumbent-model' }] },
+      scoredReason: { score: 0.8, quality: 0.5, cost: 0.2, speed: 0.1, costBasis: 'per-1m', details: [{ kind: 'incumbent-model' }] },
     });
     expect(await edit('e4')).toBeUndefined();
 
