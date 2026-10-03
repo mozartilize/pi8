@@ -15,7 +15,6 @@ import type { Dimension } from '../../types.js';
 
 const base = (prompt: string, over: Partial<PlanBase> & { deliverable?: Dimension } = {}): PlanBase => ({
   ledger: emptyLedger(),
-  branchState: 'native-empty',
   sourceEntryId: 'e9',
   prompt,
   anchors: extractPromptAnchors(prompt),
@@ -47,14 +46,6 @@ describe('planFromChoice (cold entry)', () => {
     const plan = planFromChoice(base('refactor the cache\nmore detail'), cold, newWork, { topicTitle: '' })!;
     const item = fold(emptyLedger(), plan.events).items.get(plan.workItemId!)!;
     expect(item).toMatchObject({ title: 'refactor the cache', topic: { title: 'refactor the cache' }, openContext: [] });
-  });
-
-  it('writes one migration boundary first on a legacy branch', () => {
-    const plan = planFromChoice(base('continue with step 2', {
-      branchState: 'legacy-uninitialized', legacyHeadEntryId: 'e8',
-    }), cold, newWork, { topicTitle: 'Cache', workItemTitle: 'Refactor cache' })!;
-    expect(plan.events[0]).toEqual({ v: 1, op: 'migration-init', legacyHeadEntryId: 'e8', mode: 'lazy', sourceEntryId: 'e9' });
-    expect(plan.events.filter((e) => e.op === 'migration-init')).toHaveLength(1);
   });
 });
 
@@ -173,10 +164,10 @@ describe('planFromLegacy (earlier work)', () => {
       { topicId: 'NEW_TOPIC', workItemId: 'l_1' }, 'e2', titles)).toBeUndefined();
   });
 
-  it('writes the migration boundary first on the entry that starts tracking', () => {
-    const plan = planFromLegacy(base('back to the auth work', { branchState: 'legacy-uninitialized', legacyHeadEntryId: 'e3' }),
+  it('creates and activates the legacy work, with no boundary record', () => {
+    const plan = planFromLegacy(base('back to the auth work'),
       buildCatalog(emptyLedger(), []), { topicId: 'NEW_TOPIC', workItemId: 'l_1' }, 'e2', titles)!;
-    expect(plan.events.map((e) => e.op)).toEqual(['migration-init', 'work-create', 'activate']);
+    expect(plan.events.map((e) => e.op)).toEqual(['work-create', 'activate']);
   });
 
   it('returns nothing when the topic choice does not hold', () => {

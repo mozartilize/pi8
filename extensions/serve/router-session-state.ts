@@ -93,9 +93,9 @@ export class RoutingContextState {
   /** Lines of anchored files read so far, until they cover the whole file; runtime-only. */
   private readCoverage = new Map<string, ReadCoverage>();
   /**
-   * The index of the history before tracking started, for the boundary it
-   * was built at. The path to an entry never changes, so it holds across
-   * `/tree` and is dropped only on reset.
+   * The index of the requests the router did not serve, for the last such
+   * request it covers. The path to an entry never changes, so it holds
+   * across `/tree` and is dropped only on reset.
    */
   private legacyIndex: LegacyIndex | undefined;
 
@@ -117,11 +117,6 @@ export class RoutingContextState {
     this.branchState = classifyBranch(branch, this.ledger);
     this.entrySource = undefined;
     this.readCoverage.clear();
-  }
-
-  /** Re-read an untracked branch's state; a tracked branch keeps its ledger's. */
-  refreshBranchState(branch: readonly unknown[] | undefined): void {
-    if (this.ledger.events === 0) this.branchState = classifyBranch(branch, this.ledger);
   }
 
   /**
@@ -224,7 +219,7 @@ export class RoutingContextState {
     this.ledger = rest;
   }
 
-  /** The index for `headEntryId`, built at most once per boundary. */
+  /** The index for `headEntryId`, built at most once per head. */
   legacyIndexFor(headEntryId: string, build: () => LegacyIndex): LegacyIndex {
     if (this.legacyIndex?.headEntryId !== headEntryId) this.legacyIndex = build();
     return this.legacyIndex;

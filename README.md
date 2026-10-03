@@ -75,6 +75,8 @@ Uncertainty always routes up. Missing data or a missing declaration never makes 
 
 pi8 has no effect on a session that uses a concrete model instead of `router/auto`.
 
+When you return to `router/auto` after requests to another model, the router does not continue the active work item: the next request collects context and chooses again. The requests you sent to the other model can be found again as earlier work.
+
 ### Capability and model preferences
 
 Fixed minimums do not change when the request's candidate pool changes:

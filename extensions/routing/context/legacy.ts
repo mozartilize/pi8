@@ -1,20 +1,21 @@
 /**
- * Work from before tracking started on a branch, found again when a later
- * entry returns to it.
+ * Work the router did not serve, found again when a later entry returns to
+ * it: history from before tracking started on a branch, and requests sent
+ * under another model since.
  *
- * The branch up to the migration boundary is the only record of that work,
- * and nothing from it enters the ledger until an entry is placed on it. Its
- * genuine user requests are indexed on demand and searched after exact anchor
- * matches, lexically: a hit only offers a short excerpt to choose
- * from, never a routing fact. Pi's tree is append-only, so the path to a given
- * boundary never changes and its index never goes stale.
+ * The branch is the only record of that work, and nothing from it enters
+ * the ledger until an entry is placed on it. Its genuine user requests that
+ * the router did not serve are indexed on demand and searched after exact
+ * anchor matches, lexically: a hit only offers a short excerpt to choose
+ * from, never a routing fact. Pi's tree is append-only, so the path to a
+ * given entry never changes and its index never goes stale.
  */
 import MiniSearch from 'minisearch';
 import type { Message } from '@earendil-works/pi-ai';
 import { redactSecrets } from '../policy/secret-redact.js';
 import { classifyProvenance } from './message-provenance.js';
 import { extractPromptAnchors, type PromptAnchor } from './anchors.js';
-import { messageText } from './persistence.js';
+import { messageText, requestRouting } from './persistence.js';
 
 export const LEGACY_LIMITS = {
   /** Raw lexical hits read per search. */
@@ -32,7 +33,7 @@ export const LEGACY_LIMITS = {
 
 interface LegacyRequest {
   entryId: string;
-  /** Position among the branch's genuine user requests before the boundary. */
+  /** Position among all genuine user requests on the path, served or not, so a gap measures real distance. */
   ordinal: number;
   text: string;
   /** Path and issue anchors, as `kind\0value`. */
@@ -48,13 +49,13 @@ interface IndexedRequest {
 }
 
 export interface LegacyIndex {
-  /** The last entry before tracking started; the index covers the path to it. */
+  /** The last request the router did not serve; the index covers the path to it. */
   readonly headEntryId: string;
   readonly requests: readonly LegacyRequest[];
   readonly search: MiniSearch<IndexedRequest>;
 }
 
-/** A pre-tracking request offered as a catalog choice. */
+/** A request the router did not serve, offered as a catalog choice. */
 export interface LegacyCandidate {
   /** `l_<rank>`: listed in one prompt, never stored. */
   id: string;
@@ -90,17 +91,21 @@ interface BranchMessage {
 }
 
 /**
- * Index the genuine user requests on `branch`, the path from the root to
- * `headEntryId`. Summaries, synthetic injections, and user-role messages Pi
- * did not stamp are skipped; a reply contributes only its text, never tool
- * calls, results, or thinking.
+ * Index the genuine user requests the router did not serve on `branch`, the
+ * path from the root to `headEntryId`. Summaries, synthetic injections, and
+ * user-role messages Pi did not stamp are skipped; a reply contributes only
+ * its text, never tool calls, results, or thinking.
  */
 export function buildLegacyIndex(
   branch: readonly unknown[] | undefined,
   headEntryId: string,
   opts: { cwd?: string; syntheticPrefixes?: readonly string[] } = {},
 ): LegacyIndex {
-  const found: Array<{ entryId: string; text: string; reply?: string }> = [];
+  const { unrouted } = requestRouting(branch);
+  const found: Array<{ entryId: string; ordinal: number; text: string; reply?: string }> = [];
+  // The request the next reply belongs to; undefined after a served request.
+  let open: (typeof found)[number] | undefined;
+  let ordinal = 0;
   for (const raw of branch ?? []) {
     const entry = raw as BranchMessage | null;
     if (!entry || entry.type !== 'message' || typeof entry.id !== 'string' || !entry.message) continue;
@@ -109,23 +114,25 @@ export function buildLegacyIndex(
       if (typeof timestamp !== 'number') continue;
       if (classifyProvenance(entry.message as Message, opts.syntheticPrefixes) !== 'user') continue;
       const text = messageText(entry.message.content).trim();
-      if (text) found.push({ entryId: entry.id, text });
+      if (!text) continue;
+      open = unrouted.has(entry.id) ? { entryId: entry.id, ordinal, text } : undefined;
+      if (open) found.push(open);
+      ordinal++;
     } else if (role === 'assistant') {
-      const last = found.at(-1);
-      if (!last || last.reply != null) continue;
+      if (!open || open.reply != null) continue;
       const reply = messageText(entry.message.content).trim();
-      if (reply) last.reply = reply;
+      if (reply) open.reply = reply;
     }
   }
 
-  const requests: LegacyRequest[] = found.map((request, ordinal) => {
+  const requests: LegacyRequest[] = found.map((request) => {
     const text = request.text.slice(0, LEGACY_LIMITS.indexedChars);
     const anchors = extractPromptAnchors(text, opts.cwd ? { cwd: opts.cwd } : {});
     const excerpt = [
       `User: ${clip(request.text, LEGACY_LIMITS.requestChars)}`,
       ...(request.reply ? [`Assistant: ${clip(request.reply, LEGACY_LIMITS.replyChars)}`] : []),
     ].join('\n');
-    return { entryId: request.entryId, ordinal, text, anchorKeys: new Set(anchors.map(anchorKey)), excerpt };
+    return { entryId: request.entryId, ordinal: request.ordinal, text, anchorKeys: new Set(anchors.map(anchorKey)), excerpt };
   });
 
   const search = new MiniSearch<IndexedRequest>({
@@ -133,8 +140,8 @@ export function buildLegacyIndex(
     tokenize,
     searchOptions: { boost: { anchors: 3 }, prefix: true, fuzzy: 0.2 },
   });
-  search.addAll(requests.map((request) => ({
-    id: request.ordinal,
+  search.addAll(requests.map((request, position) => ({
+    id: position,
     text: request.text,
     anchors: [...request.anchorKeys].map((key) => key.split('\0')[1]).join(' '),
   })));
@@ -150,7 +157,7 @@ function names(request: LegacyRequest, anchor: PromptAnchor): boolean {
 }
 
 /**
- * The pre-tracking requests an entry may return to, best first: requests that
+ * The unserved requests an entry may return to, best first: requests that
  * name one of the prompt's anchors exactly (newest first), then lexical hits.
  * A hit near a better one is the same stretch of work and is dropped. A
  * request in `listed` already has its work item in the catalog, so it is not

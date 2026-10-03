@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   CONTEXT_ENTRY_TYPE,
+  SELECTION_ENTRY_TYPE,
   branchEvents,
   branchHoldsEntry,
   classifyBranch,
-  classifyBranchBefore,
+  lastUnroutedRequest,
   latestGenuineUserEntry,
   readBranch,
   rebuildLedger,
+  requestRouting,
 } from './persistence.js';
 import { SessionTree } from '../../test-support/session-tree.js';
 import { activateEvent, createEvent, workItem } from '../../test-support/context-fixtures.js';
@@ -221,13 +223,77 @@ describe('classifyBranch', () => {
     expect(state()).toBe('legacy-uninitialized');
   });
 
-  it('reads the branch before the entry being routed, not the entry itself', () => {
+  it('keeps a branch tracked through a stored migration record, which keeps no state', () => {
     const t = new SessionTree();
-    const first = t.user('refactor the cache');
-    expect(classifyBranchBefore(t.getBranch(), first, rebuildLedger(t.getBranch()))).toBe('native-empty');
-    t.assistant('done');
-    const second = t.user('add eviction metrics');
-    expect(classifyBranchBefore(t.getBranch(), second, rebuildLedger(t.getBranch()))).toBe('legacy-uninitialized');
+    const u = t.user('hi');
+    t.event({ v: 1, op: 'migration-init', legacyHeadEntryId: 'e0', mode: 'lazy', sourceEntryId: u });
+    expect(rebuildLedger(t.getBranch())).toMatchObject({ events: 1 });
+    expect('migration' in rebuildLedger(t.getBranch())).toBe(false);
+  });
+});
+
+describe('requestRouting', () => {
+  it('marks every request sent under another model, in each stretch, and none sent to router/auto', () => {
+    const t = new SessionTree();
+    const legacy = t.user('first, before any model was recorded');
+    t.modelChange('router', 'auto');
+    const routed = t.user('served by the router');
+    t.modelChange('openai', 'gpt-5');
+    const concrete1 = t.user('sent to gpt-5');
+    t.modelChange('router', 'auto');
+    t.user('served again');
+    t.modelChange('openai', 'gpt-5');
+    const concrete2 = t.user('sent to gpt-5 again');
+    t.modelChange('router', 'auto');
+    const current = t.user('current entry');
+    const { unrouted, routedAtEnd } = requestRouting(t.getBranch());
+    expect([...unrouted]).toEqual([legacy, concrete1, concrete2]);
+    expect(unrouted.has(routed)).toBe(false);
+    expect(routedAtEnd).toBe(true);
+    expect(lastUnroutedRequest(t.getBranch(), current)).toBe(concrete2);
+    expect(lastUnroutedRequest(t.getBranch(), concrete2)).toBe(concrete1);
+  });
+
+  it('reads the router selection record like model_change', () => {
+    const t = new SessionTree();
+    t.modelChange('router', 'auto');
+    t.custom(SELECTION_ENTRY_TYPE, { provider: 'openai', modelId: 'gpt-5' });
+    const concrete = t.user('resumed with --model gpt-5');
+    t.custom(SELECTION_ENTRY_TYPE, { provider: 'router', modelId: 'auto' });
+    const routed = t.user('resumed with --model router/auto');
+    const { unrouted } = requestRouting(t.getBranch());
+    expect(unrouted.has(concrete)).toBe(true);
+    expect(unrouted.has(routed)).toBe(false);
+  });
+
+  it('counts a request as served when a router event names it or follows it with no record', () => {
+    const t = new SessionTree();
+    // History without any selection record: the router's own events show it served.
+    const first = t.user('first routed entry');
+    t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'incumbent', served: { registryId: 'a/opus', thinkingLevel: 'high' }, dimension: 'implement', sourceEntryId: first });
+    const answer = t.user('answered without a ledger write');
+    const { unrouted, routedAtEnd } = requestRouting(t.getBranch());
+    expect(unrouted.has(first)).toBe(false);
+    expect(unrouted.has(answer)).toBe(false);
+    expect(routedAtEnd).toBe(true);
+  });
+
+  it('stops continuing the active item after a request the router did not serve', () => {
+    const t = new SessionTree();
+    t.modelChange('router', 'auto');
+    const u1 = t.user('build the exporter');
+    t.event(createEvent(workItem('w_1', 't_1'), u1));
+    t.event(activateEvent('w_1', u1));
+    // A switch with no request sent under it keeps the active item.
+    t.modelChange('openai', 'gpt-5');
+    t.modelChange('router', 'auto');
+    expect(rebuildLedger(t.getBranch()).activeWorkItemId).toBe('w_1');
+    t.modelChange('openai', 'gpt-5');
+    t.user('something else entirely');
+    t.modelChange('router', 'auto');
+    const ledger = rebuildLedger(t.getBranch());
+    expect(ledger.activeWorkItemId).toBeUndefined();
+    expect(ledger.items.get('w_1')?.status).toBe('active');
   });
 });
 

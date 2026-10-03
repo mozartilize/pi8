@@ -239,10 +239,9 @@ describe('work-context resolution through the provider', () => {
     expect(harness.session.context.getLedger().items.size).toBe(1);
   });
 
-  it('persists one migration boundary when an entry first selects work on an existing branch', async () => {
+  it('starts tracking an existing branch with its first work, and writes no boundary record', async () => {
     tree.user('refactor the cache layer', 1);
     tree.assistant('step 1 done');
-    const legacyHead = tree.getLeafId();
     await setup();
     harness.session.context.restore(tree.getBranch());
     expect(harness.session.context.getBranchState()).toBe('legacy-uninitialized');
@@ -250,34 +249,39 @@ describe('work-context resolution through the provider', () => {
     expect(ledgerEvents()).toEqual([]);
     expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Cache',
       workItemTitle: 'Cache refactor' })).accepted).toBe(true);
-    const migrations = branchEvents(tree.getBranch()).filter((event) => event.op === 'migration-init');
-    expect(migrations).toEqual([expect.objectContaining({ legacyHeadEntryId: legacyHead })]);
+    expect(ledgerEvents().slice(0, 2)).toEqual(['work-create', 'activate']);
     expect(harness.session.context.getBranchState()).toBe('tracked');
   });
 
-  it('detects pre-tracking history when a concrete model switches to router/auto', async () => {
-    tree.modelChange('openai', 'gpt-5');
-    tree.user('refactor the cache layer', 1);
-    tree.assistant('step 1 done');
+  it('offers requests sent under another model after tracking began, and stops continuing the active item', async () => {
     tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
-    const legacyHead = tree.getLeafId();
     await setup();
-    expect(harness.session.context.getBranchState()).toBe('native-empty');
-    await entry('continue with step 2 of the cache refactor');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Cache',
-      workItemTitle: 'Cache refactor' })).accepted).toBe(true);
-    expect(ledgerEvents()[0]).toBe('migration-init');
-    expect(harness.session.context.getLedger().migration?.legacyHeadEntryId).toBe(legacyHead);
+    const item = await createItem();
+    expect(harness.session.context.getLedger().activeWorkItemId).toBe(item.id);
+    tree.modelChange('openai', 'gpt-5');
+    const concrete = tree.user('implement the auth login flow with JWT sessions', Date.now());
+    tree.assistant('Login issues a JWT.');
+    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
+    // model_select rebuilds the ledger from the branch on the switch back.
+    harness.session.context.restore(tree.getBranch());
+    expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
+    expect(harness.session.context.getLedger().items.get(item.id)?.status).toBe('active');
+    await entry('back to the auth login work');
+    const legacy = harness.session.getWorkPhaseState()?.pendingIdentity?.legacy ?? [];
+    expect(legacy.map((choice) => choice.excerpt).join('\n')).toContain('implement the auth login flow');
+    expect((await handoff({ ...READY, workItemId: legacy[0]!.id, topicTitle: 'Auth' })).accepted).toBe(true);
+    const recovered = [...harness.session.context.getLedger().items.values()].find((i) => i.legacySourceEntryId === concrete);
+    expect(recovered).toBeDefined();
+    expect(ledgerEvents()).not.toContain('migration-init');
   });
 
-  it('does not migrate a router/auto branch whose lightweight entry selected no work', async () => {
+  it('never offers a request the router served as earlier work', async () => {
     tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
     await setup();
-    await entry('hi');
+    await entry('implement the auth login flow');
     expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'lightweight', workItemId: 'NONE' })).accepted).toBe(true);
-    expect(ledgerEvents()).toEqual([]);
-    await createItem();
-    expect(ledgerEvents()).not.toContain('migration-init');
+    await entry('back to the auth login flow');
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity?.legacy ?? []).toEqual([]);
   });
 
   it('offers scrubbed earlier requests, never tool output, as bounded legacy choices', async () => {
@@ -302,7 +306,7 @@ describe('work-context resolution through the provider', () => {
     expect((await handoff({ ...READY, workItemId: choices[0]!.id, topicTitle: 'Auth' })).accepted).toBe(true);
     const item = [...harness.session.context.getLedger().items.values()][0]!;
     expect(item).toMatchObject({ legacySourceEntryId: seed, grounding: [] });
-    expect(ledgerEvents().slice(0, 3)).toEqual(['migration-init', 'work-create', 'activate']);
+    expect(ledgerEvents().slice(0, 2)).toEqual(['work-create', 'activate']);
     const raw = readFileSync(join(temp.path, 'decisions.jsonl'), 'utf8');
     expect(raw).not.toContain(seed);
     expect(raw).not.toContain('LOGIN_FILE_CONTENTS');

@@ -145,6 +145,7 @@ export type FlatContextEvent =
   | { v: 1; op: 'work-update'; workItemId: WorkItemId; patch: WorkItemPatch; sourceEntryId: string }
   | { v: 1; op: 'work-close'; workItemId: WorkItemId; status: 'done' | 'superseded'; sourceEntryId: string }
   | { v: 1; op: 'activate'; workItemId: WorkItemId; sourceEntryId: string }
+  /** Read only: stored commits can hold it; the router does not write it. */
   | { v: 1; op: 'migration-init'; legacyHeadEntryId: string; mode: 'lazy'; sourceEntryId: string }
   | { v: 1; op: 'grounding-upsert'; workItemId: WorkItemId; artifact: GroundedArtifact; sourceEntryId: string }
   | {

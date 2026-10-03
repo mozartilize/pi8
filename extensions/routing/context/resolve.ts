@@ -14,7 +14,6 @@ import { bound, CONTEXT_LIMITS, getWorkItem, legacyWorkItem, newTopicId, newWork
 import {
   NEW_TOPIC,
   NONE,
-  type BranchState,
   type ContextReason,
   type EntryResolution,
   type RoutingContextEvent,
@@ -25,10 +24,7 @@ import {
 
 export interface PlanBase {
   ledger: TopicLedger;
-  branchState: BranchState;
   sourceEntryId: string;
-  /** The entry's parent on a legacy branch: the end of history that predates the ledger. */
-  legacyHeadEntryId?: string;
   prompt: string;
   anchors: readonly PromptAnchor[];
   /** The entry's task type. */
@@ -140,17 +136,6 @@ function titleFromPrompt(prompt: string): string {
   return bound(line || 'Untitled work', CONTEXT_LIMITS.workTitle);
 }
 
-function migration(base: PlanBase): RoutingContextEvent[] {
-  if (base.branchState !== 'legacy-uninitialized' || base.ledger.migration) return [];
-  return [{
-    v: 1,
-    op: 'migration-init',
-    legacyHeadEntryId: base.legacyHeadEntryId ?? base.sourceEntryId,
-    mode: 'lazy',
-    sourceEntryId: base.sourceEntryId,
-  }];
-}
-
 function resolution(
   base: PlanBase,
   fields: Pick<EntryResolution, 'topicId' | 'workItemId' | 'relation' | 'contextReasons' | 'resolver'>,
@@ -249,7 +234,7 @@ export function planFromChoice(
         contextReasons: requestContext(base.anchors, base.deliverable),
         resolver: RESOLVER,
       }),
-      events: migration(base),
+      events: [],
       createdTopic: false,
       createdWorkItem: false,
     };
@@ -266,7 +251,7 @@ export function planFromChoice(
         contextReasons: reasons,
         resolver: RESOLVER,
       }),
-      events: [...migration(base), ...touchItem(base, item, reasons)],
+      events: touchItem(base, item, reasons),
       workItemId: item.id,
       createdTopic: false,
       createdWorkItem: false,
@@ -284,7 +269,7 @@ export function planFromChoice(
       contextReasons: reasons,
       resolver: RESOLVER,
     }),
-    events: [...migration(base), ...created.events],
+    events: created.events,
     workItemId: created.item.id,
     createdTopic: existingTopic == null,
     createdWorkItem: true,
@@ -324,7 +309,7 @@ export function planFromLegacy(
         contextReasons: carried,
         resolver: RESOLVER,
       }),
-      events: [...migration(base), ...touchItem(base, found, carried)],
+      events: touchItem(base, found, carried),
       workItemId: found.id,
       createdTopic: false,
       createdWorkItem: false,
@@ -341,7 +326,7 @@ export function planFromLegacy(
       contextReasons: reasons,
       resolver: RESOLVER,
     }),
-    events: [...migration(base), ...created.events],
+    events: created.events,
     workItemId: created.item.id,
     createdTopic: listedTopic == null,
     createdWorkItem: true,

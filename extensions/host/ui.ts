@@ -273,10 +273,10 @@ export function formatWorkContext(
   branchState: BranchState,
 ): string[] {
   if (branchState === 'legacy-uninitialized') {
-    return ['Work context: not tracked on this branch yet; your next message starts tracking it (earlier history is left as it is)'];
+    return ['Work context: none yet; earlier requests that the router did not serve are searched when a message returns to their work'];
   }
   if (branchState === 'native-empty' || ledger.items.size === 0) {
-    return [`Work context: none yet${ledger.migration ? ' (tracking started on this branch)' : ''}`];
+    return ['Work context: none yet'];
   }
   const topics = ledgerTopics(ledger).length;
   const open = [...ledger.items.values()].filter((item) => item.status === 'active' || item.status === 'blocked').length;
@@ -294,9 +294,6 @@ export function formatWorkContext(
       const reasons = active.openContext.map((reason) => CONTEXT_REASON_LABELS[reason]).join(', ');
       lines.push(`  context:    still needed before its next change (${reasons})`);
     }
-  }
-  if (ledger.migration) {
-    lines.push('  note:       tracking started partway through this session; earlier work is looked up when a message returns to it');
   }
   return lines;
 }

@@ -82,7 +82,7 @@ import {
   defaultRuntimeBindings,
 } from './serve/router-session-state.js';
 import { isMutationCall } from './routing/policy/mutation-detector.js';
-import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
+import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, readBranch, requestRouting } from './routing/context/persistence.js';
 import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
 import { CONTEXT_HANDOFF_TOOL } from './routing/policy/context-acquisition.js';
 import { COMPLETE_WORK_TOOL, REOPEN_WORK_TOOL } from './routing/policy/work-completion.js';
@@ -366,6 +366,26 @@ async function handleSessionStart(
 }
 
 /**
+ * Record the session model before a request when the branch records another
+ * one. Pi records `/model` switches itself, but not a model given with
+ * `--model` on resume, or the current model after `/tree` moves to a branch
+ * recorded with another model. Without the record, requests to a concrete
+ * model read as served by the router, or the reverse. Pi stores the user
+ * message only after `before_agent_start`, so the record comes first; a
+ * session that is opened or navigated without a request gets no entry.
+ */
+function recordModelSelection(pi: ExtensionAPI, ctx: ExtensionContext | undefined): void {
+  try {
+    const model = ctx?.model;
+    if (!model || typeof pi.appendEntry !== 'function') return;
+    if (requestRouting(readBranch(ctx?.sessionManager)).routedAtEnd === isRouterAutoActive(model)) return;
+    pi.appendEntry(SELECTION_ENTRY_TYPE, { provider: model.provider, modelId: model.id });
+  } catch {
+    // Without the record, the next routed entry's own events show the router served it.
+  }
+}
+
+/**
  * Rebuild the work ledger and the recorded router notes from the active
  * branch. Reading never writes: a branch without a ledger stays untracked
  * until its next genuine user entry.
@@ -415,13 +435,10 @@ function handleModelSelect(
     // Pi applies the new model's thinking level during the switch; that is
     // not a user choice, so the next turn must not read it as one.
     session.setSyncedThinkingLevel(undefined);
-    // Requests sent under the previous model are history the router never
-    // routed: an untracked branch shows as such until its next entry.
-    try {
-      session.context.refreshBranchState(readBranch(ctx?.sessionManager));
-    } catch {
-      // The next entry reads the branch itself.
-    }
+    // Requests sent under the previous model were not served by the router:
+    // the rebuilt ledger no longer continues the active item, and the
+    // requests become history that a later entry can return to.
+    restoreWorkLedger(ctx, session);
   }
   if (event.model.id === AUTO_MODEL_ID && !isOfflineMode()) {
     void refreshRoleModels(ctx.modelRegistry, ctx).catch(() => {
@@ -773,7 +790,10 @@ export default async function autoModelRouterExtension(
     carryPhaseAcrossTree(session, readBranch(ctx?.sessionManager));
   });
 
-  pi.on('before_agent_start', (event, ctx) => handleBeforeAgentStart(event, ctx, session));
+  pi.on('before_agent_start', (event, ctx) => {
+    recordModelSelection(pi, ctx);
+    return handleBeforeAgentStart(event, ctx, session);
+  });
 
   pi.on('turn_start', (event, ctx) => handleTurnStart(event, ctx, pi, session, runtime));
 

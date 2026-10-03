@@ -367,19 +367,10 @@ describe('formatWorkContext', () => {
     expect(formatWorkContext(ledger, 'tracked')).toContain('  context:    still needed before its next change (files it references)');
   });
 
-  it('says an untracked legacy branch starts tracking with the next message', () => {
-    expect(formatWorkContext(emptyLedger(), 'legacy-uninitialized')[0]).toContain('your next message starts tracking');
+  it('says an untracked branch searches the requests the router did not serve', () => {
+    expect(formatWorkContext(emptyLedger(), 'legacy-uninitialized')[0])
+      .toContain('earlier requests that the router did not serve are searched');
     expect(formatWorkContext(emptyLedger(), 'native-empty')).toEqual(['Work context: none yet']);
-  });
-
-  it('notes a lazy migration boundary, and whether earlier work is looked up', () => {
-    const ledger = foldEvents([
-      { v: 1, op: 'migration-init', legacyHeadEntryId: 'e1', mode: 'lazy', sourceEntryId: 'e2' },
-      createEvent(workItem('w_1')),
-      activateEvent('w_1'),
-    ]);
-    expect(formatWorkContext(ledger, 'tracked').at(-1))
-      .toContain('tracking started partway through this session; earlier work is looked up when a message returns to it');
   });
 });
 

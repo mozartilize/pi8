@@ -60,12 +60,13 @@ describe('ledger fold', () => {
     expect(ledger.items.get('w_1')?.status).toBe('superseded');
   });
 
-  it('keeps the first migration boundary', () => {
+  it('applies a stored migration record as an event that keeps no state', () => {
     const ledger = foldEvents([
       { v: 1, op: 'migration-init', legacyHeadEntryId: 'e5', mode: 'lazy', sourceEntryId: 'e6' },
-      { v: 1, op: 'migration-init', legacyHeadEntryId: 'e9', mode: 'lazy', sourceEntryId: 'e10' },
+      create(workItem('w_1')),
     ]);
-    expect(ledger.migration).toEqual({ legacyHeadEntryId: 'e5', sourceEntryId: 'e6' });
+    expect(ledger.events).toBe(2);
+    expect(ledger.items.has('w_1')).toBe(true);
   });
 
   it('upserts grounding per anchor and ends open context at its handoff boundary', () => {

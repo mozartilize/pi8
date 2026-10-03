@@ -43,8 +43,6 @@ export interface TopicLedger {
   /** Item ids, most recently touched first. */
   readonly recency: readonly string[];
   readonly activeWorkItemId?: string;
-  /** The lazy migration boundary, when this branch predates pi8. */
-  readonly migration?: { legacyHeadEntryId: string; sourceEntryId: string };
   /** Events applied; zero means the branch carries no ledger. The incumbent is not counted. */
   readonly events: number;
   readonly incumbent?: Incumbent;
@@ -187,14 +185,11 @@ export function applyEvent(ledger: TopicLedger, event: RoutingContextEvent): Top
         events: ledger.events + 1,
       };
     }
-    case 'migration-init': {
-      if (ledger.migration) return ledger;
-      return {
-        ...ledger,
-        migration: { legacyHeadEntryId: event.legacyHeadEntryId, sourceEntryId: event.sourceEntryId },
-        events: ledger.events + 1,
-      };
-    }
+    case 'migration-init':
+      // A stored legacy boundary. The legacy index reads which requests the
+      // router served from the branch itself, so the record keeps no state;
+      // it counts as applied so that the commit holding it still applies.
+      return { ...ledger, events: ledger.events + 1 };
     case 'grounding-upsert': {
       const item = ledger.items.get(event.workItemId);
       if (!item) return ledger;

@@ -13,6 +13,14 @@ import { applyEvent, emptyLedger, parseContextEvent, type TopicLedger } from './
 
 export const CONTEXT_ENTRY_TYPE = 'pi8-routing-context-v1';
 
+/**
+ * The router's record of the session model, written before a request only
+ * when Pi recorded none: Pi writes `model_change` for `/model`, but not when
+ * a session resumes with `--model` or `/tree` moves to a branch recorded
+ * with another model. Read exactly like `model_change`.
+ */
+export const SELECTION_ENTRY_TYPE = 'pi8-model-selection-v1';
+
 /** The slice of a Pi session entry this module reads. */
 export interface BranchEntryLike {
   type: string;
@@ -38,15 +46,76 @@ function asEntries(branch: readonly unknown[] | undefined): BranchEntryLike[] {
     && typeof (entry as BranchEntryLike).id === 'string');
 }
 
+const isRouterAuto = (provider: unknown, modelId: unknown): boolean =>
+  provider === ROUTER_PROVIDER_ID && modelId === AUTO_MODEL_ID;
+
+/** The model selection an entry records, true for router/auto; undefined when it records none. */
+function recordedSelection(entry: BranchEntryLike): boolean | undefined {
+  if (entry.type === 'model_change') return isRouterAuto(entry.provider, entry.modelId);
+  if (entry.type !== 'custom' || entry.customType !== SELECTION_ENTRY_TYPE) return undefined;
+  if (!entry.data || typeof entry.data !== 'object') return undefined;
+  const data = entry.data as { provider?: unknown; modelId?: unknown };
+  return isRouterAuto(data.provider, data.modelId);
+}
+
+const isUserMessage = (entry: BranchEntryLike): boolean => entry.type === 'message' && entry.message?.role === 'user';
+
+export interface RequestRouting {
+  /** Entry ids of the user requests the router did not serve. */
+  unrouted: ReadonlySet<string>;
+  /** Whether a request sent after the branch's last entry goes to router/auto, as the branch records it. */
+  routedAtEnd: boolean;
+}
+
+/**
+ * Which user requests on the branch the router served. A request is served
+ * when the latest model selection recorded before it is router/auto, or
+ * when a router event names it as its source. A router event also shows
+ * that router/auto was the selection from there on, for history in which
+ * neither Pi nor the router recorded it. A request with no selection
+ * recorded before it counts as not served: nothing shows the router saw it.
+ */
+export function requestRouting(branch: readonly unknown[] | undefined): RequestRouting {
+  const entries = asEntries(branch);
+  const named = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type !== 'custom' || entry.customType !== CONTEXT_ENTRY_TYPE) continue;
+    const event = parseContextEvent(entry.data);
+    if (!event) continue;
+    for (const inner of event.op === 'context-commit' ? event.events : [event]) named.add(inner.sourceEntryId);
+  }
+  const unrouted = new Set<string>();
+  let routed = false;
+  for (const entry of entries) {
+    const selected = recordedSelection(entry);
+    if (selected !== undefined) routed = selected;
+    else if (entry.type === 'custom' && entry.customType === CONTEXT_ENTRY_TYPE) routed = true;
+    else if (isUserMessage(entry) && !routed && !named.has(entry.id)) unrouted.add(entry.id);
+  }
+  return { unrouted, routedAtEnd: routed };
+}
+
 function scanContextEvents(branch: readonly unknown[] | undefined): { events: RoutingContextEvent[]; ledger: TopicLedger } {
   const events: RoutingContextEvent[] = [];
+  const { unrouted } = requestRouting(branch);
   let ledger = emptyLedger();
   for (const entry of asEntries(branch)) {
     // A switch to another model ends the incumbent; a switch back to
     // router/auto starts without one until the router chooses again.
-    if (entry.type === 'model_change' && !(entry.provider === ROUTER_PROVIDER_ID && entry.modelId === AUTO_MODEL_ID)) {
-      if (ledger.incumbent) {
+    const selected = recordedSelection(entry);
+    if (selected !== undefined) {
+      if (!selected && ledger.incumbent) {
         const { incumbent: _ended, ...rest } = ledger;
+        ledger = rest;
+      }
+      continue;
+    }
+    // A request the router did not serve may have started other work, so
+    // the active item is not continued by default: the next routed entry
+    // collects context and chooses again. The item stays open.
+    if (isUserMessage(entry)) {
+      if (unrouted.has(entry.id) && ledger.activeWorkItemId) {
+        const { activeWorkItemId: _dropped, ...rest } = ledger;
         ledger = rest;
       }
       continue;
@@ -83,46 +152,29 @@ export function rebuildLedger(branch: readonly unknown[] | undefined): TopicLedg
 }
 
 /**
- * Whether the branch holds a user request the router never routed: one sent
- * while Pi's model, as its latest `model_change` before the request records
- * it, was not `router/auto`. A request with no model recorded before it
- * counts too, since nothing shows the router saw it.
- */
-function hasUnroutedRequest(branch: readonly BranchEntryLike[]): boolean {
-  let routed = false;
-  for (const entry of branch) {
-    if (entry.type === 'model_change') {
-      routed = entry.provider === ROUTER_PROVIDER_ID && entry.modelId === AUTO_MODEL_ID;
-    } else if (entry.type === 'message' && entry.message?.role === 'user' && !routed) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
  * A branch with ledger events is tracked. Without them, a branch holding a
- * request the router never routed predates tracking on it (legacy); one
+ * request the router did not serve has untracked history (legacy); one
  * whose requests all went to `router/auto`, or that holds none, starts fresh:
  * its entries so far simply recorded no work.
  */
 export function classifyBranch(branch: readonly unknown[] | undefined, ledger: TopicLedger): BranchState {
   if (ledger.events > 0) return 'tracked';
-  return hasUnroutedRequest(asEntries(branch)) ? 'legacy-uninitialized' : 'native-empty';
+  return requestRouting(branch).unrouted.size > 0 ? 'legacy-uninitialized' : 'native-empty';
 }
 
 /**
- * The branch state for routing the entry `entryId`: the branch as it stood
- * before it. The entry itself is the request being routed, not history.
+ * The last request the router did not serve before the entry `entryId`.
+ * The legacy index covers the path to it; requests after it went to the
+ * router, so the index stays the same until another such request is sent.
  */
-export function classifyBranchBefore(
-  branch: readonly unknown[] | undefined,
-  entryId: string,
-  ledger: TopicLedger,
-): BranchState {
-  const entries = asEntries(branch);
-  const index = entries.findIndex((entry) => entry.id === entryId);
-  return classifyBranch(index < 0 ? entries : entries.slice(0, index), ledger);
+export function lastUnroutedRequest(branch: readonly unknown[] | undefined, entryId: string): string | undefined {
+  const { unrouted } = requestRouting(branch);
+  let last: string | undefined;
+  for (const entry of asEntries(branch)) {
+    if (entry.id === entryId) break;
+    if (unrouted.has(entry.id)) last = entry.id;
+  }
+  return last;
 }
 
 /** Read the active branch, or the path to `fromId`; undefined when the session exposes none. */

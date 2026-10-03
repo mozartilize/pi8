@@ -18,7 +18,7 @@ import { defaultRouterSession } from './serve/router-session-state.js';
 import type { WorkPhaseState } from './routing/policy/work-phase.js';
 import { SessionTree } from './test-support/session-tree.js';
 import { activateEvent, createEvent, workItem } from './test-support/context-fixtures.js';
-import { CONTEXT_ENTRY_TYPE } from './routing/context/persistence.js';
+import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, requestRouting } from './routing/context/persistence.js';
 
 vi.mock('./host/commands.js', () => ({ registerCommands: vi.fn(() => vi.fn()) }));
 vi.mock('./serve/provider.js', () => ({
@@ -898,6 +898,55 @@ describe('work ledger lifecycle', () => {
     await handlers.get('model_select')!({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctxFor(tree));
     expect(defaultRouterSession.context.getBranchState()).toBe('legacy-uninitialized');
     expect(appendEntry).not.toHaveBeenCalled();
+  });
+
+  it('records the session model before a request only when the branch records another one', async () => {
+    const tree = new SessionTree();
+    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
+    tree.user('implement the export');
+    tree.assistant('done');
+    const { handlers, pi, appendEntry } = makePi(tree);
+    await autoModelRouterExtension(pi);
+    const withModel = (provider: string, id: string) => ({ ...ctxFor(tree), model: { provider, id } }) as unknown as ExtensionContext;
+    const prompt = { prompt: 'next', systemPromptOptions: {} };
+
+    // Opening or navigating writes nothing.
+    await handlers.get('session_start')!({ reason: 'resume' }, withModel('openai', 'gpt-5'));
+    await handlers.get('session_tree')!({}, withModel('openai', 'gpt-5'));
+    expect(appendEntry).not.toHaveBeenCalled();
+
+    await handlers.get('before_agent_start')!(prompt, withModel(ROUTER_PROVIDER_ID, AUTO_MODEL_ID));
+    expect(appendEntry).not.toHaveBeenCalled();
+
+    // Resumed with --model: Pi records nothing, so the router records it before the request.
+    await handlers.get('before_agent_start')!(prompt, withModel('openai', 'gpt-5'));
+    expect(appendEntry).toHaveBeenCalledTimes(1);
+    expect(appendEntry).toHaveBeenCalledWith(SELECTION_ENTRY_TYPE, { provider: 'openai', modelId: 'gpt-5' });
+    await handlers.get('before_agent_start')!(prompt, withModel('openai', 'gpt-5'));
+    expect(appendEntry).toHaveBeenCalledTimes(1);
+
+    const concrete = tree.user('sent to gpt-5');
+    expect(requestRouting(tree.getBranch()).unrouted.has(concrete)).toBe(true);
+  });
+
+  it('stops continuing the active item when router/auto returns after requests to another model', async () => {
+    const tree = new SessionTree();
+    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
+    const u = tree.user('implement the export');
+    tree.event(createEvent(workItem('w_1', 't_1'), u));
+    tree.event(activateEvent('w_1', u));
+    const { handlers, pi } = makePi(tree);
+    await autoModelRouterExtension(pi);
+    await handlers.get('session_start')!({ reason: 'resume' }, ctxFor(tree));
+    expect(defaultRouterSession.context.getLedger().activeWorkItemId).toBe('w_1');
+
+    tree.modelChange('openai', 'gpt-5');
+    tree.user('fix the login page');
+    tree.assistant('done');
+    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
+    await handlers.get('model_select')!({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctxFor(tree));
+    expect(defaultRouterSession.context.getLedger().activeWorkItemId).toBeUndefined();
+    expect(defaultRouterSession.context.getLedger().items.get('w_1')?.status).toBe('active');
   });
 
   it('keeps the ledger across compaction', async () => {

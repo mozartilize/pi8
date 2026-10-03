@@ -11,7 +11,7 @@ import { DIMENSION_STRENGTH } from '../routing/dimensions.js';
 import { activeWorkItem, getWorkItem } from '../routing/context/ledger.js';
 import {
   branchHoldsEntry,
-  classifyBranchBefore,
+  lastUnroutedRequest,
   latestGenuineUserEntry,
   readBranch,
   type BranchReader,
@@ -70,15 +70,10 @@ export function atLeast(dimension: Dimension, floor: Dimension | undefined): Dim
   return floor && DIMENSION_STRENGTH[floor] > DIMENSION_STRENGTH[dimension] ? floor : dimension;
 }
 
-function parentOf(branch: readonly unknown[] | undefined, id: string): string | undefined {
-  const entry = (branch ?? []).find((e) => (e as { id?: unknown }).id === id) as { parentId?: string | null } | undefined;
-  return entry?.parentId ?? undefined;
-}
-
 /**
- * Earlier work an entry may return to, from the branch's history before
- * `headEntryId`. Items the catalog already lists are not offered again.
- * A failed search offers nothing.
+ * Earlier work an entry may return to: the requests the router did not
+ * serve on the path to `headEntryId`, the last of them. Items the catalog
+ * already lists are not offered again. A failed search offers nothing.
  */
 function legacyCandidates(
   req: EntryContextRequest,
@@ -110,24 +105,19 @@ export async function resolveEntryContext(req: EntryContextRequest): Promise<Ent
   const ledger = session.context.getLedger();
   const branch = readBranch(req.sessionManager);
   const sourceEntryId = latestGenuineUserEntry(branch, turn) ?? turn.key;
-  // With no ledger yet, the branch is read as it stood before this entry:
-  // the state read when the session opened misses requests sent under
-  // another model since, before a switch to router/auto.
-  const untracked = ledger.events === 0 ? classifyBranchBefore(branch, sourceEntryId, ledger) : undefined;
   const known = [...ledger.items.values()].flatMap((item) => item.anchors);
   const anchors = extractPromptAnchors(turn.promptText, { ...(req.cwd ? { cwd: req.cwd } : {}), known });
   const base: PlanBase = {
     ledger,
-    branchState: untracked ?? session.context.getBranchState(),
     sourceEntryId,
-    ...(parentOf(branch, sourceEntryId) ? { legacyHeadEntryId: parentOf(branch, sourceEntryId) } : {}),
     prompt: turn.promptText,
     anchors,
     deliverable: req.deliverable,
   };
   const catalog = buildCatalog(ledger, anchors, 'normal');
-  const legacyHead = ledger.migration?.legacyHeadEntryId
-    ?? (untracked === 'legacy-uninitialized' ? parentOf(branch, sourceEntryId) : undefined);
+  // Every request the router did not serve can be returned to: history
+  // from before tracking and requests sent under another model since.
+  const legacyHead = lastUnroutedRequest(branch, sourceEntryId);
   const legacy = legacyHead ? legacyCandidates(req, legacyHead, { prompt: turn.promptText, anchors }, catalog) : [];
   if (!req.stillCurrent()) return { kind: 'aborted' };
   session.context.setEntrySource(sourceEntryId);

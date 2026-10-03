@@ -60,6 +60,25 @@ describe('legacy index', () => {
     }
   });
 
+  it('indexes only requests the router did not serve, in every stretch, and measures gaps over all requests', () => {
+    const tree = new SessionTree();
+    const first = tree.user('billing invoices export');
+    tree.modelChange('router', 'auto');
+    for (const request of FILLER) {
+      tree.user(request);
+      tree.assistant('router reply');
+    }
+    tree.modelChange('openai', 'gpt-5');
+    const second = tree.user('billing invoices totals');
+    tree.assistant('totals added');
+    const idx = index(tree);
+    expect(idx.requests.map((r) => r.entryId)).toEqual([first, second]);
+    // The first request had no reply of its own; a served request's reply is not attached to it.
+    expect(idx.requests[0]!.excerpt).not.toContain('router reply');
+    // Three served requests lie between them, so both stretches are offered.
+    expect(search(idx, 'billing invoices').map((c) => c.seedEntryId).sort()).toEqual([first, second].sort());
+  });
+
   it('does not offer a request whose work is listed, nor the requests beside it', () => {
     const { tree, ids } = history(['payments retry queue', 'payments retry backoff', ...FILLER, 'payments ledger export']);
     const found = search(index(tree), 'payments retry', new Set([ids[0]!]));
