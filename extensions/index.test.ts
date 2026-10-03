@@ -1719,3 +1719,43 @@ describe('mutation observation hooks', () => {
     expect(defaultRouterSession.intent.getWorkPhaseState()).toEqual(before);
   });
 });
+
+describe('router tool declaration', () => {
+  const ROUTER_TOOLS = ['commit_execution', 'hand_off_context', 'routing_context', 'complete_work', 'reopen_work'];
+
+  async function setup(initial: string[]) {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    let active = [...initial];
+    const setActiveTools = vi.fn((names: string[]) => { active = [...names]; });
+    const pi = {
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool: vi.fn(),
+      getActiveTools: () => [...active],
+      setActiveTools,
+    } as unknown as ExtensionAPI;
+    await autoModelRouterExtension(pi);
+    return { handlers, setActiveTools, active: () => active };
+  }
+
+  it('declares the router tools only while router/auto is the session model', async () => {
+    const { handlers, active } = await setup(['read', 'bash', ...ROUTER_TOOLS, 'other_ext']);
+    const concrete = { provider: 'github-copilot', id: 'gpt-5.4' };
+    await handlers.get('session_start')!({ reason: 'new' }, contextWithRegistry([registryModel('alpha/cheap')], concrete));
+    expect(active()).toEqual(['read', 'bash', 'other_ext']);
+
+    const auto = { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID };
+    await handlers.get('model_select')!({ model: auto }, contextWithRegistry([registryModel('alpha/cheap')], auto));
+    expect(active()).toEqual(['read', 'bash', 'other_ext', ...ROUTER_TOOLS]);
+
+    await handlers.get('model_select')!({ model: concrete }, contextWithRegistry([registryModel('alpha/cheap')], concrete));
+    expect(active()).toEqual(['read', 'bash', 'other_ext']);
+  });
+
+  it('does not set an unchanged tool set again, so Pi records no tool change', async () => {
+    const { handlers, setActiveTools } = await setup(['read', ...ROUTER_TOOLS]);
+    const auto = { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID };
+    await handlers.get('session_start')!({ reason: 'new' }, contextWithRegistry([registryModel('alpha/cheap')], auto));
+    await handlers.get('model_select')!({ model: auto }, contextWithRegistry([registryModel('alpha/cheap')], auto));
+    expect(setActiveTools).not.toHaveBeenCalled();
+  });
+});

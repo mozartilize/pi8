@@ -15,7 +15,7 @@
  *
  * The records are custom session entries, so they follow `/tree` and forks
  * and never reach the model by themselves. Only router/auto requests carry
- * notes.
+ * notes: a concrete model has no router tools, so the notes do not apply.
  */
 import { createHash } from 'node:crypto';
 

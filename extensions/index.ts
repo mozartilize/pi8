@@ -84,6 +84,10 @@ import {
 import { isMutationCall } from './routing/policy/mutation-detector.js';
 import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
 import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
+import { CONTEXT_HANDOFF_TOOL } from './routing/policy/context-acquisition.js';
+import { COMPLETE_WORK_TOOL, REOPEN_WORK_TOOL } from './routing/policy/work-completion.js';
+import { EXECUTION_CONTRACT_TOOL } from './routing/policy/execution-contract.js';
+import { ROUTING_CONTEXT_TOOL } from './serve/routing-context-tool.js';
 import { observeContextGrounding } from './serve/context-grounding.js';
 import { carryPhaseAcrossTree } from './serve/context-resolution.js';
 import { registerRoutingContextTool } from './serve/routing-context-tool.js';
@@ -144,6 +148,32 @@ function noticeSetup(ctx: ExtensionContext, runtime: RuntimeBindings): void {
     .catch(() => {
       // The check reports its own failures; a notice is advisory.
     });
+}
+
+/** The tools only router/auto serves. */
+const ROUTER_TOOLS: readonly string[] = [
+  EXECUTION_CONTRACT_TOOL, CONTEXT_HANDOFF_TOOL, ROUTING_CONTEXT_TOOL, COMPLETE_WORK_TOOL, REOPEN_WORK_TOOL,
+];
+
+/**
+ * Declare the router tools to the model only while router/auto is the
+ * session model; a concrete model does not see them. Only these names are
+ * added or removed, so other extensions' tools and `--tools` stay as they
+ * are. A change of the tool set changes the prompt head: Pi records it in
+ * the transcript, and the provider's cached prefix is lost at that switch.
+ * An unchanged set is not set again, so no change is recorded.
+ */
+function syncRouterTools(pi: ExtensionAPI, model: { provider?: string; id?: string } | undefined): void {
+  try {
+    if (typeof pi.getActiveTools !== 'function' || typeof pi.setActiveTools !== 'function') return;
+    const active = pi.getActiveTools();
+    const others = active.filter((name) => !ROUTER_TOOLS.includes(name));
+    const next = isRouterAutoActive(model) ? [...others, ...ROUTER_TOOLS] : others;
+    if (next.length === active.length && next.every((name) => active.includes(name))) return;
+    pi.setActiveTools(next);
+  } catch {
+    // The router tools refuse calls outside router/auto, so a failed sync only shows them.
+  }
 }
 
 /** Matches Pi's own offline semantics (model-runtime.js: any non-empty value). */
@@ -253,6 +283,7 @@ async function handleSessionStart(
   } catch {
     // Ephemeral / no session manager: logs fall back to the shared store.
   }
+  syncRouterTools(pi, ctx?.model);
   debugLog('lifecycle.session_start.begin', {
     reason: event.reason,
     previousSessionFile: event.previousSessionFile,
@@ -350,6 +381,7 @@ function restoreWorkLedger(ctx: ExtensionContext | undefined, session: RouterSes
 }
 
 function handleModelSelect(
+  pi: ExtensionAPI,
   event: ModelSelectEventLike,
   ctx: ExtensionContext,
   refreshRoleModels: RoleModelRefresher,
@@ -364,6 +396,7 @@ function handleModelSelect(
       : undefined,
     ...session.blacklist.getDebugState(),
   });
+  syncRouterTools(pi, event.model);
   // A concrete model selection makes the previous router decision stale,
   // and ends the incumbent: switching back starts by collecting context.
   if (event.model.provider !== ROUTER_PROVIDER_ID || event.model.id !== AUTO_MODEL_ID) {
@@ -706,7 +739,7 @@ export default async function autoModelRouterExtension(
     });
   });
 
-  pi.on('model_select', (event, ctx) => handleModelSelect(event, ctx, refreshRoleModels, session, runtime));
+  pi.on('model_select', (event, ctx) => handleModelSelect(pi, event, ctx, refreshRoleModels, session, runtime));
 
   // A missing hand_off_context or complete_work can still be declared, so
   // those reminders run here. agent_settled only records how the entry ended.
