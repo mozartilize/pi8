@@ -1030,7 +1030,7 @@ async function runCandidateAttempt(
   }
 }
 
-type SettledAttempt = Exclude<CandidateAttemptResult, RetryAttempt | { kind: 'undeclared-answer' }>;
+type SettledAttempt = Exclude<CandidateAttemptResult, RetryAttempt>;
 
 /**
  * Attempt one candidate, retrying in place while the failure policy asks for
