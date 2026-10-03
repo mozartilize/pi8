@@ -38,6 +38,7 @@ import {
   type RoutingContextEvent,
 } from '../routing/context/types.js';
 import type { ResolvedEntryContext } from './context-resolution.js';
+import { RequestNoteState } from './request-notes.js';
 
 export interface CachedRoutingIntent {
   key: string;
@@ -297,6 +298,8 @@ export class RouterSession {
   public readonly blacklist: BlacklistState;
   public readonly intent: IntentState;
   public readonly context = new RoutingContextState();
+  /** Router notes recorded on the active branch; the persistence binding survives resets. */
+  public readonly notes = new RequestNoteState();
   private readonly trajectory = new TrajectoryState();
 
   private sessionGen = 0;
@@ -698,6 +701,7 @@ export class RouterSession {
 
     this.intent.reset();
     this.context.reset();
+    this.notes.reset();
     this.trajectory.reset();
     // Note: blacklist exclusions are cleared independently via blacklist.clearSessionBlacklist()
   }

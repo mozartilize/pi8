@@ -105,8 +105,8 @@ import {
   CLARIFICATION_NOTE,
   closeContextEntry,
   gatheringNote,
-  withGatheringNote,
 } from './gathering-gate.js';
+import { planRequestNote, withRequestNotes } from './request-notes.js';
 import { completedIncumbent, incumbentWorkItem } from '../routing/policy/work-completion.js';
 import { activeWorkNote, completedWorkNote } from './completed-work-gate.js';
 
@@ -1058,6 +1058,30 @@ function countAcquisitionRequest(session: RouterSession, intentKey: string): voi
 }
 
 /** Resolve the served effort, run the fallback walk, and settle the handoff. */
+/**
+ * The delegated context with every recorded note, plus this invocation's
+ * note when it differs from the entry's latest one. Without a routed entry
+ * the recorded notes are still added, so the prefix stays the same.
+ */
+function withEntryNotes(
+  session: RouterSession,
+  context: Context,
+  intentKey: string,
+  instruction: string | undefined,
+  routedEntry: boolean,
+): Context {
+  const messages = context.messages ?? [];
+  const plan = routedEntry ? planRequestNote(session.notes.getNotes(), messages, intentKey, instruction) : {};
+  if (plan.record) session.notes.record(plan.record);
+  const noted = withRequestNotes(messages, session.notes.getNotes());
+  if (plan.unanchored && noted.length > 0) {
+    const last = noted[noted.length - 1]!;
+    const blocks = typeof last.content === 'string' ? [{ type: 'text' as const, text: last.content }] : last.content;
+    noted[noted.length - 1] = { ...last, content: [...blocks, { type: 'text', text: plan.unanchored }] } as typeof last;
+  }
+  return { ...context, messages: noted };
+}
+
 async function delegateRouterTurn(args: {
   prepared: PreparedTurn;
   resolved: ResolvedTurn;
@@ -1122,8 +1146,9 @@ async function delegateRouterTurn(args: {
   const pendingTrajectory = session.peekPendingTrajectoryEscalation();
   const delegationSessionGeneration = session.getSessionGeneration();
   // An entry collecting context carries the router's standing instruction to
-  // hand off rather than act; see withGatheringNote. The status, not the
-  // decision's cause, decides it: a pinned model acquires under its own cause.
+  // hand off rather than act. The status, not the decision's cause, decides
+  // it: a pinned model acquires under its own cause. Notes stay where they
+  // were first sent; see request-notes.ts.
   const intentKey = prepared.measured.turnInput.key;
   const current = session.getWorkPhaseState();
   const entry = current?.intentKey === intentKey ? current : undefined;
@@ -1131,15 +1156,14 @@ async function delegateRouterTurn(args: {
   const clarifying = entry?.contextStatus === 'clarification-only';
   const workNote = entry?.priorCompletion ? completedWorkNote(entry)
     : entry && (session.context.getLedger().activeWorkItemId || entry.completion) ? activeWorkNote : undefined;
-  let delegatedContext = entry && (acquiring || clarifying)
-    ? withGatheringNote(context, gatheringNote(entry))
-    : workNote ? withGatheringNote(context, workNote) : context;
+  const instruction = !entry ? undefined
+    : clarifying ? CLARIFICATION_NOTE
+    : acquiring ? gatheringNote(entry)
+    : workNote;
+  const delegatedContext = withEntryNotes(session, context, intentKey, entry ? instruction : undefined, !!entry);
   // The one clarification request: tools stay defined, so a history with
   // tool calls remains valid, but none may be called, and no fallback follows.
-  if (clarifying) {
-    delegatedContext = withGatheringNote(delegatedContext, CLARIFICATION_NOTE);
-    decision.fallbackChain = [decision.chosen];
-  }
+  if (clarifying) decision.fallbackChain = [decision.chosen];
   const delegationOptions: DelegationOptions = {
     decision,
     registry: registry!,

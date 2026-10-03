@@ -7,7 +7,6 @@ import type {
   ToolResultEventResult,
 } from '@earendil-works/pi-coding-agent';
 import { stat } from 'node:fs/promises';
-import type { Context, UserMessage } from '@earendil-works/pi-ai';
 import { appendContextHandoffSignal, type ContextHandoffSignal } from '../host/decisionlog.js';
 import { servedKey } from '../host/ui.js';
 import { EXECUTION_CONTRACT_TOOL } from '../routing/policy/execution-contract.js';
@@ -23,8 +22,6 @@ import {
   owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { isMutationCall } from '../routing/policy/mutation-detector.js';
-import { ROUTER_SETTLE_PREFIX } from '../routing/policy/continuation.js';
-import { classifyProvenance } from '../routing/context/message-provenance.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { ContextReason } from '../routing/context/types.js';
 import type { RouterSession } from './router-session-state.js';
@@ -158,35 +155,6 @@ export function gatheringNote(state: WorkPhaseState): string {
 
 /** The instruction for the one request after collecting context ended without a ready handoff. */
 export const CLARIFICATION_NOTE = `Router: ${CLARIFICATION_TEXT}`;
-
-/**
- * The delegated context of an entry collecting context: the note appended as
- * a text block to the entry's user message (the last user message), in the
- * delegated request only, never in Pi's transcript. The note sits at that
- * fixed position with the same bytes on every invocation of the phase, so
- * the prompt prefix — and its cache — stays identical, and no later message
- * is rewritten. A note at the tail would move on every invocation and
- * rewrite the history after its old position. A router settle reminder is
- * user-role too, but it is not the entry's message: the note stays before it.
- */
-export function withGatheringNote(context: Context, note: string): Context {
-  const messages = context.messages ?? [];
-  let index = -1;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message?.role === 'user' && classifyProvenance(message, [ROUTER_SETTLE_PREFIX]) !== 'synthetic-known') {
-      index = i;
-      break;
-    }
-  }
-  if (index < 0) return context;
-  const entry = messages[index] as UserMessage;
-  const blocks = typeof entry.content === 'string'
-    ? [{ type: 'text' as const, text: entry.content }]
-    : entry.content;
-  const noted: UserMessage = { ...entry, content: [...blocks, { type: 'text', text: note }] };
-  return { ...context, messages: [...messages.slice(0, index), noted, ...messages.slice(index + 1)] };
-}
 
 /** Appended once per `gather` entry that may turn into planning, to its first edit/write result. */
 export const CONTEXT_HANDOFF_REMINDER =

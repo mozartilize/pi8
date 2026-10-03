@@ -2029,7 +2029,7 @@ describe('context acquisition', () => {
       expect(phaseEnd?.handoff?.trajectoryFired).toBe(true);
     });
 
-    it('carries the investigation note on the entry message, byte-identical, only while investigating', async () => {
+    it('keeps the investigation note on the entry message, byte-identical, and supersedes it after the handoff', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       const userBlocks = () => {
@@ -2047,9 +2047,12 @@ describe('context acquisition', () => {
 
       await submitPrepared(handoff(1));
       await session.routeTurnAgainWithSameUserEntry();
-      const entry = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
-      expect(JSON.stringify(entry.content)).toContain('complete_work');
-      expect(JSON.stringify(entry.content)).not.toContain('Do not write the plan, review, or change yourself');
+      // The sent note keeps its bytes, so the cached prefix holds; the next
+      // note follows it and tells the model not to follow it.
+      const after = userBlocks();
+      expect(after.slice(0, 2)).toEqual(first);
+      expect(after[2]!.text).toMatch(/^Router: Do not follow the earlier router notes for this request\.\nRouter: call complete_work/);
+      expect(session.piContext!.messages[0]!.content).toBe(PLAN_PROMPT);
     });
 
     it('has a pinned model acquire the context too, then serve the deliverable', async () => {

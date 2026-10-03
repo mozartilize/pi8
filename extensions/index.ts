@@ -83,6 +83,7 @@ import {
 } from './serve/router-session-state.js';
 import { isMutationCall } from './routing/policy/mutation-detector.js';
 import { CONTEXT_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
+import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
 import { observeContextGrounding } from './serve/context-grounding.js';
 import { carryPhaseAcrossTree } from './serve/context-resolution.js';
 import { registerRoutingContextTool } from './serve/routing-context-tool.js';
@@ -334,12 +335,15 @@ async function handleSessionStart(
 }
 
 /**
- * Rebuild the work ledger from the active branch. Reading never writes: a
- * branch without a ledger stays untracked until its next genuine user entry.
+ * Rebuild the work ledger and the recorded router notes from the active
+ * branch. Reading never writes: a branch without a ledger stays untracked
+ * until its next genuine user entry.
  */
 function restoreWorkLedger(ctx: ExtensionContext | undefined, session: RouterSession): void {
   try {
-    session.context.restore(readBranch(ctx?.sessionManager));
+    const branch = readBranch(ctx?.sessionManager);
+    session.context.restore(branch);
+    session.notes.restore(branch);
   } catch {
     // An unreadable branch routes as a fresh one.
   }
@@ -670,6 +674,9 @@ export default async function autoModelRouterExtension(
   registerReopenWorkTool(pi, session);
   session.context.bindPersistence((event) => {
     if (typeof pi.appendEntry === 'function') pi.appendEntry(CONTEXT_ENTRY_TYPE, event);
+  });
+  session.notes.bindPersistence((note) => {
+    if (typeof pi.appendEntry === 'function') pi.appendEntry(REQUEST_NOTE_ENTRY_TYPE, note);
   });
 
   const routingState = new SubagentRoutingState();

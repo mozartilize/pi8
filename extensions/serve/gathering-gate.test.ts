@@ -6,8 +6,7 @@ import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { routingDecision } from '../test-support/router-fixtures.js';
 import { RouterSession } from './router-session-state.js';
 import { submitContextHandoff } from './context-handoff-tool.js';
-import { ROUTER_SETTLE_PREFIX } from '../routing/policy/continuation.js';
-import { countContextRefusal, gateContextToolCall, withGatheringNote } from './gathering-gate.js';
+import { countContextRefusal, gateContextToolCall } from './gathering-gate.js';
 
 vi.mock('../host/decisionlog.js', () => ({ appendContextHandoffSignal: vi.fn() }));
 
@@ -75,17 +74,5 @@ describe('gathering gate refusal accounting', () => {
       block: true,
       reason: 'Router: this call was not made: the router could not check it while collecting context.',
     });
-  });
-});
-
-describe('withGatheringNote', () => {
-  it('keeps the note on the entry message when a router settle reminder follows it', () => {
-    const reminder = { role: 'user' as const, content: `${ROUTER_SETTLE_PREFIX}\nRouter: remind`, timestamp: 3 };
-    const noted = withGatheringNote({ messages: [
-      { role: 'user', content: 'do it', timestamp: 1 },
-      reminder,
-    ] }, 'NOTE');
-    expect(noted.messages[0]!.content).toEqual([{ type: 'text', text: 'do it' }, { type: 'text', text: 'NOTE' }]);
-    expect(noted.messages[1]).toBe(reminder);
   });
 });
