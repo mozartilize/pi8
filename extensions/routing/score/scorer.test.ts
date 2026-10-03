@@ -7,7 +7,6 @@ import {
   logUtilities,
   buildRouterThinkingLevelMap,
   chooseThinkingLevel,
-  clampEffortToFloor,
   levelFrom,
   resolveThinkingLevel,
   findSourceCandidate,
@@ -743,7 +742,7 @@ describe('scorer', () => {
         reasoning: true,
         thinkingLevelMap: { off: 'off', low: 'low', high: 'high', xhigh: null, max: null },
       });
-      expect(resolveThinkingLevel(model, 'low', 'implement')).toBe('low');
+      expect(resolveThinkingLevel(model, 'low')).toBe('low');
     });
 
     it('clamps an unsupported explicit reasoning request to the nearest supported level', () => {
@@ -751,48 +750,40 @@ describe('scorer', () => {
         reasoning: true,
         thinkingLevelMap: { off: 'off', low: null, medium: null, high: 'high', xhigh: null, max: null },
       });
-      expect(resolveThinkingLevel(model, 'max', 'plan')).toBe('high');
+      expect(resolveThinkingLevel(model, 'max')).toBe('high');
     });
 
-    // ── Minimum effort: a scored effort may raise it, never lower it ──
+    // ── The scored effort is served; each effort has its own score ──
 
-    it('serves a measured effort at or above the dimension floor', () => {
-      const model = candidate('test/model-1', {
-        reasoning: true,
-        effort: 'high',
-        thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
-      });
-      // implement floor is medium; measured high wins.
-      expect(chooseThinkingLevel(model, 'implement')).toBe('high');
-      // gather floor is low; measured high wins.
-      expect(chooseThinkingLevel(model, 'gather')).toBe('high');
-    });
-
-    it('raises a measured effort below the dimension minimum to that minimum', () => {
+    it('serves the scored effort for every task type, below any former per-task level too', () => {
       const model = candidate('test/model-1', {
         reasoning: true,
         effort: 'low',
         thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
       });
-      // plan floor is medium: a cheap low measurement must never serve plan at low.
-      expect(chooseThinkingLevel(model, 'plan')).toBe('medium');
-      // implement floor is medium: low is raised to medium.
-      expect(chooseThinkingLevel(model, 'implement')).toBe('medium');
-      // review floor is medium: low is raised to medium.
-      expect(chooseThinkingLevel(model, 'review')).toBe('medium');
-      // gather floor is low: measured low is at the floor and wins.
-      expect(chooseThinkingLevel(model, 'gather')).toBe('low');
+      expect(chooseThinkingLevel(model)).toBe('low');
+      expect(resolveThinkingLevel(model, undefined)).toBe('low');
+      expect(servedEffort(model)).toBe('low');
     });
 
-    it('raises an off measurement to the floor on thinking dimensions', () => {
+    it('serves an off measurement as off', () => {
       const model = candidate('test/model-1', {
         reasoning: true,
         effort: 'off',
         thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
       });
-      expect(chooseThinkingLevel(model, 'implement')).toBe('medium');
-      // lightweight floor is off: an off measurement is at the floor.
-      expect(chooseThinkingLevel(model, 'lightweight')).toBe('off');
+      expect(chooseThinkingLevel(model)).toBe('off');
+    });
+
+    it('makes no router effort choice for a candidate with no effort label, so Pi\'s session level applies', () => {
+      const model = candidate('test/model-1', {
+        reasoning: true,
+        thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
+      });
+      expect(chooseThinkingLevel(model)).toBeUndefined();
+      expect(resolveThinkingLevel(model, 'high')).toBe('high');
+      // Pi's level is fitted to the nearest level the model supports.
+      expect(resolveThinkingLevel(model, 'max')).toBe('high');
     });
 
     it('lets an explicit user reasoning level suppress the router effort choice', () => {
@@ -801,8 +792,8 @@ describe('scorer', () => {
         effort: 'low',
         thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
       });
-      // The router would serve low (gather floor), but the user asked for high.
-      expect(resolveThinkingLevel(model, 'high', 'gather')).toBe('high');
+      // The router would serve the scored low, but the user asked for high.
+      expect(resolveThinkingLevel(model, 'high')).toBe('high');
     });
 
     it('drops an effort the model cannot serve instead of sending it', () => {
@@ -813,14 +804,13 @@ describe('scorer', () => {
       });
       // Nothing at or above the measured low is supported: no reasoning is
       // sent rather than an unsupported level.
-      expect(chooseThinkingLevel(model, 'gather')).toBeUndefined();
+      expect(chooseThinkingLevel(model)).toBeUndefined();
     });
 
-    // Regression (M1): levelFrom (up-only) never serves below the dimension
-    // floor even when the nearest-first walk would pick a lower level first.
-    // Scenario: measured high, map nulls high + xhigh but lists max → levelFrom
-    // yields max; the nearest-first resolveThinkingLevel would yield medium.
-    it('levelFrom walks up-only from the clamped effort, never below the floor', () => {
+    // A router-chosen effort walks up only: a gap in the support map never
+    // serves below the scored effort, even where the nearest-first walk that
+    // honours a user request would pick a lower level.
+    it('levelFrom walks up-only from the scored effort', () => {
       // A provider whose map lacks high/xhigh but supports max (e.g. a model
       // with {off, low, medium, max} and no high/xhigh entries).
       const model = candidate('test/model-1', {
@@ -829,11 +819,10 @@ describe('scorer', () => {
         thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: null, xhigh: null, max: 'max' },
       });
       // levelFrom from high: walks up → xhigh (unsupported) → max (supported) = 'max'
-      expect(levelFrom(clampEffortToFloor('high', 'implement'), model)).toBe('max');
-      // Same for review:
-      expect(levelFrom(clampEffortToFloor('high', 'review'), model)).toBe('max');
+      expect(levelFrom('high', model)).toBe('max');
+      expect(chooseThinkingLevel(model)).toBe('max');
       // Nearest-first (resolveThinkingLevel) would return 'medium' — prove the divergence:
-      expect(resolveThinkingLevel(model, 'high', 'implement')).toBe('medium');
+      expect(resolveThinkingLevel(model, 'high')).toBe('medium');
     });
 
     it('builds a router thinking-level map from the union of registry capabilities', () => {
@@ -1454,7 +1443,8 @@ describe('scorer — AA-Omniscience reliability floor', () => {
     const low = candidate('test/effort-bypass', {
       effort: 'low',
       reasoning: true,
-      thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', max: 'max' },
+      // The model cannot serve low, so the entry serves at medium.
+      thinkingLevelMap: { off: 'off', low: null, medium: 'medium', max: 'max' },
       exactQualityByEffort: { medium: { knowledge: -11.2, research: 0.61 } },
       bench: benchRow('test/effort-bypass', {
         effort: 'low',
@@ -1464,7 +1454,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
       cost: { input: 0.001, output: 0.001 },
     });
     // The medium sibling is absent, as it would be after an effort-specific
-    // blacklist, but plan still clamps this low entry to medium at delegation.
+    // blacklist, but this low entry still serves at medium at delegation.
     const decision = pickBest([reliable, low], 'plan');
 
     expect(decision.chosen).toBe(reliable.registryId);
@@ -1478,7 +1468,8 @@ describe('scorer — AA-Omniscience reliability floor', () => {
     const low = candidate('test/effort-unknown-medium', {
       effort: 'low',
       reasoning: true,
-      thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', max: 'max' },
+      // The model cannot serve low, so the entry serves at medium.
+      thinkingLevelMap: { off: 'off', low: null, medium: 'medium', max: 'max' },
       bench: benchRow('test/effort-unknown-medium', {
         effort: 'low',
         quality: { intelligence: 99, knowledge: 15.3, research: 0.61 },
@@ -1486,7 +1477,7 @@ describe('scorer — AA-Omniscience reliability floor', () => {
       cost: { input: 0.001, output: 0.001 },
     });
     // The low row's nominal knowledge cannot stand in for the unmeasured
-    // medium level that plan will actually serve via the floor.
+    // medium level that will actually serve.
     const decision = pickBest([reliable, low], 'plan');
 
     expect(decision.candidateDiagnostics).toContainEqual({
@@ -1620,7 +1611,7 @@ describe('isStrictlyStrongerCandidate', () => {
       },
       bench: benchRow('test/strong', { effort: 'high', quality: { intelligence: 95, coding: 95, agenticCoding: 95 } }),
     });
-    expect(servedEffort(dest, 'implement')).toBeUndefined();
+    expect(servedEffort(dest)).toBeUndefined();
     expect(isStrictlyStrongerCandidate(dest, 'test/weak:medium', 'implement', source, {
       candidates: [source, dest],
     })).toBe(false);

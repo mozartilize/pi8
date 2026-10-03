@@ -427,35 +427,53 @@ describe('runDelegationLoop contracts', () => {
     expect(h.blacklist).toEqual(['alpha/model:xhigh']);
   });
 
-  it('raises a chain entry effort below the dimension floor to the floor', async () => {
+  const fullThinkingRegistry = {
+    find: (provider: string, id: string) =>
+      registryModel(`${provider}/${id}`, {
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'off', minimal: 'minimal', low: 'low', medium: 'medium',
+          high: 'high', xhigh: 'xhigh', max: 'max',
+        },
+      }) as unknown as Model<Api>,
+  };
+  const served = [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }];
+
+  it('serves a chain entry at its scored effort for every task type', async () => {
     const h = createDelegationHarness({
       chain: ['alpha/model:low'],
-      scripts: {
-        'alpha/model': [
-          [
-            { type: 'text_delta', delta: 'served' },
-            { type: 'done', message: { stopReason: 'stop' } },
-          ],
-        ],
-      },
-      registry: {
-        find: (provider: string, id: string) =>
-          registryModel(`${provider}/${id}`, {
-            reasoning: true,
-            thinkingLevelMap: {
-              off: 'off', minimal: 'minimal', low: 'low', medium: 'medium',
-              high: 'high', xhigh: 'xhigh', max: 'max',
-            },
-          }) as unknown as Model<Api>,
-      },
+      scripts: { 'alpha/model': [served] },
+      registry: fullThinkingRegistry,
     });
+    expect((await h.run()).success).toBe(true);
+    expect(h.reasoningOptions).toEqual(['low']);
+  });
 
-    const result = await h.run();
+  it('raises entries of the incumbent model to the effort the incumbent served at, and no other model', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/model:low', 'beta/model:low'],
+      scripts: {
+        'alpha/model': [[{ type: 'error', error: { errorMessage: '421' } }]],
+        'beta/model': [served],
+      },
+      registry: fullThinkingRegistry,
+      decision: { ...routingDecision(['alpha/model:low', 'beta/model:low']), incumbentEffort: { model: 'alpha/model', effort: 'high' } },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.reasoningOptions).toEqual(['high', 'low']);
+  });
 
-    expect(result.success).toBe(true);
-    // routingDecision defaults to dimension 'implement' (floor medium): a low
-    // chain entry is raised to medium before serving.
-    expect(h.reasoningOptions).toEqual(['medium']);
+  it('lets an explicit user thinking level win over the incumbent effort', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/model:low'],
+      scripts: { 'alpha/model': [served] },
+      registry: fullThinkingRegistry,
+      reasoning: 'minimal',
+      userReasoningOverride: true,
+      decision: { ...routingDecision(['alpha/model:low']), incumbentEffort: { model: 'alpha/model', effort: 'high' } },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.reasoningOptions).toEqual(['minimal']);
   });
 
   it('never lets an explicit user reasoning request be overridden by an entry effort', async () => {

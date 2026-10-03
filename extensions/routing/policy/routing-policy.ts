@@ -12,15 +12,17 @@
  */
 import type { Candidate, DecisionCause, Dimension, RoutingDecision } from '../../types.js';
 import { addReasonDetail } from '../score/decision-reason.js';
-import { DIMENSION_STRENGTH } from '../dimensions.js';
 import type { AutoRouterConfig } from '../../types.js';
-import type { ThinkingLevel } from '@earendil-works/pi-ai';
+import type { ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
 import {
   pickBest,
   escalationChain,
   isValidEscalationCandidate,
   candidateKey,
   capabilityForDimension,
+  parseCandidateKey,
+  levelFrom,
+  MODEL_THINKING_LEVELS,
   type ScoreOpts,
 } from '../score/scorer.js';
 import type { PendingTrajectoryEscalation } from '../struggle/types.js';
@@ -50,15 +52,8 @@ export interface RoutingPolicyInput {
   warmPrefixTokens?: ReadonlyMap<string, number>;
   protocolPenalties?: ReadonlyMap<string, number>;
   needsVision: boolean;
+  /** The incumbent's candidate key, with the effort it served at. */
   incumbentRegistryId?: string;
-  /**
-   * The dimension the previous decision resolved at. When the incumbent model
-   * keeps serving a task, this carries forward as an up-only effort
-   * minimum so a cheap-phrased same-task follow-up cannot serve the strong
-   * incumbent at a shallow thinking level. It is skipped on the same
-   * sanctioned moves as the incumbent capability minimum.
-   */
-  incumbentResolvedDimension?: Dimension;
   /**
    * True when this invocation shares the previous decision's intent key — i.e.
    * it is a continuation of the same user entry (a post-tool re-invocation),
@@ -89,6 +84,12 @@ export interface RoutingPolicyInput {
 
 export interface RoutingPolicyResult {
   decision: RoutingDecision;
+  /**
+   * The pool the decision was scored on. It differs from the input only
+   * when the incumbent minimum thinking level replaced lower efforts of the
+   * incumbent model, so chain keys can name a row the input does not have.
+   */
+  candidates: Candidate[];
   /** True when trajectory friction selected a stronger head pick. */
   trajectoryApplied: boolean;
 }
@@ -209,31 +210,106 @@ function applyIncumbentModelFloor(
   }
 }
 
+interface IncumbentEffort {
+  model: string;
+  effort: ModelThinkingLevel;
+}
+
+const effortRank = (effort: ModelThinkingLevel | undefined): number =>
+  effort == null ? -1 : MODEL_THINKING_LEVELS.indexOf(effort);
+
+/** The incumbent model and the effort its key says it served at. */
+function incumbentEffortOf(incumbentRegistryId: string | undefined): IncumbentEffort | undefined {
+  if (incumbentRegistryId == null) return undefined;
+  const incumbent = parseCandidateKey(incumbentRegistryId);
+  const effort = incumbent.effort as ModelThinkingLevel | undefined;
+  if (effort == null || effort === 'off' || !MODEL_THINKING_LEVELS.includes(effort)) return undefined;
+  return { model: `${incumbent.provider}/${incumbent.id}`, effort };
+}
+
 /**
- * Incumbent effort floor. Holding the strong incumbent model on a
- * cheap-classified same-task follow-up (whether re-picked naturally or
- * restored by the model floor) would otherwise serve it at the cheap
- * dimension's shallow thinking floor — right model, wrong effort. Carry the
- * incumbent's resolved dimension forward as an up-only effort floor. This
- * never lowers effort (max only), never changes the routed dimension or
- * model (so no DecisionCause — it is a secondary mechanism recorded in the
- * reason).
+ * Incumbent minimum thinking level, applied to the pool before scoring.
+ * Delegation serves an entry of the incumbent model at the incumbent's
+ * effort or higher, so the scorer must score the effort that will serve:
+ * the quality, price, and time of a lower effort would choose an entry that
+ * delegation then serves at another effort. A lower effort is dropped when a
+ * row at the served effort exists. Without one, the nearest lower row takes
+ * the served effort. The effort-specific axes are never estimated across
+ * efforts, so that row reads them from a retained measurement at the served
+ * effort, or counts them as unknown. Its other axes, price, and time stay at
+ * the lower effort's values. Unlabelled rows keep their place: Pi's session
+ * level serves them, and delegation raises it.
  */
-function applyIncumbentEffortFloor(
+function atIncumbentEffort(candidates: Candidate[], minimum: IncumbentEffort | undefined): Candidate[] {
+  if (!minimum) return candidates;
+  const labelled = candidates.filter((c) => c.registryId === minimum.model && c.reasoning && c.effort != null);
+  const below = labelled.filter((c) => effortRank(c.effort) < effortRank(minimum.effort));
+  if (below.length === 0) return candidates;
+  const served = levelFrom(minimum.effort, below[0]!);
+  if (served == null) return candidates;
+  const hasServedRow = labelled.some((c) => c.effort === served);
+  const nearest = below.reduce((a, b) => (effortRank(b.effort) > effortRank(a.effort) ? b : a));
+  return candidates.flatMap((c) => {
+    if (!below.includes(c)) return [c];
+    if (hasServedRow || c !== nearest) return [];
+    const exact = c.exactQualityByEffort?.[served];
+    return [{
+      ...c,
+      effort: served,
+      ...(c.bench ? {
+        bench: {
+          ...c.bench,
+          effort: served,
+          quality: {
+            ...c.bench.quality,
+            knowledge: exact?.knowledge,
+            research: exact?.research,
+            longContext: exact?.longContext,
+            visionReasoning: exact?.visionReasoning,
+          },
+        },
+      } : {}),
+    }];
+  });
+}
+
+/**
+ * `key` when the policy can score the incumbent at it: a row has the key, or
+ * the key names an effort above a labelled row of its model, which
+ * `atIncumbentEffort` scores at that effort. Otherwise undefined.
+ */
+export function scoredIncumbentKey(candidates: readonly Candidate[], key: string): string | undefined {
+  if (candidates.some((c) => candidateKey(c) === key)) return key;
+  const minimum = incumbentEffortOf(key);
+  if (!minimum) return undefined;
+  return candidates.some((c) => c.registryId === minimum.model && c.reasoning && c.effort != null
+    && effortRank(c.effort) < effortRank(minimum.effort))
+    ? key
+    : undefined;
+}
+
+/**
+ * Record the incumbent minimum thinking level for delegation. It never
+ * lowers effort and never changes the model or the task type, so it records
+ * a reason but no DecisionCause. It is skipped on the same moves as the
+ * incumbent capability minimum.
+ */
+function applyIncumbentEffort(
   decision: RoutingDecision,
-  dimension: Dimension,
-  incumbentResolvedDimension: Dimension | undefined,
-  skip: boolean,
+  minimum: IncumbentEffort | undefined,
+  raised: boolean,
 ): void {
-  if (
-    incumbentResolvedDimension == null ||
-    skip ||
-    DIMENSION_STRENGTH[incumbentResolvedDimension] <= DIMENSION_STRENGTH[dimension]
-  ) {
-    return;
+  if (!minimum) return;
+  const sameModel = (key: string): boolean => {
+    const entry = parseCandidateKey(key);
+    return `${entry.provider}/${entry.id}` === minimum.model;
+  };
+  if (!decision.fallbackChain.some(sameModel)) return;
+  decision.incumbentEffort = minimum;
+  const chosen = parseCandidateKey(decision.chosen).effort as ModelThinkingLevel | undefined;
+  if (sameModel(decision.chosen) && (raised || effortRank(chosen) < effortRank(minimum.effort))) {
+    addReasonDetail(decision, { kind: 'incumbent-effort' });
   }
-  decision.effortFloorDimension = incumbentResolvedDimension;
-  addReasonDetail(decision, { kind: 'incumbent-effort' });
 }
 
 /**
@@ -299,7 +375,6 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     warmPrefixTokens,
     needsVision,
     incumbentRegistryId,
-    incumbentResolvedDimension,
     sameIntentAsLast,
     config,
     handoffMinimum,
@@ -315,6 +390,18 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
 
   const hasAnyBenchmark = candidates.some((candidate) => candidate.bench !== undefined);
   if (!hasAnyBenchmark && cause === 'heuristic') cause = 'no-data';
+
+  // The minimums are skipped only for sanctioned moves: an applied trajectory
+  // handoff owns the model (its repick excludes the source, so the floor must
+  // not restore it); a handoff boundary until a model serves the new phase;
+  // and a recorded move to other work at entry start. Cheap wording never counts
+  // as a work change, and tool-loop invocations keep the serving model's
+  // minimums even when the entry began as new work.
+  const changedWork = !sameIntentAsLast &&
+    (workRelation === 'new' || workRelation === 'resume' || workRelation === 'reopen' || workRelation === 'switch');
+  const keepMinimums = !changedWork && handoffPending !== true;
+  const minimumEffort = keepMinimums ? incumbentEffortOf(incumbentRegistryId) : undefined;
+  const pool = atIncumbentEffort(candidates, minimumEffort);
 
   // Score with the configured active-dimension weights.
   // The handoff minimum is request-local to the primary pick: a trajectory
@@ -332,10 +419,11 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   const pickOpts: ScoreOpts = handoffMinimum != null
     ? { ...baseOpts, handoffMinimum }
     : baseOpts;
-  let decision = pickBest(candidates, dimension, config.dimensionWeights[dimension], pickOpts);
+  let decision = pickBest(pool, dimension, config.dimensionWeights[dimension], pickOpts);
 
   // Objective trajectory friction may repick away from the source
-  // model when scoring would keep it.
+  // model when scoring would keep it. An applied repick skips both incumbent
+  // minimums, so it reads the input pool.
   const trajectory = applyTrajectoryRepick(
     decision,
     cause,
@@ -348,43 +436,29 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
   decision = trajectory.decision;
   cause = trajectory.cause;
 
-  // The minimums are skipped only for sanctioned moves: an applied trajectory
-  // handoff owns the model (its repick excludes the source, so the floor must
-  // not restore it); a handoff boundary until a model serves the new phase;
-  // and a recorded move to other work at entry start. Cheap wording never counts
-  // as a work change, and tool-loop invocations keep the serving model's
-  // minimums even when the entry began as new work.
-  const changedWork = !sameIntentAsLast &&
-    (workRelation === 'new' || workRelation === 'resume' || workRelation === 'reopen' || workRelation === 'switch');
-  const skipIncumbentMinimums =
-    trajectory.applied || changedWork || handoffPending === true;
+  const skipIncumbentMinimums = trajectory.applied || !keepMinimums;
 
-  // Incumbent capability floor.
+  // Incumbent capability minimum.
   applyIncumbentModelFloor(
     decision,
-    candidates,
+    pool,
     dimension,
     incumbentRegistryId,
     skipIncumbentMinimums,
   );
 
-  // Incumbent effort floor.
-  applyIncumbentEffortFloor(
-    decision,
-    dimension,
-    incumbentResolvedDimension,
-    skipIncumbentMinimums,
-  );
+  // Incumbent minimum thinking level.
+  if (!trajectory.applied) applyIncumbentEffort(decision, minimumEffort, pool !== candidates);
 
   // Metadata and reason suffixes.
   annotateDecision(
     decision,
     dimension,
     cause,
-    candidates,
+    pool,
     estimatedContextTokens,
     incumbentRegistryId,
   );
 
-  return { decision, trajectoryApplied: trajectory.applied };
+  return { decision, candidates: pool, trajectoryApplied: trajectory.applied };
 }

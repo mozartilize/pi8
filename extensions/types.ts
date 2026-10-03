@@ -111,15 +111,17 @@ export interface Candidate {
   bench?: BenchModel;
   /**
    * Reasoning-effort level this candidate should be served at. Present only
-   * when a measured bench row exists for exactly this (model, effort) pair;
-   * absent means "no measured effort" and the dimension floor applies.
+   * when a bench row (measured or stepped down) exists for exactly this
+   * (model, effort) pair; absent means "no effort label", and Pi's session
+   * thinking level applies.
    */
   effort?: ModelThinkingLevel;
   /**
    * Exact-effort measurements of this model at each effort it was measured
-   * at. Delegation may serve a higher effort than the candidate's own (the
-   * task type's effort minimum), and these axes are never estimated across
-   * efforts, so eligibility reads them at the served effort. Every sibling
+   * at. Delegation may serve a higher effort than the candidate's own (a gap
+   * in the support map, or the incumbent's minimum thinking level), and
+   * these axes are never estimated across efforts, so eligibility reads them
+   * at the served effort. Every sibling
    * keeps the map so filtering cannot erase serving evidence.
    */
   exactQualityByEffort?: Partial<Record<ModelThinkingLevel, ExactQuality>>;
@@ -329,15 +331,13 @@ export type DecisionCause =
 export interface RoutingDecision {
   dimension: Dimension;
   /**
-   * Effort floor applied when serving, when it must outrank the routed
-   * dimension's own floor. The incumbent model keeps serving a task, so a
-   * cheap-phrased same-task follow-up keeps the strong model — but its routed
-   * dimension (and thus its effort floor) can classify low. This carries the
-   * incumbent's resolved dimension forward as an up-only effort floor so the
-   * served thinking level cannot drop below what the incumbent ran at.
-   * Absent means the routed dimension's floor applies unchanged.
+   * The incumbent's minimum thinking level: the model (`provider/id`) that
+   * served the task and the effort it served at. Chain entries of that model
+   * serve at this effort or higher, so a same-task follow-up that keeps the
+   * incumbent does not drop to a lower effort. An explicit user thinking
+   * level still wins. Absent when the incumbent minimums are skipped.
    */
-  effortFloorDimension?: Dimension;
+  incumbentEffort?: { model: string; effort: ModelThinkingLevel };
   chosen: string;
   reason: string;
   /** Typed source for scorer and policy wording; reason remains the rendered log/UI value. */

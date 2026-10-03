@@ -712,7 +712,7 @@ describe('provider orchestration', () => {
     expect(harness.getProviderState().lastDecision?.fallbackChain[0]).toBe('alpha/first:high');
   });
 
-  it('raises a measured low effort to the implement minimum after selecting work', async () => {
+  it('serves a scored low effort as low after selecting implementation work', async () => {
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
       version: 2,
       syncedAt: Date.now(),
@@ -724,8 +724,8 @@ describe('provider orchestration', () => {
     const { routedContext } = await selectedTurn('implement the parser');
     await harness.serve(routedContext, {});
 
-    // The implement minimum is medium even when the benchmark measures low.
-    expect(harness.delegatedCall().options?.reasoning).toBe('medium');
+    // Each effort has its own score, so the scored low effort is served as is.
+    expect(harness.delegatedCall().options?.reasoning).toBe('low');
   });
 
   it('lets an explicit user reasoning level suppress the router effort choice', async () => {
@@ -748,25 +748,79 @@ describe('provider orchestration', () => {
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
 
-  it('re-adapts thinking when Pi echoes the gather level into an implement handoff', async () => {
-    // Pi echoes the current effective level, which need not be a user override.
+  it('does not read the level Pi echoes back as a user choice: the next scored effort serves', async () => {
+    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+      version: 2,
+      syncedAt: Date.now(),
+      aliases: {},
+      models: [
+        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+      ],
+    }));
     const { routedContext, firstReasoning } = await selectedTurn('implement a function to parse the pending adjustment payload');
     expect(firstReasoning).toBe('low');
+    // The next sync scores the same model at high; Pi still echoes low.
+    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+      version: 2,
+      syncedAt: Date.now() + 1,
+      aliases: {},
+      models: [
+        { registryId: 'alpha/first', benchSlug: 'first-high', active: true, effort: 'high', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+      ],
+    }));
     await harness.serve(routedContext, { reasoning: firstReasoning });
-    expect(harness.delegatedCall().options?.reasoning).toBe('medium');
+    expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
 
-  it('syncs Pi\'s own thinking-level state to the selected implement level', async () => {
+  it('keeps the effort the incumbent served at when no row measures that effort', async () => {
+    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+      version: 2,
+      syncedAt: Date.now(),
+      aliases: {},
+      models: [
+        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+      ],
+    }));
+    harness = await setupProviderTest({
+      dir: temp.path, models: REGISTRY_MODELS,
+      pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI,
+    });
+    const request = { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context;
+    // An explicit user level serves the low row at high.
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(request, { reasoning: 'high' });
+    expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first:low');
+    expect(harness.delegatedCall().options?.reasoning).toBe('high');
+    harness.resetEventStream();
+    vi.mocked(streamSimple).mockClear();
+
+    // Pi echoes high back. The same request scores the incumbent at the
+    // effort it served at, not at the chosen row's effort.
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve(request, { reasoning: 'high' });
+    expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first:high');
+    expect(harness.delegatedCall().options?.reasoning).toBe('high');
+  });
+
+  it('syncs Pi\'s own thinking-level state to the served effort', async () => {
     // The footer/session state only updates via pi.setThinkingLevel; without
     // this call it would keep showing whatever level the user last set
     // manually, never reflecting what the router actually picked per-turn.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
+    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+      version: 2,
+      syncedAt: Date.now(),
+      aliases: {},
+      models: [
+        { registryId: 'alpha/first', benchSlug: 'first-high', active: true, effort: 'high', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+      ],
+    }));
     const { routedContext } = await selectedTurn('implement a function to parse the pending adjustment payload');
     setThinkingLevelSpy.mockClear();
     await harness.serve(routedContext, {});
 
-    expect(setThinkingLevelSpy).toHaveBeenCalledWith('medium');
+    expect(setThinkingLevelSpy).toHaveBeenCalledWith('high');
   });
 
   it('never lets a footer-sync failure break the turn', async () => {
@@ -1181,8 +1235,8 @@ describe('a thinking-level change the router did not write pins the served model
   });
 });
 
-describe('incumbent effort floor carries across invocations', () => {
-  // Gathering an unresolved entry retains the selected work's effort minimum.
+describe('incumbent keeps serving across unresolved entries', () => {
+  // Gathering an unresolved entry keeps the selected work's model and task type.
   let harness: ProviderTestHarness;
   let tree: SessionTree;
 
@@ -1216,7 +1270,7 @@ describe('incumbent effort floor carries across invocations', () => {
     });
   });
 
-  it('keeps the selected work’s effort minimum across two unresolved entries', async () => {
+  it('keeps the selected work’s model and task type across two unresolved entries', async () => {
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
     const selectedContext = await prepareSelectedWork(harness, tree, 'implement the retry logic across the module');
     harness.resetEventStream();
@@ -1233,7 +1287,7 @@ describe('incumbent effort floor carries across invocations', () => {
       await harness.serve({ messages } as unknown as Context);
       return harness.getProviderState().lastDecision;
     }
-    // The incumbent serves each later entry, at its task type's effort minimum.
+    // The incumbent serves each later entry at the selected work's task type.
     const turn2 = await nextEntry('give me today’s weather forecast');
     expect(turn2?.dimension).toBe('implement');
     expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
@@ -1519,7 +1573,8 @@ describe('provider status reporting', () => {
       cause: 'error-fallback',
       viaFallback: true,
     });
-    expect(logged.served?.startsWith(`${attempted[1]}:`)).toBe(true);
+    // The served key names the fallback model; its effort suffix is present only when an effort was sent.
+    expect(logged.served?.split(':')[0]).toBe(attempted[1]);
     expect(logged.chain[0]).toBe(attempted[1]);
   });
 
@@ -2375,7 +2430,6 @@ describe('context acquisition', () => {
       expect(implementing?.dimension).toBe('implement');
       expect(implementing?.chosen).toBe('beta/strong');
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
-      expect(harness.session.getWorkPhaseState()?.contract?.submitterDimension).toBe('implement');
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       breakWithUndeclaredEdit();
       const restored = await session.routeTurnAgainWithSameUserEntry();
@@ -2601,8 +2655,6 @@ describe('context acquisition', () => {
       await executeOnce();
       await executeOnce();
       expect(harness.session.getWorkPhaseState()?.contractStrikes).toEqual({ cheap: 1 });
-      // The revised plan was submitted during review but belongs to the planning task.
-      expect(harness.session.getWorkPhaseState()?.contract?.submitterDimension).toBe('plan');
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
       const escalated = await session.routeTurnAgainWithSameUserEntry();

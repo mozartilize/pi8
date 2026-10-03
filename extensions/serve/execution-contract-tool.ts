@@ -483,7 +483,6 @@ export function submitExecutionContract(
   }
   const accepted = acceptContract(base, {
     submitter: served,
-    submitterDimension: previous?.submitterDimension ?? last.dimension,
     validation,
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },

@@ -11,7 +11,7 @@ Implementation-level architecture for the router. For user-facing setup and comm
 - **Session generation/currentness**: a generation changes on session reset; asynchronous results check that they still belong to the active generation before writing state. **Provenance** labels whether text came from a user, an assistant, a summary, or a known synthetic source such as a router settle reminder.
 - **Sidecar**: the per-session decision-log file beside Pi's transcript. **Seam**: a deliberate test hook for replacing a path, timeout, or runtime dependency.
 
-Each *minimum* has a different subject: the **role minimum task type** constrains subagent picks; the **incumbent capability minimum** keeps the serving model at or above the previous served candidate's quality on the routed task axis, while its **minimum thinking level** constrains effort separately. The **dimension effort minimum** sets reasoning per task type. For measured model quality, the **capability minimums** are fixed per task type and do not depend on the candidate pool (see §2, Capability tiers); a handoff requirement is a share of a fixed reference strength per axis. A plan or review handoff's **reasoning minimum** is the higher of its rubric requirement and its final step's band minimum (`standard` 45%, `strong` 70%, `frontier` 85%). An execution contract's **executor implement minimum** is the higher of the requirement computed from the submitter's rubric and the router's measurements (30% at least) and the minimum of the contract's band (`economy` 30%, `standard` 45%, `strong` 70%). Name the subject rather than saying only “floor.”
+Each *minimum* has a different subject: the **role minimum task type** constrains subagent picks; the **incumbent capability minimum** keeps the serving model at or above the previous served candidate's quality on the routed task axis, while its **minimum thinking level** keeps chain entries of the incumbent model at or above the effort it served at. For measured model quality, the **capability minimums** are fixed per task type and do not depend on the candidate pool (see §2, Capability tiers); a handoff requirement is a share of a fixed reference strength per axis. A plan or review handoff's **reasoning minimum** is the higher of its rubric requirement and its final step's band minimum (`standard` 45%, `strong` 70%, `frontier` 85%). An execution contract's **executor implement minimum** is the higher of the requirement computed from the submitter's rubric and the router's measurements (30% at least) and the minimum of the contract's band (`economy` 30%, `standard` 45%, `strong` 70%). Name the subject rather than saying only “floor.”
 
 ## Pipeline overview
 
@@ -103,19 +103,15 @@ Entries and reminder episodes are deduplicated. A reminder outcome belongs to th
 
 `reputation` defaults to true. Unset `reputationWeights` means collection only for compliance; fit the weights after at least two weeks of observations rather than supplying fixture-derived defaults. Positive rewards for execution outcomes are not used. `/router-status` shows decayed counts and penalties; `/router-why` records a penalty that changed the preferred candidate. Every history read/write fails open.
 
-### Effort floor
+### Effort
 
-Minimum reasoning effort per dimension, not an assignment. A measured effort may raise it, never lower it:
+Each effort of a model is a separate candidate with its own score: a measured row, or an estimate stepped down from the nearest measured effort above it. The scorer therefore chooses the effort with the model, and the router serves the scored effort for every task type. There is no per-task effort table.
 
-| Dimension | Min thinking |
-|---|---|
-| `lightweight` | off |
-| `gather` | low |
-| `implement` | medium |
-| `review` | high |
-| `plan` | max |
+The router raises a scored effort only to the nearest level the model supports, with an **up-only walk** (`levelFrom`), and to the incumbent's minimum thinking level (`incumbentEffort`) for entries of the incumbent model. It never lowers a router-chosen effort.
 
-The router-chosen effort uses an **up-only walk** (`levelFrom`) from the clamped minimum — a gap in the `thinkingLevelMap` never resolves below the minimum. Explicit user reasoning requests use a nearest-first walk to honour the user's choice as closely as possible.
+The incumbent's minimum thinking level is the effort the incumbent actually served at, taken from the served key even when no row measures that effort. It applies to the pool before scoring, so the scorer compares the incumbent model at the effort that will serve: a lower effort is dropped when a row at the served effort exists. Otherwise the nearest lower row stands in at the served effort. That row reads knowledge, research, long-context, and vision reasoning only from a measurement retained at the served effort, or counts them as unknown; its other axes, price, and time stay at the lower effort's values. Delegation raises only an unlabelled entry of the incumbent model, which Pi's session level serves.
+
+A candidate with no effort label gets Pi's session thinking level, as Pi sends it when a user selects that model; Pi does not choose an effort itself, and a provider turns thinking off when no level is sent. An explicit user thinking level wins over both and uses a nearest-first walk (`resolveThinkingLevel`) to honour the user's choice as closely as the model supports.
 
 ---
 
@@ -158,7 +154,7 @@ A usage-limit error — quota/billing exhaustion, OpenCode `GoUsageLimitError`, 
 
 ### Effort resolution per chain entry
 
-Each chain entry carries its own effort from the bench row. Router-chosen efforts are clamped to the dimension floor and resolved via up-only walk (`levelFrom`). Explicit user reasoning requests use nearest-first walk (`resolveThinkingLevel`) so the user's choice is honoured as closely as the model supports.
+Each chain entry carries its own effort from the bench row. Router-chosen efforts are resolved via up-only walk (`levelFrom`); an entry of the incumbent model is raised to `incumbentEffort`. Explicit user reasoning requests use nearest-first walk (`resolveThinkingLevel`) so the user's choice is honoured as closely as the model supports.
 
 ### Post-content irreversibility
 

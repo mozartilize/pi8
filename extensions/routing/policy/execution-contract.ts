@@ -31,7 +31,6 @@ import type {
   CapabilityBand,
   ContractKeepReason,
   ContractOutcome,
-  Dimension,
   ExecutionContractMeta,
   ExecutionRubric,
   MeasuredFeatures,
@@ -80,10 +79,11 @@ export interface ExecutionStepInput {
 
 export interface ExecutionContract {
   status: ExecutionContractMeta['status'];
-  /** Served candidate key (`provider/id[:effort]`) that submitted the plan. */
+  /**
+   * Served candidate key (`provider/id[:effort]`) that submitted the plan.
+   * A broken or reviewed plan returns to this model at this effort or higher.
+   */
   submitter: string;
-  /** The submitter's routed task type, restored when the contract breaks. */
-  submitterDimension: Dimension;
   band: CapabilityBand;
   /** False when only the submitter executes the plan. */
   release: boolean;
@@ -229,7 +229,6 @@ export function acceptContract(
   state: WorkPhaseState,
   input: {
     submitter: string;
-    submitterDimension: Dimension;
     validation: ValidatedContract;
     rubric: ExecutionRubric;
     measured: MeasuredFeatures;
@@ -256,7 +255,6 @@ export function acceptContract(
   const contract: ExecutionContract = {
     status: 'active',
     submitter: input.submitter,
-    submitterDimension: input.submitterDimension,
     band: bandMinimum != null ? band : 'frontier',
     release: bandMinimum != null,
     ...(bandMinimum != null ? { minimum: Math.max(requirement, bandMinimum), releasePending: true } : {}),

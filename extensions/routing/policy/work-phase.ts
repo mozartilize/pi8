@@ -196,9 +196,10 @@ export function boundaryQualifiers(decision: {
 }
 
 /**
- * Whether the served key is one of `qualifiers`. Serving raises a candidate's
- * effort to the task type's effort minimum, never lowers it, so the same model
- * at a higher effort than a qualifying key also qualifies.
+ * Whether the served key is one of `qualifiers`. Serving can raise a
+ * candidate's effort to a supported level or to the incumbent's minimum
+ * thinking level, never lowers it, so the same model at a higher effort than
+ * a qualifying key also qualifies.
  */
 export function servesBoundary(served: string, qualifiers: readonly string[]): boolean {
   const s = parseCandidateKey(served);

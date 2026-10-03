@@ -50,7 +50,6 @@ function accepted(
   if (!validation.ok) throw new Error(validation.reason);
   return acceptContract(base, {
     submitter: 'codex/sol:max',
-    submitterDimension: 'plan',
     validation,
     rubric: { ...EASY, ...rubric },
     measured: { ...validation.structural, ...QUIET, ...observed },
@@ -133,8 +132,7 @@ describe('execution contract lifecycle', () => {
   it('releases a small plan and keeps the submitter for a large one', () => {
     const small = accepted([edit('a.ts'), verify]).contract!;
     expect(small).toMatchObject({
-      status: 'active', band: 'economy', release: true, minimum: BASE_REQUIREMENT, submitterDimension: 'plan',
-    });
+      status: 'active', band: 'economy', release: true, minimum: BASE_REQUIREMENT,    });
     const large = accepted(['a', 'b', 'c', 'd', 'e', 'f'].map((f) => edit(`${f}.ts`))).contract!;
     expect(large).toMatchObject({ band: 'frontier', release: false, keepReason: 'size' });
     expect(large.minimum).toBeUndefined();

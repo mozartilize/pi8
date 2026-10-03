@@ -68,7 +68,7 @@ import {
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop, type DelegationOptions } from './delegation.js';
 import { makeTerminalErrorEvent } from './error-event.js';
-import { resolveRoutingDecision } from '../routing/policy/routing-policy.js';
+import { resolveRoutingDecision, scoredIncumbentKey } from '../routing/policy/routing-policy.js';
 import {
   penaltiesOf,
   nextProviderInvocation,
@@ -531,10 +531,13 @@ function resolveTurnEffort(args: {
 }) {
   const requestedReasoning = args.explicitThinking ?? (typeof args.options?.reasoning === 'string' ? args.options.reasoning : undefined);
   const inheritedReasoning = args.explicitThinking == null && requestedReasoning === args.session.getLastResolvedThinkingLevel();
+  // A candidate with an effort label serves its scored effort unless the user
+  // chose a level. One without a label gets Pi's session thinking level, as
+  // Pi sends it when a user selects that model.
+  const routerEffort = inheritedReasoning && args.chosenCandidate?.effort != null;
   const reasoning = resolveThinkingLevel(
     args.chosenCandidate,
-    inheritedReasoning ? undefined : requestedReasoning as ThinkingLevel | undefined,
-    args.decision.dimension,
+    routerEffort ? undefined : requestedReasoning as ThinkingLevel | undefined,
   );
   args.session.setLastResolvedThinkingLevel(reasoning);
   debugLog('decision.thinking', {
@@ -795,9 +798,13 @@ function settleExecutionContract(
   return expired.contract;
 }
 
-/** The submitter's routable candidate key, matching an unsuffixed benchmark row. */
+/**
+ * The submitter's candidate key, with the effort it served at when the policy
+ * can score that effort; otherwise the unsuffixed benchmark row it matches.
+ */
 function submitterKey(candidates: readonly Candidate[], submitter: string): string {
-  if (candidates.some((c) => candidateKey(c) === submitter)) return submitter;
+  const scored = scoredIncumbentKey(candidates, submitter);
+  if (scored) return scored;
   const row = findSourceCandidate(candidates, submitter);
   return row ? candidateKey(row) : submitter;
 }
@@ -913,14 +920,15 @@ function scoreRouterTurn(args: {
   const reasoningPending = pendingBoundary && reasoning?.pending === true;
 
   // Pi clears lastServed at stream start; the rotated value is the model and
-  // effort that actually served, including an effort-floor bump or fallback.
+  // effort that actually served, including an incumbent effort raise or fallback.
+  // That effort is the incumbent's minimum thinking level even when no row
+  // measures it, so the chosen key stands in only when no row of the model can.
   const previous = session.getPreviousServed();
   const servedCandidateKey = previous && servedKey(previous);
   const incumbentRegistryId = handBack
     ? submitterKey(routableCandidates, handBack.submitter)
-    : servedCandidateKey && routableCandidates.some((c) => candidateKey(c) === servedCandidateKey)
-      ? servedCandidateKey
-      : session.getLastChosenRegistryId();
+    : (servedCandidateKey && scoredIncumbentKey(routableCandidates, servedCandidateKey))
+      || session.getLastChosenRegistryId();
   const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
   const userReasoningOverride =
     requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
@@ -946,8 +954,6 @@ function scoreRouterTurn(args: {
     protocolPenalties: history ? compliancePenalties(history, config.reputationWeights, config.switchMargin) : undefined,
     needsVision,
     incumbentRegistryId,
-    incumbentResolvedDimension: handBack?.submitterDimension ??
-      session.getLastDecision()?.effortFloorDimension ?? session.getLastDecision()?.dimension,
     sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
     ...(execution
       ? { handoffMinimum: execution.minimum, handoffPending: contract?.releasePending === true }
@@ -963,6 +969,12 @@ function scoreRouterTurn(args: {
     config,
   });
   const decision = policy.decision;
+  // The scored pool can hold an incumbent row at its served effort that the
+  // routable pool does not; later lookups by chain key need it.
+  const scoredCandidates = [
+    ...routableCandidates,
+    ...policy.candidates.filter((c) => !routableCandidates.some((r) => candidateKey(r) === candidateKey(c))),
+  ];
   if (reasoning && policy.trajectoryApplied && !reasoning.trajectoryFired) {
     const current = session.getWorkPhaseState()!;
     session.commitWorkPhaseState({ ...current, reasoningHandoff: { ...reasoning, trajectoryFired: true } });
@@ -1005,7 +1017,7 @@ function scoreRouterTurn(args: {
 
   const scored: ScoredTurn = {
     decision,
-    routableCandidates,
+    routableCandidates: scoredCandidates,
     requestedReasoning,
     ...(restore ? { restoredContract: restore } : {}),
     ...(pendingBoundary ? { pendingBoundary: true } : {}),
@@ -1337,7 +1349,7 @@ function pinOnThinkingChange(
       : session.getPreviousServed()?.registryId;
     const model = registryId ? models.find((m) => `${m.provider}/${m.id}` === registryId) : undefined;
     if (!registryId || !model) return;
-    const level = resolveThinkingLevel(model, requested as ThinkingLevel, prepared.intent.baseDimension);
+    const level = resolveThinkingLevel(model, requested as ThinkingLevel);
     const pin = level ? `${registryId}:${level}` : registryId;
     if (!resolveManualModel(pin, models)) return;
     session.setManualModel(pin);

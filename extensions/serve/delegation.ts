@@ -38,6 +38,8 @@ import {
   candidateKey,
   parseCandidateKey,
   servedEffort,
+  levelFrom,
+  MODEL_THINKING_LEVELS,
   type StrongerCompareOpts,
   type ScoreOpts,
 } from '../routing/score/scorer.js';
@@ -219,31 +221,34 @@ export interface DelegationResult {
 /**
  * The chain entry's own measured effort wins over the turn-level reasoning
  * (a fallback to a different effort of the same model is a legitimate chain
- * step); it is still clamped to the dimension effort minimum and to the
- * entry model's support. Entries without an effort inherit the turn-level
- * reasoning. An explicit user/session reasoning always wins — the router
- * fills a gap, it does not override an instruction.
+ * step); it is raised only to a level the entry model supports. Entries
+ * without an effort inherit the turn-level reasoning. An explicit user/session
+ * reasoning always wins — the router fills a gap, it does not override an
+ * instruction.
  *
- * Router-chosen efforts use an up-only walk (levelFrom) so a gap in the
- * model's thinkingLevelMap never resolves below that minimum. An
- * explicit user request uses the nearest-first walk so the user's choice is
- * honoured as closely as the model supports.
+ * Router-chosen efforts use an up-only walk (levelFrom). An entry of the
+ * incumbent model is also raised to `minimum`, the effort the incumbent
+ * served at. An explicit user request uses the nearest-first walk so the
+ * user's choice is honoured as closely as the model supports.
  */
 function resolveAttemptEffort(
   entryEffort: ModelThinkingLevel | undefined,
-  effortFloorDimension: Dimension,
+  minimum: ModelThinkingLevel | undefined,
   userReasoningOverride: boolean | undefined,
   chosen: Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
   turnReasoning: string | undefined,
 ): ModelThinkingLevel | undefined {
-  return servedEffort(
+  const served = servedEffort(
     { ...chosen, effort: entryEffort },
-    effortFloorDimension,
     {
       userReasoning: typeof turnReasoning === 'string' ? (turnReasoning as ThinkingLevel) : undefined,
       userReasoningOverride,
     },
   );
+  if (minimum == null || userReasoningOverride || !chosen.reasoning) return served;
+  const rank = (level: ModelThinkingLevel | undefined): number => (level == null ? -1 : MODEL_THINKING_LEVELS.indexOf(level));
+  if (rank(served) >= rank(minimum)) return served;
+  return levelFrom(minimum, chosen) ?? served;
 }
 
 /**
@@ -1325,13 +1330,14 @@ export async function runDelegationLoop(
     }
     lastAttemptedId = candidateId;
 
-    // An incumbent held on a cheap follow-up carries the
-    // incumbent's resolved dimension as an up-only effort floor, so the
-    // served thinking level cannot drop below what the incumbent ran at.
-    const effortFloorDimension = decision.effortFloorDimension ?? decision.dimension;
+    // An entry of the incumbent model serves at the effort the incumbent
+    // served at or higher.
+    const incumbentMinimum = decision.incumbentEffort?.model === `${provider}/${modelId}`
+      ? decision.incumbentEffort.effort
+      : undefined;
     const effectiveReasoning = resolveAttemptEffort(
       entryEffort,
-      effortFloorDimension,
+      incumbentMinimum,
       opts.userReasoningOverride,
       chosen as Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
       opts.reasoning,

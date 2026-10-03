@@ -188,25 +188,21 @@ interface Eligibility {
 }
 
 /**
- * Exact-effort axes at the effort delegation will serve. The task type's
- * effort minimum can raise a candidate's own effort (low serves at medium for
- * a plan), and these axes are never estimated across efforts, so another
- * effort's measurement never stands in for the served one.
+ * Exact-effort axes at the effort delegation will serve. A gap in the
+ * model's thinking-level map can raise a candidate's own effort, and these
+ * axes are never estimated across efforts, so another effort's measurement
+ * never stands in for the served one.
  */
 function servedExactQuality(
   candidate: Candidate,
   candidates: readonly Candidate[],
-  dimension: Dimension,
 ): ExactQuality {
   const exact = (quality: BenchModel['quality'] = {}): ExactQuality => ({
     knowledge: quality.knowledge, research: quality.research,
     longContext: quality.longContext, visionReasoning: quality.visionReasoning,
   });
   const own = exact(candidate.bench?.quality);
-  const minimum = MIN_THINKING_BY_DIMENSION[dimension];
-  const served = candidate.effort != null
-    ? levelFrom(clampEffortToFloor(candidate.effort, dimension), candidate)
-    : minimum === 'off' ? undefined : levelFrom(minimum, candidate);
+  const served = candidate.effort != null ? levelFrom(candidate.effort, candidate) : undefined;
   if (served == null || served === candidate.effort) return own;
   const retained = candidate.exactQualityByEffort?.[served];
   if (retained) return exact(retained);
@@ -502,29 +498,26 @@ export interface StrongerCompareOpts {
 }
 
 /**
- * Effort the candidate will actually serve after the dimension floor, the
- * model's support map, and an explicit user override. Same walk as
- * delegation's attempt resolution: labelled efforts go through `levelFrom`,
- * so a stronger-hop proof cannot use a labelled effort that will never be
- * sent.
+ * Effort the candidate will actually serve after the model's support map
+ * and an explicit user override. Same walk as delegation's attempt
+ * resolution: labelled efforts go through `levelFrom`, so a stronger-hop
+ * proof cannot use a labelled effort that will never be sent.
  */
 export function servedEffort(
   candidate: Pick<Candidate, 'effort' | 'reasoning' | 'thinkingLevelMap'>,
-  dimension: Dimension,
   opts?: Pick<StrongerCompareOpts, 'userReasoning' | 'userReasoningOverride'>,
 ): ModelThinkingLevel | undefined {
   if (candidate.effort != null && !opts?.userReasoningOverride) {
-    return levelFrom(clampEffortToFloor(candidate.effort, dimension), candidate);
+    return levelFrom(candidate.effort, candidate);
   }
-  return resolveThinkingLevel(candidate, opts?.userReasoning, dimension);
+  return resolveThinkingLevel(candidate, opts?.userReasoning);
 }
 
 function destServingKey(
   dest: Candidate,
-  dim: Dimension,
   opts?: StrongerCompareOpts,
 ): string {
-  const effort = servedEffort(dest, dim, opts);
+  const effort = servedEffort(dest, opts);
   if (effort == null) {
     // A reasoning model that cannot serve its labelled effort must not
     // look like a higher-effort hop. Non-reasoning labelled rows keep
@@ -538,10 +531,9 @@ function destServingKey(
 
 function destAtServedEffort(
   dest: Candidate,
-  dim: Dimension,
   opts?: StrongerCompareOpts,
 ): Candidate | undefined {
-  const effort = servedEffort(dest, dim, opts);
+  const effort = servedEffort(dest, opts);
   if (effort == null) {
     if (dest.effort == null || !dest.reasoning) return dest;
     return undefined;
@@ -571,7 +563,7 @@ export function isStrictlyStrongerCandidate(
   source?: Candidate,
   opts?: StrongerCompareOpts,
 ): boolean {
-  const destKey = destServingKey(dest, dim, opts);
+  const destKey = destServingKey(dest, opts);
   if (!isValidEscalationCandidate(destKey, fromModel)) return false;
   const sourceParsed = parseCandidateKey(fromModel);
   const destParsed = parseCandidateKey(destKey);
@@ -581,7 +573,7 @@ export function isStrictlyStrongerCandidate(
   // effort ladder is the evidence. Unmeasured efforts would otherwise be
   // unreachable as destinations even when the model plainly supports them.
   if (destParsed.id === sourceParsed.id) return true;
-  const measured = destAtServedEffort(dest, dim, opts);
+  const measured = destAtServedEffort(dest, opts);
   if (!measured) return false;
   const destQuality = capabilityForDimension(measured, dim);
   if (destQuality == null || measured.bench?.qualityEstimated === true) return false;
@@ -697,13 +689,12 @@ export function applyCandidateGuards(
  */
 function computeEligibility(
   filtered: Candidate[],
-  dimension: Dimension,
   minimums: Minimums,
 ): Map<string, Eligibility> {
   return new Map(filtered.map((c) => [
     candidateKey(c),
     eligibilityOf(
-      c.bench && { ...c.bench.quality, ...servedExactQuality(c, filtered, dimension) },
+      c.bench && { ...c.bench.quality, ...servedExactQuality(c, filtered) },
       minimums,
     ),
   ]));
@@ -875,7 +866,7 @@ export function pickBest(
     ...(opts.estimatedContextTokens >= 64_000 ? { longContext: 0.30 } : {}),
     ...(opts.needsVision ? { visionReasoning: 0.30 } : {}),
   };
-  const eligibility = computeEligibility(filtered, dimension, minimums);
+  const eligibility = computeEligibility(filtered, minimums);
 
   // Request-local cost and speed scales, chosen once for this call from the
   // tier-0 pool: a tier-2 candidate missing task cost or time never competes
@@ -911,21 +902,6 @@ export function pickBest(
 }
 
 const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-
-/**
- * Minimum reasoning effort per dimension — a FLOOR, not an assignment. The
- * scorer may serve any measured effort at or above it (a scored
- * effort may raise the floor, never lower it). A model with no measurement
- * at or above the floor keeps today's behavior: send the floor level,
- * clamped by thinkingLevelMap.
- */
-const MIN_THINKING_BY_DIMENSION: Record<Dimension, ThinkingLevel | 'off'> = {
-  lightweight: 'off',
-  gather: 'low',
-  plan: 'medium',
-  implement: 'medium',
-  review: 'medium',
-};
 
 function isThinkingSupported(
   c: Pick<Candidate, 'reasoning' | 'thinkingLevelMap'> | undefined,
@@ -966,40 +942,20 @@ export function levelFrom(
 }
 
 /**
- * Raise a measured effort to the dimension floor when it sits below it. The
- * floor is the only downward protection on the effort axis; scoring
- * already guarantees chain entries respect it, so this is defense in depth
- * for the delegation loop.
+ * The router's effort for a candidate: its measured (or estimated) effort,
+ * raised only to the nearest level the model supports. Each effort has its
+ * own score, so the scorer has already chosen the effort for the task. A
+ * candidate with no effort label gets no router choice; the caller sends
+ * Pi's session thinking level, as Pi does when a user selects that model.
  */
-export function clampEffortToFloor(
-  effort: ModelThinkingLevel,
-  dimension: Dimension,
-): ModelThinkingLevel {
-  const floor = MIN_THINKING_BY_DIMENSION[dimension];
-  const effortIdx = THINKING_LEVELS.indexOf(effort);
-  const floorIdx = THINKING_LEVELS.indexOf(floor);
-  return effortIdx >= floorIdx ? effort : floor;
-}
-
-export function chooseThinkingLevel(
-  c: Candidate | undefined,
-  dimension: Dimension,
-): ModelThinkingLevel | undefined {
-  if (!c?.reasoning) return undefined;
-  const floor = MIN_THINKING_BY_DIMENSION[dimension];
-  // A measured effort at or above the dimension floor is the router's choice;
-  // below the floor it is raised to the floor, never sent as-is.
-  if (c.effort != null) {
-    return levelFrom(clampEffortToFloor(c.effort, dimension), c);
-  }
-  if (floor === 'off') return undefined;
-  return levelFrom(floor, c);
+export function chooseThinkingLevel(c: Candidate | undefined): ModelThinkingLevel | undefined {
+  if (!c?.reasoning || c.effort == null) return undefined;
+  return levelFrom(c.effort, c);
 }
 
 export function resolveThinkingLevel(
   c: Pick<Candidate, 'reasoning' | 'thinkingLevelMap'> | undefined,
   requested: ThinkingLevel | undefined,
-  dimension: Dimension,
 ): ModelThinkingLevel | undefined {
   if (!c?.reasoning) return undefined;
   if (requested) {
@@ -1020,7 +976,7 @@ export function resolveThinkingLevel(
     }
     return undefined;
   }
-  return chooseThinkingLevel(c as Candidate | undefined, dimension);
+  return chooseThinkingLevel(c as Candidate | undefined);
 }
 
 export function buildRouterThinkingLevelMap(
@@ -1062,7 +1018,7 @@ export function buildCandidate(
     bench,
     // A candidate built from an effort-labelled row serves at exactly that
     // measured effort; a candidate without a bench row (or with an unlabelled
-    // row) carries no effort and the dimension floor applies.
+    // row) carries no effort and Pi's session thinking level applies.
     effort: bench?.effort,
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
