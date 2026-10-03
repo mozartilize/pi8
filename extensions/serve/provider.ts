@@ -1251,7 +1251,7 @@ async function delegateRouterTurn(args: {
     if (config.reputation !== false && actual) {
       appendModelEvent({
         kind: 'served', model: servedKey(actual), entry: modelEventEntry(intentKey), session: modelEventSession(),
-        prefix: prepared.cacheHead.identity, prefixTokens: prepared.cacheHead.tokens,
+        dimension: decision.dimension, prefix: prepared.cacheHead.identity, prefixTokens: prepared.cacheHead.tokens,
       });
     }
   }
@@ -1802,8 +1802,8 @@ async function runRouterTurn(args: {
   const { context, options, pi, session, runtime, turnTimer, stream } = args;
 
   if (!session.getManualModel()) {
-    const browser = await runtime.checkBrowser();
-    if (!browser.ready) return { kind: 'terminal', reason: 'error', message: browser.message };
+    const benchmarks = runtime.checkBenchmarks();
+    if (!benchmarks.ready) return { kind: 'terminal', reason: 'error', message: benchmarks.message };
   }
 
   const preparation = await prepareRouterTurn({ context, session, runtime });

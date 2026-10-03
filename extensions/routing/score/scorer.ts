@@ -138,6 +138,21 @@ export const AXIS_REFERENCE: Readonly<Record<Exclude<QualityAxis, 'knowledge'>, 
   visionReasoning: 1,
 };
 
+/** The Intelligence Index major.minor version that the minimums above are calibrated for. */
+export const CALIBRATED_INDEX_VERSION = '4.3';
+
+/**
+ * A warning when the synced index version is not the calibrated version.
+ * A new version can change evaluations and scales, but the user chose to
+ * keep routing: the warning asks for a recalibration and does not block.
+ */
+export function indexVersionWarning(version: string | undefined): string | undefined {
+  const reported = version?.trim().replace(/^v/i, '').split('.').slice(0, 2).join('.');
+  if (reported === CALIBRATED_INDEX_VERSION) return undefined;
+  return `Artificial Analysis Intelligence Index ${reported ? `version ${reported}` : 'version is not reported'}. `
+    + `The capability minimums are calibrated for version ${CALIBRATED_INDEX_VERSION}. Routing continues with these minimums.`;
+}
+
 /** The strongest handoff requirement: the work keeps a model near the reference. */
 export const FRONTIER_REQUIREMENT = 0.85;
 

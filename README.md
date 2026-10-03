@@ -32,9 +32,11 @@ For local development, load a checkout through `.pi/extensions/` or with `pi -e 
 3. Run `/router-sync <your-key>`.
 4. Set the session model to `router/auto`.
 
-When Chromium is missing, selecting `router/auto` shows an install command for the exact resolved package version. Automatic turns stop with that setup message and make no model call. Install the browser and run `/router-sync`; Pi does not need a restart. Concrete-model sessions are unaffected.
+Sync reads both the API and the public models page, so `/router-sync` needs Chromium. If either source fails, sync keeps the previous store. Pi does not need a restart after the browser install.
 
-Sync reads both the API and the public models page. If either fails, it keeps the previous store. Without a synced store, Chromium-ready routing can use registry metadata, but quality is unknown.
+`router/auto` routes only from synced benchmark data that includes the models-page measurements. Without that data, selecting `router/auto` shows an error, and automatic turns stop with a message to run `/router-sync`; they make no model call. A manual pin and concrete-model sessions are unaffected. A missing browser does not stop routing: the current data stays in use, and selecting `router/auto` shows a warning that `/router-sync` cannot refresh it.
+
+The capability minimums are calibrated for Artificial Analysis Intelligence Index version 4.3. When a sync reports a different version, the router saves the data, keeps routing, and shows a warning at sync, at `router/auto` selection, and in `/router-status`.
 
 ## How it works
 

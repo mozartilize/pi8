@@ -191,11 +191,40 @@ export const isActive = (m: BenchModel): boolean => m.active;
 export const activeModels = (store: BenchmarkStore): BenchModel[] =>
   store.models.filter(isActive);
 
+export type BenchmarkCheck = { ready: true } | { ready: false; message: string };
+
 /**
- * Group active models by registryId *and* effort; return row with richest
- * quality info per group. Quality richness order: per-dimension present >
- * headline index present. Effort variants of one model are separate rows —
- * each is a distinct (model, effort) measurement pair.
+ * `router/auto` serves only from synced benchmark data that includes the
+ * models-page measurements. Plan/review minimums need them, and registry
+ * metadata alone gives no capability measurement. Chromium is needed only
+ * to sync: a previous store stays usable when the browser is missing.
+ */
+export function checkBenchmarkStore(store: BenchmarkStore | undefined = loadStore()): BenchmarkCheck {
+  const active = store ? activeModels(store) : [];
+  if (!store?.syncedAt || active.length === 0) {
+    return {
+      ready: false,
+      message: 'router/auto has no benchmark data. Run /router-sync <key> with a free key from https://artificialanalysis.ai/.',
+    };
+  }
+  // Briefcase and LCR come only from the models page.
+  if (!active.some((m) => m.quality.research !== undefined || m.quality.longContext !== undefined)) {
+    return {
+      ready: false,
+      message: 'The benchmark data has no Artificial Analysis models-page measurements. Run /router-sync.',
+    };
+  }
+  return { ready: true };
+}
+
+/**
+ * Group active models by registryId *and* effort and keep one whole row per
+ * group. Two rows in one group are different AA models (for example a preview
+ * and its release) that resolve to one registry model. Taking each axis from
+ * a different row would describe a model nobody measured. The kept row is
+ * measured rather than estimated, then has the most quality axes.
+ * Effort variants of one model are separate rows — each is a distinct
+ * (model, effort) measurement pair.
  * Only active rows are merged; inactive (unresolved) rows must be passed in
  * separately if the caller wants to retain them.
  */
@@ -209,27 +238,12 @@ export const mergeActiveBenchRows = (models: BenchModel[]): BenchModel[] => {
     byKey.set(key, list);
   }
   const result: BenchModel[] = [];
+  const axes = (row: BenchModel): number => Object.values(row.quality).filter((v) => v !== undefined).length;
   for (const [, rows] of byKey) {
-    if (rows.length === 1) {
-      result.push(rows[0]);
-      continue;
-    }
-    // Merge quality fields, prefer filled ones.
-    const quality = {
-      intelligence: rows.map((r) => r.quality.intelligence).find((v) => v !== undefined),
-      coding: rows.map((r) => r.quality.coding).find((v) => v !== undefined),
-      agenticCoding: rows.map((r) => r.quality.agenticCoding).find((v) => v !== undefined),
-      knowledge: rows.map((r) => r.quality.knowledge).find((v) => v !== undefined),
-      research: rows.map((r) => r.quality.research).find((v) => v !== undefined),
-      longContext: rows.map((r) => r.quality.longContext).find((v) => v !== undefined),
-      visionReasoning: rows.map((r) => r.quality.visionReasoning).find((v) => v !== undefined),
-    };
-    const nonEmpty = rows.find((r) => Object.values(r.quality).some((v) => v !== undefined)) ?? rows[0];
-    result.push({
-      ...nonEmpty,
-      quality,
-      qualityEstimated: rows.some(row => row.qualityEstimated) || undefined,
-    });
+    result.push(rows.reduce((best, row) => {
+      if (!!row.qualityEstimated !== !!best.qualityEstimated) return row.qualityEstimated ? best : row;
+      return axes(row) > axes(best) ? row : best;
+    }));
   }
   return result;
 };

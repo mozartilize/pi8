@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 
 import { syncBenchmarks, syncSummary } from './sync.js';
+import { indexVersionWarning } from '../routing/score/scorer.js';
 import { loadStore, saveStore, emptyStore } from './store.js';
 import * as aa from '../adapters/artificial-analysis.js';
 import type { ExtensionContext } from '../types.js';
@@ -68,6 +69,27 @@ describe('syncBenchmarks', () => {
       qualityEstimated: true,
       timePerTaskSeconds: 120,
     });
+  });
+
+  it('saves an uncalibrated index version and only warns', async () => {
+    const row = {
+      benchSlug: 'claude-opus-4-6', effort: 'max' as const, source: 'artificial-analysis',
+      quality: { intelligence: 52, knowledge: 30, research: 0.5 },
+    };
+    vi.spyOn(aa, 'fetchAndNormalize').mockResolvedValue(Object.assign([row], { indexVersion: '4.4' }));
+    const results = await syncBenchmarks(fakeCtx, { apiKey: 'key' });
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ ok: true, matched: 1, warning: expect.stringMatching(/version 4\.4.*calibrated for version 4\.3/) });
+    expect(results[0].error).toBeUndefined();
+    expect(loadStore()).toMatchObject({ indexVersion: '4.4', models: [expect.objectContaining({ benchSlug: 'claude-opus-4-6' })] });
+    expect(syncSummary(results)).toContain('Warning: ');
+  });
+
+  it('accepts the calibrated index version, including patch releases', () => {
+    expect(indexVersionWarning('4.3')).toBeUndefined();
+    expect(indexVersionWarning('v4.3.1')).toBeUndefined();
+    expect(indexVersionWarning('4.4')).toMatch(/version 4\.4/);
+    expect(indexVersionWarning(undefined)).toMatch(/not reported/);
   });
 
   it('keeps the previous store when the fetch fails', async () => {

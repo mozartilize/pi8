@@ -2,7 +2,6 @@
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { identityKey } from './matcher.js';
 import { resolveStoragePath } from './store.js';
 
 const REMINDER_RULE_VERSION = 1;
@@ -20,18 +19,25 @@ export interface ModelEvent {
   /** An opaque hash of a session and entry identity; never request text. */
   entry: string;
   session?: string;
+  /** The routed task type, so fitted weights can control for workload mix. */
+  dimension?: string;
   reminder?: string;
   /** Only successful serves carry prompt-head hashes and counts. */
   prefix?: string;
   prefixTokens?: number;
 }
 interface StoredEvent extends ModelEvent { at: number; version: number }
-export interface ModelStats {
-  entries: number;
+/** Counts for one reminder kind (`context`, `completion`, `contract`). */
+export interface ReminderStats {
   remindedEntries: number;
   reminders: number;
   followed: number;
   ignored: number;
+}
+export interface ModelStats {
+  entries: number;
+  /** Each kind has its own opportunities, so the kinds are never added into one rate. */
+  byReminder: Map<string, ReminderStats>;
 }
 export interface ModelHistory {
   collectedSince?: number;
@@ -43,9 +49,15 @@ export interface ModelHistory {
 export function modelEntryId(session: string, entry: string): string {
   return createHash('sha256').update(session).update('\0').update(entry).digest('hex');
 }
+/**
+ * Compliance identity: one model release across providers and efforts.
+ * Effort is a call option, not different model weights. A dated or revised
+ * release keeps its own identity and does not get an older release's history.
+ */
 export function reputationKey(model: string): string {
-  // Effort is a call option, not different model weights.
-  return identityKey(model.replace(/:(minimal|low|medium|high|xhigh|max|off)$/, ''));
+  const id = model.includes('/') ? model.slice(model.indexOf('/') + 1) : model;
+  // Providers spell one release as `4.8` or `4-8`; separators carry no identity.
+  return id.replace(/:(minimal|low|medium|high|xhigh|max|off)$/, '').toLowerCase().replace(/[._\s]+/g, '-');
 }
 
 /** Log failures must never block a turn, tool call or notification. */
@@ -87,27 +99,39 @@ export function loadModelHistory(storageBase?: string, now = Date.now()): ModelH
     if (!model || event.model === 'unknown/unknown') continue;
     collectedSince ??= event.at;
     const weight = 2 ** (-(now - event.at) / HALF_LIFE_MS);
-    const stat = stats.get(model) ?? { entries: 0, remindedEntries: 0, reminders: 0, followed: 0, ignored: 0 };
+    const stat = stats.get(model) ?? { entries: 0, byReminder: new Map<string, ReminderStats>() };
     stats.set(model, stat);
     const entryKey = `${model}\0${event.entry}`;
-    const episode = `${event.entry}\0${event.reminder ?? ''}`;
+    const kind = typeof event.reminder === 'string' && event.reminder ? event.reminder : undefined;
+    const episode = `${event.entry}\0${kind ?? ''}`;
+    const reminderStats = (): ReminderStats => {
+      const existing = stat.byReminder.get(kind!);
+      if (existing) return existing;
+      const created = { remindedEntries: 0, reminders: 0, followed: 0, ignored: 0 };
+      stat.byReminder.set(kind!, created);
+      return created;
+    };
     if (event.kind === 'served') {
       if (!seen.has(entryKey)) { stat.entries += weight; seen.add(entryKey); }
       if (typeof event.prefix === 'string' && /^[a-f0-9]{64}$/.test(event.prefix)
         && Number.isFinite(event.prefixTokens) && event.prefixTokens! > 0) {
         recentPrefixes.set(event.model, { at: event.at, prefix: event.prefix, tokens: event.prefixTokens!, entry: event.entry, session: event.session });
       }
+    } else if (!kind) {
+      continue;
     } else if (event.kind === 'reminder') {
       if (reminders.has(episode)) continue;
       reminders.set(episode, { model, resolved: false });
-      stat.reminders += weight;
-      if (!remindedEntries.has(entryKey)) { stat.remindedEntries += weight; remindedEntries.add(entryKey); }
+      const counts = reminderStats();
+      counts.reminders += weight;
+      const remindedKey = `${entryKey}\0${kind}`;
+      if (!remindedEntries.has(remindedKey)) { counts.remindedEntries += weight; remindedEntries.add(remindedKey); }
     } else {
       const reminder = reminders.get(episode);
       // Another model taking over is not proof the original model ignored a reminder.
       if (!reminder || reminder.resolved || reminder.model !== model) continue;
       reminder.resolved = true;
-      stat[event.kind] += weight;
+      reminderStats()[event.kind] += weight;
     }
   }
   return { stats, recentPrefixes, collectedSince };
@@ -129,10 +153,13 @@ export function compliancePenalties(history: ModelHistory, weights: ReputationWe
   const penalties = new Map<string, number>();
   if (!weights || !modelHistoryReady(history)) return penalties;
   for (const [model, stats] of history.stats) {
-    const completed = stats.followed + stats.ignored;
-    const reminder = stats.entries >= 30 ? wilsonLower(stats.remindedEntries, stats.entries) * weights.reminder : 0;
-    const ignored = completed >= 10 ? wilsonLower(stats.ignored, completed) * weights.ignored : 0;
-    penalties.set(model, Math.min(Math.max(0, cap), reminder + ignored));
+    let penalty = 0;
+    for (const counts of stats.byReminder.values()) {
+      const completed = counts.followed + counts.ignored;
+      if (stats.entries >= 30) penalty += wilsonLower(counts.remindedEntries, stats.entries) * weights.reminder;
+      if (completed >= 10) penalty += wilsonLower(counts.ignored, completed) * weights.ignored;
+    }
+    penalties.set(model, Math.min(Math.max(0, cap), penalty));
   }
   return penalties;
 }

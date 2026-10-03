@@ -67,6 +67,7 @@ function logSettle(
     served: served ? servedKey(served) : 'unknown/unknown',
     action,
     reminder,
+    ...(state.deliverable ? { deliverable: state.deliverable } : {}),
     ...(workItemId ? { workItemId } : {}),
   });
 }

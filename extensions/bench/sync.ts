@@ -3,7 +3,7 @@
  * models, and replace the store. A failed fetch, or a sync that binds no
  * registry model, keeps the previous store.
  */
-import { AXIS_REFERENCE } from '../routing/score/scorer.js';
+import { AXIS_REFERENCE, indexVersionWarning } from '../routing/score/scorer.js';
 import type { ExtensionContext, SyncResult } from '../types.js';
 import {
   loadStore,
@@ -74,10 +74,14 @@ export async function syncBenchmarks(
   }
 
   const max = Math.max(0, ...merged.filter(row => row.active).map(row => row.quality.intelligence ?? 0));
-  const notices: string[] = [];
-  if (max > 0 && Math.abs(max / AXIS_REFERENCE.intelligence - 1) > 0.15) notices.push('intelligence maximum differs by over 15% from calibration; review capability minimums');
-  if (rows.indexVersion && rows.indexVersion.replace(/^v/, '') !== '4.3') notices.push(`AA index version ${rows.indexVersion} differs from calibration 4.3`);
-  if (notices.length) fetched.error = `Notice: ${notices.join('; ')}`;
+  // Warnings only: a calibration gap keeps the new data and keeps routing.
+  const warnings: string[] = [];
+  const versionWarning = indexVersionWarning(rows.indexVersion);
+  if (versionWarning) warnings.push(versionWarning);
+  if (max > 0 && Math.abs(max / AXIS_REFERENCE.intelligence - 1) > 0.15) {
+    warnings.push('The strongest intelligence score differs by more than 15% from the calibration reference. Review the capability minimums.');
+  }
+  if (warnings.length) fetched.warning = warnings.join(' ');
   saveStore({ ...store, version: 2, indexVersion: rows.indexVersion, syncedAt: Date.now(), models: merged });
   return [fetched];
 }
@@ -85,7 +89,7 @@ export async function syncBenchmarks(
 export function syncSummary(results: SyncResult[]): string {
   const lines = results.map((r) => {
     const status = r.ok ? 'ok' : 'failed';
-    const extra = r.error ? ` (${r.error})` : '';
+    const extra = r.error ? ` (${r.error})` : r.warning ? `\nWarning: ${r.warning}` : '';
     return `${r.source}: ${status}, fetched ${r.fetched}, matched ${r.matched}, unresolved ${r.unresolved}${extra}`;
   });
   return lines.join('\n');

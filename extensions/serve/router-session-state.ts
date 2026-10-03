@@ -18,7 +18,7 @@ import type {
   Dimension,
   RoutingDecision,
 } from '../types.js';
-import { checkPlaywright, type PlaywrightCheck } from '../adapters/artificial-analysis-site.js';
+import { checkBenchmarkStore, type BenchmarkCheck } from '../bench/store.js';
 import { debugLog } from '../host/debuglog.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
@@ -251,8 +251,8 @@ export class RoutingContextState {
  */
 export class RuntimeBindings {
   constructor(
-    /** Whether Chromium for Playwright is installed; `router/auto` routes only when it is. */
-    readonly checkBrowser: () => Promise<PlaywrightCheck> = checkPlaywright,
+    /** Whether synced benchmark data exists; `router/auto` routes only when it does. */
+    readonly checkBenchmarks: () => BenchmarkCheck = () => checkBenchmarkStore(),
   ) {}
 
   private lastContext: ExtensionContext | undefined;

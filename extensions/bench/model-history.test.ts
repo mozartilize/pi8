@@ -40,7 +40,10 @@ describe('global model history', () => {
       appendModelEvent({ kind: 'ignored', model, entry, reminder: 'completion' });
     }
     const stats = loadModelHistory().stats.get(reputationKey('p/claude-opus-4.8'))!;
-    expect(stats).toEqual({ entries: 1, remindedEntries: 1, reminders: 1, followed: 0, ignored: 1 });
+    expect(stats).toEqual({
+      entries: 1,
+      byReminder: new Map([['completion', { remindedEntries: 1, reminders: 1, followed: 0, ignored: 1 }]]),
+    });
     const text = readFileSync(join(dir, 'model-events.jsonl'), 'utf8');
     expect(text).not.toContain('request');
     expect(text).not.toContain(dir);
@@ -50,8 +53,27 @@ describe('global model history', () => {
     const entry = modelEntryId('s', 'e');
     appendModelEvent({ kind: 'reminder', model: 'p/a', entry, reminder: 'context' });
     appendModelEvent({ kind: 'ignored', model: 'p/b', entry, reminder: 'context' });
-    expect(loadModelHistory().stats.get('a')?.ignored).toBe(0);
-    expect(loadModelHistory().stats.get('b')?.ignored).toBe(0);
+    expect(loadModelHistory().stats.get('a')?.byReminder.get('context')?.ignored).toBe(0);
+    expect(loadModelHistory().stats.get('b')?.byReminder.get('context')?.ignored ?? 0).toBe(0);
+  }));
+
+  it('keeps a dated release apart from an older release of the same model', () => {
+    expect(reputationKey('p/claude-opus-4.8:high')).toBe(reputationKey('q/claude-opus-4-8'));
+    expect(reputationKey('p/claude-opus-4.8-20261001')).not.toBe(reputationKey('p/claude-opus-4.8'));
+    expect(reputationKey('p/gpt-5.6-sol-2026-10-01')).not.toBe(reputationKey('p/gpt-5.6-sol'));
+  });
+
+  it('counts each reminder kind apart and records the routed task type', () => withTempRouterDir((dir) => {
+    const entry = modelEntryId('s', 'e');
+    appendModelEvent({ kind: 'served', model: 'p/a', entry, dimension: 'plan' });
+    appendModelEvent({ kind: 'reminder', model: 'p/a', entry, reminder: 'context', dimension: 'plan' });
+    appendModelEvent({ kind: 'reminder', model: 'p/a', entry, reminder: 'completion', dimension: 'plan' });
+    appendModelEvent({ kind: 'followed', model: 'p/a', entry, reminder: 'completion' });
+    const byReminder = loadModelHistory().stats.get('a')!.byReminder;
+    expect(byReminder.get('context')).toEqual({ remindedEntries: 1, reminders: 1, followed: 0, ignored: 0 });
+    expect(byReminder.get('completion')).toEqual({ remindedEntries: 1, reminders: 1, followed: 1, ignored: 0 });
+    const lines = readFileSync(join(dir, 'model-events.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(lines.slice(0, 3).map((line) => line.dimension)).toEqual(['plan', 'plan', 'plan']);
   }));
 
   it('keeps unanswered or interrupted reminder episodes out of the ignore denominator', () => withTempRouterDir(() => {

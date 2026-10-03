@@ -528,4 +528,6 @@ export interface SyncResult {
   matched: number;
   unresolved: number;
   error?: string;
+  /** A successful sync that saved data the minimums are not calibrated for. */
+  warning?: string;
 }

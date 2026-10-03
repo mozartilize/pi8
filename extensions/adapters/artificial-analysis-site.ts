@@ -8,9 +8,9 @@
  * `JSON.parse` before the page loads captures the decrypted
  * `{ models: [...] }` payload; no HTML is parsed.
  *
- * Chromium for Playwright is a user setup step, not a router error: without
- * it the sync fails with `playwrightSetupText()` and `router/auto` does not
- * serve.
+ * Chromium for Playwright is a user setup step for `/router-sync`, not a
+ * router error: without it the sync fails with `playwrightSetupText()` and
+ * keeps the previous store. Serving reads only the persisted store.
  */
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';

@@ -57,7 +57,9 @@ import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './r
 import { loadConfig } from './config.js';
 import { setSessionFile } from './sessionpaths.js';
 import { debugLog, setConfigDebug } from './host/debuglog.js';
-import type { RegistryModelInfo } from './routing/score/scorer.js';
+import { indexVersionWarning, type RegistryModelInfo } from './routing/score/scorer.js';
+import { loadStore } from './bench/store.js';
+import { checkPlaywright } from './adapters/artificial-analysis-site.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
 import {
   appendSubagentGapSignal,
@@ -116,14 +118,27 @@ function isRouterAutoActive(model: { provider?: string; id?: string } | undefine
 }
 
 /**
- * Show the browser install command when `router/auto` becomes the session
- * model and Chromium for Playwright is missing. Pi has no way to refuse the
- * selection; the router's turns end with the same message until the install.
+ * Tell the user about setup gaps when `router/auto` becomes the session
+ * model. Pi has no way to refuse the selection. Missing benchmark data is an
+ * error: the router's turns end with the same message until a sync. An
+ * uncalibrated index version and a missing browser are warnings: routing
+ * continues, and the browser is needed only for the next `/router-sync`.
  */
-function noticeMissingBrowser(ctx: ExtensionContext, runtime: RuntimeBindings): void {
-  void runtime.checkBrowser()
+function noticeSetup(ctx: ExtensionContext, runtime: RuntimeBindings): void {
+  try {
+    const benchmarks = runtime.checkBenchmarks();
+    if (!benchmarks.ready) {
+      ctx.ui?.notify?.(benchmarks.message, 'error');
+    } else {
+      const versionWarning = indexVersionWarning(loadStore()?.indexVersion);
+      if (versionWarning) ctx.ui?.notify?.(versionWarning, 'warning');
+    }
+  } catch {
+    // A notice is advisory; the provider reports the same gap at turn time.
+  }
+  void checkPlaywright()
     .then((browser) => {
-      if (!browser.ready) ctx.ui?.notify?.(browser.message, 'error');
+      if (!browser.ready) ctx.ui?.notify?.(`/router-sync cannot refresh benchmark data. ${browser.message}`, 'warning');
     })
     .catch(() => {
       // The check reports its own failures; a notice is advisory.
@@ -272,7 +287,7 @@ async function handleSessionStart(
   }
   // A reassertion below selects router/auto through model_select, which
   // gives the notice itself.
-  if (isRouterAutoActive(ctx?.model)) noticeMissingBrowser(ctx, runtime);
+  if (isRouterAutoActive(ctx?.model)) noticeSetup(ctx, runtime);
   try {
     registerAutoRouterProvider(pi, ctx, session, runtime);
     // Pi derives a resumed/restored session's "current model" from the
@@ -359,7 +374,7 @@ function handleModelSelect(
   // generation-guarded: a slow probe sweep must never block the switch, and
   // a stale refresh cannot overwrite a newer one.
   if (event.model.id === AUTO_MODEL_ID) {
-    noticeMissingBrowser(ctx, runtime);
+    noticeSetup(ctx, runtime);
     // Pi applies the new model's thinking level during the switch; that is
     // not a user choice, so the next turn must not read it as one.
     session.setSyncedThinkingLevel(undefined);

@@ -30,12 +30,30 @@ describe('artificial-analysis adapter', () => {
     }
   });
 
+  it('returns the index version reported on the first page', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ intelligence_index_version: 4.3, data: [{ slug: 'model' }] }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    )));
+    try {
+      expect((await fetchRaw({ apiKey: 'test-key', endpoint: 'https://example.test/models' })).indexVersion).toBe('4.3');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   describe('unwrap', () => {
     // The v2 API returns an envelope; unwrap extracts pagination and data.
     it('unwraps the v2 { pagination, data } envelope', () => {
       const { rows, pagination } = unwrap(payload);
       expect(rows).toHaveLength(7);
       expect(pagination?.page).toBe(1);
+    });
+
+    it('reads the index version from the envelope, as a number or a string', () => {
+      expect(unwrap(payload).indexVersion).toBe('4.1');
+      expect(unwrap({ intelligence_index_version: 'v4.3', data: [] }).indexVersion).toBe('v4.3');
+      expect(unwrap({ data: [] }).indexVersion).toBeUndefined();
     });
 
     it('still accepts a bare array', () => {

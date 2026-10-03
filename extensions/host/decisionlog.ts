@@ -193,7 +193,7 @@ export function appendExecutionContractSignal(
   storageBase?: string,
 ): void {
   try {
-    if (signal.action === 'reminder') recordProtocolEvent(signal.intentKey, signal.served, 'reminder', 'contract', storageBase);
+    if (signal.action === 'reminder') recordProtocolEvent(signal.intentKey, signal.served, 'reminder', 'contract', undefined, storageBase);
     const path = decisionLogPath(storageBase);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -252,7 +252,7 @@ export function appendContextHandoffSignal(
   storageBase?: string,
 ): void {
   try {
-    if (signal.action === 'reminder') recordProtocolEvent(signal.intentKey, signal.served, 'reminder', 'context', storageBase);
+    if (signal.action === 'reminder') recordProtocolEvent(signal.intentKey, signal.served, 'reminder', 'context', signal.deliverable, storageBase);
     const path = decisionLogPath(storageBase);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -321,9 +321,15 @@ export function modelEventSession(): string {
 }
 export function modelEventEntry(intentKey: string): string { return modelEntryId(modelEventSession(), intentKey); }
 
-function recordProtocolEvent(intentKey: string, model: string, kind: ModelEvent['kind'], reminder: string, storageBase?: string): void {
+function recordProtocolEvent(
+  intentKey: string, model: string, kind: ModelEvent['kind'], reminder: string,
+  dimension: string | undefined, storageBase?: string,
+): void {
   if (loadConfig().reputation === false) return;
-  appendModelEvent({ kind, model, entry: modelEventEntry(intentKey), session: modelEventSession(), reminder }, storageBase);
+  appendModelEvent({
+    kind, model, entry: modelEventEntry(intentKey), session: modelEventSession(), reminder,
+    ...(dimension ? { dimension } : {}),
+  }, storageBase);
 }
 
 export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBase?: string): void {
@@ -331,7 +337,7 @@ export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBa
     const kind = signal.action === 'settle-reminder' ? 'reminder'
       : signal.action === 'settle-followed' ? 'followed'
         : signal.action === 'settle-ignored' ? 'ignored' : undefined;
-    if (kind && signal.reminder) recordProtocolEvent(signal.intentKey, signal.served, kind, signal.reminder, storageBase);
+    if (kind && signal.reminder) recordProtocolEvent(signal.intentKey, signal.served, kind, signal.reminder, signal.deliverable, storageBase);
     const path = decisionLogPath(storageBase);
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

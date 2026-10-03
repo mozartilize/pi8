@@ -15,7 +15,8 @@ import { checkPlaywright } from '../adapters/artificial-analysis-site.js';
 import { buildModelFilter } from '../routing/policy/allowlist.js';
 import { syncBenchmarks, syncSummary } from '../bench/sync.js';
 import { ROLE_DIMENSIONS, ROUTER_PROVIDER_ID } from '../types.js';
-import { activeModels, isStale, loadStore, addAlias, saveStore } from '../bench/store.js';
+import { activeModels, checkBenchmarkStore, isStale, loadStore, addAlias, saveStore } from '../bench/store.js';
+import { CALIBRATED_INDEX_VERSION, indexVersionWarning } from '../routing/score/scorer.js';
 import {
   getProviderState,
   buildSubagentProviderAuthFilter,
@@ -237,7 +238,10 @@ async function handleSyncCommand(
   if (apiKey) saveApiKey(apiKey);
   ctx.ui.notify('Syncing Artificial Analysis benchmark data…', 'info');
   const results = await syncBenchmarks(ctx, { apiKey });
-  ctx.ui.notify(syncSummary(results), results.every((r) => r.ok) ? 'info' : 'error');
+  ctx.ui.notify(
+    syncSummary(results),
+    !results.every((r) => r.ok) ? 'error' : results.some((r) => r.warning) ? 'warning' : 'info',
+  );
 }
 
 async function handleStatusCommand(
@@ -253,13 +257,16 @@ async function handleStatusCommand(
   const penalties = protocolHistory ? compliancePenalties(protocolHistory, config.reputationWeights, config.switchMargin) : new Map<string, number>();
   const modelHistory = !protocolHistory ? ['Model history: disabled'] : [
     `Model history: ${!modelHistoryReady(protocolHistory) ? 'collecting; global preference starts after 14 days' : config.reputationWeights ? 'compliance weights configured' : 'collecting compliance; no penalty weights configured'}`,
-    ...[...protocolHistory.stats].map(([model, stats]) =>
-      `  ${model}: ${stats.entries.toFixed(1)} decayed entries, ${stats.reminders.toFixed(1)} reminders, ${stats.followed.toFixed(1)} followed, ${stats.ignored.toFixed(1)} ignored; penalty ${(penalties.get(model) ?? 0).toFixed(3)}`),
+    ...[...protocolHistory.stats].map(([model, stats]) => {
+      const kinds = [...stats.byReminder].map(([kind, counts]) =>
+        `${kind}: ${counts.reminders.toFixed(1)} reminders, ${counts.followed.toFixed(1)} followed, ${counts.ignored.toFixed(1)} ignored`);
+      return `  ${model}: ${stats.entries.toFixed(1)} decayed entries${kinds.length ? `; ${kinds.join('; ')}` : ''}; penalty ${(penalties.get(model) ?? 0).toFixed(3)}`;
+    }),
   ];
   const browser = await checkPlaywright();
   const browserStatus = browser.ready
     ? ['Chromium for Playwright: ready']
-    : ['Chromium for Playwright: missing — router/auto does not route until it is installed.', browser.message];
+    : ['Chromium for Playwright: missing — /router-sync cannot refresh benchmark data. The current data stays in use.', browser.message];
   const store = loadStore();
   if (!store || !store.syncedAt) {
     const msg = [
@@ -275,6 +282,8 @@ async function handleStatusCommand(
   }
   const stale = isStale(store);
   const active = activeModels(store);
+  const readiness = checkBenchmarkStore(store);
+  const versionWarning = indexVersionWarning(store.indexVersion);
   // Coverage against the live registry is the number that actually
   // predicts routing quality: unmatched models fall back to price-only.
   const registryIds = new Set(
@@ -290,6 +299,9 @@ async function handleStatusCommand(
     ...modelHistory,
     ...workContext,
     `Synced: ${new Date(store.syncedAt).toISOString()}${stale ? ' (stale)' : ''}`,
+    `AA Intelligence Index version: ${store.indexVersion ?? 'not reported'} (minimums calibrated for ${CALIBRATED_INDEX_VERSION})`,
+    ...(readiness.ready ? [] : [`router/auto does not route: ${readiness.message}`]),
+    ...(versionWarning ? [`Warning: ${versionWarning}`] : []),
     `Active models in store: ${active.length}`,
     `Registry coverage: ${covered}/${registryIds.size} models have benchmark data`,
     `Benchmark rows without a registry match: ${store.models.filter((m) => !m.active).length}`,

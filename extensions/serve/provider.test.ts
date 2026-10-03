@@ -411,13 +411,23 @@ describe('provider auth filtering', () => {
   });
 });
 
-describe('Chromium setup prerequisite', () => {
-  it('returns one setup error and never delegates when the browser is missing', async () => {
-    const harness = await setupProviderTest({ dir: temp.path, browser: { ready: false, message: 'Install Chromium with playwright-core install --no-shell chromium' } });
+describe('benchmark data prerequisite', () => {
+  const missing = { ready: false as const, message: 'router/auto has no benchmark data. Run /router-sync <key>.' };
+
+  it('returns one setup error and never delegates without benchmark data', async () => {
+    const harness = await setupProviderTest({ dir: temp.path, benchmarkCheck: missing });
     await harness.serve({ messages: [{ role: 'user', content: 'hi' }] } as Context);
     expect(harness.outStream.events.filter(event => event.type === 'error')).toHaveLength(1);
-    expect(JSON.stringify(harness.outStream.events)).toContain('playwright-core install --no-shell chromium');
+    expect(JSON.stringify(harness.outStream.events)).toContain('/router-sync');
     expect(harness.streamedModels()).toEqual([]);
+  });
+
+  it('serves a manual pin without benchmark data', async () => {
+    const harness = await setupProviderTest({ dir: temp.path, benchmarkCheck: missing });
+    harness.session.setManualModel('alpha/first');
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve({ messages: [{ role: 'user', content: 'hi' }] } as Context);
+    expect(harness.streamedModels()).toEqual(['alpha/first']);
   });
 
   it('collects counts only for a successful serve', async () => {

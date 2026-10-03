@@ -10,6 +10,7 @@ import {
   isStale,
   isValidStore,
   mergeBenchRows,
+  checkBenchmarkStore,
   addAlias,
   resolveStoragePath,
   DEFAULT_BENCHMARK_ALIASES,
@@ -133,7 +134,7 @@ describe('store', () => {
     const rows = [
       { ...base, benchSlug: 'x-low', effort: 'low', quality: { intelligence: 30 } },
       { ...base, benchSlug: 'x-max', effort: 'max', quality: { intelligence: 50 } },
-      // Same (registryId, effort) pair as the first row: must merge into it.
+      // Same (registryId, effort) pair as the first row: one of the two is kept.
       {
         ...base,
         benchSlug: 'x-low-2',
@@ -145,7 +146,7 @@ describe('store', () => {
     expect(merged).toHaveLength(2);
     const low = merged.find((m) => m.effort === 'low');
     const max = merged.find((m) => m.effort === 'max');
-    expect(low?.quality).toEqual({ intelligence: 30, coding: 90, agenticCoding: 85 });
+    expect(low).toMatchObject({ benchSlug: 'x-low-2', quality: { coding: 90, agenticCoding: 85 } });
     expect(max?.quality).toEqual({ intelligence: 50 });
   });
 
@@ -188,59 +189,37 @@ describe('store', () => {
     expect(loaded?.models[1]?.latencyMsTtfa).toBeUndefined();
   });
 
-  it('merges rows by registryId, keeping richest quality', () => {
+  it('keeps one measured row whole instead of mixing axes of different AA models', () => {
+    // A preview (estimated) and its release resolve to one registry model.
     const rows = [
       {
-        registryId: 'a/b',
-        active: true,
-        benchSlug: 'x',
-        quality: { intelligence: 80 },
-        source: 'aa',
+        registryId: 'a/hy3', active: true, benchSlug: 'hy3-preview', qualityEstimated: true,
+        quality: { intelligence: 22.7, coding: 58.8, agenticCoding: 24.1, knowledge: -35 },
+        priceInputPer1M: 1, source: 'aa',
       },
       {
-        registryId: 'a/b',
-        active: true,
-        benchSlug: 'y',
-        quality: { coding: 90, agenticCoding: 85 },
-        source: 'lb',
+        registryId: 'a/hy3', active: true, benchSlug: 'hy3',
+        quality: { intelligence: 25.3, knowledge: -18.5, research: 0.27 },
+        priceInputPer1M: 2, source: 'aa',
       },
     ] as any;
     const merged = mergeBenchRows(rows);
     expect(merged).toHaveLength(1);
-    expect(merged[0].quality).toEqual({
-      intelligence: 80,
-      coding: 90,
-      agenticCoding: 85,
-    });
+    expect(merged[0]).toMatchObject({ benchSlug: 'hy3', priceInputPer1M: 2 });
+    expect(merged[0].quality).toEqual({ intelligence: 25.3, knowledge: -18.5, research: 0.27 });
+    expect(merged[0].qualityEstimated).toBeUndefined();
   });
 
-  it('keeps the knowledge axis alongside headline axes when sources overlap', () => {
-    const rows = [
-      {
-        registryId: 'a/b',
-        active: true,
-        benchSlug: 'x',
-        quality: { intelligence: 80, coding: 70 },
-        priceInputPer1M: 2,
-        source: 'aa',
-      },
-      {
-        registryId: 'a/b',
-        active: true,
-        benchSlug: 'y',
-        quality: { knowledge: 31.3 },
-        source: 'other',
-      },
-    ] as any;
-    const merged = mergeBenchRows(rows);
-    expect(merged).toHaveLength(1);
-    expect(merged[0].quality).toEqual({
-      intelligence: 80,
-      coding: 70,
-      knowledge: 31.3,
-    });
-    // The headline row carries the economics; the knowledge row adds none.
-    expect(merged[0].priceInputPer1M).toBe(2);
+  it('routes only from synced data that includes models-page measurements', () => {
+    const row = { registryId: 'a/b', active: true, benchSlug: 'b', source: 'aa' } as const;
+    const store = (models: unknown[], syncedAt = 1) => ({ version: 2 as const, syncedAt, aliases: {}, models }) as any;
+    expect(checkBenchmarkStore(undefined)).toMatchObject({ ready: false, message: expect.stringMatching(/no benchmark data.*\/router-sync/) });
+    expect(checkBenchmarkStore(store([{ ...row, quality: { intelligence: 40 } }], 0)).ready).toBe(false);
+    expect(checkBenchmarkStore(store([{ ...row, active: false, quality: { research: 0.4 } }])).ready).toBe(false);
+    // API-only data has no Briefcase or LCR measurement.
+    expect(checkBenchmarkStore(store([{ ...row, quality: { intelligence: 40, knowledge: 10 } }])))
+      .toMatchObject({ ready: false, message: expect.stringMatching(/models-page/) });
+    expect(checkBenchmarkStore(store([{ ...row, quality: { intelligence: 40, longContext: 0.5 } }]))).toEqual({ ready: true });
   });
 
   it('preserves unresolved rows after merge', () => {

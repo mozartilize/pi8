@@ -75,7 +75,8 @@ export interface AAPagination {
 
 export interface AAResponse {
   tier?: string;
-  intelligence_index_version?: string;
+  /** A string or a number (`4.1`) in observed payloads. */
+  intelligence_index_version?: string | number;
   pagination?: AAPagination;
   data?: AARawModel[];
 }
@@ -90,12 +91,17 @@ export interface AAConfig {
  * Accepts either the v2 envelope or a bare array, so a future shape change
  * back to a plain list does not break sync.
  */
-export function unwrap(payload: unknown): { rows: AARawModel[]; pagination?: AAPagination } {
+export function unwrap(payload: unknown): { rows: AARawModel[]; pagination?: AAPagination; indexVersion?: string } {
   if (Array.isArray(payload)) return { rows: payload as AARawModel[] };
   if (payload && typeof payload === 'object') {
     const env = payload as AAResponse;
     if (Array.isArray(env.data)) {
-      return { rows: env.data, pagination: env.pagination };
+      const version = env.intelligence_index_version;
+      return {
+        rows: env.data,
+        pagination: env.pagination,
+        ...(typeof version === 'string' || typeof version === 'number' ? { indexVersion: String(version) } : {}),
+      };
     }
   }
   throw new Error(
@@ -111,6 +117,7 @@ export async function fetchRaw(config: AAConfig): Promise<AARawModel[] & { index
   }
   const endpoint = config.endpoint || AA_ENDPOINT;
   const all: AARawModel[] = [];
+  let indexVersion: string | undefined;
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     const url = new URL(endpoint);
@@ -125,7 +132,8 @@ export async function fetchRaw(config: AAConfig): Promise<AARawModel[] & { index
         `Artificial Analysis API returned ${res.status}: ${(await res.text()).slice(0, 200)}`,
       );
     }
-    const { rows, pagination } = unwrap(await res.json());
+    const { rows, pagination, indexVersion: pageVersion } = unwrap(await res.json());
+    indexVersion ??= pageVersion;
     all.push(...rows);
 
     const morePages =
@@ -134,7 +142,7 @@ export async function fetchRaw(config: AAConfig): Promise<AARawModel[] & { index
     if (!morePages || rows.length === 0) break;
   }
 
-  return all;
+  return Object.assign(all, indexVersion ? { indexVersion } : {});
 }
 
 const EFFORT_LABELS: ReadonlySet<string> = new Set([
