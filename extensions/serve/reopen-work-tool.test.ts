@@ -101,11 +101,12 @@ describe('reopen_work', () => {
     const unread = doneSession({
       pendingIdentity: {
         generation: 0, entryKey: 'entry',
-        base: { sourceEntryId: 'u1', anchors: [{ kind: 'path', value: 'reopen-missing-artifact.ts', mention: 'at' }] },
+        base: { sourceEntryId: 'u1', anchors: [{ kind: 'path', value: 'package.json', mention: 'at' }] },
       } as unknown as PendingIdentity,
     });
     const facts = await prepareReopenFacts(AUTO, unread);
-    expect(facts.unmet).toContain('reopen-missing-artifact.ts');
+    // package.json exists and this entry has not read it.
+    expect(facts.unmet).toContain('package.json');
     expect(submitReopenWork(SHAPE, AUTO, unread, facts).accepted).toBe(false);
     expect(unread.context.getLedger().activeWorkItemId).toBeUndefined();
   });

@@ -54,6 +54,8 @@ The resolved intent is cached per user entry key and reused through that entry's
 
 ### Candidate expansion
 
+The router delegates with a bare `modelRegistry.streamSimple` call, so a provider that rejects that call is never a candidate: `cursor` (pi-cursor-sdk) accepts only calls from the session that owns the request. A Pi session can still select such a model as its own.
+
 Candidates are expanded per supported (model, effort) pair. One registry model may produce several routable candidates when bench rows exist at different effort levels — each with its own quality/cost/speed measurement. A supported level the source never measured is covered by an estimate stepped down from the nearest measured level above it, marked `qualityEstimated` (see "Effort estimation"). An `off` candidate exists only where a request at `off` runs the mode an `off` row measures: always for a non-reasoning model (its only serveable mode); for a reasoning model, only when its map does not set `off` to `null` and its provider can turn thinking off. `claude-bridge` cannot: it sends no effort, and Claude Code runs its default effort. `minimal` is never estimated: sources almost never measure it, and Codex, Anthropic adaptive thinking, and `claude-bridge` send it as `low`. A measured `minimal` row is kept. When all measured efforts are unsupported by the model's `thinkingLevelMap`, the model falls back to a single effort-less candidate.
 
 ### Effort estimation

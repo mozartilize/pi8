@@ -1252,7 +1252,7 @@ describe('mutation observation hooks', () => {
   function handoffTool(registerTool: ReturnType<typeof vi.fn>) {
     const tool = registerTool.mock.calls[1]![0] as {
       name: string;
-      execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }>;
+      execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean }; content: Array<{ text: string }> }>;
     };
     return tool;
   }
@@ -1264,6 +1264,20 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
   }
+
+  it.each([
+    [{ question: undefined }, 'question'],
+    [{ findings: ' ' }, 'findings'],
+    [{ findings: '', question: '' }, 'findings, question'],
+  ])('names the empty field when a handoff lacks %o', async (over, empty) => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    investigating();
+    const request = { outcome: 'ready', deliverable: 'plan', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', difficulty: DIFFICULTY };
+    const result = await handoffTool(registerTool).execute('p', { ...request, ...over }, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
+    expect(result.details.accepted).toBe(false);
+    expect(result.content[0].text).toContain(`Empty: ${empty}.`);
+  });
 
   it('hands context off through hand_off_context, logging codes and levels but never findings or paths', async () => {
     const registerTool = vi.fn();

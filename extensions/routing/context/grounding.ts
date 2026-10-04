@@ -224,17 +224,41 @@ export async function referencedArtifactsFresh(
   item: Pick<WorkItem, 'grounding' | 'openContext'>,
   paths: readonly string[],
 ): Promise<boolean> {
-  return paths.length > 0 && (await unmetArtifactPaths(cwd, item, paths)).length === 0;
+  const present = await presentPaths(cwd, paths);
+  return present.length > 0 && (await unmetArtifactPaths(cwd, item, present)).length === 0;
 }
 
-/** The referenced paths not yet met: a file not read as it is now, or a directory no accepted handoff closed. */
+/**
+ * The paths that exist. A path that does not exist has no content to read:
+ * a request often names a file that it asks to create. A path that exists
+ * but cannot be read stays, so it remains unmet.
+ */
+async function presentPaths(cwd: string | undefined, paths: readonly string[]): Promise<string[]> {
+  const present: string[] = [];
+  for (const path of paths) {
+    try {
+      await stat(cwd ? join(cwd, path) : path);
+      present.push(path);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') present.push(path);
+    }
+  }
+  return present;
+}
+
+/**
+ * The referenced paths not yet met: a file not read as it is now, or a
+ * directory no accepted handoff closed. A path that does not exist is never
+ * unmet, because no read can meet it.
+ */
 export async function unmetArtifactPaths(
   cwd: string | undefined,
   item: Pick<WorkItem, 'grounding' | 'openContext'>,
   paths: readonly string[],
 ): Promise<string[]> {
   const unmet: string[] = [];
-  for (const path of paths) {
+  for (const path of await presentPaths(cwd, paths)) {
     const artifact = item.grounding.find((g) => g.anchorValue === path);
     if (artifact) {
       if (!(await isFresh(cwd, artifact))) unmet.push(path);
@@ -245,8 +269,8 @@ export async function unmetArtifactPaths(
       unmet.push(path);
       continue;
     }
-    // A missing, unreadable, oversized, or special file must not masquerade
-    // as a directory scope merely because fingerprinting failed.
+    // An unreadable, oversized, or special file must not masquerade as a
+    // directory scope merely because fingerprinting failed.
     try {
       if (!(await stat(cwd ? join(cwd, path) : path)).isDirectory()) unmet.push(path);
     } catch {

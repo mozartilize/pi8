@@ -111,7 +111,7 @@ const REJECTIONS = {
   'already-handed-off': 'Context not handed off: this request was already handed off. Continue with the next step.',
   'clarification-only': 'Collecting context has ended for this request. Reply to the user with your question, without calling tools.',
   'missing-question': 'Context not handed off: give the question for the user. Call it again with outcome "needs-user" and a question.',
-  'missing-findings': 'Context not handed off: describe the findings and the question. Call it again with both.',
+  'missing-findings': 'Context not handed off: a field is empty. Put what you found in findings. Put what the next step must do in question. Empty:',
   'missing-deliverable': 'Context not handed off: name the task type the user wants (deliverable). Call it again with it.',
   'missing-task-shape': 'Context not handed off: give complexity and scope for the declared task. Call it again with both.',
   'artifact-not-read': 'Context not handed off: the request rests on files not read as they are now. Read them in full, then call it again:',
@@ -291,7 +291,11 @@ export function submitContextHandoff(
     log(state, served, 'answer', { deliverable: reported });
     return { accepted: true, text: `Declared ${reported}. Answer the user directly; do not make changes.` };
   }
-  if (!filled(params?.findings) || !filled(params?.question)) return reject(session, 'missing-findings', state, served);
+  if (!filled(params?.findings) || !filled(params?.question)) {
+    // Name each empty field: a model that put the question into findings must see which field to fill.
+    const empty = [filled(params?.findings) ? '' : 'findings', filled(params?.question) ? '' : 'question'].filter(Boolean);
+    return reject(session, 'missing-findings', state, served, ` ${empty.join(', ')}. Call it again with both fields.`);
+  }
   const complexity = member(COMPLEXITIES, params?.complexity);
   const scope = member(SCOPES, params?.scope);
   const deliverable = adoptedDeliverable(reported);

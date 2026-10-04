@@ -12,6 +12,7 @@ import {
   matchedLineRanges,
   readLineRange,
   referencedArtifactsFresh,
+  unmetArtifactPaths,
 } from './grounding.js';
 
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -47,6 +48,20 @@ describe('grounding', () => {
     expect(await isFresh(dir, artifact)).toBe(false);
     rmSync(join(dir, 'req.md'));
     expect(await isFresh(dir, artifact)).toBe(false);
+  });
+
+  it('owes no read for a referenced path that does not exist', async () => {
+    writeFileSync(join(dir, 'req.md'), 'v1');
+    const item = { grounding: [], openContext: [] };
+    // A request names a file that it asks to create; no read can meet it.
+    expect(await unmetArtifactPaths(dir, item, ['src/new.ts', 'req.md'])).toEqual(['req.md']);
+    expect(await unmetArtifactPaths(dir, item, ['req.md/child'])).toEqual([]);
+    // A file read and then deleted owes no read either.
+    const read = { grounding: [{ anchorValue: 'req.md', sha256: sha('v1'), observedAtEntryId: 'u', observedBy: 'read' as const }], openContext: [] };
+    rmSync(join(dir, 'req.md'));
+    expect(await unmetArtifactPaths(dir, read, ['req.md'])).toEqual([]);
+    // A missing path proves no context in hand.
+    expect(await referencedArtifactsFresh(dir, item, ['src/new.ts'])).toBe(false);
   });
 
   it('requires an accepted context handoff for a directory without treating it as a grounded file', async () => {

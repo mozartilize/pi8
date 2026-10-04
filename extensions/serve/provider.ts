@@ -382,6 +382,14 @@ function applyRuntimeExclusions(
   });
 }
 
+/**
+ * Providers that reject a bare `modelRegistry.streamSimple` call. The router
+ * delegates with that call, so it never routes to them. A Pi session can
+ * still select them as its own model.
+ * - cursor (pi-cursor-sdk): a call needs the receipt of the session that owns it.
+ */
+const PROVIDERS_WITHOUT_DELEGATION: ReadonlySet<string> = new Set(['cursor']);
+
 function buildRoutableCandidates(args: {
   regModels: unknown[];
   extensionContext: ExtensionContext | undefined;
@@ -431,6 +439,7 @@ function buildRoutableCandidates(args: {
         (rm) =>
           rm.provider &&
           rm.provider !== ROUTER_PROVIDER_ID &&
+          !PROVIDERS_WITHOUT_DELEGATION.has(rm.provider) &&
           !blacklistedProviders.has(rm.provider) &&
           isModelAllowed(`${rm.provider}/${rm.id}`) &&
           !isBlacklisted(`${rm.provider}/${rm.id}`) &&

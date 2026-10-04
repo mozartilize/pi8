@@ -835,6 +835,23 @@ describe('provider orchestration', () => {
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
 
+  it('never routes to a provider that rejects delegated calls, even when it scores best', async () => {
+    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+      version: 2, syncedAt: Date.now(), aliases: {},
+      models: [
+        { registryId: 'cursor/grok', benchSlug: 'g', active: true, effort: 'high', source: 'test', quality: { intelligence: 95, coding: 95, agenticCoding: 95 }, costPerTask: 0.1, timePerTaskSeconds: 1 },
+        { registryId: 'alpha/first', benchSlug: 'a', active: true, effort: 'high', source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90 }, costPerTask: 5, timePerTaskSeconds: 5 },
+      ],
+    }));
+    const cursor = registryModel('cursor/grok', { contextWindow: 200000, maxTokens: 8192, reasoning: true, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
+    harness = await setupProviderTest({ dir: temp.path, models: [...REGISTRY_MODELS, cursor], pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve({ messages: [{ role: 'user', content: 'what does the cache module do' }] } as unknown as Context);
+    const decision = harness.getProviderState().lastDecision!;
+    expect(decision.chosen).toBe('alpha/first:high');
+    expect(decision.fallbackChain.filter((key) => key.startsWith('cursor/'))).toEqual([]);
+  });
+
   it.each([false, true])('sets incumbent minimums only from a model the router still serves (ended=%s)', async (ended) => {
     writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
       version: 2, syncedAt: Date.now(), aliases: {},
