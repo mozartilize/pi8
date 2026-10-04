@@ -19,6 +19,7 @@ import type {
 } from '../../types.js';
 import { DEFAULT_DIMENSION_WEIGHTS, DEFAULT_SWITCH_MARGIN } from '../../constants.js';
 import { renderScoredReason, type ScoredReason } from './decision-reason.js';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
 // ─── Candidate identity ─────────────────────────────────────────────
@@ -910,19 +911,17 @@ export function pickBest(
 const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 /**
- * Pi's own rule (`getSupportedThinkingLevels`): a null map entry is an
- * unsupported level, `off` included, and `xhigh`/`max` need an explicit
- * entry. A model without reasoning supports no level.
+ * Pi's own rule, read from Pi so the two cannot differ: a null map entry is
+ * an unsupported level, `off` included, and `xhigh`/`max` need an explicit
+ * entry. A model without reasoning has no thinking level to send, so it
+ * supports none here; Pi lists only `off` for it.
  */
 function isThinkingSupported(
   c: Pick<Candidate, 'reasoning' | 'thinkingLevelMap'> | undefined,
   level: ModelThinkingLevel,
 ): boolean {
   if (!c?.reasoning) return false;
-  const mapped = c.thinkingLevelMap?.[level];
-  if (mapped === null) return false;
-  if (level === 'xhigh' || level === 'max') return mapped !== undefined;
-  return true;
+  return getSupportedThinkingLevels(c as Parameters<typeof getSupportedThinkingLevels>[0]).includes(level);
 }
 
 export function isThinkingSupportedByRegistryModel(

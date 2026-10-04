@@ -1,0 +1,5467 @@
+{
+ "source": "Active benchmark rows from a /router-sync of 2026-10-03, and pi-ai catalog entries for the providers claude-bridge (the anthropic catalog), openai-codex, github-copilot, and deepseek. Regenerate both together.",
+ "registry": [
+  {
+   "provider": "claude-bridge",
+   "id": "claude-fable-5",
+   "name": "Claude Fable 5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 10,
+    "output": 50,
+    "cacheRead": 1,
+    "cacheWrite": 12.5
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-fable-5-1",
+   "name": "Claude Fable 5.1",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 10,
+    "output": 50,
+    "cacheRead": 0.25,
+    "cacheWrite": 12.5
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-haiku-4-5",
+   "name": "Claude Haiku 4.5 (latest)",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 1,
+    "output": 5,
+    "cacheRead": 0.1,
+    "cacheWrite": 1.25
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-haiku-4-5-20251001",
+   "name": "Claude Haiku 4.5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 1,
+    "output": 5,
+    "cacheRead": 0.1,
+    "cacheWrite": 1.25
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-5",
+   "name": "Claude Opus 4.5 (latest)",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-5-20251101",
+   "name": "Claude Opus 4.5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-6",
+   "name": "Claude Opus 4.6",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   },
+   "thinkingLevelMap": {
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-7",
+   "name": "Claude Opus 4.7",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-8",
+   "name": "Claude Opus 4.8",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-5",
+   "name": "Claude Opus 5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-5-5",
+   "name": "Claude Opus 5.5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 4,
+    "output": 20,
+    "cacheRead": 0.2,
+    "cacheWrite": 5
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-4-5",
+   "name": "Claude Sonnet 4.5 (latest)",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 3,
+    "output": 15,
+    "cacheRead": 0.3,
+    "cacheWrite": 3.75
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-4-5-20250929",
+   "name": "Claude Sonnet 4.5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 3,
+    "output": 15,
+    "cacheRead": 0.3,
+    "cacheWrite": 3.75
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-4-6",
+   "name": "Claude Sonnet 4.6",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 3,
+    "output": 15,
+    "cacheRead": 0.3,
+    "cacheWrite": 3.75
+   },
+   "thinkingLevelMap": {
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-5",
+   "name": "Claude Sonnet 5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-5-5",
+   "name": "Claude Sonnet 5.5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.3-codex-spark",
+   "name": "GPT-5.3 Codex Spark",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text"
+   ],
+   "contextWindow": 128000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 1.75,
+    "output": 14,
+    "cacheRead": 0.175,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.5",
+   "name": "GPT-5.5",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 5,
+    "output": 30,
+    "cacheRead": 0.5,
+    "cacheWrite": 0,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 10,
+      "output": 45,
+      "cacheRead": 1,
+      "cacheWrite": 0
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.6-luna",
+   "name": "GPT-5.6 Luna",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 0.2,
+    "output": 1.2,
+    "cacheRead": 0.02,
+    "cacheWrite": 0.25,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 0.4,
+      "output": 1.8,
+      "cacheRead": 0.04,
+      "cacheWrite": 0.5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.6-sol",
+   "name": "GPT-5.6 Sol",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 4,
+    "output": 20,
+    "cacheRead": 0.4,
+    "cacheWrite": 5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 8,
+      "output": 30,
+      "cacheRead": 0.8,
+      "cacheWrite": 10
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.6-terra",
+   "name": "GPT-5.6 Terra",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 12,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 18,
+      "cacheRead": 0.4,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-6-astra",
+   "name": "GPT-6 Astra",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 10,
+    "output": 50,
+    "cacheRead": 1,
+    "cacheWrite": 12.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 20,
+      "output": 75,
+      "cacheRead": 2,
+      "cacheWrite": 25
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-6-luna",
+   "name": "GPT-6 Luna",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 0.1,
+    "output": 0.5,
+    "cacheRead": 0.01,
+    "cacheWrite": 0.125,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 0.2,
+      "output": 0.75,
+      "cacheRead": 0.02,
+      "cacheWrite": 0.25
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": "none",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-6-sol",
+   "name": "GPT-6 Sol",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 15,
+      "cacheRead": 0.4,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": "none",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-6.1-sol",
+   "name": "GPT-6.1 Sol",
+   "api": "openai-codex-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.1,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 15,
+      "cacheRead": 0.2,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-fable-5",
+   "name": "Claude Fable 5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 10,
+    "output": 50,
+    "cacheRead": 1,
+    "cacheWrite": 12.5
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-fable-5.1",
+   "name": "Claude Fable 5.1",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 10,
+    "output": 50,
+    "cacheRead": 0.25,
+    "cacheWrite": 12.5
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-haiku-4.5",
+   "name": "Claude Haiku 4.5 (latest)",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 1,
+    "output": 5,
+    "cacheRead": 0.1,
+    "cacheWrite": 1.25
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-opus-4.7",
+   "name": "Claude Opus 4.7",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 32000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-opus-4.8",
+   "name": "Claude Opus 4.8",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-opus-5",
+   "name": "Claude Opus 5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 5,
+    "output": 25,
+    "cacheRead": 0.5,
+    "cacheWrite": 6.25
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-opus-5.5",
+   "name": "Claude Opus 5.5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 4,
+    "output": 20,
+    "cacheRead": 0.2,
+    "cacheWrite": 5
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-sonnet-4.6",
+   "name": "Claude Sonnet 4.6",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 32000,
+   "cost": {
+    "input": 3,
+    "output": 15,
+    "cacheRead": 0.3,
+    "cacheWrite": 3.75
+   },
+   "thinkingLevelMap": {
+    "max": "max",
+    "minimal": "low"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-sonnet-5",
+   "name": "Claude Sonnet 5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "claude-sonnet-5.5",
+   "name": "Claude Sonnet 5.5",
+   "api": "anthropic-messages",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gemini-3.5-flash",
+   "name": "Gemini 3.5 Flash",
+   "api": "openai-completions",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 1.5,
+    "output": 9,
+    "cacheRead": 0.15,
+    "cacheWrite": 0
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gemini-3.6-flash",
+   "name": "Gemini 3.6 Flash",
+   "api": "openai-completions",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 0.75,
+    "output": 3.75,
+    "cacheRead": 0.075,
+    "cacheWrite": 0
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gemini-3.7-flash",
+   "name": "Gemini 3.7 Flash",
+   "api": "openai-completions",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 0.75,
+    "output": 3.75,
+    "cacheRead": 0.075,
+    "cacheWrite": 0
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gemini-3.8-flash",
+   "name": "Gemini 3.8 Flash",
+   "api": "openai-completions",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 0.75,
+    "output": 3.75,
+    "cacheRead": 0.075,
+    "cacheWrite": 0
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "kimi-k2.7-code",
+   "name": "Kimi K2.7 Code",
+   "api": "openai-completions",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 256000,
+   "maxTokens": 32000,
+   "cost": {
+    "input": 0.95,
+    "output": 4,
+    "cacheRead": 0.19,
+    "cacheWrite": 0
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "kimi-k3",
+   "name": "Kimi K3",
+   "api": "openai-completions",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1048576,
+   "maxTokens": 131072,
+   "cost": {
+    "input": 3,
+    "output": 15,
+    "cacheRead": 0.3,
+    "cacheWrite": 0
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5-mini",
+   "name": "GPT-5 Mini",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 264000,
+   "maxTokens": 64000,
+   "cost": {
+    "input": 0.25,
+    "output": 2,
+    "cacheRead": 0.025,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": null,
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5.3-codex",
+   "name": "GPT-5.3 Codex",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 1.75,
+    "output": 14,
+    "cacheRead": 0.175,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5.4",
+   "name": "GPT-5.4",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2.5,
+    "output": 15,
+    "cacheRead": 0.25,
+    "cacheWrite": 0,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 5,
+      "output": 22.5,
+      "cacheRead": 0.5,
+      "cacheWrite": 0
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5.4-mini",
+   "name": "GPT-5.4 mini",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 400000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 0.75,
+    "output": 4.5,
+    "cacheRead": 0.075,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5.4-nano",
+   "name": "GPT-5.4 nano",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 400000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 0.2,
+    "output": 1.25,
+    "cacheRead": 0.02,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "xhigh": "xhigh"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5.5",
+   "name": "GPT-5.5",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 5,
+    "output": 30,
+    "cacheRead": 0.5,
+    "cacheWrite": 0,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 10,
+      "output": 45,
+      "cacheRead": 1,
+      "cacheWrite": 0
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5.6-luna",
+   "name": "GPT-5.6 Luna",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1050000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 0.2,
+    "output": 1.2,
+    "cacheRead": 0.02,
+    "cacheWrite": 0.25,
+    "tiers": [
+     {
+      "inputTokensAbove": 200000,
+      "input": 0.4,
+      "output": 1.8,
+      "cacheRead": 0.04,
+      "cacheWrite": 0.5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5.6-sol",
+   "name": "GPT-5.6 Sol",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1050000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 4,
+    "output": 20,
+    "cacheRead": 0.4,
+    "cacheWrite": 5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 8,
+      "output": 30,
+      "cacheRead": 0.8,
+      "cacheWrite": 10
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-5.6-terra",
+   "name": "GPT-5.6 Terra",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1050000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 12,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 18,
+      "cacheRead": 0.4,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-6-astra",
+   "name": "GPT-6 Astra",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 10,
+    "output": 50,
+    "cacheRead": 1,
+    "cacheWrite": 12.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 20,
+      "output": 75,
+      "cacheRead": 2,
+      "cacheWrite": 25
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-6-luna",
+   "name": "GPT-6 Luna",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 0.1,
+    "output": 0.5,
+    "cacheRead": 0.01,
+    "cacheWrite": 0.125,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 0.2,
+      "output": 0.75,
+      "cacheRead": 0.02,
+      "cacheWrite": 0.25
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": "none",
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-6-sol",
+   "name": "GPT-6 Sol",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 15,
+      "cacheRead": 0.4,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": "none",
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "gpt-6.1-sol",
+   "name": "GPT-6.1 Sol",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1050000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.1,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 15,
+      "cacheRead": 0.2,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "grok-4.5",
+   "name": "Grok 4.5",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 500000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 6,
+    "cacheRead": 0.5,
+    "cacheWrite": 0,
+    "tiers": [
+     {
+      "inputTokensAbove": 200000,
+      "input": 4,
+      "output": 12,
+      "cacheRead": 1,
+      "cacheWrite": 0
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": null,
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "grok-4.6",
+   "name": "Grok 4.6",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 500000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 6,
+    "cacheRead": 0.5,
+    "cacheWrite": 0,
+    "tiers": [
+     {
+      "inputTokensAbove": 200000,
+      "input": 4,
+      "output": 12,
+      "cacheRead": 1,
+      "cacheWrite": 0
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "grok-4.7",
+   "name": "Grok 4.7",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 500000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 2,
+    "output": 6,
+    "cacheRead": 0.5,
+    "cacheWrite": 0,
+    "tiers": [
+     {
+      "inputTokensAbove": 200000,
+      "input": 4,
+      "output": 12,
+      "cacheRead": 1,
+      "cacheWrite": 0
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "mai-code-1-flash-picker",
+   "name": "MAI-Code-1-Flash",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text"
+   ],
+   "contextWindow": 256000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 0.75,
+    "output": 4.5,
+    "cacheRead": 0.075,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": null,
+    "max": null
+   }
+  },
+  {
+   "provider": "github-copilot",
+   "id": "mai-code-1.1-flash",
+   "name": "MAI-Code-1.1-Flash",
+   "api": "openai-responses",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 256000,
+   "maxTokens": 128000,
+   "cost": {
+    "input": 0.2,
+    "output": 1.2,
+    "cacheRead": 0.02,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": null,
+    "max": null
+   }
+  },
+  {
+   "provider": "deepseek",
+   "id": "deepseek-flash",
+   "name": "DeepSeek V4.1 Flash",
+   "api": "openai-completions",
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 384000,
+   "cost": {
+    "input": 0.3,
+    "output": 1.2,
+    "cacheRead": 0.006,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "minimal": null,
+    "low": "low",
+    "medium": null,
+    "high": "high",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "deepseek",
+   "id": "deepseek-v4-pro",
+   "name": "DeepSeek V4 Pro",
+   "api": "openai-completions",
+   "reasoning": true,
+   "input": [
+    "text"
+   ],
+   "contextWindow": 1000000,
+   "maxTokens": 384000,
+   "cost": {
+    "input": 1.32,
+    "output": 3.96,
+    "cacheRead": 0.044,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "minimal": null,
+    "low": null,
+    "medium": null,
+    "high": "high",
+    "max": "max"
+   }
+  }
+ ],
+ "benchmarks": [
+  {
+   "benchSlug": "gpt-6-sol-low",
+   "quality": {
+    "intelligence": 34.2,
+    "knowledge": 26.516666666666666,
+    "research": 0.20202020202020202,
+    "longContext": 0.793333333333333,
+    "visionReasoning": 0.801734104046243
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 78.86,
+   "latencyMsTtft": 1720,
+   "latencyMsTtfa": 1720,
+   "effort": "low",
+   "costPerTask": 0.1328,
+   "timePerTaskSeconds": 41.68162965380766,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-low",
+   "quality": {
+    "intelligence": 34.2,
+    "knowledge": 26.516666666666666,
+    "research": 0.20202020202020202,
+    "longContext": 0.793333333333333,
+    "visionReasoning": 0.801734104046243
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 78.86,
+   "latencyMsTtft": 1720,
+   "latencyMsTtfa": 1720,
+   "effort": "low",
+   "costPerTask": 0.1328,
+   "timePerTaskSeconds": 41.68162965380766,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5-medium",
+   "quality": {
+    "intelligence": 40.8,
+    "knowledge": 20.1,
+    "research": 0.509090909090909,
+    "longContext": 0.763333333333333
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 98.65,
+   "latencyMsTtft": 1170,
+   "latencyMsTtfa": 1170,
+   "effort": "medium",
+   "costPerTask": 0.5894,
+   "timePerTaskSeconds": 135.40023730422607,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5-medium",
+   "quality": {
+    "intelligence": 40.8,
+    "knowledge": 20.1,
+    "research": 0.509090909090909,
+    "longContext": 0.763333333333333
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 98.65,
+   "latencyMsTtft": 1170,
+   "latencyMsTtfa": 1170,
+   "effort": "medium",
+   "costPerTask": 0.5894,
+   "timePerTaskSeconds": 135.40023730422607,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-low",
+   "quality": {
+    "intelligence": 21,
+    "coding": 44.2,
+    "agenticCoding": 16.1,
+    "knowledge": -14.65,
+    "research": 0.13079299691040164,
+    "longContext": 0.7,
+    "visionReasoning": 0.739884393063584
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 109.15,
+   "latencyMsTtft": 1580,
+   "latencyMsTtfa": 1580,
+   "effort": "low",
+   "costPerTask": 0.0098,
+   "timePerTaskSeconds": 23.259517760148395,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-low",
+   "quality": {
+    "intelligence": 21,
+    "coding": 44.2,
+    "agenticCoding": 16.1,
+    "knowledge": -14.65,
+    "research": 0.13079299691040164,
+    "longContext": 0.7,
+    "visionReasoning": 0.739884393063584
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 109.15,
+   "latencyMsTtft": 1580,
+   "latencyMsTtfa": 1580,
+   "effort": "low",
+   "costPerTask": 0.0098,
+   "timePerTaskSeconds": 23.259517760148395,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-fable-5-1-low",
+   "quality": {
+    "intelligence": 46.8,
+    "coding": 75.2,
+    "agenticCoding": 47.1,
+    "knowledge": 34.13333333333333,
+    "research": 0.5535353535353535,
+    "longContext": 0.823333333333333
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 51.71,
+   "latencyMsTtft": 4730,
+   "latencyMsTtfa": 4730,
+   "effort": "low",
+   "costPerTask": 2.371,
+   "timePerTaskSeconds": 253.44633464337778,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-fable-5-1",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-low",
+   "quality": {
+    "intelligence": 33.5,
+    "coding": 69.7,
+    "agenticCoding": 31.6,
+    "knowledge": 18.866666666666667,
+    "research": 0.23939393939393938,
+    "longContext": 0.78,
+    "visionReasoning": 0.809826589595376
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 68.6,
+   "latencyMsTtft": 2510,
+   "latencyMsTtfa": 2510,
+   "effort": "low",
+   "costPerTask": 0.2606,
+   "timePerTaskSeconds": 57.47933822132986,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-low",
+   "quality": {
+    "intelligence": 33.5,
+    "coding": 69.7,
+    "agenticCoding": 31.6,
+    "knowledge": 18.866666666666667,
+    "research": 0.23939393939393938,
+    "longContext": 0.78,
+    "visionReasoning": 0.809826589595376
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 68.6,
+   "latencyMsTtft": 2510,
+   "latencyMsTtfa": 2510,
+   "effort": "low",
+   "costPerTask": 0.2606,
+   "timePerTaskSeconds": 57.47933822132986,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol-xhigh",
+   "quality": {
+    "intelligence": 51,
+    "knowledge": 40.86666666666667,
+    "research": 0.5161616161616162,
+    "longContext": 0.796666666666667,
+    "visionReasoning": 0.850867052023121
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 50.54,
+   "latencyMsTtft": 149620,
+   "latencyMsTtfa": 149620,
+   "effort": "xhigh",
+   "costPerTask": 0.3929,
+   "timePerTaskSeconds": 350.16082439253967,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol-xhigh",
+   "quality": {
+    "intelligence": 51,
+    "knowledge": 40.86666666666667,
+    "research": 0.5161616161616162,
+    "longContext": 0.796666666666667,
+    "visionReasoning": 0.850867052023121
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 50.54,
+   "latencyMsTtft": 149620,
+   "latencyMsTtfa": 149620,
+   "effort": "xhigh",
+   "costPerTask": 0.3929,
+   "timePerTaskSeconds": 350.16082439253967,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-xhigh",
+   "quality": {
+    "intelligence": 49.7,
+    "coding": 77,
+    "agenticCoding": 55.6,
+    "knowledge": 35.38333333333333,
+    "research": 0.5797979797979798,
+    "longContext": 0.803333333333333,
+    "visionReasoning": 0.839884393063584
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 55.81,
+   "latencyMsTtft": 37330,
+   "latencyMsTtfa": 37330,
+   "effort": "xhigh",
+   "costPerTask": 4.8778,
+   "timePerTaskSeconds": 673.0050726146376,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-xhigh",
+   "quality": {
+    "intelligence": 49.7,
+    "coding": 77,
+    "agenticCoding": 55.6,
+    "knowledge": 35.38333333333333,
+    "research": 0.5797979797979798,
+    "longContext": 0.803333333333333,
+    "visionReasoning": 0.839884393063584
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 55.81,
+   "latencyMsTtft": 37330,
+   "latencyMsTtfa": 37330,
+   "effort": "xhigh",
+   "costPerTask": 4.8778,
+   "timePerTaskSeconds": 673.0050726146376,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-low",
+   "quality": {
+    "intelligence": 24.3,
+    "knowledge": -8.233333333333333,
+    "research": 0.24646464646464647,
+    "longContext": 0.673333333333333
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 63.8,
+   "latencyMsTtft": 1060,
+   "latencyMsTtfa": 1060,
+   "effort": "low",
+   "costPerTask": 0.5088,
+   "timePerTaskSeconds": 140.1659104398274,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-low",
+   "quality": {
+    "intelligence": 24.3,
+    "knowledge": -8.233333333333333,
+    "research": 0.24646464646464647,
+    "longContext": 0.673333333333333
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 63.8,
+   "latencyMsTtft": 1060,
+   "latencyMsTtfa": 1060,
+   "effort": "low",
+   "costPerTask": 0.5088,
+   "timePerTaskSeconds": 140.1659104398274,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-xhigh",
+   "quality": {
+    "intelligence": 34.6,
+    "knowledge": -1.8333333333333333,
+    "research": 0.33636363636363636,
+    "longContext": 0.8,
+    "visionReasoning": 0.797109826589595
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 138.42,
+   "latencyMsTtft": 22230,
+   "latencyMsTtfa": 22230,
+   "effort": "xhigh",
+   "costPerTask": 0.0422,
+   "timePerTaskSeconds": 197.87987368286534,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-xhigh",
+   "quality": {
+    "intelligence": 34.6,
+    "knowledge": -1.8333333333333333,
+    "research": 0.33636363636363636,
+    "longContext": 0.8,
+    "visionReasoning": 0.797109826589595
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 138.42,
+   "latencyMsTtft": 22230,
+   "latencyMsTtfa": 22230,
+   "effort": "xhigh",
+   "costPerTask": 0.0422,
+   "timePerTaskSeconds": 197.87987368286534,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5",
+   "quality": {
+    "intelligence": 38.4,
+    "coding": 74.9,
+    "agenticCoding": 36.4,
+    "knowledge": 20.516666666666666,
+    "research": 0.33438818565400846,
+    "longContext": 0.843333333333333,
+    "visionReasoning": 0.798843930635838
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 84.38,
+   "latencyMsTtft": 49030,
+   "latencyMsTtfa": 49030,
+   "effort": "xhigh",
+   "costPerTask": 2.634,
+   "timePerTaskSeconds": 282.4208269757081,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5",
+   "quality": {
+    "intelligence": 38.4,
+    "coding": 74.9,
+    "agenticCoding": 36.4,
+    "knowledge": 20.516666666666666,
+    "research": 0.33438818565400846,
+    "longContext": 0.843333333333333,
+    "visionReasoning": 0.798843930635838
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 84.38,
+   "latencyMsTtft": 49030,
+   "latencyMsTtfa": 49030,
+   "effort": "xhigh",
+   "costPerTask": 2.634,
+   "timePerTaskSeconds": 282.4208269757081,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra-xhigh",
+   "quality": {
+    "intelligence": 52.4,
+    "coding": 75.9,
+    "agenticCoding": 50.2,
+    "knowledge": 43.416666666666664,
+    "research": 0.5232323232323233,
+    "longContext": 0.8,
+    "visionReasoning": 0.86242774566474
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 49.37,
+   "latencyMsTtft": 144370,
+   "latencyMsTtfa": 144370,
+   "effort": "xhigh",
+   "costPerTask": 2.3088,
+   "timePerTaskSeconds": 341.052572351872,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra-xhigh",
+   "quality": {
+    "intelligence": 52.4,
+    "coding": 75.9,
+    "agenticCoding": 50.2,
+    "knowledge": 43.416666666666664,
+    "research": 0.5232323232323233,
+    "longContext": 0.8,
+    "visionReasoning": 0.86242774566474
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 49.37,
+   "latencyMsTtft": 144370,
+   "latencyMsTtfa": 144370,
+   "effort": "xhigh",
+   "costPerTask": 2.3088,
+   "timePerTaskSeconds": 341.052572351872,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "grok-4-7-low",
+   "quality": {
+    "intelligence": 42.2,
+    "knowledge": 29.616666666666667,
+    "research": 0.49292929292929294,
+    "longContext": 0.8,
+    "visionReasoning": 0.78150289017341
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 6,
+   "outputSpeedTps": 73.86,
+   "latencyMsTtft": 8920,
+   "latencyMsTtfa": 8920,
+   "effort": "low",
+   "costPerTask": 1.248,
+   "timePerTaskSeconds": 382.7840287092949,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/grok-4.7",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-low",
+   "quality": {
+    "intelligence": 39.4,
+    "coding": 66.9,
+    "agenticCoding": 36,
+    "knowledge": 28.55,
+    "research": 0.38181818181818183,
+    "longContext": 0.813333333333333,
+    "visionReasoning": 0.798265895953757
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 54.44,
+   "latencyMsTtft": 2720,
+   "latencyMsTtfa": 2720,
+   "effort": "low",
+   "costPerTask": 1.0983,
+   "timePerTaskSeconds": 168.65922548155805,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-low",
+   "quality": {
+    "intelligence": 39.4,
+    "coding": 66.9,
+    "agenticCoding": 36,
+    "knowledge": 28.55,
+    "research": 0.38181818181818183,
+    "longContext": 0.813333333333333,
+    "visionReasoning": 0.798265895953757
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 54.44,
+   "latencyMsTtft": 2720,
+   "latencyMsTtfa": 2720,
+   "effort": "low",
+   "costPerTask": 1.0983,
+   "timePerTaskSeconds": 168.65922548155805,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5",
+   "quality": {
+    "intelligence": 38.2,
+    "coding": 71.5,
+    "agenticCoding": 43.6,
+    "knowledge": 16.45,
+    "research": 0.42323232323232324,
+    "longContext": 0.82,
+    "visionReasoning": 0.772832369942197
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 82.56,
+   "latencyMsTtft": 185290,
+   "latencyMsTtfa": 185290,
+   "effort": "max",
+   "costPerTask": 5.0912,
+   "timePerTaskSeconds": 831.3626187747153,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5",
+   "quality": {
+    "intelligence": 38.2,
+    "coding": 71.5,
+    "agenticCoding": 43.6,
+    "knowledge": 16.45,
+    "research": 0.42323232323232324,
+    "longContext": 0.82,
+    "visionReasoning": 0.772832369942197
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 82.56,
+   "latencyMsTtft": 185290,
+   "latencyMsTtfa": 185290,
+   "effort": "max",
+   "costPerTask": 5.0912,
+   "timePerTaskSeconds": 831.3626187747153,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-4-5-thinking",
+   "quality": {
+    "intelligence": 29.1,
+    "knowledge": 14,
+    "longContext": 0.773333333333333,
+    "visionReasoning": 0.740462427745665
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 49.55,
+   "latencyMsTtft": 14420,
+   "latencyMsTtfa": 14420,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-4-5",
+   "active": true
+  },
+  {
+   "benchSlug": "grok-4-6-medium",
+   "quality": {
+    "intelligence": 42.8,
+    "coding": 74.4,
+    "agenticCoding": 50.6,
+    "knowledge": 28,
+    "research": 0.5252525252525253,
+    "longContext": 0.81
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 6,
+   "outputSpeedTps": 63.84,
+   "latencyMsTtft": 25170,
+   "latencyMsTtfa": 25170,
+   "effort": "medium",
+   "costPerTask": 1.4963,
+   "timePerTaskSeconds": 438.02308194324377,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/grok-4.6",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5-high",
+   "quality": {
+    "intelligence": 46.8,
+    "knowledge": 20.95,
+    "research": 0.602020202020202,
+    "longContext": 0.78
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 101.05,
+   "latencyMsTtft": 12190,
+   "latencyMsTtfa": 12190,
+   "effort": "high",
+   "costPerTask": 1.1225,
+   "timePerTaskSeconds": 230.52611270010377,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5-high",
+   "quality": {
+    "intelligence": 46.8,
+    "knowledge": 20.95,
+    "research": 0.602020202020202,
+    "longContext": 0.78
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 101.05,
+   "latencyMsTtft": 12190,
+   "latencyMsTtfa": 12190,
+   "effort": "high",
+   "costPerTask": 1.1225,
+   "timePerTaskSeconds": 230.52611270010377,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-medium",
+   "quality": {
+    "intelligence": 30.1,
+    "coding": 64.7,
+    "agenticCoding": 30.4,
+    "knowledge": -5.133333333333334,
+    "research": 0.2202020202020202,
+    "longContext": 0.74,
+    "visionReasoning": 0.767630057803468
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 85.3,
+   "latencyMsTtft": 2220,
+   "latencyMsTtfa": 2220,
+   "effort": "medium",
+   "costPerTask": 0.1834,
+   "timePerTaskSeconds": 62.84804083712414,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-medium",
+   "quality": {
+    "intelligence": 30.1,
+    "coding": 64.7,
+    "agenticCoding": 30.4,
+    "knowledge": -5.133333333333334,
+    "research": 0.2202020202020202,
+    "longContext": 0.74,
+    "visionReasoning": 0.767630057803468
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 85.3,
+   "latencyMsTtft": 2220,
+   "latencyMsTtfa": 2220,
+   "effort": "medium",
+   "costPerTask": 0.1834,
+   "timePerTaskSeconds": 62.84804083712414,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "grok-4-7-high",
+   "quality": {
+    "intelligence": 46.3,
+    "knowledge": 30.9,
+    "research": 0.5501022494887525,
+    "longContext": 0.77
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 6,
+   "outputSpeedTps": 78.12,
+   "latencyMsTtft": 40210,
+   "latencyMsTtfa": 40210,
+   "effort": "high",
+   "costPerTask": 2.7261,
+   "timePerTaskSeconds": 858.0229530927044,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/grok-4.7",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-mini",
+   "quality": {
+    "intelligence": 16.8,
+    "coding": 15.6,
+    "agenticCoding": 6.8,
+    "knowledge": -17.316666666666666,
+    "research": 0.08282828282828283,
+    "longContext": 0.723333333333333,
+    "visionReasoning": 0.700578034682081
+   },
+   "priceInputPer1M": 0.25,
+   "priceOutputPer1M": 2,
+   "outputSpeedTps": 139.9,
+   "latencyMsTtft": 43520,
+   "latencyMsTtfa": 43520,
+   "effort": "high",
+   "costPerTask": 0.0535,
+   "timePerTaskSeconds": 113.52822290234009,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5-mini",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-4-6",
+   "quality": {
+    "intelligence": 24.7,
+    "knowledge": -3.55,
+    "longContext": 0.683333333333333,
+    "visionReasoning": 0.705780346820809
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 3,
+   "priceOutputPer1M": 15,
+   "outputSpeedTps": 43.68,
+   "latencyMsTtft": 1200,
+   "latencyMsTtfa": 1200,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-4-6",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra",
+   "quality": {
+    "intelligence": 52.7,
+    "coding": 76.9,
+    "agenticCoding": 51,
+    "knowledge": 43.4,
+    "research": 0.5202020202020202,
+    "longContext": 0.806666666666667,
+    "visionReasoning": 0.86878612716763
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 53.68,
+   "latencyMsTtft": 319000,
+   "latencyMsTtfa": 319000,
+   "effort": "max",
+   "costPerTask": 3.2575,
+   "timePerTaskSeconds": 503.0351959258995,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra",
+   "quality": {
+    "intelligence": 52.7,
+    "coding": 76.9,
+    "agenticCoding": 51,
+    "knowledge": 43.4,
+    "research": 0.5202020202020202,
+    "longContext": 0.806666666666667,
+    "visionReasoning": 0.86878612716763
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 53.68,
+   "latencyMsTtft": 319000,
+   "latencyMsTtfa": 319000,
+   "effort": "max",
+   "costPerTask": 3.2575,
+   "timePerTaskSeconds": 503.0351959258995,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5",
+   "quality": {
+    "intelligence": 57.6,
+    "knowledge": 46.416666666666664,
+    "research": 0.6121212121212121,
+    "longContext": 0.846666666666667,
+    "visionReasoning": 0.876878612716763
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 93.01,
+   "latencyMsTtft": 717480,
+   "latencyMsTtfa": 717480,
+   "effort": "max",
+   "costPerTask": 5.982,
+   "timePerTaskSeconds": 792.6746208296072,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5",
+   "quality": {
+    "intelligence": 57.6,
+    "knowledge": 46.416666666666664,
+    "research": 0.6121212121212121,
+    "longContext": 0.846666666666667,
+    "visionReasoning": 0.876878612716763
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 93.01,
+   "latencyMsTtft": 717480,
+   "latencyMsTtfa": 717480,
+   "effort": "max",
+   "costPerTask": 5.982,
+   "timePerTaskSeconds": 792.6746208296072,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-4-7-non-reasoning",
+   "quality": {
+    "intelligence": 30.9,
+    "knowledge": 14.833333333333334,
+    "research": 0.27635619242579323,
+    "longContext": 0.756666666666667,
+    "visionReasoning": 0.763583815028902
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 44.04,
+   "latencyMsTtft": 980,
+   "latencyMsTtfa": 980,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-4-7",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-medium",
+   "quality": {
+    "intelligence": 29.9,
+    "knowledge": -5.05,
+    "research": 0.2808080808080808,
+    "longContext": 0.783333333333333,
+    "visionReasoning": 0.778612716763006
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "effort": "medium",
+   "costPerTask": 0.0175,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-medium",
+   "quality": {
+    "intelligence": 29.9,
+    "knowledge": -5.05,
+    "research": 0.2808080808080808,
+    "longContext": 0.783333333333333,
+    "visionReasoning": 0.778612716763006
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "effort": "medium",
+   "costPerTask": 0.0175,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-4-mini-medium",
+   "quality": {
+    "intelligence": 19.7,
+    "knowledge": -20.616666666666667,
+    "longContext": 0.67,
+    "visionReasoning": 0.711560693641618
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 4.5,
+   "outputSpeedTps": 188.3,
+   "latencyMsTtft": 8100,
+   "latencyMsTtfa": 8100,
+   "effort": "medium",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.4-mini",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-fable-5-1-medium",
+   "quality": {
+    "intelligence": 48.9,
+    "coding": 77.1,
+    "agenticCoding": 50.2,
+    "knowledge": 37.6,
+    "research": 0.5606060606060606,
+    "longContext": 0.846666666666667
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 54.54,
+   "latencyMsTtft": 10830,
+   "latencyMsTtfa": 10830,
+   "effort": "medium",
+   "costPerTask": 2.9826,
+   "timePerTaskSeconds": 312.2972269912395,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-fable-5-1",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol-high",
+   "quality": {
+    "intelligence": 50.2,
+    "knowledge": 41.45,
+    "research": 0.4909090909090909,
+    "longContext": 0.823333333333333,
+    "visionReasoning": 0.849132947976879
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 50.38,
+   "latencyMsTtft": 57710,
+   "latencyMsTtfa": 57710,
+   "effort": "high",
+   "costPerTask": 0.3191,
+   "timePerTaskSeconds": 260.60262471572776,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol-high",
+   "quality": {
+    "intelligence": 50.2,
+    "knowledge": 41.45,
+    "research": 0.4909090909090909,
+    "longContext": 0.823333333333333,
+    "visionReasoning": 0.849132947976879
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 50.38,
+   "latencyMsTtft": 57710,
+   "latencyMsTtfa": 57710,
+   "effort": "high",
+   "costPerTask": 0.3191,
+   "timePerTaskSeconds": 260.60262471572776,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-fable-5-1",
+   "quality": {
+    "intelligence": 53.4,
+    "coding": 81.6,
+    "agenticCoding": 57.9,
+    "knowledge": 43.45,
+    "research": 0.6151515151515151,
+    "longContext": 0.853333333333333
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 67.46,
+   "latencyMsTtft": 238660,
+   "latencyMsTtfa": 238660,
+   "effort": "max",
+   "costPerTask": 7.6297,
+   "timePerTaskSeconds": 739.0799878910055,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-fable-5-1",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-4-5",
+   "quality": {
+    "intelligence": 23.7,
+    "knowledge": -4.133333333333334,
+    "longContext": 0.706666666666667,
+    "visionReasoning": 0.712138728323699
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 47.73,
+   "latencyMsTtft": 1210,
+   "latencyMsTtfa": 1210,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-4-5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna",
+   "quality": {
+    "intelligence": 37.3,
+    "coding": 71.4,
+    "agenticCoding": 42.1,
+    "knowledge": -10.283333333333333,
+    "research": 0.3797979797979798,
+    "longContext": 0.836666666666667,
+    "visionReasoning": 0.785549132947977
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 125.11,
+   "latencyMsTtft": 109990,
+   "latencyMsTtfa": 109990,
+   "effort": "max",
+   "costPerTask": 0.1783,
+   "timePerTaskSeconds": 322.51916367290755,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna",
+   "quality": {
+    "intelligence": 37.3,
+    "coding": 71.4,
+    "agenticCoding": 42.1,
+    "knowledge": -10.283333333333333,
+    "research": 0.3797979797979798,
+    "longContext": 0.836666666666667,
+    "visionReasoning": 0.785549132947977
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 125.11,
+   "latencyMsTtft": 109990,
+   "latencyMsTtfa": 109990,
+   "effort": "max",
+   "costPerTask": 0.1783,
+   "timePerTaskSeconds": 322.51916367290755,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-4-6",
+   "quality": {
+    "intelligence": 26.4,
+    "knowledge": 2.3666666666666667,
+    "longContext": 0.67,
+    "visionReasoning": 0.725433526011561
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 38.35,
+   "latencyMsTtft": 1880,
+   "latencyMsTtfa": 1880,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-4-6",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5-low",
+   "quality": {
+    "intelligence": 42.3,
+    "knowledge": 38.86666666666667,
+    "research": 0.42525252525252527,
+    "longContext": 0.806666666666667,
+    "visionReasoning": 0.846820809248555
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 76.28,
+   "latencyMsTtft": 8950,
+   "latencyMsTtfa": 8950,
+   "effort": "low",
+   "costPerTask": 0.5512,
+   "timePerTaskSeconds": 83.47330056769931,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5-low",
+   "quality": {
+    "intelligence": 42.3,
+    "knowledge": 38.86666666666667,
+    "research": 0.42525252525252527,
+    "longContext": 0.806666666666667,
+    "visionReasoning": 0.846820809248555
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 76.28,
+   "latencyMsTtft": 8950,
+   "latencyMsTtfa": 8950,
+   "effort": "low",
+   "costPerTask": 0.5512,
+   "timePerTaskSeconds": 83.47330056769931,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-4-non-reasoning",
+   "quality": {
+    "intelligence": 18.2,
+    "knowledge": -15.666666666666666,
+    "longContext": 0.583333333333333,
+    "visionReasoning": 0.705780346820809
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 2.5,
+   "priceOutputPer1M": 15,
+   "outputSpeedTps": 61.44,
+   "latencyMsTtft": 800,
+   "latencyMsTtfa": 800,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.4",
+   "active": true
+  },
+  {
+   "benchSlug": "kimi-k3-low",
+   "quality": {
+    "intelligence": 30.1,
+    "coding": 72,
+    "agenticCoding": 29.3,
+    "knowledge": 3.9166666666666665,
+    "research": 0.2606060606060606,
+    "longContext": 0.793333333333333,
+    "visionReasoning": 0.784971098265896
+   },
+   "priceInputPer1M": 3,
+   "priceOutputPer1M": 15,
+   "outputSpeedTps": 36.13,
+   "latencyMsTtft": 4650,
+   "latencyMsTtfa": 60000,
+   "effort": "low",
+   "costPerTask": 1.1463,
+   "timePerTaskSeconds": 328.3152374077501,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/kimi-k3",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-high",
+   "quality": {
+    "intelligence": 42.4,
+    "knowledge": 26.816666666666666,
+    "research": 0.3787878787878788,
+    "longContext": 0.836666666666667,
+    "visionReasoning": 0.819653179190751
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 89,
+   "latencyMsTtft": 17740,
+   "latencyMsTtfa": 17740,
+   "effort": "high",
+   "costPerTask": 0.3728,
+   "timePerTaskSeconds": 114.27940767991042,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-high",
+   "quality": {
+    "intelligence": 42.4,
+    "knowledge": 26.816666666666666,
+    "research": 0.3787878787878788,
+    "longContext": 0.836666666666667,
+    "visionReasoning": 0.819653179190751
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 89,
+   "latencyMsTtft": 17740,
+   "latencyMsTtfa": 17740,
+   "effort": "high",
+   "costPerTask": 0.3728,
+   "timePerTaskSeconds": 114.27940767991042,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-4-low",
+   "quality": {
+    "intelligence": 27.6,
+    "knowledge": 4.783333333333333,
+    "longContext": 0.766666666666667,
+    "visionReasoning": 0.779768786127168
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 2.5,
+   "priceOutputPer1M": 15,
+   "outputSpeedTps": 58.37,
+   "latencyMsTtft": 2190,
+   "latencyMsTtfa": 2190,
+   "effort": "low",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.4",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-4-6-adaptive",
+   "quality": {
+    "intelligence": 31.9,
+    "knowledge": 13.666666666666666,
+    "longContext": 0.78,
+    "visionReasoning": 0.754335260115607
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 41.34,
+   "latencyMsTtft": 19790,
+   "latencyMsTtfa": 19790,
+   "effort": "max",
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-4-6",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-medium",
+   "quality": {
+    "intelligence": 25,
+    "coding": 50.7,
+    "agenticCoding": 23.9,
+    "knowledge": -13.183333333333334,
+    "research": 0.20202020202020202,
+    "longContext": 0.75,
+    "visionReasoning": 0.758381502890173
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 112.4,
+   "latencyMsTtft": 2990,
+   "latencyMsTtfa": 2990,
+   "effort": "medium",
+   "costPerTask": 0.0156,
+   "timePerTaskSeconds": 39.96686875756917,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-medium",
+   "quality": {
+    "intelligence": 25,
+    "coding": 50.7,
+    "agenticCoding": 23.9,
+    "knowledge": -13.183333333333334,
+    "research": 0.20202020202020202,
+    "longContext": 0.75,
+    "visionReasoning": 0.758381502890173
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 112.4,
+   "latencyMsTtft": 2990,
+   "latencyMsTtfa": 2990,
+   "effort": "medium",
+   "costPerTask": 0.0156,
+   "timePerTaskSeconds": 39.96686875756917,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "grok-4-7",
+   "quality": {
+    "intelligence": 46.4,
+    "knowledge": 32.03333333333333,
+    "research": 0.5535353535353535,
+    "longContext": 0.766666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 6,
+   "outputSpeedTps": 76.77,
+   "latencyMsTtft": 41260,
+   "latencyMsTtfa": 41260,
+   "effort": "xhigh",
+   "costPerTask": 3.7383,
+   "timePerTaskSeconds": 1092.703267697045,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/grok-4.7",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-3-codex",
+   "quality": {
+    "intelligence": 32.5,
+    "knowledge": 10.866666666666667,
+    "research": 0.21818181818181817,
+    "longContext": 0.833333333333333,
+    "visionReasoning": 0.784971098265896
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 1.75,
+   "priceOutputPer1M": 14,
+   "outputSpeedTps": 94.6,
+   "latencyMsTtft": 73960,
+   "latencyMsTtfa": 73960,
+   "effort": "xhigh",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.3-codex",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-3-codex",
+   "quality": {
+    "intelligence": 32.5,
+    "knowledge": 10.866666666666667,
+    "research": 0.21818181818181817,
+    "longContext": 0.833333333333333,
+    "visionReasoning": 0.784971098265896
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 1.75,
+   "priceOutputPer1M": 14,
+   "outputSpeedTps": 94.6,
+   "latencyMsTtft": 73960,
+   "latencyMsTtfa": 73960,
+   "effort": "xhigh",
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.3-codex-spark",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-non-reasoning",
+   "quality": {
+    "intelligence": 18.5,
+    "knowledge": -21.9,
+    "research": 0.21313131313131314,
+    "longContext": 0.396666666666667,
+    "visionReasoning": 0.620809248554913
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 129.81,
+   "latencyMsTtft": 670,
+   "latencyMsTtfa": 670,
+   "effort": "off",
+   "costPerTask": 0.0113,
+   "timePerTaskSeconds": 28.813631367577383,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-non-reasoning",
+   "quality": {
+    "intelligence": 18.5,
+    "knowledge": -21.9,
+    "research": 0.21313131313131314,
+    "longContext": 0.396666666666667,
+    "visionReasoning": 0.620809248554913
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 129.81,
+   "latencyMsTtft": 670,
+   "latencyMsTtfa": 670,
+   "effort": "off",
+   "costPerTask": 0.0113,
+   "timePerTaskSeconds": 28.813631367577383,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5-medium",
+   "quality": {
+    "intelligence": 33.8,
+    "coding": 71.5,
+    "agenticCoding": 29.5,
+    "knowledge": 18.1,
+    "research": 0.26565656565656565,
+    "longContext": 0.83,
+    "visionReasoning": 0.811560693641619
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 82.56,
+   "latencyMsTtft": 7500,
+   "latencyMsTtfa": 7500,
+   "effort": "medium",
+   "costPerTask": 0.9017,
+   "timePerTaskSeconds": 104.62820201223278,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5-medium",
+   "quality": {
+    "intelligence": 33.8,
+    "coding": 71.5,
+    "agenticCoding": 29.5,
+    "knowledge": 18.1,
+    "research": 0.26565656565656565,
+    "longContext": 0.83,
+    "visionReasoning": 0.811560693641619
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 82.56,
+   "latencyMsTtft": 7500,
+   "latencyMsTtfa": 7500,
+   "effort": "medium",
+   "costPerTask": 0.9017,
+   "timePerTaskSeconds": 104.62820201223278,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-medium",
+   "quality": {
+    "intelligence": 39.2,
+    "coding": 76.3,
+    "agenticCoding": 39.7,
+    "knowledge": 19.4,
+    "research": 0.3181818181818182,
+    "longContext": 0.803333333333333,
+    "visionReasoning": 0.813872832369942
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 70.89,
+   "latencyMsTtft": 5870,
+   "latencyMsTtfa": 5870,
+   "effort": "medium",
+   "costPerTask": 0.505,
+   "timePerTaskSeconds": 109.33773117872548,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-medium",
+   "quality": {
+    "intelligence": 39.2,
+    "coding": 76.3,
+    "agenticCoding": 39.7,
+    "knowledge": 19.4,
+    "research": 0.3181818181818182,
+    "longContext": 0.803333333333333,
+    "visionReasoning": 0.813872832369942
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 70.89,
+   "latencyMsTtft": 5870,
+   "latencyMsTtfa": 5870,
+   "effort": "medium",
+   "costPerTask": 0.505,
+   "timePerTaskSeconds": 109.33773117872548,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5-non-reasoning",
+   "quality": {
+    "intelligence": 23.2,
+    "coding": 56.5,
+    "knowledge": -4.75,
+    "longContext": 0.64,
+    "visionReasoning": 0.713872832369942
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 79.41,
+   "latencyMsTtft": 880,
+   "latencyMsTtfa": 880,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5-non-reasoning",
+   "quality": {
+    "intelligence": 23.2,
+    "coding": 56.5,
+    "knowledge": -4.75,
+    "longContext": 0.64,
+    "visionReasoning": 0.713872832369942
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 79.41,
+   "latencyMsTtft": 880,
+   "latencyMsTtfa": 880,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna",
+   "quality": {
+    "intelligence": 38.1,
+    "knowledge": 0.65,
+    "research": 0.4121212121212121,
+    "longContext": 0.833333333333333,
+    "visionReasoning": 0.796531791907514
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 129.94,
+   "latencyMsTtft": 132770,
+   "latencyMsTtfa": 132770,
+   "effort": "max",
+   "costPerTask": 0.0678,
+   "timePerTaskSeconds": 380.58263320794526,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna",
+   "quality": {
+    "intelligence": 38.1,
+    "knowledge": 0.65,
+    "research": 0.4121212121212121,
+    "longContext": 0.833333333333333,
+    "visionReasoning": 0.796531791907514
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 129.94,
+   "latencyMsTtft": 132770,
+   "latencyMsTtfa": 132770,
+   "effort": "max",
+   "costPerTask": 0.0678,
+   "timePerTaskSeconds": 380.58263320794526,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-high",
+   "quality": {
+    "intelligence": 48.1,
+    "coding": 76.5,
+    "agenticCoding": 52.3,
+    "knowledge": 33.71666666666667,
+    "research": 0.5383838383838384,
+    "longContext": 0.79,
+    "visionReasoning": 0.824277456647399
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 54.39,
+   "latencyMsTtft": 19730,
+   "latencyMsTtfa": 19730,
+   "effort": "high",
+   "costPerTask": 3.6133,
+   "timePerTaskSeconds": 520.3622456883389,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-high",
+   "quality": {
+    "intelligence": 48.1,
+    "coding": 76.5,
+    "agenticCoding": 52.3,
+    "knowledge": 33.71666666666667,
+    "research": 0.5383838383838384,
+    "longContext": 0.79,
+    "visionReasoning": 0.824277456647399
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 54.39,
+   "latencyMsTtft": 19730,
+   "latencyMsTtfa": 19730,
+   "effort": "high",
+   "costPerTask": 3.6133,
+   "timePerTaskSeconds": 520.3622456883389,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "gemini-3-8-flash-medium",
+   "quality": {
+    "intelligence": 39.8,
+    "coding": 74.1,
+    "agenticCoding": 39.7,
+    "knowledge": 28.583333333333332,
+    "research": 0.4111111111111111,
+    "longContext": 0.84,
+    "visionReasoning": 0.842196531791908
+   },
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 3.75,
+   "effort": "medium",
+   "costPerTask": 0.931,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gemini-3.8-flash",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-medium",
+   "quality": {
+    "intelligence": 39.8,
+    "knowledge": 27.016666666666666,
+    "research": 0.32626262626262625,
+    "longContext": 0.823333333333333,
+    "visionReasoning": 0.804046242774566
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "effort": "medium",
+   "costPerTask": 0.2473,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-medium",
+   "quality": {
+    "intelligence": 39.8,
+    "knowledge": 27.016666666666666,
+    "research": 0.32626262626262625,
+    "longContext": 0.823333333333333,
+    "visionReasoning": 0.804046242774566
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "effort": "medium",
+   "costPerTask": 0.2473,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "grok-4-5",
+   "quality": {
+    "intelligence": 38.8,
+    "coding": 72.4,
+    "agenticCoding": 41.2,
+    "knowledge": 25.316666666666666,
+    "research": 0.4070707070707071,
+    "longContext": 0.793333333333333,
+    "visionReasoning": 0.804046242774566
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 6,
+   "outputSpeedTps": 54.24,
+   "latencyMsTtft": 9340,
+   "latencyMsTtfa": 9340,
+   "effort": "high",
+   "costPerTask": 1.0365,
+   "timePerTaskSeconds": 505.13721111140563,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/grok-4.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-non-reasoning",
+   "quality": {
+    "intelligence": 28.3,
+    "coding": 65.1,
+    "agenticCoding": 28.1,
+    "knowledge": 1.1,
+    "research": 0.2383838383838384,
+    "longContext": 0.623333333333333,
+    "visionReasoning": 0.71907514450867
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 67.78,
+   "latencyMsTtft": 1000,
+   "latencyMsTtfa": 1000,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-non-reasoning",
+   "quality": {
+    "intelligence": 28.3,
+    "coding": 65.1,
+    "agenticCoding": 28.1,
+    "knowledge": 1.1,
+    "research": 0.2383838383838384,
+    "longContext": 0.623333333333333,
+    "visionReasoning": 0.71907514450867
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 67.78,
+   "latencyMsTtft": 1000,
+   "latencyMsTtfa": 1000,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-high",
+   "quality": {
+    "intelligence": 32.9,
+    "knowledge": -5.5,
+    "research": 0.3181818181818182,
+    "longContext": 0.793333333333333,
+    "visionReasoning": 0.77514450867052
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 133.57,
+   "latencyMsTtft": 12220,
+   "latencyMsTtfa": 12220,
+   "effort": "high",
+   "costPerTask": 0.029,
+   "timePerTaskSeconds": 144.6174165197451,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-high",
+   "quality": {
+    "intelligence": 32.9,
+    "knowledge": -5.5,
+    "research": 0.3181818181818182,
+    "longContext": 0.793333333333333,
+    "visionReasoning": 0.77514450867052
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 133.57,
+   "latencyMsTtft": 12220,
+   "latencyMsTtfa": 12220,
+   "effort": "high",
+   "costPerTask": 0.029,
+   "timePerTaskSeconds": 144.6174165197451,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-high",
+   "quality": {
+    "intelligence": 34.2,
+    "coding": 67.1,
+    "agenticCoding": 36.7,
+    "knowledge": -3.466666666666667,
+    "research": 0.29797979797979796,
+    "longContext": 0.776666666666667,
+    "visionReasoning": 0.790751445086705
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 84.98,
+   "latencyMsTtft": 3740,
+   "latencyMsTtfa": 3740,
+   "effort": "high",
+   "costPerTask": 0.3379,
+   "timePerTaskSeconds": 131.28419105233655,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-high",
+   "quality": {
+    "intelligence": 34.2,
+    "coding": 67.1,
+    "agenticCoding": 36.7,
+    "knowledge": -3.466666666666667,
+    "research": 0.29797979797979796,
+    "longContext": 0.776666666666667,
+    "visionReasoning": 0.790751445086705
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 84.98,
+   "latencyMsTtft": 3740,
+   "latencyMsTtfa": 3740,
+   "effort": "high",
+   "costPerTask": 0.3379,
+   "timePerTaskSeconds": 131.28419105233655,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "deepseek-v4-pro",
+   "quality": {
+    "intelligence": 36,
+    "coding": 68.8,
+    "agenticCoding": 41.3,
+    "knowledge": 0.8333333333333334,
+    "research": 0.4351851851851852,
+    "longContext": 0.803333333333333
+   },
+   "priceInputPer1M": 1.32,
+   "priceOutputPer1M": 3.96,
+   "outputSpeedTps": 109.15,
+   "latencyMsTtft": 1690,
+   "latencyMsTtfa": 20010,
+   "effort": "max",
+   "costPerTask": 0.674,
+   "timePerTaskSeconds": 438.7542248113762,
+   "source": "artificial-analysis",
+   "registryId": "deepseek/deepseek-v4-pro",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-xhigh",
+   "quality": {
+    "intelligence": 34.6,
+    "coding": 68.6,
+    "agenticCoding": 38.7,
+    "knowledge": -10.766666666666667,
+    "research": 0.3484848484848485,
+    "longContext": 0.816666666666667,
+    "visionReasoning": 0.785549132947977
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 115.09,
+   "latencyMsTtft": 54010,
+   "latencyMsTtfa": 54010,
+   "effort": "xhigh",
+   "costPerTask": 0.0853,
+   "timePerTaskSeconds": 202.07491367946542,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-xhigh",
+   "quality": {
+    "intelligence": 34.6,
+    "coding": 68.6,
+    "agenticCoding": 38.7,
+    "knowledge": -10.766666666666667,
+    "research": 0.3484848484848485,
+    "longContext": 0.816666666666667,
+    "visionReasoning": 0.785549132947977
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 115.09,
+   "latencyMsTtft": 54010,
+   "latencyMsTtfa": 54010,
+   "effort": "xhigh",
+   "costPerTask": 0.0853,
+   "timePerTaskSeconds": 202.07491367946542,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gemini-3-8-flash",
+   "quality": {
+    "intelligence": 40.9,
+    "coding": 76.3,
+    "agenticCoding": 40.2,
+    "knowledge": 29.55,
+    "research": 0.4212121212121212,
+    "longContext": 0.813333333333333,
+    "visionReasoning": 0.85606936416185
+   },
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 3.75,
+   "outputSpeedTps": 239.12,
+   "latencyMsTtft": 15820,
+   "latencyMsTtfa": 15820,
+   "effort": "high",
+   "costPerTask": 1.2428,
+   "timePerTaskSeconds": 289.88076001904926,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gemini-3.8-flash",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-high",
+   "quality": {
+    "intelligence": 42.3,
+    "coding": 77.2,
+    "agenticCoding": 44.2,
+    "knowledge": 20.366666666666667,
+    "research": 0.38585858585858585,
+    "longContext": 0.816666666666667,
+    "visionReasoning": 0.81849710982659
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 73.63,
+   "latencyMsTtft": 21820,
+   "latencyMsTtfa": 21820,
+   "effort": "high",
+   "costPerTask": 0.808,
+   "timePerTaskSeconds": 179.32991387354156,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-high",
+   "quality": {
+    "intelligence": 42.3,
+    "coding": 77.2,
+    "agenticCoding": 44.2,
+    "knowledge": 20.366666666666667,
+    "research": 0.38585858585858585,
+    "longContext": 0.816666666666667,
+    "visionReasoning": 0.81849710982659
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 73.63,
+   "latencyMsTtft": 21820,
+   "latencyMsTtfa": 21820,
+   "effort": "high",
+   "costPerTask": 0.808,
+   "timePerTaskSeconds": 179.32991387354156,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5-xhigh",
+   "quality": {
+    "intelligence": 51.9,
+    "knowledge": 23.5,
+    "research": 0.6222222222222222,
+    "longContext": 0.796666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 103.71,
+   "latencyMsTtft": 35130,
+   "latencyMsTtfa": 35130,
+   "effort": "xhigh",
+   "costPerTask": 2.7462,
+   "timePerTaskSeconds": 444.761973590721,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5-xhigh",
+   "quality": {
+    "intelligence": 51.9,
+    "knowledge": 23.5,
+    "research": 0.6222222222222222,
+    "longContext": 0.796666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 103.71,
+   "latencyMsTtft": 35130,
+   "latencyMsTtfa": 35130,
+   "effort": "xhigh",
+   "costPerTask": 2.7462,
+   "timePerTaskSeconds": 444.761973590721,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-4-8",
+   "quality": {
+    "intelligence": 41.8,
+    "coding": 74.3,
+    "agenticCoding": 41.9,
+    "knowledge": 28.75,
+    "research": 0.38686868686868686,
+    "longContext": 0.776666666666667
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 61.44,
+   "latencyMsTtft": 53580,
+   "latencyMsTtfa": 53580,
+   "effort": "max",
+   "costPerTask": 4.081,
+   "timePerTaskSeconds": 693.1438547165425,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-4-8",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-4-8",
+   "quality": {
+    "intelligence": 41.8,
+    "coding": 74.3,
+    "agenticCoding": 41.9,
+    "knowledge": 28.75,
+    "research": 0.38686868686868686,
+    "longContext": 0.776666666666667
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 61.44,
+   "latencyMsTtft": 53580,
+   "latencyMsTtfa": 53580,
+   "effort": "max",
+   "costPerTask": 4.081,
+   "timePerTaskSeconds": 693.1438547165425,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-4.8",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-xhigh",
+   "quality": {
+    "intelligence": 34.4,
+    "knowledge": 3.183333333333333,
+    "research": 0.4,
+    "longContext": 0.766666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 74.62,
+   "latencyMsTtft": 23980,
+   "latencyMsTtfa": 23980,
+   "effort": "xhigh",
+   "costPerTask": 2.872,
+   "timePerTaskSeconds": 512.5247487299932,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-xhigh",
+   "quality": {
+    "intelligence": 34.4,
+    "knowledge": 3.183333333333333,
+    "research": 0.4,
+    "longContext": 0.766666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 74.62,
+   "latencyMsTtft": 23980,
+   "latencyMsTtfa": 23980,
+   "effort": "xhigh",
+   "costPerTask": 2.872,
+   "timePerTaskSeconds": 512.5247487299932,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-fable-5-1-xhigh",
+   "quality": {
+    "intelligence": 53.2,
+    "coding": 80.7,
+    "agenticCoding": 57.2,
+    "knowledge": 42.38333333333333,
+    "research": 0.6060606060606061,
+    "longContext": 0.83
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 64.45,
+   "latencyMsTtft": 97770,
+   "latencyMsTtfa": 97770,
+   "effort": "xhigh",
+   "costPerTask": 5.9783,
+   "timePerTaskSeconds": 601.1812569889739,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-fable-5-1",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-non-reasoning",
+   "quality": {
+    "intelligence": 20.8,
+    "coding": 52.3,
+    "agenticCoding": 23.5,
+    "knowledge": -23.216666666666665,
+    "research": 0.2111111111111111,
+    "longContext": 0.586666666666667,
+    "visionReasoning": 0.667052023121387
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 86.28,
+   "latencyMsTtft": 810,
+   "latencyMsTtfa": 810,
+   "effort": "off",
+   "costPerTask": 0.1397,
+   "timePerTaskSeconds": 36.19957521055921,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-non-reasoning",
+   "quality": {
+    "intelligence": 20.8,
+    "coding": 52.3,
+    "agenticCoding": 23.5,
+    "knowledge": -23.216666666666665,
+    "research": 0.2111111111111111,
+    "longContext": 0.586666666666667,
+    "visionReasoning": 0.667052023121387
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 86.28,
+   "latencyMsTtft": 810,
+   "latencyMsTtfa": 810,
+   "effort": "off",
+   "costPerTask": 0.1397,
+   "timePerTaskSeconds": 36.19957521055921,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-fable-5-1-high",
+   "quality": {
+    "intelligence": 51.2,
+    "coding": 79.1,
+    "agenticCoding": 53.1,
+    "knowledge": 40.8,
+    "research": 0.5717171717171717,
+    "longContext": 0.836666666666667
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 53.82,
+   "latencyMsTtft": 25000,
+   "latencyMsTtfa": 25000,
+   "effort": "high",
+   "costPerTask": 3.9125,
+   "timePerTaskSeconds": 432.85408177397096,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-fable-5-1",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-xhigh",
+   "quality": {
+    "intelligence": 38,
+    "coding": 70.6,
+    "agenticCoding": 41.4,
+    "knowledge": -2.9833333333333334,
+    "research": 0.35353535353535354,
+    "longContext": 0.79,
+    "visionReasoning": 0.794797687861272
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 90.94,
+   "latencyMsTtft": 31660,
+   "latencyMsTtfa": 31660,
+   "effort": "xhigh",
+   "costPerTask": 0.6318,
+   "timePerTaskSeconds": 225.299174456085,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-xhigh",
+   "quality": {
+    "intelligence": 38,
+    "coding": 70.6,
+    "agenticCoding": 41.4,
+    "knowledge": -2.9833333333333334,
+    "research": 0.35353535353535354,
+    "longContext": 0.79,
+    "visionReasoning": 0.794797687861272
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 90.94,
+   "latencyMsTtft": 31660,
+   "latencyMsTtfa": 31660,
+   "effort": "xhigh",
+   "costPerTask": 0.6318,
+   "timePerTaskSeconds": 225.299174456085,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol-medium",
+   "quality": {
+    "intelligence": 47.8,
+    "knowledge": 39.95,
+    "research": 0.4404040404040404,
+    "longContext": 0.833333333333333,
+    "visionReasoning": 0.839306358381503
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 45.43,
+   "latencyMsTtft": 5950,
+   "latencyMsTtfa": 5950,
+   "effort": "medium",
+   "costPerTask": 0.2137,
+   "timePerTaskSeconds": 176.94090505056755,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol-medium",
+   "quality": {
+    "intelligence": 47.8,
+    "knowledge": 39.95,
+    "research": 0.4404040404040404,
+    "longContext": 0.833333333333333,
+    "visionReasoning": 0.839306358381503
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 45.43,
+   "latencyMsTtft": 5950,
+   "latencyMsTtfa": 5950,
+   "effort": "medium",
+   "costPerTask": 0.2137,
+   "timePerTaskSeconds": 176.94090505056755,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra-low",
+   "quality": {
+    "intelligence": 45.8,
+    "coding": 75.7,
+    "agenticCoding": 38.8,
+    "knowledge": 40.55,
+    "research": 0.402020202020202,
+    "longContext": 0.8,
+    "visionReasoning": 0.846242774566474
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 47.2,
+   "latencyMsTtft": 2750,
+   "latencyMsTtfa": 2750,
+   "effort": "low",
+   "costPerTask": 0.8175,
+   "timePerTaskSeconds": 93.63666024569386,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra-low",
+   "quality": {
+    "intelligence": 45.8,
+    "coding": 75.7,
+    "agenticCoding": 38.8,
+    "knowledge": 40.55,
+    "research": 0.402020202020202,
+    "longContext": 0.8,
+    "visionReasoning": 0.846242774566474
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 47.2,
+   "latencyMsTtft": 2750,
+   "latencyMsTtfa": 2750,
+   "effort": "low",
+   "costPerTask": 0.8175,
+   "timePerTaskSeconds": 93.63666024569386,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-4",
+   "quality": {
+    "intelligence": 39,
+    "coding": 71.1,
+    "knowledge": 5.783333333333333,
+    "longContext": 0.82,
+    "visionReasoning": 0.784393063583815
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 2.5,
+   "priceOutputPer1M": 15,
+   "outputSpeedTps": 90.07,
+   "latencyMsTtft": 192940,
+   "latencyMsTtfa": 192940,
+   "effort": "xhigh",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.4",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-high",
+   "quality": {
+    "intelligence": 32.1,
+    "coding": 63.3,
+    "agenticCoding": 34.6,
+    "knowledge": -12,
+    "research": 0.298989898989899,
+    "longContext": 0.803333333333333,
+    "visionReasoning": 0.775722543352601
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 111.49,
+   "latencyMsTtft": 17670,
+   "latencyMsTtfa": 17670,
+   "effort": "high",
+   "costPerTask": 0.044,
+   "timePerTaskSeconds": 123.57247221457834,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-high",
+   "quality": {
+    "intelligence": 32.1,
+    "coding": 63.3,
+    "agenticCoding": 34.6,
+    "knowledge": -12,
+    "research": 0.298989898989899,
+    "longContext": 0.803333333333333,
+    "visionReasoning": 0.775722543352601
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 111.49,
+   "latencyMsTtft": 17670,
+   "latencyMsTtfa": 17670,
+   "effort": "high",
+   "costPerTask": 0.044,
+   "timePerTaskSeconds": 123.57247221457834,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-4-mini-non-reasoning",
+   "quality": {
+    "intelligence": 11.1,
+    "knowledge": -45.416666666666664,
+    "longContext": 0.37,
+    "visionReasoning": 0.604624277456647
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 4.5,
+   "outputSpeedTps": 187.99,
+   "latencyMsTtft": 740,
+   "latencyMsTtfa": 740,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.4-mini",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5-high",
+   "quality": {
+    "intelligence": 37,
+    "coding": 71.6,
+    "agenticCoding": 34.3,
+    "knowledge": 18.75,
+    "research": 0.30606060606060603,
+    "longContext": 0.843333333333333,
+    "visionReasoning": 0.810982658959538
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 83.24,
+   "latencyMsTtft": 20370,
+   "latencyMsTtfa": 20370,
+   "effort": "high",
+   "costPerTask": 1.5413,
+   "timePerTaskSeconds": 181.6506990581732,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5-high",
+   "quality": {
+    "intelligence": 37,
+    "coding": 71.6,
+    "agenticCoding": 34.3,
+    "knowledge": 18.75,
+    "research": 0.30606060606060603,
+    "longContext": 0.843333333333333,
+    "visionReasoning": 0.810982658959538
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 83.24,
+   "latencyMsTtft": 20370,
+   "latencyMsTtfa": 20370,
+   "effort": "high",
+   "costPerTask": 1.5413,
+   "timePerTaskSeconds": 181.6506990581732,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5",
+   "quality": {
+    "intelligence": 56,
+    "knowledge": 32.3,
+    "research": 0.6515151515151515,
+    "longContext": 0.826666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 138.97,
+   "latencyMsTtft": 428360,
+   "latencyMsTtfa": 428360,
+   "effort": "max",
+   "costPerTask": 7.6668,
+   "timePerTaskSeconds": 902.5292355731805,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5",
+   "quality": {
+    "intelligence": 56,
+    "knowledge": 32.3,
+    "research": 0.6515151515151515,
+    "longContext": 0.826666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 138.97,
+   "latencyMsTtft": 428360,
+   "latencyMsTtfa": 428360,
+   "effort": "max",
+   "costPerTask": 7.6668,
+   "timePerTaskSeconds": 902.5292355731805,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gemini-3-7-flash",
+   "quality": {
+    "intelligence": 39.1,
+    "coding": 76.1,
+    "agenticCoding": 35.2,
+    "knowledge": 26.483333333333334,
+    "research": 0.36363636363636365,
+    "longContext": 0.816666666666667,
+    "visionReasoning": 0.854913294797688
+   },
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 3.75,
+   "outputSpeedTps": 298.01,
+   "latencyMsTtft": 10480,
+   "latencyMsTtfa": 10480,
+   "effort": "high",
+   "costPerTask": 0.9253,
+   "timePerTaskSeconds": 197.4192686773724,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gemini-3.7-flash",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol",
+   "quality": {
+    "intelligence": 51.8,
+    "knowledge": 41.53333333333333,
+    "research": 0.5565656565656566,
+    "longContext": 0.83,
+    "visionReasoning": 0.859537572254335
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 54.94,
+   "latencyMsTtft": 282570,
+   "latencyMsTtfa": 282570,
+   "effort": "max",
+   "costPerTask": 0.7242,
+   "timePerTaskSeconds": 694.1935011709234,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol",
+   "quality": {
+    "intelligence": 51.8,
+    "knowledge": 41.53333333333333,
+    "research": 0.5565656565656566,
+    "longContext": 0.83,
+    "visionReasoning": 0.859537572254335
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 54.94,
+   "latencyMsTtft": 282570,
+   "latencyMsTtfa": 282570,
+   "effort": "max",
+   "costPerTask": 0.7242,
+   "timePerTaskSeconds": 694.1935011709234,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5",
+   "quality": {
+    "intelligence": 50.8,
+    "coding": 78,
+    "agenticCoding": 56.5,
+    "knowledge": 37.06666666666667,
+    "research": 0.5717171717171717,
+    "longContext": 0.793333333333333,
+    "visionReasoning": 0.847398843930636
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 57.66,
+   "latencyMsTtft": 62330,
+   "latencyMsTtfa": 62330,
+   "effort": "max",
+   "costPerTask": 5.8584,
+   "timePerTaskSeconds": 775.6323123991205,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5",
+   "quality": {
+    "intelligence": 50.8,
+    "coding": 78,
+    "agenticCoding": 56.5,
+    "knowledge": 37.06666666666667,
+    "research": 0.5717171717171717,
+    "longContext": 0.793333333333333,
+    "visionReasoning": 0.847398843930636
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 57.66,
+   "latencyMsTtft": 62330,
+   "latencyMsTtfa": 62330,
+   "effort": "max",
+   "costPerTask": 5.8584,
+   "timePerTaskSeconds": 775.6323123991205,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-high",
+   "quality": {
+    "intelligence": 31.7,
+    "knowledge": -3.683333333333333,
+    "research": 0.35454545454545455,
+    "longContext": 0.766666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 69.39,
+   "latencyMsTtft": 9800,
+   "latencyMsTtfa": 9800,
+   "effort": "high",
+   "costPerTask": 1.7925,
+   "timePerTaskSeconds": 372.6530750942845,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-high",
+   "quality": {
+    "intelligence": 31.7,
+    "knowledge": -3.683333333333333,
+    "research": 0.35454545454545455,
+    "longContext": 0.766666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 69.39,
+   "latencyMsTtft": 9800,
+   "latencyMsTtfa": 9800,
+   "effort": "high",
+   "costPerTask": 1.7925,
+   "timePerTaskSeconds": 372.6530750942845,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-4-mini",
+   "quality": {
+    "intelligence": 24.1,
+    "coding": 56.1,
+    "agenticCoding": 17.9,
+    "knowledge": -18.916666666666668,
+    "research": 0.1254355400696864,
+    "longContext": 0.77,
+    "visionReasoning": 0.732947976878613
+   },
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 4.5,
+   "outputSpeedTps": 216.34,
+   "latencyMsTtft": 120120,
+   "latencyMsTtfa": 120120,
+   "effort": "xhigh",
+   "costPerTask": 0.4474,
+   "timePerTaskSeconds": 223.12867635904874,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.4-mini",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5-low",
+   "quality": {
+    "intelligence": 35.9,
+    "knowledge": 19.366666666666667,
+    "research": 0.4171717171717172,
+    "longContext": 0.76
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 92.96,
+   "latencyMsTtft": 1350,
+   "latencyMsTtfa": 1350,
+   "effort": "low",
+   "costPerTask": 0.417,
+   "timePerTaskSeconds": 94.12854545504491,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-5-low",
+   "quality": {
+    "intelligence": 35.9,
+    "knowledge": 19.366666666666667,
+    "research": 0.4171717171717172,
+    "longContext": 0.76
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 92.96,
+   "latencyMsTtft": 1350,
+   "latencyMsTtfa": 1350,
+   "effort": "low",
+   "costPerTask": 0.417,
+   "timePerTaskSeconds": 94.12854545504491,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-mini-minimal",
+   "quality": {
+    "intelligence": 9.9,
+    "knowledge": -53.05,
+    "longContext": 0.393333333333333,
+    "visionReasoning": 0.583815028901734
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 0.25,
+   "priceOutputPer1M": 2,
+   "outputSpeedTps": 130.78,
+   "latencyMsTtft": 790,
+   "latencyMsTtfa": 790,
+   "effort": "minimal",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5-mini",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra",
+   "quality": {
+    "intelligence": 42.1,
+    "coding": 76.7,
+    "agenticCoding": 43.2,
+    "knowledge": 0.05,
+    "research": 0.3414141414141414,
+    "longContext": 0.83,
+    "visionReasoning": 0.806936416184971
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 101.72,
+   "latencyMsTtft": 172370,
+   "latencyMsTtfa": 172370,
+   "effort": "max",
+   "costPerTask": 1.3987,
+   "timePerTaskSeconds": 374.72624055541735,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra",
+   "quality": {
+    "intelligence": 42.1,
+    "coding": 76.7,
+    "agenticCoding": 43.2,
+    "knowledge": 0.05,
+    "research": 0.3414141414141414,
+    "longContext": 0.83,
+    "visionReasoning": 0.806936416184971
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 101.72,
+   "latencyMsTtft": 172370,
+   "latencyMsTtfa": 172370,
+   "effort": "max",
+   "costPerTask": 1.3987,
+   "timePerTaskSeconds": 374.72624055541735,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-low",
+   "quality": {
+    "intelligence": 21.5,
+    "knowledge": -9.166666666666666,
+    "research": 0.14444444444444443,
+    "longContext": 0.74,
+    "visionReasoning": 0.759537572254335
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 129.04,
+   "latencyMsTtft": 2420,
+   "latencyMsTtfa": 2420,
+   "effort": "low",
+   "costPerTask": 0.0045,
+   "timePerTaskSeconds": 16.186193916812893,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-luna-low",
+   "quality": {
+    "intelligence": 21.5,
+    "knowledge": -9.166666666666666,
+    "research": 0.14444444444444443,
+    "longContext": 0.74,
+    "visionReasoning": 0.759537572254335
+   },
+   "priceInputPer1M": 0.1,
+   "priceOutputPer1M": 0.5,
+   "outputSpeedTps": 129.04,
+   "latencyMsTtft": 2420,
+   "latencyMsTtfa": 2420,
+   "effort": "low",
+   "costPerTask": 0.0045,
+   "timePerTaskSeconds": 16.186193916812893,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "grok-4-6-low",
+   "quality": {
+    "intelligence": 35.1,
+    "coding": 66.3,
+    "agenticCoding": 41.2,
+    "knowledge": 25.9,
+    "research": 0.402020202020202,
+    "longContext": 0.806666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 6,
+   "outputSpeedTps": 65.75,
+   "latencyMsTtft": 7440,
+   "latencyMsTtfa": 7440,
+   "effort": "low",
+   "costPerTask": 0.4753,
+   "timePerTaskSeconds": 161.95000495531386,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/grok-4.6",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-mini-medium",
+   "quality": {
+    "intelligence": 20.6,
+    "knowledge": -11.033333333333333,
+    "longContext": 0.723333333333333,
+    "visionReasoning": 0.688439306358381
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 0.25,
+   "priceOutputPer1M": 2,
+   "outputSpeedTps": 132.32,
+   "latencyMsTtft": 9890,
+   "latencyMsTtfa": 9890,
+   "effort": "medium",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5-mini",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol",
+   "quality": {
+    "intelligence": 47.6,
+    "knowledge": 27.116666666666667,
+    "research": 0.4626262626262626,
+    "longContext": 0.836666666666667,
+    "visionReasoning": 0.829479768786127
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 95.18,
+   "latencyMsTtft": 125710,
+   "latencyMsTtfa": 125710,
+   "effort": "max",
+   "costPerTask": 1.0447,
+   "timePerTaskSeconds": 322.5297068219314,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol",
+   "quality": {
+    "intelligence": 47.6,
+    "knowledge": 27.116666666666667,
+    "research": 0.4626262626262626,
+    "longContext": 0.836666666666667,
+    "visionReasoning": 0.829479768786127
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 95.18,
+   "latencyMsTtft": 125710,
+   "latencyMsTtfa": 125710,
+   "effort": "max",
+   "costPerTask": 1.0447,
+   "timePerTaskSeconds": 322.5297068219314,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5-low",
+   "quality": {
+    "intelligence": 30.7,
+    "coding": 60.9,
+    "knowledge": 15.1,
+    "longContext": 0.81,
+    "visionReasoning": 0.790173410404624
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 79.17,
+   "latencyMsTtft": 1570,
+   "latencyMsTtfa": 1570,
+   "effort": "low",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-5-low",
+   "quality": {
+    "intelligence": 30.7,
+    "coding": 60.9,
+    "knowledge": 15.1,
+    "longContext": 0.81,
+    "visionReasoning": 0.790173410404624
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 30,
+   "outputSpeedTps": 79.17,
+   "latencyMsTtft": 1570,
+   "latencyMsTtfa": 1570,
+   "effort": "low",
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "grok-4-6",
+   "quality": {
+    "intelligence": 44.3,
+    "coding": 76.8,
+    "agenticCoding": 53,
+    "knowledge": 30.483333333333334,
+    "research": 0.5282828282828282,
+    "longContext": 0.803333333333333
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 6,
+   "outputSpeedTps": 72.94,
+   "latencyMsTtft": 31630,
+   "latencyMsTtfa": 31630,
+   "effort": "high",
+   "costPerTask": 1.8589,
+   "timePerTaskSeconds": 486.5532168691853,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/grok-4.6",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-low",
+   "quality": {
+    "intelligence": 27.5,
+    "coding": 58.1,
+    "agenticCoding": 25.9,
+    "knowledge": -6.833333333333333,
+    "research": 0.23333333333333334,
+    "longContext": 0.713333333333333,
+    "visionReasoning": 0.761271676300578
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 82.78,
+   "latencyMsTtft": 1760,
+   "latencyMsTtfa": 1760,
+   "effort": "low",
+   "costPerTask": 0.1445,
+   "timePerTaskSeconds": 46.61415734686755,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-terra-low",
+   "quality": {
+    "intelligence": 27.5,
+    "coding": 58.1,
+    "agenticCoding": 25.9,
+    "knowledge": -6.833333333333333,
+    "research": 0.23333333333333334,
+    "longContext": 0.713333333333333,
+    "visionReasoning": 0.761271676300578
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 12,
+   "outputSpeedTps": 82.78,
+   "latencyMsTtft": 1760,
+   "latencyMsTtfa": 1760,
+   "effort": "low",
+   "costPerTask": 0.1445,
+   "timePerTaskSeconds": 46.61415734686755,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-terra",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-fable-5",
+   "quality": {
+    "intelligence": 49.6,
+    "coding": 76.5,
+    "agenticCoding": 50.7,
+    "knowledge": 43.3,
+    "research": 0.5595959595959596,
+    "longContext": 0.823333333333333
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 65.33,
+   "latencyMsTtft": 97240,
+   "latencyMsTtfa": 97240,
+   "effort": "max",
+   "costPerTask": 8.746,
+   "timePerTaskSeconds": 626.2210331412714,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-fable-5",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-non-reasoning",
+   "quality": {
+    "intelligence": 28.5,
+    "knowledge": -0.85,
+    "research": 0.32222222222222224,
+    "longContext": 0.64,
+    "visionReasoning": 0.703468208092486
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 81.98,
+   "latencyMsTtft": 1010,
+   "latencyMsTtfa": 1010,
+   "effort": "off",
+   "costPerTask": 0.3337,
+   "timePerTaskSeconds": 60.334829738768505,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-non-reasoning",
+   "quality": {
+    "intelligence": 28.5,
+    "knowledge": -0.85,
+    "research": 0.32222222222222224,
+    "longContext": 0.64,
+    "visionReasoning": 0.703468208092486
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 81.98,
+   "latencyMsTtft": 1010,
+   "latencyMsTtfa": 1010,
+   "effort": "off",
+   "costPerTask": 0.3337,
+   "timePerTaskSeconds": 60.334829738768505,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "deepseek-v4-pro-non-reasoning",
+   "quality": {
+    "intelligence": 20.4,
+    "knowledge": -12.383333333333333,
+    "research": 0.27639751552795033,
+    "longContext": 0.506666666666667
+   },
+   "priceInputPer1M": 0.91,
+   "priceOutputPer1M": 2.98,
+   "outputSpeedTps": 109.55,
+   "latencyMsTtft": 1650,
+   "latencyMsTtfa": 1650,
+   "effort": "off",
+   "costPerTask": 0.3297,
+   "timePerTaskSeconds": 267.95296457490446,
+   "source": "artificial-analysis",
+   "registryId": "deepseek/deepseek-v4-pro",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-non-reasoning",
+   "quality": {
+    "intelligence": 23.2,
+    "coding": 66.4,
+    "knowledge": -0.65,
+    "longContext": 0.7,
+    "visionReasoning": 0.71907514450867
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 64.39,
+   "latencyMsTtft": 1040,
+   "latencyMsTtfa": 1040,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-non-reasoning",
+   "quality": {
+    "intelligence": 23.2,
+    "coding": 66.4,
+    "knowledge": -0.65,
+    "longContext": 0.7,
+    "visionReasoning": 0.71907514450867
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 64.39,
+   "latencyMsTtft": 1040,
+   "latencyMsTtfa": 1040,
+   "effort": "off",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "grok-4-6-xhigh",
+   "quality": {
+    "intelligence": 44.2,
+    "coding": 75.9,
+    "agenticCoding": 52.5,
+    "knowledge": 29.316666666666666,
+    "research": 0.5383838383838384,
+    "longContext": 0.81
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 6,
+   "outputSpeedTps": 68.67,
+   "latencyMsTtft": 36640,
+   "latencyMsTtfa": 36640,
+   "effort": "xhigh",
+   "costPerTask": 2.3237,
+   "timePerTaskSeconds": 559.0427745016856,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/grok-4.6",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol",
+   "quality": {
+    "intelligence": 47,
+    "coding": 77.4,
+    "agenticCoding": 50.2,
+    "knowledge": 21.966666666666665,
+    "research": 0.4184839044652129,
+    "longContext": 0.84,
+    "visionReasoning": 0.834104046242775
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 79.23,
+   "latencyMsTtft": 134900,
+   "latencyMsTtfa": 134900,
+   "effort": "max",
+   "costPerTask": 1.9885,
+   "timePerTaskSeconds": 373.02808918031616,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol",
+   "quality": {
+    "intelligence": 47,
+    "coding": 77.4,
+    "agenticCoding": 50.2,
+    "knowledge": 21.966666666666665,
+    "research": 0.4184839044652129,
+    "longContext": 0.84,
+    "visionReasoning": 0.834104046242775
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 79.23,
+   "latencyMsTtft": 134900,
+   "latencyMsTtfa": 134900,
+   "effort": "max",
+   "costPerTask": 1.9885,
+   "timePerTaskSeconds": 373.02808918031616,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-xhigh",
+   "quality": {
+    "intelligence": 44,
+    "coding": 78.3,
+    "agenticCoding": 47.4,
+    "knowledge": 20.983333333333334,
+    "research": 0.4131313131313131,
+    "longContext": 0.823333333333333,
+    "visionReasoning": 0.826589595375723
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 75.23,
+   "latencyMsTtft": 56890,
+   "latencyMsTtfa": 56890,
+   "effort": "xhigh",
+   "costPerTask": 1.1844,
+   "timePerTaskSeconds": 258.89959635040543,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-sol-xhigh",
+   "quality": {
+    "intelligence": 44,
+    "coding": 78.3,
+    "agenticCoding": 47.4,
+    "knowledge": 20.983333333333334,
+    "research": 0.4131313131313131,
+    "longContext": 0.823333333333333,
+    "visionReasoning": 0.826589595375723
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 75.23,
+   "latencyMsTtft": 56890,
+   "latencyMsTtfa": 56890,
+   "effort": "xhigh",
+   "costPerTask": 1.1844,
+   "timePerTaskSeconds": 258.89959635040543,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-xhigh",
+   "quality": {
+    "intelligence": 44.2,
+    "knowledge": 26.666666666666668,
+    "research": 0.4171717171717172,
+    "longContext": 0.813333333333333,
+    "visionReasoning": 0.825433526011561
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 91.26,
+   "latencyMsTtft": 50760,
+   "latencyMsTtfa": 50760,
+   "effort": "xhigh",
+   "costPerTask": 0.5208,
+   "timePerTaskSeconds": 171.4665632542424,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-sol-xhigh",
+   "quality": {
+    "intelligence": 44.2,
+    "knowledge": 26.666666666666668,
+    "research": 0.4171717171717172,
+    "longContext": 0.813333333333333,
+    "visionReasoning": 0.825433526011561
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 91.26,
+   "latencyMsTtft": 50760,
+   "latencyMsTtfa": 50760,
+   "effort": "xhigh",
+   "costPerTask": 0.5208,
+   "timePerTaskSeconds": 171.4665632542424,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-non-reasoning",
+   "quality": {
+    "intelligence": 15.5,
+    "coding": 39.3,
+    "agenticCoding": 13.4,
+    "knowledge": -24.95,
+    "research": 0.12857142857142856,
+    "longContext": 0.426666666666667,
+    "visionReasoning": 0.603468208092486
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 105.49,
+   "latencyMsTtft": 800,
+   "latencyMsTtfa": 800,
+   "effort": "off",
+   "costPerTask": 0.0101,
+   "timePerTaskSeconds": 19.18161670801455,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-5-6-luna-non-reasoning",
+   "quality": {
+    "intelligence": 15.5,
+    "coding": 39.3,
+    "agenticCoding": 13.4,
+    "knowledge": -24.95,
+    "research": 0.12857142857142856,
+    "longContext": 0.426666666666667,
+    "visionReasoning": 0.603468208092486
+   },
+   "priceInputPer1M": 0.2,
+   "priceOutputPer1M": 1.2,
+   "outputSpeedTps": 105.49,
+   "latencyMsTtft": 800,
+   "latencyMsTtfa": 800,
+   "effort": "off",
+   "costPerTask": 0.0101,
+   "timePerTaskSeconds": 19.18161670801455,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-5.6-luna",
+   "active": true
+  },
+  {
+   "benchSlug": "gemini-3-7-flash-low",
+   "quality": {
+    "intelligence": 36.9,
+    "coding": 71,
+    "knowledge": 22.133333333333333,
+    "longContext": 0.786666666666667,
+    "visionReasoning": 0.848554913294798
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 3.75,
+   "outputSpeedTps": 286.8,
+   "latencyMsTtft": 1360,
+   "latencyMsTtfa": 1360,
+   "effort": "low",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gemini-3.7-flash",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5-xhigh",
+   "quality": {
+    "intelligence": 56,
+    "knowledge": 42.65,
+    "research": 0.6060606060606061,
+    "longContext": 0.846666666666667,
+    "visionReasoning": 0.865895953757225
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 83.04,
+   "latencyMsTtft": 141220,
+   "latencyMsTtfa": 141220,
+   "effort": "xhigh",
+   "costPerTask": 3.4591,
+   "timePerTaskSeconds": 500.9146449757457,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5-xhigh",
+   "quality": {
+    "intelligence": 56,
+    "knowledge": 42.65,
+    "research": 0.6060606060606061,
+    "longContext": 0.846666666666667,
+    "visionReasoning": 0.865895953757225
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 83.04,
+   "latencyMsTtft": 141220,
+   "latencyMsTtfa": 141220,
+   "effort": "xhigh",
+   "costPerTask": 3.4591,
+   "timePerTaskSeconds": 500.9146449757457,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-4-6-adaptive",
+   "quality": {
+    "intelligence": 30.1,
+    "coding": 63,
+    "agenticCoding": 31.8,
+    "knowledge": 12.216666666666667,
+    "research": 0.289198606271777,
+    "longContext": 0.8,
+    "visionReasoning": 0.732947976878613
+   },
+   "priceInputPer1M": 3,
+   "priceOutputPer1M": 15,
+   "outputSpeedTps": 50.11,
+   "latencyMsTtft": 104120,
+   "latencyMsTtfa": 104120,
+   "effort": "max",
+   "costPerTask": 2.4859,
+   "timePerTaskSeconds": 1204.756550582316,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-4-6",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra-high",
+   "quality": {
+    "intelligence": 50.9,
+    "coding": 77.1,
+    "agenticCoding": 48.2,
+    "knowledge": 43.733333333333334,
+    "research": 0.5080808080808081,
+    "longContext": 0.8,
+    "visionReasoning": 0.864161849710983
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 47.74,
+   "latencyMsTtft": 78160,
+   "latencyMsTtfa": 78160,
+   "effort": "high",
+   "costPerTask": 1.7253,
+   "timePerTaskSeconds": 249.6776197525717,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra-high",
+   "quality": {
+    "intelligence": 50.9,
+    "coding": 77.1,
+    "agenticCoding": 48.2,
+    "knowledge": 43.733333333333334,
+    "research": 0.5080808080808081,
+    "longContext": 0.8,
+    "visionReasoning": 0.864161849710983
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 47.74,
+   "latencyMsTtft": 78160,
+   "latencyMsTtfa": 78160,
+   "effort": "high",
+   "costPerTask": 1.7253,
+   "timePerTaskSeconds": 249.6776197525717,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol-low",
+   "quality": {
+    "intelligence": 42.1,
+    "knowledge": 37.63333333333333,
+    "research": 0.3333333333333333,
+    "longContext": 0.84,
+    "visionReasoning": 0.83121387283237
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 48,
+   "latencyMsTtft": 3370,
+   "latencyMsTtfa": 3370,
+   "effort": "low",
+   "costPerTask": 0.1308,
+   "timePerTaskSeconds": 83.61814105956978,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-1-sol-low",
+   "quality": {
+    "intelligence": 42.1,
+    "knowledge": 37.63333333333333,
+    "research": 0.3333333333333333,
+    "longContext": 0.84,
+    "visionReasoning": 0.83121387283237
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 48,
+   "latencyMsTtft": 3370,
+   "latencyMsTtfa": 3370,
+   "effort": "low",
+   "costPerTask": 0.1308,
+   "timePerTaskSeconds": 83.61814105956978,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6.1-sol",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra-medium",
+   "quality": {
+    "intelligence": 49.6,
+    "coding": 76.7,
+    "agenticCoding": 46,
+    "knowledge": 42.21666666666667,
+    "research": 0.47474747474747475,
+    "longContext": 0.796666666666667,
+    "visionReasoning": 0.850867052023121
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 45.67,
+   "latencyMsTtft": 5890,
+   "latencyMsTtfa": 5890,
+   "effort": "medium",
+   "costPerTask": 1.5406,
+   "timePerTaskSeconds": 211.12696389247444,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "gpt-6-astra-medium",
+   "quality": {
+    "intelligence": 49.6,
+    "coding": 76.7,
+    "agenticCoding": 46,
+    "knowledge": 42.21666666666667,
+    "research": 0.47474747474747475,
+    "longContext": 0.796666666666667,
+    "visionReasoning": 0.850867052023121
+   },
+   "priceInputPer1M": 10,
+   "priceOutputPer1M": 50,
+   "outputSpeedTps": 45.67,
+   "latencyMsTtft": 5890,
+   "latencyMsTtfa": 5890,
+   "effort": "medium",
+   "costPerTask": 1.5406,
+   "timePerTaskSeconds": 211.12696389247444,
+   "source": "artificial-analysis",
+   "registryId": "openai-codex/gpt-6-astra",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-4-7",
+   "quality": {
+    "intelligence": 40.7,
+    "coding": 73.6,
+    "agenticCoding": 38.6,
+    "knowledge": 27.266666666666666,
+    "research": 0.39337474120082816,
+    "longContext": 0.786666666666667,
+    "visionReasoning": 0.788439306358382
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 48.32,
+   "latencyMsTtft": 25330,
+   "latencyMsTtfa": 25330,
+   "effort": "max",
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-4-7",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5-medium",
+   "quality": {
+    "intelligence": 51.2,
+    "knowledge": 40.31666666666667,
+    "research": 0.5696969696969697,
+    "longContext": 0.843333333333333,
+    "visionReasoning": 0.857225433526012
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 73.24,
+   "latencyMsTtft": 25240,
+   "latencyMsTtfa": 25240,
+   "effort": "medium",
+   "costPerTask": 1.336,
+   "timePerTaskSeconds": 218.3006584316858,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5-medium",
+   "quality": {
+    "intelligence": 51.2,
+    "knowledge": 40.31666666666667,
+    "research": 0.5696969696969697,
+    "longContext": 0.843333333333333,
+    "visionReasoning": 0.857225433526012
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 73.24,
+   "latencyMsTtft": 25240,
+   "latencyMsTtfa": 25240,
+   "effort": "medium",
+   "costPerTask": 1.336,
+   "timePerTaskSeconds": 218.3006584316858,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gemini-3-7-flash-medium",
+   "quality": {
+    "intelligence": 39.6,
+    "coding": 71.5,
+    "knowledge": 23.7,
+    "longContext": 0.83,
+    "visionReasoning": 0.847398843930636
+   },
+   "qualityEstimated": true,
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 3.75,
+   "outputSpeedTps": 288.24,
+   "latencyMsTtft": 5270,
+   "latencyMsTtfa": 5270,
+   "effort": "medium",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gemini-3.7-flash",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-medium",
+   "quality": {
+    "intelligence": 28.1,
+    "knowledge": -6.866666666666666,
+    "research": 0.2909090909090909,
+    "longContext": 0.736666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 67.74,
+   "latencyMsTtft": 1660,
+   "latencyMsTtfa": 1660,
+   "effort": "medium",
+   "costPerTask": 0.9991,
+   "timePerTaskSeconds": 236.8599978527431,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-sonnet-5-medium",
+   "quality": {
+    "intelligence": 28.1,
+    "knowledge": -6.866666666666666,
+    "research": 0.2909090909090909,
+    "longContext": 0.736666666666667
+   },
+   "priceInputPer1M": 2,
+   "priceOutputPer1M": 10,
+   "outputSpeedTps": 67.74,
+   "latencyMsTtft": 1660,
+   "latencyMsTtfa": 1660,
+   "effort": "medium",
+   "costPerTask": 0.9991,
+   "timePerTaskSeconds": 236.8599978527431,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-sonnet-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5-high",
+   "quality": {
+    "intelligence": 53.6,
+    "knowledge": 40.63333333333333,
+    "research": 0.5888888888888889,
+    "longContext": 0.826666666666667,
+    "visionReasoning": 0.858381502890173
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 77.02,
+   "latencyMsTtft": 37370,
+   "latencyMsTtfa": 37370,
+   "effort": "high",
+   "costPerTask": 1.8225,
+   "timePerTaskSeconds": 287.21555600475557,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-5-high",
+   "quality": {
+    "intelligence": 53.6,
+    "knowledge": 40.63333333333333,
+    "research": 0.5888888888888889,
+    "longContext": 0.826666666666667,
+    "visionReasoning": 0.858381502890173
+   },
+   "priceInputPer1M": 4,
+   "priceOutputPer1M": 20,
+   "outputSpeedTps": 77.02,
+   "latencyMsTtft": 37370,
+   "latencyMsTtfa": 37370,
+   "effort": "high",
+   "costPerTask": 1.8225,
+   "timePerTaskSeconds": 287.21555600475557,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5.5",
+   "active": true
+  },
+  {
+   "benchSlug": "gemini-3-8-flash-low",
+   "quality": {
+    "intelligence": 33.5,
+    "coding": 73.5,
+    "agenticCoding": 32.6,
+    "knowledge": 21.35,
+    "research": 0.35454545454545455,
+    "longContext": 0.806666666666667,
+    "visionReasoning": 0.845086705202312
+   },
+   "priceInputPer1M": 0.75,
+   "priceOutputPer1M": 3.75,
+   "effort": "low",
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/gemini-3.8-flash",
+   "active": true
+  },
+  {
+   "benchSlug": "kimi-k3",
+   "quality": {
+    "intelligence": 43.6,
+    "coding": 76.2,
+    "agenticCoding": 50,
+    "knowledge": 19.7,
+    "research": 0.5097236438075742,
+    "longContext": 0.886666666666667,
+    "visionReasoning": 0.805202312138728
+   },
+   "priceInputPer1M": 3,
+   "priceOutputPer1M": 15,
+   "outputSpeedTps": 36.11,
+   "latencyMsTtft": 4170,
+   "latencyMsTtfa": 59550,
+   "effort": "max",
+   "costPerTask": 2.0001,
+   "timePerTaskSeconds": 1180.6473113355023,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/kimi-k3",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-medium",
+   "quality": {
+    "intelligence": 44.8,
+    "coding": 74.3,
+    "agenticCoding": 46.2,
+    "knowledge": 31.016666666666666,
+    "research": 0.48484848484848486,
+    "longContext": 0.82,
+    "visionReasoning": 0.816184971098266
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 53.66,
+   "latencyMsTtft": 7140,
+   "latencyMsTtfa": 7140,
+   "effort": "medium",
+   "costPerTask": 2.1895,
+   "timePerTaskSeconds": 317.89245335878473,
+   "source": "artificial-analysis",
+   "registryId": "claude-bridge/claude-opus-5",
+   "active": true
+  },
+  {
+   "benchSlug": "claude-opus-5-medium",
+   "quality": {
+    "intelligence": 44.8,
+    "coding": 74.3,
+    "agenticCoding": 46.2,
+    "knowledge": 31.016666666666666,
+    "research": 0.48484848484848486,
+    "longContext": 0.82,
+    "visionReasoning": 0.816184971098266
+   },
+   "priceInputPer1M": 5,
+   "priceOutputPer1M": 25,
+   "outputSpeedTps": 53.66,
+   "latencyMsTtft": 7140,
+   "latencyMsTtfa": 7140,
+   "effort": "medium",
+   "costPerTask": 2.1895,
+   "timePerTaskSeconds": 317.89245335878473,
+   "source": "artificial-analysis",
+   "registryId": "github-copilot/claude-opus-5",
+   "active": true
+  }
+ ]
+}

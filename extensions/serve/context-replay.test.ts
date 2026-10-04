@@ -34,8 +34,7 @@ import { observeContextGrounding } from './context-grounding.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
-  contentText: (await importOriginal<typeof import('@earendil-works/pi-ai')>()).contentText,
-  Type: (await importOriginal<typeof import('@earendil-works/pi-ai')>()).Type,
+  ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
   createAssistantMessageEventStream: vi.fn(),
   isRetryableAssistantError: () => false,
 }));

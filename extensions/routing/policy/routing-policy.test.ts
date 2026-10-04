@@ -595,6 +595,39 @@ describe('incumbent capability floor', () => {
       expect(result.candidates.some((c) => c.effort === 'low')).toBe(false);
     });
 
+    it('takes the nearest lower row when no row measures the served effort', () => {
+      const result = resolveRoutingDecision(makePolicyInput({
+        candidates: [row('p/strong', 'low', 1, { intelligence: 40 }), { ...row('p/strong', 'low', 2, { intelligence: 50 }), effort: 'medium', bench: { ...row('p/strong', 'low', 2, { intelligence: 50 }).bench!, effort: 'medium' } }],
+        baseDimension: 'gather', incumbentRegistryId: 'p/strong:high', sameIntentAsLast: true,
+      }));
+      expect(result.candidates.map((c) => c.effort)).toEqual(['high']);
+      expect(result.candidates[0]!.bench?.quality.intelligence).toBe(50);
+    });
+
+    it('records the minimum and its reason only for a chosen entry of the incumbent model', () => {
+      const other = row('p/other', 'low', 0.1);
+      const result = resolveRoutingDecision(makePolicyInput({
+        candidates: [...efforts, other], baseDimension: 'gather', incumbentRegistryId: 'p/strong:high', sameIntentAsLast: true,
+        config: { dimensionWeights: DEFAULT_DIMENSION_WEIGHTS, switchMargin: 0 },
+      }));
+      expect(result.decision.chosen).toBe('p/other:low');
+      expect(result.decision.incumbentEffort).toEqual({ model: 'p/strong', effort: 'high' });
+      expect(result.decision.reason).not.toContain("[kept current model's thinking level]");
+      // At or above the minimum with no raise, no reason is added.
+      const atMinimum = resolveRoutingDecision(makePolicyInput({
+        candidates: [row('p/strong', 'high', 5)], baseDimension: 'gather', incumbentRegistryId: 'p/strong:high', sameIntentAsLast: true,
+      }));
+      expect(atMinimum.decision.reason).not.toContain("[kept current model's thinking level]");
+    });
+
+    it.each(['p/strong:off', 'p/strong:fast', 'p/strong'])('sets no minimum from the incumbent key %s', (incumbentRegistryId) => {
+      const result = resolveRoutingDecision(makePolicyInput({
+        candidates: efforts, baseDimension: 'gather', incumbentRegistryId, sameIntentAsLast: true,
+      }));
+      expect(result.candidates).toBe(efforts);
+      expect(result.decision.incumbentEffort).toBeUndefined();
+    });
+
     it('reads a retained measurement at the served effort', () => {
       const low = {
         ...row('p/strong', 'low', 1),
@@ -630,6 +663,50 @@ describe('incumbent capability floor', () => {
       expect(resolveRoutingDecision(makePolicyInput({
         candidates: efforts, baseDimension: 'gather', incumbentRegistryId: 'p/strong', sameIntentAsLast: true,
       })).decision.incumbentEffort).toBeUndefined();
+    });
+  });
+
+  describe('incumbent capability minimum', () => {
+    const model = (id: string, intelligence: number, price: number): Candidate => candidate(id, {
+      bench: { ...benchRow(id), quality: { intelligence, coding: 70, agenticCoding: 50 } },
+      cost: { input: price, output: price * 4 },
+    });
+    const pool = [model('p/incumbent', 70, 10), model('p/cheap', 50, 1), model('p/middle', 75, 5)];
+    const input = (incumbentRegistryId: string, extra: Partial<RoutingPolicyInput> = {}) => makePolicyInput({
+      candidates: pool, baseDimension: 'gather', incumbentRegistryId, sameIntentAsLast: true,
+      config: { dimensionWeights: DEFAULT_DIMENSION_WEIGHTS, switchMargin: 0 }, ...extra,
+    });
+
+    it('moves to the first chain entry at or above the incumbent capability, which may be another model', () => {
+      expect(resolveRoutingDecision(makePolicyInput({ ...input('p/incumbent'), incumbentRegistryId: undefined })).decision.chosen).toBe('p/cheap');
+      const result = resolveRoutingDecision(input('p/incumbent'));
+      expect(result.decision.chosen).toBe('p/middle');
+      expect(result.decision.fallbackChain[0]).toBe('p/middle');
+    });
+
+    it('changes nothing when the incumbent is weaker than the pick, absent, or skipped', () => {
+      expect(resolveRoutingDecision(input('p/cheap')).decision.chosen).toBe('p/cheap');
+      expect(resolveRoutingDecision(input('gone/model')).decision.chosen).toBe('p/cheap');
+      expect(resolveRoutingDecision(input('p/incumbent', { sameIntentAsLast: false, workRelation: 'new' })).decision.chosen).toBe('p/cheap');
+    });
+  });
+
+  describe('decision metadata', () => {
+    it('measures context pressure against the chosen model window', () => {
+      const small = candidate('p/small', { contextWindow: 100_000 });
+      const big = candidate('p/big', { contextWindow: 1_000_000, cost: { input: 50, output: 50 } });
+      const pressured = resolveRoutingDecision(makePolicyInput({ candidates: [small, big], estimatedContextTokens: 70_000 }));
+      expect(pressured.decision.chosen).toBe('p/small');
+      expect(pressured.decision.contextPressure?.usageRatio).toBeCloseTo(0.7, 6);
+      const relaxed = resolveRoutingDecision(makePolicyInput({ candidates: [big], estimatedContextTokens: 70_000 }));
+      expect(relaxed.decision.contextPressure).toBeUndefined();
+    });
+
+    it('marks no-data only when no candidate has benchmark data', () => {
+      const unbenchmarked = candidate('p/plain', { bench: undefined });
+      const benchmarked = candidate('p/bench', { bench: benchRow('p/bench') });
+      expect(resolveRoutingDecision(makePolicyInput({ candidates: [unbenchmarked] })).decision.cause).toBe('no-data');
+      expect(resolveRoutingDecision(makePolicyInput({ candidates: [unbenchmarked, benchmarked] })).decision.cause).toBe('heuristic');
     });
   });
 

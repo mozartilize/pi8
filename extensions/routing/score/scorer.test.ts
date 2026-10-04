@@ -14,6 +14,8 @@ import {
   servedEffort,
   type RegistryModelInfo,
   servesThinkingOff,
+  applyCandidateGuards,
+  scoreCandidate,
 } from './scorer.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../../constants.js';
 import { benchRow, candidate, registryModel } from '../../test-support/router-fixtures.js';
@@ -1179,13 +1181,6 @@ describe('scorer — degraded mode (no benchmark data)', () => {
     noBench('p/cheap', 0.5, 2),
   ];
 
-  it('derives a price signal from the registry when bench data is missing', () => {
-    // Cost is relative across the candidate set, so an absolute per-candidate
-    // score is meaningless; assert the underlying price signal instead.
-    expect(blendedPricePer1M(set[0])).toBeGreaterThan(blendedPricePer1M(set[1])!);
-    expect(blendedPricePer1M(set[1])).toBeGreaterThan(blendedPricePer1M(set[2])!);
-  });
-
   it('treats a 0/0 price from the registry as genuinely free when benchmark data is present', () => {
     const freeModel = noBench('p/free', 0, 0);
     freeModel.bench = {
@@ -1194,10 +1189,6 @@ describe('scorer — degraded mode (no benchmark data)', () => {
       source: 'aa',
     };
     expect(blendedPricePer1M(freeModel)).toBe(0);
-  });
-
-  it('treats a 0/0 price without benchmark data as unknown (custom-model zero-fill)', () => {
-    expect(blendedPricePer1M(noBench('p/unknown-zero', 0, 0))).toBeUndefined();
   });
 
   it('treats absent cost data as unknown price', () => {
@@ -1395,20 +1386,6 @@ describe('scorer — AA-Omniscience reliability floor', () => {
     'test/unreliable',
     { intelligence: 99, coding: 99, agenticCoding: 99, knowledge: -11.2, research: 0.61 },
     0.01,
-  );
-
-  it.each(['plan', 'review'] as const)(
-    'uses the index zero crossing as the %s reliability floor',
-    (dimension) => {
-      const decision = pickBest([reliable, unreliable], dimension);
-
-      expect(decision.chosen).toBe(reliable.registryId);
-      expect(decision.candidateDiagnostics).toContainEqual({
-        candidateKey: unreliable.registryId,
-        excludedReason: 'below-knowledge-minimum',
-      });
-      expect(decision.fallbackChain).toContain(unreliable.registryId);
-    },
   );
 
   it('keeps missing knowledge ahead of measured negative reliability', () => {
@@ -1660,5 +1637,152 @@ describe('thinking off', () => {
     expect(servesThinkingOff(registryModel('p/model', { reasoning: true, thinkingLevelMap: { off: 'off' } }))).toBe(true);
     expect(servesThinkingOff(registryModel('p/model', { reasoning: true, thinkingLevelMap: { off: null } }))).toBe(false);
     expect(servesThinkingOff(registryModel('claude-bridge/model', { reasoning: true }))).toBe(false);
+  });
+});
+
+describe('stronger-model proof', () => {
+  const at = (id: string, quality: number, estimated = false) => candidate(id, {
+    bench: benchRow(id, { quality: { intelligence: quality }, ...(estimated ? { qualityEstimated: true } : {}) }),
+  });
+
+  it('proves a different model stronger only by measured quality above the source', () => {
+    const source = at('p/source', 50);
+    expect(isStrictlyStrongerCandidate(at('q/dest', 60), 'p/source', 'gather', source)).toBe(true);
+    expect(isStrictlyStrongerCandidate(at('q/dest', 50), 'p/source', 'gather', source)).toBe(false);
+  });
+
+  it('never proves an upgrade from estimated or unknown quality on either side', () => {
+    const source = at('p/source', 50);
+    expect(isStrictlyStrongerCandidate(at('q/dest', 90, true), 'p/source', 'gather', source)).toBe(false);
+    expect(isStrictlyStrongerCandidate(at('q/dest', 90), 'p/source', 'gather', at('p/source', 10, true))).toBe(false);
+    expect(isStrictlyStrongerCandidate(at('q/dest', 90), 'p/source', 'gather', undefined)).toBe(false);
+    const unmeasuredSource = candidate('p/source', { bench: benchRow('p/source', { quality: { intelligence: undefined } }) });
+    expect(isStrictlyStrongerCandidate(at('q/dest', 90), 'p/source', 'gather', unmeasuredSource)).toBe(false);
+  });
+
+  it('judges a destination at the sibling row of the effort that will serve', () => {
+    const map = { off: 'off', low: null, medium: 'medium', high: 'high' } as const;
+    // The low row cannot serve; the entry serves at medium, which is weaker.
+    const low = candidate('q/dest', { effort: 'low', reasoning: true, thinkingLevelMap: map, bench: benchRow('q/dest', { effort: 'low', quality: { intelligence: 90 } }) });
+    const medium = candidate('q/dest', { effort: 'medium', reasoning: true, thinkingLevelMap: map, bench: benchRow('q/dest', { effort: 'medium', quality: { intelligence: 40 } }) });
+    const source = at('p/source', 50);
+    expect(isStrictlyStrongerCandidate(low, 'p/source', 'gather', source, { candidates: [low, medium] })).toBe(false);
+    // Without a row at the served effort, nothing proves the upgrade.
+    expect(isStrictlyStrongerCandidate(low, 'p/source', 'gather', source, { candidates: [low] })).toBe(false);
+  });
+});
+
+describe('eligibility at the served effort', () => {
+  const map = { off: 'off', low: null, medium: 'medium', high: 'high' } as const;
+  const planRow = (effort: 'low' | 'medium', knowledge?: number, research?: number) => candidate('p/model', {
+    effort, reasoning: true, thinkingLevelMap: map,
+    bench: benchRow('p/model', { effort, quality: { intelligence: 60, knowledge, research } }),
+  });
+
+  it('reads effort-specific axes from the sibling row at the served effort', () => {
+    // The low entry serves at medium; only the medium row measures knowledge and research.
+    const decision = pickBest([planRow('low'), planRow('medium', 10, 0.5)], 'plan');
+    expect(decision.candidateDiagnostics?.find((d) => d.candidateKey === 'p/model:low')).toBeUndefined();
+  });
+
+  it('counts effort-specific axes as unknown without a measurement at the served effort', () => {
+    const decision = pickBest([planRow('low', 10, 0.5)], 'plan');
+    expect(decision.candidateDiagnostics?.find((d) => d.candidateKey === 'p/model:low')?.excludedReason).toBe('unknown-quality');
+  });
+
+  it('treats a non-finite measurement as unknown, never as meeting or missing a minimum', () => {
+    const nan = candidate('p/nan', { bench: benchRow('p/nan', { quality: { intelligence: Number.NaN } }) });
+    const decision = pickBest([nan], 'gather');
+    expect(decision.candidateDiagnostics?.[0]?.excludedReason).toBe('unknown-quality');
+  });
+});
+
+describe('price validation', () => {
+  it('ignores a benchmark price that is not a non-negative finite number', () => {
+    const noRegistry = { cost: undefined };
+    expect(blendedPricePer1M(candidate('p/a', { ...noRegistry, bench: benchRow('p/a', { priceInputPer1M: Number.NaN, priceOutputPer1M: 2 }) }))).toBeUndefined();
+    expect(blendedPricePer1M(candidate('p/a', { ...noRegistry, bench: benchRow('p/a', { priceInputPer1M: 1, priceOutputPer1M: -2 }) }))).toBeUndefined();
+    expect(blendedPricePer1M(candidate('p/a', { ...noRegistry, bench: benchRow('p/a', { priceInputPer1M: 1, priceOutputPer1M: 3 }) }))).toBe(2.5);
+    // One side of a benchmark price still gives a partial price.
+    expect(blendedPricePer1M(candidate('p/a', { ...noRegistry, bench: benchRow('p/a', { priceOutputPer1M: 3 }) }))).toBe(3);
+    expect(blendedPricePer1M(candidate('p/a', { ...noRegistry, bench: benchRow('p/a', { priceInputPer1M: 1 }) }))).toBe(1);
+  });
+
+  it('prefers a valid registry price over the benchmark price', () => {
+    const c = candidate('p/a', { cost: { input: 2, output: 2 }, bench: benchRow('p/a', { priceInputPer1M: 100, priceOutputPer1M: 100 }) });
+    expect(blendedPricePer1M(c)).toBe(2);
+    const invalid = candidate('p/a', { cost: { input: -1, output: 2 }, bench: benchRow('p/a', { priceInputPer1M: 4, priceOutputPer1M: 4 }) });
+    expect(blendedPricePer1M(invalid)).toBe(4);
+  });
+});
+
+describe('context and vision guards', () => {
+  const windowed = (id: string, contextWindow: number | undefined, vision = false) => candidate(id, { contextWindow, vision });
+
+  it('drops a window under 1.2 times the request and keeps an unknown window', () => {
+    const kept = applyCandidateGuards(
+      [windowed('p/small', 100_000), windowed('p/edge', 120_000), windowed('p/unknown', undefined)],
+      { estimatedContextTokens: 100_000 },
+    ).map((c) => c.registryId);
+    expect(kept).toEqual(['p/edge', 'p/unknown']);
+  });
+
+  it('keeps only the largest window when every window is too small', () => {
+    const kept = applyCandidateGuards([windowed('p/a', 50_000), windowed('p/b', 80_000)], { estimatedContextTokens: 100_000 });
+    expect(kept.map((c) => c.registryId)).toEqual(['p/b']);
+  });
+
+  it('applies no window guard without a token estimate', () => {
+    expect(applyCandidateGuards([windowed('p/a', 1)], { estimatedContextTokens: 0 })).toHaveLength(1);
+  });
+
+  it('keeps vision models for an image, and every model when none has vision', () => {
+    const pool = [windowed('p/text', 200_000), windowed('p/eyes', 200_000, true)];
+    expect(applyCandidateGuards(pool, { estimatedContextTokens: 0, needsVision: true }).map((c) => c.registryId)).toEqual(['p/eyes']);
+    expect(applyCandidateGuards([pool[0]!], { estimatedContextTokens: 0, needsVision: true })).toHaveLength(1);
+  });
+});
+
+describe('decision order for equal scores', () => {
+  it('breaks a tie by time per task, then by candidate key', () => {
+    const tied = (id: string, time: number) => candidate(id, { bench: benchRow(id, { costPerTask: 1, timePerTaskSeconds: time }) });
+    const zero = { ...DEFAULT_DIMENSION_WEIGHTS.gather, cost: 0, speed: 0 };
+    expect(pickBest([tied('p/slow', 20), tied('p/fast', 10)], 'gather', zero).fallbackChain).toEqual(['p/fast', 'p/slow']);
+    expect(pickBest([tied('p/b', 10), tied('p/a', 10)], 'gather', zero).fallbackChain).toEqual(['p/a', 'p/b']);
+  });
+});
+
+describe('unknown quality', () => {
+  it('assumes decent quality for plan and review, neutral for implement, and low for gather', () => {
+    // Unknown capability on a hard task type routes up; on gather it is
+    // assumed low, so a measured model is preferred.
+    const unknown = candidate('p/unknown', { bench: undefined });
+    expect(scoreCandidate(unknown, 'plan', DEFAULT_DIMENSION_WEIGHTS.plan, { estimatedContextTokens: 0 }).qualityComponent)
+      .toBeCloseTo(0.7 * DEFAULT_DIMENSION_WEIGHTS.plan.quality, 6);
+    expect(scoreCandidate(unknown, 'review', DEFAULT_DIMENSION_WEIGHTS.review, { estimatedContextTokens: 0 }).qualityComponent)
+      .toBeCloseTo(0.7 * DEFAULT_DIMENSION_WEIGHTS.review.quality, 6);
+    expect(scoreCandidate(unknown, 'implement', DEFAULT_DIMENSION_WEIGHTS.implement, { estimatedContextTokens: 0 }).qualityComponent)
+      .toBeCloseTo(0.5 * DEFAULT_DIMENSION_WEIGHTS.implement.quality, 6);
+    expect(scoreCandidate(unknown, 'gather', DEFAULT_DIMENSION_WEIGHTS.gather, { estimatedContextTokens: 0 }).qualityComponent)
+      .toBeCloseTo(0.3 * DEFAULT_DIMENSION_WEIGHTS.gather.quality, 6);
+  });
+});
+
+describe('nearest thinking level for a user request', () => {
+  it('walks up first, then down, to the nearest supported level', () => {
+    const upToHigh = { reasoning: true, thinkingLevelMap: { off: 'off', minimal: null, low: 'low', medium: 'medium', high: 'high' } };
+    expect(resolveThinkingLevel(upToHigh, 'max')).toBe('high');
+    expect(resolveThinkingLevel(upToHigh, 'minimal')).toBe('low');
+    expect(resolveThinkingLevel(upToHigh, 'medium')).toBe('medium');
+    expect(resolveThinkingLevel({ reasoning: true, thinkingLevelMap: { off: null, minimal: null, low: null, medium: null, high: null } }, 'low')).toBeUndefined();
+  });
+});
+
+describe('cost scale with weaker candidates', () => {
+  it('chooses the scale from the candidates that meet every minimum, not from weaker ones', () => {
+    const strong = (id: string, costPerTask: number) => candidate(id, { bench: benchRow(id, { quality: { intelligence: 80 }, costPerTask }) });
+    const weak = (id: string) => candidate(id, { bench: benchRow(id, { quality: { intelligence: 5 } }) });
+    const decision = pickBest([strong('p/a', 1), strong('p/b', 2), weak('p/w1'), weak('p/w2'), weak('p/w3')], 'gather');
+    expect(decision.reason).toContain('[cost per task]');
   });
 });

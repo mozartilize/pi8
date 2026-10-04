@@ -12,7 +12,7 @@ import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-too
 import { gatheringNote } from './gathering-gate.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
-  contentText: (await importOriginal<typeof import('@earendil-works/pi-ai')>()).contentText,
+  ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
   createAssistantMessageEventStream: vi.fn(),
   isRetryableAssistantError: () => false,
 }));

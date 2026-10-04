@@ -20,7 +20,8 @@ import { defaultRouterSession } from './router-session-state.js';
 import { defaultBlacklistState } from './blacklist.js';
 import { setDelegationTimeouts } from './delegation.js';
 
-vi.mock('@earendil-works/pi-ai', () => ({
+vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
   createAssistantMessageEventStream: vi.fn(),
   // Real-style transient classifier: retry only on overload/5xx/rate-limit/network.
   isRetryableAssistantError: (m: { stopReason?: string; errorMessage?: string }) =>
@@ -461,6 +462,17 @@ describe('runDelegationLoop contracts', () => {
     });
     expect((await h.run()).success).toBe(true);
     expect(h.reasoningOptions).toEqual(['high', 'low']);
+  });
+
+  it('never lowers a scored effort above the incumbent effort', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/model:max'],
+      scripts: { 'alpha/model': [served] },
+      registry: fullThinkingRegistry,
+      decision: { ...routingDecision(['alpha/model:max']), incumbentEffort: { model: 'alpha/model', effort: 'high' } },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(h.reasoningOptions).toEqual(['max']);
   });
 
   it('lets an explicit user thinking level win over the incumbent effort', async () => {
@@ -974,6 +986,44 @@ describe('runDelegationLoop fallback policy', () => {
     expect(h.attempts).toEqual(['alpha/x']);
     expect(result.lastServed?.registryId).toBe('alpha/x');
     expect(h.output.some((e) => (e as { type: string }).type === 'text_delta')).toBe(true);
+  });
+
+  it.each([
+    ['visible text', [{ type: 'text_delta', delta: 'partial but visible' }]],
+    ['a tool call', [{ type: 'toolcall_start' }, { type: 'toolcall_delta', delta: '{}' }, { type: 'toolcall_end' }]],
+  ])('never replays after %s followed by a retryable error', async (_label, output) => {
+    const h = createDelegationHarness({
+      chain: ['alpha/x', 'beta/y'],
+      scripts: {
+        'alpha/x': [[...output, { type: 'error', error: { stopReason: 'error', errorMessage: '503 service unavailable' } }]],
+        'beta/y': [[{ type: 'text_delta', delta: 'replayed' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    await h.run();
+    expect(h.attempts).toEqual(['alpha/x']);
+    expect(h.output.some((e) => (e as { delta?: string }).delta === 'replayed')).toBe(false);
+  });
+
+  it.each([
+    ['visible text', [{ type: 'text_delta', delta: 'partial but visible' }]],
+    ['a tool call', [{ type: 'toolcall_start' }, { type: 'toolcall_delta', delta: '{}' }, { type: 'toolcall_end' }]],
+  ])('never replays after %s when the stream then throws', async (_label, output) => {
+    const throwsAfterOutput: AsyncIterable<unknown> = {
+      async *[Symbol.asyncIterator]() {
+        yield* output;
+        throw new Error('503 service unavailable');
+      },
+    };
+    const h = createDelegationHarness({
+      chain: ['alpha/x', 'beta/y'],
+      scripts: {
+        'alpha/x': [throwsAfterOutput],
+        'beta/y': [[{ type: 'text_delta', delta: 'replayed' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    await h.run();
+    expect(h.attempts).toEqual(['alpha/x']);
+    expect(h.output.some((e) => (e as { delta?: string }).delta === 'replayed')).toBe(false);
   });
 
   it('never replays after a tool call followed by length', async () => {
@@ -1789,5 +1839,31 @@ describe('pre-output reasoning-loop handoff', () => {
     controller.abort();
     await pending;
     expect(h.abortSignals[0]?.aborted).toBe(true);
+  });
+});
+
+describe('failure reporting and spend', () => {
+  it.each([
+    ['an error payload message', { type: 'error', error: { stopReason: 'error', errorMessage: 'quota detail 7' } }],
+    ['an error string', { type: 'error', error: 'quota detail 7' }],
+    ['an event message', { type: 'error', message: 'quota detail 7' }],
+  ])('reports the provider text from %s', async (_label, event) => {
+    const h = createDelegationHarness({ chain: ['alpha/x'], scripts: { 'alpha/x': [[event]] } });
+    const result = await h.run();
+    expect(result.success).toBe(false);
+    expect(result.lastError).toContain('quota detail 7');
+  });
+
+  it('adds the provider-reported cost of every attempt, failed ones included', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/x', 'beta/y'],
+      scripts: {
+        'alpha/x': [[{ type: 'error', error: { stopReason: 'error', errorMessage: '421 misdirected', usage: { input: 10, output: 0, cost: { total: 0.25 } } } }]],
+        'beta/y': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop', usage: { input: 10, output: 5, cost: { total: 0.5 } } } }]],
+      },
+    });
+    const before = h.session.getAccumulatedCost();
+    expect((await h.run()).success).toBe(true);
+    expect(h.session.getAccumulatedCost() - before).toBeCloseTo(0.75, 9);
   });
 });

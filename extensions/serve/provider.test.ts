@@ -354,7 +354,7 @@ afterEach(async () => {
 });
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
-  contentText: (await importOriginal<typeof import('@earendil-works/pi-ai')>()).contentText,
+  ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
   createAssistantMessageEventStream: vi.fn(),
   // Real transient-error classifier: retry only on overload/5xx/rate-limit/network.
   isRetryableAssistantError: (m: { stopReason?: string; errorMessage?: string }) =>
@@ -832,6 +832,38 @@ describe('provider orchestration', () => {
     await harness.serve(request, { reasoning: 'high' });
     expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first:high');
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
+  });
+
+  it('sends the effort it scored, call after call, without a user thinking level', async () => {
+    const row = (effort: string, intelligence: number, costPerTask: number) => ({
+      registryId: 'alpha/first', benchSlug: `first-${effort}`, active: true, effort, source: 'test',
+      quality: { intelligence, coding: 100, agenticCoding: 100 }, costPerTask, timePerTaskSeconds: costPerTask,
+    });
+    const sync = (syncedAt: number, models: unknown[]) =>
+      writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({ version: 2, syncedAt, aliases: {}, models }));
+    harness = await setupProviderTest({
+      dir: temp.path, models: REGISTRY_MODELS,
+      pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI,
+    });
+    const request = { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context;
+    const serveAndCompare = async () => {
+      harness.resetEventStream();
+      vi.mocked(streamSimple).mockClear();
+      harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+      // Pi passes back the level the router synced, which is not a user choice.
+      await harness.serve(request, { reasoning: setThinkingLevelSpy.mock.calls.at(-1)?.[0] });
+      const chosen = harness.getProviderState().lastDecision!.chosen;
+      expect(harness.delegatedCall().options?.reasoning).toBe(chosen.split(':')[1]);
+      return chosen;
+    };
+
+    sync(Date.now(), [row('high', 100, 5)]);
+    expect(await serveAndCompare()).toBe('alpha/first:high');
+    // A cheaper low row appears while the same request continues. The
+    // incumbent served at high, so the router scores and sends high.
+    sync(Date.now() + 1, [row('high', 100, 5), row('low', 100, 1)]);
+    expect(await serveAndCompare()).toBe('alpha/first:high');
+    expect(await serveAndCompare()).toBe('alpha/first:high');
   });
 
   it('syncs Pi\'s own thinking-level state to the served effort', async () => {
