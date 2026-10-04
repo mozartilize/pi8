@@ -269,8 +269,10 @@ export function submitReopenWork(
   let reasoning;
   if (deliverable === 'plan' || deliverable === 'review') {
     const rubric = parseReasoningRubric(params?.difficulty);
-    const requirement = reasoningRequirement(rubric, CONVERSATION_EVIDENCE);
-    minimum = Math.max(reasoningMinimum(requirement), bandRequirement(continued.terminalBand) ?? 0);
+    // Without a rubric the default minimums of the task type apply.
+    const requirement = rubric ? reasoningRequirement(rubric, CONVERSATION_EVIDENCE) : undefined;
+    const raised = bandRequirement(continued.terminalBand);
+    minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : raised;
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence: CONVERSATION_EVIDENCE };
   }
   const resolution: EntryResolution = {

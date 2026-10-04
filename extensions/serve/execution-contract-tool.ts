@@ -485,6 +485,9 @@ export function submitExecutionContract(
   }
   const accepted = acceptContract(base, {
     submitter: served,
+    // A model that serves only because of an escalation or a fallback does
+    // not own the review of the plan it submits.
+    submitterTemporary: lastServed?.viaFallback === true || last.trajectoryFriction !== undefined,
     validation,
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },

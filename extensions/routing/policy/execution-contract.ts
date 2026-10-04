@@ -84,6 +84,12 @@ export interface ExecutionContract {
    * A broken or reviewed plan returns to this model at this effort or higher.
    */
   submitter: string;
+  /**
+   * True when the submitter served only because of an escalation or a
+   * fallback. Its plan does not return to it for review: the review gets its
+   * own decision.
+   */
+  submitterTemporary?: boolean;
   band: CapabilityBand;
   /** False when only the submitter executes the plan. */
   release: boolean;
@@ -229,6 +235,7 @@ export function acceptContract(
   state: WorkPhaseState,
   input: {
     submitter: string;
+    submitterTemporary?: boolean;
     validation: ValidatedContract;
     rubric: ExecutionRubric;
     measured: MeasuredFeatures;
@@ -255,6 +262,7 @@ export function acceptContract(
   const contract: ExecutionContract = {
     status: 'active',
     submitter: input.submitter,
+    ...(input.submitterTemporary ? { submitterTemporary: true } : {}),
     band: bandMinimum != null ? band : 'frontier',
     release: bandMinimum != null,
     ...(bandMinimum != null ? { minimum: Math.max(requirement, bandMinimum), releasePending: true } : {}),
@@ -345,6 +353,18 @@ export function serveContractRelease(state: WorkPhaseState): WorkPhaseState {
 
 export function isUnderReview(contract: ExecutionContract): boolean {
   return contract.status === 'executed' && contract.release && contract.executor != null;
+}
+
+/**
+ * The contract whose submitter serves the next invocation. A broken plan
+ * returns to its submitter. A plan another model executed returns to its
+ * submitter for review, unless the submitter served only because of an
+ * escalation or a fallback: then the review gets its own decision.
+ */
+export function handBackContract(contract: ExecutionContract | undefined): ExecutionContract | undefined {
+  if (!contract) return undefined;
+  if (contract.status === 'broken') return contract;
+  return isUnderReview(contract) && !contract.submitterTemporary ? contract : undefined;
 }
 
 /**

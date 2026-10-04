@@ -1265,6 +1265,24 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
   }
 
+  it('gives a review handoff without a rubric no higher minimum than the easiest rubric', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const minimumFor = async (difficulty?: Record<string, number>) => {
+      investigating({ terminal: undefined, terminalBand: undefined });
+      const request = { outcome: 'ready', deliverable: 'review', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', ...(difficulty ? { difficulty } : {}) };
+      const result = await handoffTool(registerTool).execute('p', request, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
+      expect(result.details.accepted).toBe(true);
+      return defaultRouterSession.getWorkPhaseState()?.reasoningHandoff?.minimum ?? 0;
+    };
+    const missing = await minimumFor();
+    const easiest = await minimumFor({ alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 });
+    const hardest = await minimumFor({ alternatives: 5, stakes: 5, spread: 5, knowledge: 5, uncertainty: 5 });
+    // Missing information selects the default band; the frontier needs evidence.
+    expect(missing).toBeLessThanOrEqual(easiest);
+    expect(missing).toBeLessThan(hardest);
+  });
+
   it.each([
     [{ question: undefined }, 'question'],
     [{ findings: ' ' }, 'findings'],

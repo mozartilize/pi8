@@ -12,6 +12,7 @@ import {
   isDeclaredTarget,
   isExcludedExecutor,
   isUnderReview,
+  handBackContract,
   noteContractEdit,
   noteContractVerifier,
   reworkContract,
@@ -254,6 +255,17 @@ describe('execution contract completion and outcome', () => {
     expect(attributeExecutor(attributed, 'copilot/terra:low')).toBe(attributed);
     const kept = accepted([edit('src/a.ts')], state(), { openDecisions: 5 });
     expect(attributeExecutor(kept, 'copilot/luna:high')).toBe(kept);
+  });
+
+  it('hands a plan back to its submitter for review only when the submitter owned the turn', () => {
+    const executed = noteContractEdit(accepted([edit('src/a.ts')]), '/repo', 'src/a.ts', 'copilot/luna:high').contract!;
+    expect(handBackContract(executed)).toBe(executed);
+    // A submitter that served because of an escalation or a fallback does not own the review.
+    expect(handBackContract({ ...executed, submitterTemporary: true })).toBeUndefined();
+    // A broken plan still returns to its submitter.
+    const broken = { ...executed, status: 'broken' as const, submitterTemporary: true };
+    expect(handBackContract(broken)).toBe(broken);
+    expect(handBackContract(undefined)).toBeUndefined();
   });
 
   it('reviews only a plan another model executed', () => {

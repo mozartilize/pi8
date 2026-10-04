@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   pickBest,
   pickEscalation,
+  escalationChain,
   buildCandidate,
   blendedPricePer1M,
   logUtilities,
@@ -1784,5 +1785,31 @@ describe('cost scale with weaker candidates', () => {
     const weak = (id: string) => candidate(id, { bench: benchRow(id, { quality: { intelligence: 5 } }) });
     const decision = pickBest([strong('p/a', 1), strong('p/b', 2), weak('p/w1'), weak('p/w2'), weak('p/w3')], 'gather');
     expect(decision.reason).toContain('[cost per task]');
+  });
+});
+
+describe('escalation target', () => {
+  // Bands on the implement axis: agenticCoding / 56.5. 30 is standard, 40-47 strong, 50-56 frontier.
+  const at = (id: string, agenticCoding: number, price: number): Candidate =>
+    candidate(id, { bench: benchRow(id, { quality: { intelligence: 50, coding: 70, agenticCoding } }), cost: { input: price, output: price * 4 } });
+
+  it('takes the cheapest candidate in the next band above the source, not the strongest', () => {
+    const pool = [at('p/source', 40, 1), at('p/mid', 45, 0.5), at('p/frontier-cheap', 50, 3), at('p/frontier-best', 56, 10)];
+    const decision = escalationChain(pool, 'implement', 'p/source', { estimatedContextTokens: 0 }, {})!;
+    expect(decision.chosen).toBe('p/frontier-cheap');
+    // The rest of the next band comes first, then the other stronger candidates.
+    expect(decision.fallbackChain).toEqual(['p/frontier-cheap', 'p/frontier-best', 'p/mid']);
+  });
+
+  it('stops at the band in between when it has a stronger candidate', () => {
+    const pool = [at('p/standard', 30, 0.2), at('p/strong', 42, 1), at('p/strong-pricy', 44, 2), at('p/frontier', 56, 10)];
+    const decision = escalationChain(pool, 'implement', 'p/standard', { estimatedContextTokens: 0 }, {})!;
+    expect(decision.chosen).toBe('p/strong');
+    expect(decision.fallbackChain).toEqual(['p/strong', 'p/strong-pricy', 'p/frontier']);
+  });
+
+  it('takes the cheapest stronger candidate in the source band when no band above has one', () => {
+    const pool = [at('p/source', 40, 1), at('p/mid-pricy', 47, 2), at('p/mid', 45, 0.5)];
+    expect(escalationChain(pool, 'implement', 'p/source', { estimatedContextTokens: 0 }, {})!.chosen).toBe('p/mid');
   });
 });

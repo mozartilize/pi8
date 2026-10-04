@@ -81,6 +81,8 @@ export class TrajectoryState {
   private stagnationRun = 0;
   private pending: PendingTrajectoryEscalation | undefined;
   private lastEscalateFingerprint: string | undefined;
+  /** The owner that already had its recovery attempt in this intent. */
+  private recoveredOwner: string | undefined;
   private pendingCalls: Array<{ toolCallId: string; toolName: string; input?: unknown }> = [];
   private pendingResults = new Map<string, ToolCycleInput>();
   private completedIds = new Set<string>();
@@ -88,6 +90,7 @@ export class TrajectoryState {
   reset(): void {
     this.intentKey = undefined;
     this.ownerKey = undefined;
+    this.recoveredOwner = undefined;
     this.evidenceFrontier.clear();
     this.files.clear();
     this.pendingCalls = [];
@@ -186,6 +189,19 @@ export class TrajectoryState {
     const pending = this.pending;
     this.pending = undefined;
     return pending;
+  }
+
+  /**
+   * True the first time a struggle of `owner` is used in this intent: that
+   * struggle gets one recovery attempt on the same model instead of an
+   * escalation, so the evidence and the pending escalation start again.
+   * Later struggles of the same owner escalate.
+   */
+  claimRecovery(owner: string): boolean {
+    if (this.recoveredOwner === owner) return false;
+    this.recoveredOwner = owner;
+    this.resetStruggle();
+    return true;
   }
 
   maybeSetPending(

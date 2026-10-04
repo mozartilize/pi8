@@ -65,12 +65,16 @@ describe('AOR', () => {
 });
 
 describe('failure persistence', () => {
-  it('uses correction count, not set overlap', () => {
+  it('warns after two failed corrections and is severe after three', () => {
+    // One failed correction is part of an ordinary test loop: red, fix, still red.
     expect(
       detectFailurePersistence(snapshot({ failureCorrections: new Map([['F1', 1]]) })).severity,
-    ).toBe('warning');
+    ).toBe('none');
     expect(
       detectFailurePersistence(snapshot({ failureCorrections: new Map([['F1', 2]]) })).severity,
+    ).toBe('warning');
+    expect(
+      detectFailurePersistence(snapshot({ failureCorrections: new Map([['F1', 3]]) })).severity,
     ).toBe('severe');
   });
 });
@@ -137,7 +141,7 @@ describe('evidence lattice', () => {
         mutationCount: 4,
         grossDistance: 100,
         netDistance: 0,
-        failureCorrections: new Map([['F1', 1]]),
+        failureCorrections: new Map([['F1', 2]]),
       }),
     );
     expect(decision.escalate).toBe(true);

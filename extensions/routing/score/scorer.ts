@@ -8,6 +8,7 @@
  */
 import { identityKey } from '../../bench/matcher.js';
 import type {
+  CapabilityBand,
   BenchModel,
   Candidate,
   Dimension,
@@ -592,23 +593,71 @@ export function isStrictlyStrongerCandidate(
   return destQuality > sourceQuality;
 }
 
+/** Band whose executor minimum covers `requirement`; `frontier` keeps the submitter. */
+export function bandForRequirement(requirement: number): CapabilityBand {
+  if (requirement < 0.45) return 'economy';
+  if (requirement < 0.70) return 'standard';
+  if (requirement < FRONTIER_REQUIREMENT) return 'strong';
+  return 'frontier';
+}
+
+const BAND_ORDER: readonly CapabilityBand[] = ['economy', 'standard', 'strong', 'frontier'];
+
+/**
+ * The band that a candidate's measured capability covers on the dimension's
+ * axis, or undefined when the candidate has no measurement on that axis.
+ */
+function candidateBand(candidate: Candidate, dimension: Dimension): CapabilityBand | undefined {
+  const quality = candidate.bench?.quality;
+  if (!quality) return undefined;
+  if (dimension === 'implement') {
+    if (quality.agenticCoding !== undefined) return bandForRequirement(quality.agenticCoding / AXIS_REFERENCE.agenticCoding);
+    if (quality.coding !== undefined) return bandForRequirement(quality.coding / AXIS_REFERENCE.coding);
+    return undefined;
+  }
+  return quality.intelligence === undefined ? undefined : bandForRequirement(quality.intelligence / AXIS_REFERENCE.intelligence);
+}
+
+/**
+ * The stronger candidates in the lowest band above the source's band. A
+ * struggle asks for the next step up, not for the strongest model: the
+ * strongest model costs the most and is rarely needed. Without a band above
+ * the source, or without a measured source band, all stronger candidates
+ * stay. A candidate without a measured band (for example a higher effort of
+ * the same model) counts as the source's band.
+ */
+function nextBandCandidates(stronger: Candidate[], source: Candidate | undefined, dimension: Dimension): Candidate[] {
+  const sourceBand = source ? candidateBand(source, dimension) : undefined;
+  if (!sourceBand) return stronger;
+  const sourceRank = BAND_ORDER.indexOf(sourceBand);
+  const ranked = stronger.map((candidate) => ({ candidate, rank: BAND_ORDER.indexOf(candidateBand(candidate, dimension) ?? sourceBand) }));
+  const above = ranked.filter((entry) => entry.rank > sourceRank);
+  if (above.length === 0) return stronger;
+  const next = Math.min(...above.map((entry) => entry.rank));
+  return above.filter((entry) => entry.rank === next).map((entry) => entry.candidate);
+}
+
+/** An escalation target is already stronger, so among targets the price decides. */
+const ESCALATION_WEIGHTS: ScoreWeights = { quality: 0, cost: 1, speed: 0 };
+
 /**
  * Pure same-dimension capability escalation: given the model that just
- * served the turn, pick a different candidate using quality-only weights.
- * This is intentionally narrow — it reuses `pickBest` for context/vision
- * guards and scoring so the behavior cannot drift from the normal path.
+ * served the turn, pick a different candidate. This is intentionally narrow —
+ * it reuses `pickBest` for context/vision guards and scoring so the behavior
+ * cannot drift from the normal path. `weights` defaults to quality only.
  */
 export function pickEscalation(
   candidates: Candidate[],
   dimension: Dimension,
   fromModel: string,
   opts: ScoreOpts = { estimatedContextTokens: 0 },
+  weights: ScoreWeights = { quality: 1, cost: 0, speed: 0 },
 ): RoutingDecision | undefined {
   // Model route-up must increase capability, not merely change transport.
   const alternatives = candidates.filter((c) => isValidEscalationCandidate(candidateKey(c), fromModel));
   if (alternatives.length === 0) return undefined;
 
-  const decision = pickBest(alternatives, dimension, { quality: 1, cost: 0, speed: 0 }, opts);
+  const decision = pickBest(alternatives, dimension, weights, opts);
   return {
     ...decision,
     cause: 'capability-escalation',
@@ -619,8 +668,9 @@ export function pickEscalation(
 /**
  * Shared escalation target selection for both the between-turn repick and the
  * pre-output in-delegation hop. Apply context/vision guards, keep only the
- * strictly-stronger reachable candidates, then pick the *strongest* by quality
- * via `pickEscalation`. Both surfaces must land on the same target for the same
+ * strictly-stronger reachable candidates, then pick the cheapest candidate in
+ * the next band above the source (`nextBandCandidates`). The higher bands
+ * follow in the fallback chain, cheapest first. Both surfaces must land on the same target for the same
  * struggle, so selection lives here and cannot diverge: one scans the remaining
  * unattempted chain, the other the full routable set, but neither re-implements
  * "which stronger model". Returns `undefined` when nothing strictly stronger is
@@ -648,9 +698,12 @@ export function escalationChain(
     isStrictlyStrongerCandidate(candidate, fromModel, dimension, source, strongerOpts),
   );
   if (stronger.length === 0) return undefined;
-  const picked = pickEscalation(stronger, dimension, fromModel, opts);
+  const next = nextBandCandidates(stronger, source, dimension);
+  const picked = pickEscalation(next, dimension, fromModel, opts, ESCALATION_WEIGHTS);
   if (!picked || picked.chosen === '') return undefined;
-  return picked;
+  const higher = stronger.filter((candidate) => !next.includes(candidate));
+  const rest = higher.length > 0 ? pickEscalation(higher, dimension, fromModel, opts, ESCALATION_WEIGHTS) : undefined;
+  return rest ? { ...picked, fallbackChain: [...picked.fallbackChain, ...rest.fallbackChain] } : picked;
 }
 
 // ─── pickBest steps ───────────────────────────────────────────────────

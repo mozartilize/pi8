@@ -296,6 +296,7 @@ export class RouterSession {
   /** Router notes recorded on the active branch; the persistence binding survives resets. */
   public readonly notes = new RequestNoteState();
   private readonly trajectory = new TrajectoryState();
+  private recoveryNoteDue = false;
 
   private sessionGen = 0;
   private history: { entry: string; data: ModelHistory } | undefined;
@@ -679,6 +680,24 @@ export class RouterSession {
 
   consumePendingTrajectoryEscalation(): PendingTrajectoryEscalation | undefined {
     return this.trajectory.consumePending();
+  }
+
+  /** True once after a struggle gave the serving model its recovery attempt. */
+  takeTrajectoryRecoveryNotice(): boolean {
+    const due = this.recoveryNoteDue;
+    this.recoveryNoteDue = false;
+    return due;
+  }
+
+  /**
+   * Use the pending struggle of `owner` as its recovery attempt when it has
+   * not had one in this intent. The evidence starts again, and the next
+   * request carries the recovery note.
+   */
+  claimTrajectoryRecovery(owner: string): boolean {
+    if (!this.trajectory.claimRecovery(owner)) return false;
+    this.recoveryNoteDue = true;
+    return true;
   }
 
   /**

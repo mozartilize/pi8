@@ -206,11 +206,15 @@ export interface ReasoningHandoffMeta {
   /** Served key of the model that called the tool. */
   requester: string;
   target: 'plan' | 'review';
-  /** Requirement the reasoning phase needs, at most the frontier requirement. */
-  minimum: number;
+  /**
+   * Requirement the reasoning phase needs, at most the frontier requirement.
+   * Undefined when the requester gave no rubric and no final-step band
+   * raises it: then the default minimums of the task type apply.
+   */
+  minimum?: number;
   /** Requirement before the cap. */
-  requirement: number;
-  rubric: ReasoningRubric;
+  requirement?: number;
+  rubric?: ReasoningRubric;
   evidence: ReasoningEvidence;
   /** The boundary still releases the incumbent: no invocation has served the phase yet. */
   pending: boolean;

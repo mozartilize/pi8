@@ -211,7 +211,7 @@ function handoffLine(decision: RoutingDecision): string[] {
   }
   const role = handoff.target === 'plan' ? 'planning' : 'reviewing';
   const state = handoff.pending ? 'pending' : `owned by ${handoff.owner ?? 'unknown'}`;
-  return [`  handoff:    ${role}, minimum ${handoff.minimum.toFixed(2)}, ${state}`];
+  return [`  handoff:    ${role}, ${handoff.minimum !== undefined ? `minimum ${handoff.minimum.toFixed(2)}` : 'default minimum'}, ${state}`];
 }
 
 function contractLines(contract: ExecutionContractMeta): string[] {

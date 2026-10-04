@@ -324,12 +324,11 @@ export function submitContextHandoff(
   if (deliverable === 'plan' || deliverable === 'review') {
     const rubric = parseReasoningRubric(params?.difficulty);
     const evidence = facts.evidence ?? CONVERSATION_EVIDENCE;
-    const requirement = reasoningRequirement(rubric, evidence);
+    // Without a rubric the default minimums of the task type apply.
+    const requirement = rubric ? reasoningRequirement(rubric, evidence) : undefined;
     // The final step's band only raises the rubric's minimum; see withStrongerTerminal.
-    const minimum = Math.max(
-      reasoningMinimum(requirement),
-      bandRequirement(terminal.terminalBand) ?? 0,
-    );
+    const raised = bandRequirement(terminal.terminalBand);
+    const minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : raised;
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence };
   }
   const key = handoffKey(params);
@@ -373,7 +372,7 @@ export function submitContextHandoff(
     const role = deliverable === 'plan' ? 'planning' : 'review';
     return {
       accepted: true,
-      text: `Context handed off (${deliverable}, minimum ${next.reasoningHandoff.minimum.toFixed(2)}). A ${role} model ` +
+      text: `Context handed off (${deliverable}, ${next.reasoningHandoff.minimum !== undefined ? `minimum ${next.reasoningHandoff.minimum.toFixed(2)}` : 'default minimum'}). A ${role} model ` +
         'chosen for this difficulty continues from the next step with your findings and question. Make no changes now.',
     };
   }

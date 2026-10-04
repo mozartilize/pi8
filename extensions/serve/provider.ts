@@ -84,6 +84,7 @@ import {
   expireContract,
   isExcludedExecutor,
   isUnderReview,
+  handBackContract,
   serveContractRelease,
   servedBySubmitter,
   type ExecutionContract,
@@ -107,7 +108,7 @@ import {
   closeContextEntry,
   gatheringNote,
 } from './gathering-gate.js';
-import { applyNotePlans, planRequestNote } from './request-notes.js';
+import { applyNotePlans, messageAnchor, planRequestNote, type NotePlan } from './request-notes.js';
 import { planToolsNote } from './router-tools-note.js';
 import { completedIncumbent, incumbentWorkItem } from '../routing/policy/work-completion.js';
 import { activeWorkNote, completedWorkNote } from './completed-work-gate.js';
@@ -692,7 +693,14 @@ async function prepareRouterTurn(args: {
   // invocation rather than stalling behind an impossible result.
   session.flushAndSetUnresolvedTrajectory();
 
-  const trajectoryEscalation = session.peekPendingTrajectoryEscalation();
+  // The first struggle of the serving model gets one recovery attempt on
+  // that model before any escalation: a new look at the failure often solves
+  // it at that model's price. A pre-output struggle has no work to recover.
+  const pendingStruggle = session.peekPendingTrajectoryEscalation();
+  const trajectoryEscalation =
+    pendingStruggle && !pendingStruggle.preOutput && session.claimTrajectoryRecovery(pendingStruggle.fromModel)
+      ? undefined
+      : pendingStruggle;
 
   const candidates = buildRoutableCandidates({
     regModels: regModels as unknown[],
@@ -889,7 +897,7 @@ function scoreRouterTurn(args: {
   // A broken contract hands the next invocation back to its submitter at the
   // submitter's task type and thinking level, until an invocation serves.
   const restore = contract?.status === 'broken' ? contract : undefined;
-  const handBack = restore ?? (reviewing ? contract : undefined);
+  const handBack = handBackContract(contract);
   advanceWorkPhase({
     cacheHit,
     turnInput,
@@ -1102,7 +1110,25 @@ function withEntryNotes(
   const messages = context.messages ?? [];
   const tools = planToolsNote(session.notes.getNotes(), messages, true);
   const entry = routedEntry ? planRequestNote(session.notes.getNotes(), messages, intentKey, instruction) : {};
-  return { ...context, messages: applyNotePlans(session.notes, messages, [tools, entry]) };
+  const recovery = session.takeTrajectoryRecoveryNotice() ? planRecoveryNote(messages) : {};
+  return { ...context, messages: applyNotePlans(session.notes, messages, [tools, entry, recovery]) };
+}
+
+/** The entry key of recovery notes. A routed entry's key is a hex hash, so the two never match. */
+const RECOVERY_NOTE_ENTRY = 'router-recovery';
+
+/**
+ * The note of a recovery attempt: the serving model keeps the work after its
+ * first struggle and gets one new look at the failure before an escalation.
+ */
+const RECOVERY_NOTE =
+  'Router: The same check still fails after your corrections. Read the full error output again. ' +
+  'Find the cause before the next edit. If the cause is not the one you fixed, change the approach.';
+
+function planRecoveryNote(messages: Context['messages']): NotePlan {
+  const anchor = messageAnchor(messages.at(-1));
+  if (!anchor) return { unanchored: RECOVERY_NOTE };
+  return { record: { anchor, entry: RECOVERY_NOTE_ENTRY, instruction: RECOVERY_NOTE, text: RECOVERY_NOTE } };
 }
 
 async function delegateRouterTurn(args: {

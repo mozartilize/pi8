@@ -22,6 +22,7 @@ import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-too
 import { submitCompleteWork } from './complete-work-tool.js';
 import { gateCompletedWorkToolCall } from './completed-work-gate.js';
 import { ROUTER_TOOLS_ON_NOTE } from './router-tools-note.js';
+import type { RouterSession } from './router-session-state.js';
 import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
@@ -36,6 +37,22 @@ import {
 } from '../test-support/provider-harness.js';
 import type { BenchModel } from '../types.js';
 import { defaultBlacklistState } from './blacklist.js';
+
+/**
+ * A struggle of `fromModel` after its recovery attempt on the same model, so
+ * the escalation applies. The first struggle of a model is a recovery attempt.
+ */
+function setStruggleAfterRecovery(
+  session: RouterSession,
+  ...args: Parameters<RouterSession['setPendingTrajectoryEscalation']>
+): void {
+  const fromModel = args[1];
+  if (fromModel) {
+    session.claimTrajectoryRecovery(fromModel);
+    session.takeTrajectoryRecoveryNotice();
+  }
+  session.setPendingTrajectoryEscalation(...args);
+}
 
 describe('candidate expansion — model × measured effort', () => {
   const benchRow = (effort: string, quality: number): BenchModel => ({
@@ -2171,7 +2188,8 @@ describe('context acquisition', () => {
       await submitPrepared(handoff(1));
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       const served = harness.session.getLastServed()!;
-      harness.session.setPendingTrajectoryEscalation(
+      setStruggleAfterRecovery(
+      harness.session,
         { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
         served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId,
         'plan',
@@ -2655,7 +2673,8 @@ describe('context acquisition', () => {
       const session = await planned();
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
-      harness.session.setPendingTrajectoryEscalation(
+      setStruggleAfterRecovery(
+      harness.session,
         { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
         'alpha/cheap',
         'implement',
@@ -2720,6 +2739,14 @@ describe('context acquisition', () => {
       expect(review?.chosen).toBe('beta/strong');
       expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'executed' });
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
+    });
+
+    it('marks a plan submitted by a model that served through a fallback as temporary', async () => {
+      await planned();
+      const served = harness.session.getLastServed()!;
+      harness.session.setLastServed({ ...served, viaFallback: true });
+      submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
+      expect(harness.session.getWorkPhaseState()?.contract?.submitterTemporary).toBe(true);
     });
 
     it('records the review verifier result and logs the outcome when the entry ends', async () => {
@@ -2894,7 +2921,8 @@ describe('trajectory capability escalation', () => {
     const fromModel = served?.registryId
       ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
       : harness.session.getLastDecision()?.chosen;
-    harness.session.setPendingTrajectoryEscalation(
+    setStruggleAfterRecovery(
+      harness.session,
       {
         escalate: true,
         tfi: 1,
@@ -2915,6 +2943,52 @@ describe('trajectory capability escalation', () => {
     // type, so the repick changes the model, not the cause.
     expect(decision?.cause).toBe('investigation');
     expect(decision?.trajectoryFriction?.fromModel).toBe(fromModel);
+  });
+
+  it('gives the first struggle of a model a recovery attempt on that model, then escalates', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      config: { switchMargin: 0.15 },
+      benchmarks: [
+        { registryId: 'alpha/source', benchSlug: 'source', active: true, quality: { intelligence: 90, coding: 90, agenticCoding: 90 }, source: 'test' },
+        { registryId: 'gamma/strong', benchSlug: 'strong', active: true, quality: { intelligence: 95, coding: 95, agenticCoding: 95 }, source: 'test' },
+      ],
+      models: [
+        registryModel('alpha/source', { contextWindow: 200000, maxTokens: 8192, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 } }),
+        registryModel('gamma/strong', { contextWindow: 200000, maxTokens: 8192, cost: { input: 100, output: 400, cacheRead: 0, cacheWrite: 0 } }),
+      ],
+    });
+    const context = { messages: [{ role: 'user', content: 'design a distributed rate limiter architecture' }] } as unknown as Context;
+    const serveAgain = async () => {
+      harness.outStream.events = [];
+      harness.outStream.ended = false;
+      vi.mocked(streamSimple).mockClear();
+      harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+      await harness.serve(context);
+      return harness.getProviderState().lastDecision;
+    };
+    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+    await harness.serve(context);
+    const first = harness.getProviderState().lastDecision!;
+    const served = harness.session.getLastServed()!;
+    const fromModel = served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId;
+    const struggle = (id: string) => ({
+      escalate: true,
+      tfi: 1,
+      signals: [{ kind: 'aor' as const, severity: 'severe' as const, evidenceIds: [id], evidenceCount: 1 }],
+    });
+
+    harness.session.setPendingTrajectoryEscalation(struggle('a:o'), fromModel, first.dimension, false);
+    const recovery = await serveAgain();
+    expect(recovery?.chosen).toBe(first.chosen);
+    expect(recovery?.trajectoryFriction).toBeUndefined();
+    const sent = vi.mocked(streamSimple).mock.calls.at(-1)?.[1] as Context;
+    expect(JSON.stringify(sent.messages)).toContain('The same check still fails after your corrections.');
+
+    harness.session.setPendingTrajectoryEscalation(struggle('b:o'), fromModel, first.dimension, false);
+    const escalation = await serveAgain();
+    expect(escalation?.chosen).toBe('gamma/strong');
+    expect(escalation?.trajectoryFriction?.fromModel).toBe(fromModel);
   });
 
   it('does not consume pending evidence when a weaker recovery candidate serves', async () => {
@@ -2977,7 +3051,8 @@ describe('trajectory capability escalation', () => {
       tfi: 1,
       signals: [{ kind: 'aor' as const, severity: 'severe' as const, evidenceIds: ['a:o'], evidenceCount: 1 }],
     };
-    harness.session.setPendingTrajectoryEscalation(
+    setStruggleAfterRecovery(
+      harness.session,
       pending,
       fromModel,
       harness.session.getLastDecision()?.dimension,
@@ -3032,7 +3107,8 @@ describe('no-stronger escalation gate', () => {
     const fromModel = served?.registryId
       ? served.thinkingLevel ? `${served.registryId}:${served.thinkingLevel}` : served.registryId
       : harness.session.getLastDecision()?.chosen;
-    harness.session.setPendingTrajectoryEscalation(
+    setStruggleAfterRecovery(
+      harness.session,
       { escalate: true, tfi: 1, signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }] },
       fromModel,
       harness.session.getLastDecision()?.dimension,

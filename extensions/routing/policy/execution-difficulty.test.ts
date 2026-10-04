@@ -135,7 +135,7 @@ describe('reasoning requirement', () => {
   });
 
   it('stays within [base, 1] and caps its minimum at the frontier requirement', () => {
-    const hardest = parseReasoningRubric({});
+    const hardest = parseReasoningRubric({ alternatives: 5, stakes: 5, spread: 5, knowledge: 5, uncertainty: 5 })!;
     const requirement = reasoningRequirement(hardest, { applicable: true, files: 20, directories: 20 });
     expect(requirement).toBeLessThanOrEqual(1);
     expect(requirement).toBeGreaterThan(FRONTIER_REQUIREMENT);
@@ -143,9 +143,14 @@ describe('reasoning requirement', () => {
     expect(reasoningMinimum(0.5)).toBe(0.5);
   });
 
-  it('counts missing or invalid levels as the hardest level', () => {
-    expect(parseReasoningRubric({ alternatives: 2, stakes: 0, spread: 2.5, knowledge: '3' }))
-      .toEqual({ alternatives: 2, stakes: 5, spread: 5, knowledge: 5, uncertainty: 5 });
+  it('counts a missing or invalid level as the highest level the requester gave', () => {
+    expect(parseReasoningRubric({ alternatives: 2, stakes: 0, spread: 2.5, knowledge: '3', uncertainty: 3 }))
+      .toEqual({ alternatives: 2, stakes: 3, spread: 3, knowledge: 3, uncertainty: 3 });
+  });
+
+  it('gives no rubric when no level is valid, so the default minimums apply', () => {
+    expect(parseReasoningRubric(undefined)).toBeUndefined();
+    expect(parseReasoningRubric({ stakes: 0, spread: 2.5, knowledge: '3' })).toBeUndefined();
   });
 });
 

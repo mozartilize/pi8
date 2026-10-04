@@ -119,10 +119,15 @@ describe('TrajectoryState', () => {
 
     state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-a\n+b\n', 'a', 'b'), 2);
     decision = state.observeToolResult(pytest(fail), 3);
-    expect(decision?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('warning');
+    // One failed correction is part of an ordinary test loop.
+    expect(decision?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('none');
 
     state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-c\n+d\n', 'c', 'd'), 4);
     decision = state.observeToolResult(pytest(fail), 5);
+    expect(decision?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('warning');
+
+    state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-e\n+f\n', 'e', 'f'), 6);
+    decision = state.observeToolResult(pytest(fail), 7);
     expect(decision?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('severe');
     expect(decision?.escalate).toBe(true);
   });
@@ -377,7 +382,10 @@ describe('TrajectoryState verifier scoping', () => {
       state.observeToolResult(pytest(PYTEST_FAIL), 1);
       state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-a\n+b\n', 'a', 'b'), 2);
       state.observeToolResult(shell(passing, 'all good'), 3);
-      const back = state.observeToolResult(pytest(PYTEST_FAIL), 3);
+      state.observeToolResult(pytest(PYTEST_FAIL), 3);
+      // A second failed correction warns only if the first one stayed counted.
+      state.observeToolResult(edit('policy.ts', '--- a\n+++ b\n-c\n+d\n', 'c', 'd'), 4);
+      const back = state.observeToolResult(pytest(PYTEST_FAIL), 5);
       expect(back?.signals.find((s) => s.kind === 'failure-persistence')?.severity).toBe('warning');
     }
   });

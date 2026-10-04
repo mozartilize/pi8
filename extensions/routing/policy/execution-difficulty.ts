@@ -18,7 +18,6 @@
  * Pure functions only: no I/O.
  */
 import type {
-  CapabilityBand,
   ExecutionRubric,
   MeasuredFeatures,
   ReasoningCriterion,
@@ -109,9 +108,25 @@ const REASONING_CRITERION_WEIGHT = 0.08;
 /** Maximum added by each weighted measurement. */
 const REASONING_MEASURED_WEIGHT = 0.03;
 
-/** Levels outside 1–5 or non-integers count as the hardest level. */
-export function parseReasoningRubric(input: unknown): ReasoningRubric {
-  return parseLevels(input, REASONING_CRITERIA);
+/**
+ * A declared reasoning rubric, or undefined when the requester scored no
+ * criterion: then the default minimums of the task type apply. Missing
+ * information selects the default band; it buys evidence, not the frontier.
+ * An unscored or invalid criterion in a partly scored rubric counts as the
+ * highest level the requester gave, so it never lowers what was declared.
+ */
+export function parseReasoningRubric(input: unknown): ReasoningRubric | undefined {
+  const record = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const valid = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 5;
+  const scored = REASONING_CRITERIA.map((criterion) => record[criterion]).filter(valid);
+  if (scored.length === 0) return undefined;
+  const fill = Math.max(...scored);
+  const rubric = {} as Record<(typeof REASONING_CRITERIA)[number], number>;
+  for (const criterion of REASONING_CRITERIA) {
+    const value = record[criterion];
+    rubric[criterion] = valid(value) ? value : fill;
+  }
+  return rubric as ReasoningRubric;
 }
 
 /**
@@ -136,13 +151,7 @@ export function reasoningMinimum(requirement: number): number {
   return Math.min(requirement, FRONTIER_REQUIREMENT);
 }
 
-/** Band whose executor minimum covers `requirement`; `frontier` keeps the submitter. */
-export function bandForRequirement(requirement: number): CapabilityBand {
-  if (requirement < 0.45) return 'economy';
-  if (requirement < 0.70) return 'standard';
-  if (requirement < 0.85) return 'strong';
-  return 'frontier';
-}
+export { bandForRequirement } from '../score/scorer.js';
 
 const TEST_PATH = /(^|[/\\])(tests?|__tests__)[/\\]|\.(test|spec)\.[^/\\]+$|_test\.[^/\\]+$/;
 
