@@ -290,18 +290,26 @@ export function blendedPricePer1M(c: Candidate): number | undefined {
 }
 
 /**
+ * True when most of `candidates` carry a per-task measurement. Task cost and
+ * time are measured per effort, while `$/1M` and tokens/sec are shared by every
+ * effort of a model, so only the task scale can tell efforts apart. Estimated
+ * rows and some measured rows never carry it, so one gap must not discard the
+ * scale for the whole pool. A candidate without the measurement gets no credit
+ * on that component, which never favours an unmeasured candidate.
+ */
+function mostlyMeasured(candidates: readonly Candidate[], value: (c: Candidate) => number | undefined): boolean {
+  const measured = candidates.filter((c) => isNonNegativeFinite(value(c))).length;
+  return measured * 2 > candidates.length;
+}
+
+/**
  * Which cost scale a pickBest call compares on. `costPerTask` and blended
  * `$/1M` are different scales and must never be mixed inside one request-local
  * ratio — the same rule that keeps `intelligence` and `coding` out of a shared
- * ratio. Task cost is preferred when EVERY candidate carries it; mixed
- * coverage degrades to the coarser `$/1M` basis for the whole set rather than
- * silently comparing incomparable numbers.
+ * ratio. Task cost is used when most candidates carry it (`mostlyMeasured`).
  */
 export function costSignal(candidates: readonly Candidate[]): 'task' | 'per-1m' {
-  return candidates.length > 0
-    && candidates.every((c) => isNonNegativeFinite(c.bench?.costPerTask))
-    ? 'task'
-    : 'per-1m';
+  return mostlyMeasured(candidates, (c) => c.bench?.costPerTask) ? 'task' : 'per-1m';
 }
 
 /**
@@ -840,14 +848,12 @@ function assembleDecision(
 
 /**
  * Which speed scale a pickBest call compares on: measured time per task when
- * every candidate in the pool that can win carries it, else output tokens per
- * second. Like cost, the two scales are never mixed in one pick.
+ * most candidates in the pool that can win carry it (`mostlyMeasured`), else
+ * output tokens per second. Like cost, the two scales are never mixed in one
+ * pick.
  */
 function speedSignal(candidates: readonly Candidate[]): 'task' | 'tps' {
-  return candidates.length > 0
-    && candidates.every((c) => isNonNegativeFinite(c.bench?.timePerTaskSeconds))
-    ? 'task'
-    : 'tps';
+  return mostlyMeasured(candidates, (c) => c.bench?.timePerTaskSeconds) ? 'task' : 'tps';
 }
 
 // ─── pickBest ─────────────────────────────────────────────────────────
@@ -903,30 +909,46 @@ export function pickBest(
 
 const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
+/**
+ * Pi's own rule (`getSupportedThinkingLevels`): a null map entry is an
+ * unsupported level, `off` included, and `xhigh`/`max` need an explicit
+ * entry. A model without reasoning supports no level.
+ */
 function isThinkingSupported(
   c: Pick<Candidate, 'reasoning' | 'thinkingLevelMap'> | undefined,
   level: ModelThinkingLevel,
 ): boolean {
   if (!c?.reasoning) return false;
-  if (level === 'off') return true;
-  const map = c.thinkingLevelMap;
-  if (!map) return level !== 'xhigh' && level !== 'max';
-  const mapped = map[level];
-  if (level === 'xhigh' || level === 'max') return mapped != null;
-  return mapped !== null;
+  const mapped = c.thinkingLevelMap?.[level];
+  if (mapped === null) return false;
+  if (level === 'xhigh' || level === 'max') return mapped !== undefined;
+  return true;
 }
 
 export function isThinkingSupportedByRegistryModel(
   c: Pick<RegistryModelInfo, 'reasoning' | 'thinkingLevelMap'> | undefined,
   level: ModelThinkingLevel,
 ): boolean {
-  if (!c?.reasoning) return false;
-  if (level === 'off') return true;
-  const map = c.thinkingLevelMap;
-  if (!map) return level !== 'xhigh' && level !== 'max';
-  const mapped = map[level];
-  if (level === 'xhigh' || level === 'max') return mapped != null;
-  return mapped !== null;
+  return isThinkingSupported(c, level);
+}
+
+/**
+ * Providers that cannot turn thinking off. Pi sends no reasoning for `off`,
+ * and these providers then send no effort, so the model runs at its own
+ * default effort. A measured `off` row describes a request they never send.
+ */
+const PROVIDERS_WITHOUT_THINKING_OFF: ReadonlySet<string> = new Set(['claude-bridge']);
+
+/**
+ * Whether a request at `off` runs the mode an `off` row measures: always for
+ * a model without reasoning, and for a reasoning model only when it supports
+ * `off` and its provider can turn thinking off.
+ */
+export function servesThinkingOff(
+  m: Pick<RegistryModelInfo, 'provider' | 'reasoning' | 'thinkingLevelMap'>,
+): boolean {
+  if (!m.reasoning) return true;
+  return isThinkingSupported(m, 'off') && !PROVIDERS_WITHOUT_THINKING_OFF.has(m.provider);
 }
 
 export function levelFrom(

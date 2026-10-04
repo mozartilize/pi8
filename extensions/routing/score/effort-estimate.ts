@@ -198,9 +198,8 @@ export function estimateRow(
     ...(anchor.contextWindow == null ? {} : { contextWindow: anchor.contextWindow }),
     // Deliberately no costPerTask, outputSpeedTps or latency: those are
     // per-run measurements of a specific effort level, not derivable by
-    // stepping down a quality ladder. Absent task cost also keeps an estimated
-    // row from silently switching a whole candidate set onto the task-cost
-    // basis it has no data for.
+    // stepping down a quality ladder. On the task scale the row gets no cost
+    // or speed credit.
     source: anchor.source,
   };
 }

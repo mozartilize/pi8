@@ -47,6 +47,7 @@ import {
   findSourceCandidate,
   parseCandidateKey,
   isThinkingSupportedByRegistryModel,
+  servesThinkingOff,
   resolveThinkingLevel,
   MODEL_THINKING_LEVELS,
   type RegistryModelInfo,
@@ -267,9 +268,14 @@ function extractSystemPrompt(context: Context): string | undefined {
  * is strictly downward: nothing above the highest measured row is ever
  * invented.
  *
- * `off` is universally serveable: non-reasoning registry models run exactly
- * the mode an off row measures, so an off row never drops a model's only
- * measurement.
+ * `off` is a candidate only when a request at `off` runs the mode an off row
+ * measures (`servesThinkingOff`): always for a model without reasoning, so an
+ * off row never drops such a model's only measurement.
+ *
+ * `minimal` is never estimated. Sources almost never measure it, and Codex,
+ * Anthropic adaptive thinking, and claude-bridge send it as `low`, so an
+ * estimate one step below `low` scores a request that serves as `low`. A
+ * measured `minimal` row is kept.
  */
 export function expandModelCandidates(
   rm: RegistryModelInfo,
@@ -304,16 +310,15 @@ export function expandModelCandidates(
 
   const byLevel = new Map(labelled.map((row) => [row.effort, row]));
   const supported = MODEL_THINKING_LEVELS.filter(
-    (level) => level === 'off' || isThinkingSupportedByRegistryModel(rm, level),
+    (level) => level === 'off' ? servesThinkingOff(rm) : isThinkingSupportedByRegistryModel(rm, level),
   )
     .map((level) => {
       const measured = byLevel.get(level);
       // A source may publish a target-level pricing/performance row with only
       // some (or none) of the quality axes. Preserve its measured axes and
       // exact-level metadata while filling only the missing axes from above.
-      return measured
-        ? completeMeasuredRow(measured, labelled, drops)
-        : estimateRow(level, labelled, drops);
+      if (measured) return completeMeasuredRow(measured, labelled, drops);
+      return level === 'minimal' ? undefined : estimateRow(level, labelled, drops);
     })
     .filter((row): row is BenchModel => row != null)
     .map((row) => attachExactQuality(buildCandidate(rm, row)));

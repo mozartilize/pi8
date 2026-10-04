@@ -54,13 +54,13 @@ The resolved intent is cached per user entry key and reused through that entry's
 
 ### Candidate expansion
 
-Candidates are expanded per supported (model, effort) pair. One registry model may produce several routable candidates when bench rows exist at different effort levels — each with its own quality/cost/speed measurement. A supported level the source never measured is covered by an estimate stepped down from the nearest measured level above it, marked `qualityEstimated` (see "Effort estimation"). `off` rows are emitted even for non-reasoning models (their only serveable mode). When all measured efforts are unsupported by the model's `thinkingLevelMap`, the model falls back to a single effort-less candidate.
+Candidates are expanded per supported (model, effort) pair. One registry model may produce several routable candidates when bench rows exist at different effort levels — each with its own quality/cost/speed measurement. A supported level the source never measured is covered by an estimate stepped down from the nearest measured level above it, marked `qualityEstimated` (see "Effort estimation"). An `off` candidate exists only where a request at `off` runs the mode an `off` row measures: always for a non-reasoning model (its only serveable mode); for a reasoning model, only when its map does not set `off` to `null` and its provider can turn thinking off. `claude-bridge` cannot: it sends no effort, and Claude Code runs its default effort. `minimal` is never estimated: sources almost never measure it, and Codex, Anthropic adaptive thinking, and `claude-bridge` send it as `low`. A measured `minimal` row is kept. When all measured efforts are unsupported by the model's `thinkingLevelMap`, the model falls back to a single effort-less candidate.
 
 ### Effort estimation
 
 Sources publish rows only for the effort levels they measured, so a fully serveable level (e.g. `sonnet-5:medium`) can have no row while `high` and `max` do. Such a level is estimated from the nearest measured level **above** it, minus a per-step quality drop; estimation is strictly downward, so nothing above the highest measured row is ever invented.
 
-The per-step drop is derived from the store on each sync — the p90 of observed adjacent-level drops, computed per quality axis — rather than fixed. p90 rather than the median is the point: at the median an estimate lands above the true value roughly half the time, at p90 it under-shoots ~90% of the time, which is what lets an estimate compete for the pick at all. An axis with too few observations is left unestimated rather than extrapolated from noise.
+The per-step drop is derived from the store when candidates are built after a store change — the p90 of observed adjacent-level drops, computed per quality axis — rather than fixed. p90 rather than the median is the point: at the median an estimate lands above the true value roughly half the time, at p90 it under-shoots ~90% of the time, which is what lets an estimate compete for the pick at all. An axis with too few observations is left unestimated rather than extrapolated from noise.
 
 Estimated rows carry price and context window (registry facts that hold across effort levels) but never `costPerTask`, speed, or latency — those are per-run measurements of one specific level. Estimated quality can meet ordinary minimums, but it cannot prove a strictly stronger model. AA-estimated indexes also carry `qualityEstimated`; exact knowledge/research values are never estimated across efforts.
 
@@ -85,9 +85,9 @@ For context ≥ 64,000 estimated tokens, LCR correctness must be ≥ 0.30. Image
 
 ### Cost and speed signals
 
-Choose one scale per pick, from the tier-0 pool (or the filtered pool when no candidate meets all minimums). Cost uses `costPerTask` only with complete coverage; otherwise it uses blended registry `$/1M` (input × 0.25 + output × 0.75), with benchmark pricing as fallback. Free models without benchmark data earn no cost credit. Within each tier, lower cost gets logarithmic utility.
+Choose one scale per pick, from the tier-0 pool (or the filtered pool when no candidate meets all minimums). Cost uses `costPerTask` when more than half of that pool carries it; otherwise it uses blended registry `$/1M` (input × 0.25 + output × 0.75), with benchmark pricing as fallback. Free models without benchmark data earn no cost credit. Within each tier, lower cost gets logarithmic utility. The two scales are never mixed: on the task scale, a candidate without `costPerTask` gets no cost credit, whatever its `$/1M` price. Only the task scale tells efforts of one model apart, because they share one `$/1M` price.
 
-Speed uses logarithmic time-per-task utility with complete preferred-pool coverage, otherwise registry output tokens/sec. Lower-tier gaps never erase the preferred pool's task-cost or time coverage. Estimated rows carry neither task cost nor task time.
+Speed uses logarithmic time-per-task utility when more than half of the preferred pool carries it, otherwise registry output tokens/sec; on the time scale, a candidate without task time gets no speed credit. Lower-tier gaps never erase the preferred pool's task-cost or time coverage. Estimated rows carry neither task cost nor task time.
 
 ### Prompt-cache preference
 
@@ -111,7 +111,7 @@ The router raises a scored effort only to the nearest level the model supports, 
 
 The incumbent's minimum thinking level is the effort the incumbent actually served at, taken from the served key even when no row measures that effort. It applies to the pool before scoring, so the scorer compares the incumbent model at the effort that will serve: a lower effort is dropped when a row at the served effort exists. Otherwise the nearest lower row stands in at the served effort. That row reads knowledge, research, long-context, and vision reasoning only from a measurement retained at the served effort, or counts them as unknown; its other axes, price, and time stay at the lower effort's values. Delegation raises only an unlabelled entry of the incumbent model, which Pi's session level serves.
 
-A candidate with no effort label gets Pi's session thinking level, as Pi sends it when a user selects that model; Pi does not choose an effort itself, and a provider turns thinking off when no level is sent. An explicit user thinking level wins over both and uses a nearest-first walk (`resolveThinkingLevel`) to honour the user's choice as closely as the model supports.
+A candidate with no effort label gets Pi's session thinking level, as Pi sends it when a user selects that model; Pi does not choose an effort itself. When no level is sent, a provider turns thinking off, or, where it cannot (`off: null`, `claude-bridge`), the model runs at its default effort. An explicit user thinking level wins over both and uses a nearest-first walk (`resolveThinkingLevel`) to honour the user's choice as closely as the model supports.
 
 ---
 

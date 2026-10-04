@@ -13,6 +13,7 @@ import {
   isStrictlyStrongerCandidate,
   servedEffort,
   type RegistryModelInfo,
+  servesThinkingOff,
 } from './scorer.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../../constants.js';
 import { benchRow, candidate, registryModel } from '../../test-support/router-fixtures.js';
@@ -108,7 +109,7 @@ describe('scorer — effort-variant diagnostics (regression)', () => {
 });
 
 describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
-  it('falls back to blended $/1M for the whole set when coverage is mixed', () => {
+  it('falls back to blended $/1M for the whole set when half or fewer candidates carry task cost', () => {
     const withTask = candidate('test/a', {
       bench: benchRow('test/a', {
         quality: { intelligence: 80 },
@@ -159,8 +160,8 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
     expect(decision.reason).toContain('[cost per task]');
     expect(decision.chosen).toBe('test/b');
 
-    // Same set with one costPerTask removed: mixed coverage degrades to
-    // per-1M and the winner flips back to A.
+    // Same set with one costPerTask removed: half the pool carries it, so
+    // the set compares on per-1M and the winner flips back to A.
     const bMixed = { ...b, bench: { ...b.bench!, costPerTask: undefined } };
     const mixed = pickBest([a, bMixed], 'gather');
     expect(mixed.reason).toContain('[cost per 1M tokens]');
@@ -199,26 +200,42 @@ describe('scorer — cost basis (cost-per-task vs blended $/1M)', () => {
   });
 
   it('never mixes the two scales inside one request-local ratio', () => {
-    // Three candidates: two with costPerTask, one without. The mixed one must
-    // drag the WHOLE set to per-1M (G3 rule applied to price), never a
-    // per-candidate scale.
+    // Two of three candidates carry costPerTask, so the pool compares on the
+    // task scale. The third has the cheapest $/1M price, but that price is a
+    // different scale: it gets no cost credit and cannot win on cost.
     const a = candidate('test/a', {
       bench: benchRow('test/a', { quality: { intelligence: 80 }, costPerTask: 1 }),
-      cost: { input: 1, output: 1 },
+      cost: { input: 10, output: 10 },
     });
     const b = candidate('test/b', {
-      bench: benchRow('test/b', { quality: { intelligence: 80 }, costPerTask: 100 }),
-      cost: { input: 1, output: 1 },
+      bench: benchRow('test/b', { quality: { intelligence: 80 }, costPerTask: 1 }),
+      cost: { input: 10, output: 10 },
     });
     const c = candidate('test/c', {
       bench: benchRow('test/c', { quality: { intelligence: 80 } }),
-      cost: { input: 100, output: 100 },
+      cost: { input: 0.01, output: 0.01 },
     });
     const decision = pickBest([a, b, c], 'gather');
-    expect(decision.reason).toContain('[cost per 1M tokens]');
-    // Under per-1M, a and b tie on cost (same blended price) and quality; the
-    // canonical-key tie-break decides. Both a and b must beat c.
+    expect(decision.reason).toContain('[cost per task]');
     expect(decision.chosen).toBe('test/a');
+    expect(decision.fallbackChain.at(-1)).toBe('test/c');
+  });
+
+  it('compares time per task when most of the pool carries it', () => {
+    const fast = candidate('test/fast', {
+      bench: benchRow('test/fast', { quality: { intelligence: 80 }, costPerTask: 1, timePerTaskSeconds: 10, outputSpeedTps: 10 }),
+      cost: { input: 1, output: 1 },
+    });
+    const slow = candidate('test/slow', {
+      bench: benchRow('test/slow', { quality: { intelligence: 80 }, costPerTask: 1, timePerTaskSeconds: 100, outputSpeedTps: 500 }),
+      cost: { input: 1, output: 1 },
+    });
+    const unmeasured = candidate('test/unmeasured', {
+      bench: benchRow('test/unmeasured', { quality: { intelligence: 80 }, costPerTask: 1, outputSpeedTps: 1000 }),
+      cost: { input: 1, output: 1 },
+    });
+    // Tokens per second would favour the other two; time per task decides.
+    expect(pickBest([unmeasured, slow, fast], 'gather').chosen).toBe('test/fast');
   });
 
   it('a non-competing candidate missing costPerTask does not blind the tier-0 pool to task-basis pricing', () => {
@@ -1627,5 +1644,21 @@ describe('isStrictlyStrongerCandidate', () => {
       bench: benchRow('test/model', { effort: 'high', quality: { intelligence: 90 } }),
     });
     expect(findSourceCandidate([low, high], 'test/model:medium')).toBeUndefined();
+  });
+});
+
+describe('thinking off', () => {
+  it('follows Pi: a null off entry is unsupported, so the up-only walk skips it', () => {
+    const model = { reasoning: true, thinkingLevelMap: { off: null, low: 'low', medium: 'medium' } };
+    expect(levelFrom('off', model)).toBe('minimal');
+    expect(levelFrom('off', { reasoning: true, thinkingLevelMap: { off: 'none' } })).toBe('off');
+    expect(levelFrom('off', { reasoning: true })).toBe('off');
+  });
+
+  it('serves off for a model without reasoning, and for a reasoning model only where off is sent', () => {
+    expect(servesThinkingOff(registryModel('p/plain', { reasoning: false }))).toBe(true);
+    expect(servesThinkingOff(registryModel('p/model', { reasoning: true, thinkingLevelMap: { off: 'off' } }))).toBe(true);
+    expect(servesThinkingOff(registryModel('p/model', { reasoning: true, thinkingLevelMap: { off: null } }))).toBe(false);
+    expect(servesThinkingOff(registryModel('claude-bridge/model', { reasoning: true }))).toBe(false);
   });
 });

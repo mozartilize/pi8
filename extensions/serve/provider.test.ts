@@ -157,6 +157,38 @@ describe('candidate expansion — model × measured effort', () => {
     expect(candidates[0]?.effort).toBe('off');
   });
 
+  it('emits no off candidate for a reasoning model that cannot serve off (map entry null)', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
+    });
+    const candidates = expandModelCandidates(model, [benchRow('off', 20), benchRow('high', 50)], { intelligence: 6 });
+    expect(candidates.some((c) => c.effort === 'off')).toBe(false);
+    expect(candidates.some((c) => c.effort === 'low')).toBe(true);
+  });
+
+  it('emits no off candidate on a provider that cannot turn thinking off, even from a measured row', () => {
+    const model = registryModel('claude-bridge/model', {
+      reasoning: true,
+      thinkingLevelMap: { xhigh: 'xhigh', max: 'max' },
+    });
+    const candidates = expandModelCandidates(model, [benchRow('off', 20), benchRow('high', 50)]);
+    expect(candidates.map((c) => c.effort)).toEqual(['high']);
+  });
+
+  it('never estimates minimal, and keeps a measured minimal row', () => {
+    const model = registryModel('p/model', {
+      reasoning: true,
+      thinkingLevelMap: { off: 'off', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high' },
+    });
+    const estimated = expandModelCandidates(model, [benchRow('high', 50)], { intelligence: 6 });
+    expect(estimated.some((c) => c.effort === 'minimal')).toBe(false);
+    // `off` is still estimated from the nearest measured row above it.
+    expect(estimated.some((c) => c.effort === 'off')).toBe(true);
+    const measured = expandModelCandidates(model, [benchRow('minimal', 30), benchRow('high', 50)], { intelligence: 6 });
+    expect(measured.find((c) => c.effort === 'minimal')?.bench?.qualityEstimated).toBeUndefined();
+  });
+
   it('emits a row whose effort is missing as a plain effort-less candidate when it is the only row', () => {
     const model = registryModel('p/model');
     const candidates = expandModelCandidates(model, []);
