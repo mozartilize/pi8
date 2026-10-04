@@ -36,7 +36,7 @@ export const CONVERSATION_EVIDENCE: ReasoningEvidence = { applicable: false, fil
 /** Acquisition provider requests, fallbacks included, before the entry must ask the user. */
 export const ACQUISITION_REQUEST_LIMIT = 32;
 
-/** Rejected handoffs and refused mutating calls, one per provider invocation, before the entry must ask the user. */
+/** Handoffs rejected for missing context and refused mutating calls, one per provider invocation, before the entry must ask the user. */
 export const ACQUISITION_DENIAL_LIMIT = 2;
 
 /**
@@ -109,7 +109,7 @@ export function acquisitionAllows(status: ContextStatus | undefined, toolName: s
 }
 
 /**
- * Count one refusal: a rejected handoff or a refused mutating call. Several
+ * Count one refusal: a handoff rejected for missing context or a refused mutating call. Several
  * refusals in one provider invocation (a batch) count once. Reaching the
  * limit ends collecting context: the entry may then only ask the user. A ready
  * boundary is not revoked, and its refusals are not counted.

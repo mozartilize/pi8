@@ -240,7 +240,13 @@ export function gateContextToolCall(
     if (next.contextStatus === 'clarification-only') {
       return { block: true, reason: `Router: this call was not made. ${CLARIFICATION_TEXT}` };
     }
-    return { block: true, reason: `Router: this call was not made. ${gatheringNote(state).slice('Router: '.length)}` };
+    // Name the refused tool: a model that is told only the allowed list can conclude the tool is gone for good.
+    const tool = event.toolName.slice(0, 64);
+    return {
+      block: true,
+      reason: `Router: this call was not made: ${tool} does not run until you call ${CONTEXT_HANDOFF_TOOL}; ` +
+        `the next step can run it. ${gatheringNote(state).slice('Router: '.length)}`,
+    };
   } catch {
     return restricted
       ? { block: true, reason: 'Router: this call was not made: the router could not check it while collecting context.' }

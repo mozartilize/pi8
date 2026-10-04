@@ -128,6 +128,19 @@ const REJECTIONS = {
 
 type RejectCode = keyof typeof REJECTIONS;
 
+/**
+ * Rejections that count against acquisition: the model must collect more
+ * context before a handoff can pass. A rejection of the payload shape does
+ * not count: the model fixes it by calling again, and the request limit stops
+ * a loop of them.
+ */
+const CONTEXT_REJECTIONS: ReadonlySet<RejectCode> = new Set(['artifact-not-read']);
+
+/** The reason alone, for a rejection that ends acquisition: the model must not read or call again. */
+const ENDING_REJECTIONS: Partial<Record<RejectCode, string>> = {
+  'artifact-not-read': 'Context not handed off: the request rests on files not read as they are now:',
+};
+
 export interface ContextHandoffParams {
   outcome?: unknown;
   question?: unknown;
@@ -229,7 +242,10 @@ export interface HandoffFacts {
   selection?: { plan: ContextPlan; key: string; generation: number; groundings: GroundedArtifact[] };
 }
 
-/** The refusal counts against acquisition; reaching the limit leaves only a question to the user. */
+/**
+ * A missing-context refusal counts against acquisition; reaching the limit
+ * leaves only a question to the user, so that text gives only that instruction.
+ */
 function reject(
   session: RouterSession,
   code: RejectCode,
@@ -237,16 +253,16 @@ function reject(
   served: string | undefined,
   detail = '',
 ): ContextHandoffSubmission {
-  let text: string = REJECTIONS[code] + detail;
   if (state && served) {
     log(state, served, 'reject', { rejectReason: code });
-    // A redirect to reopen_work names the right tool; it is not a failed context.
-    if (code !== 'not-recorded' && code !== 'internal' && code !== 'already-handed-off' && code !== 'use-reopen-work') {
+    if (CONTEXT_REJECTIONS.has(code)) {
       const next = countContextRefusal(session, state, served);
-      if (next !== state && next.contextStatus === 'clarification-only') text += ` ${CLARIFICATION_TEXT}`;
+      if (next !== state && next.contextStatus === 'clarification-only') {
+        return { accepted: false, text: `${ENDING_REJECTIONS[code] ?? REJECTIONS[code]}${detail} ${CLARIFICATION_TEXT}` };
+      }
     }
   }
-  return { accepted: false, text };
+  return { accepted: false, text: REJECTIONS[code] + detail };
 }
 
 /**

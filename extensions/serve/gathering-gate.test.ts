@@ -6,7 +6,7 @@ import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { routingDecision } from '../test-support/router-fixtures.js';
 import { RouterSession } from './router-session-state.js';
 import { submitContextHandoff } from './context-handoff-tool.js';
-import { countContextRefusal, gateContextToolCall } from './gathering-gate.js';
+import { CLARIFICATION_TEXT, countContextRefusal, gateContextToolCall } from './gathering-gate.js';
 
 vi.mock('../host/decisionlog.js', () => ({ appendContextHandoffSignal: vi.fn() }));
 
@@ -25,12 +25,15 @@ function acquiringSession(): RouterSession {
 
 beforeEach(() => vi.clearAllMocks());
 
+const ROUTER_AUTO = { model: { provider: 'router', id: 'auto' } } as unknown as ExtensionContext;
+const READY = { outcome: 'ready', deliverable: 'implement', complexity: 'routine', scope: 'bounded', findings: 'f', question: 'q' };
+const UNREAD = { unmet: ['src/queue.ts'] };
+
 describe('gathering gate refusal accounting', () => {
   it('shares one refusal between a blocked mutation and a rejected handoff in the same invocation', () => {
     const session = acquiringSession();
     expect(gateContextToolCall({ toolName: 'write', input: {} }, session)?.block).toBe(true);
-    const ctx = { model: { provider: 'router', id: 'auto' } } as unknown as ExtensionContext;
-    expect(submitContextHandoff({ outcome: 'ready' }, ctx, session).accepted).toBe(false);
+    expect(submitContextHandoff(READY, ROUTER_AUTO, session, UNREAD).accepted).toBe(false);
     expect(session.getWorkPhaseState()?.contextDenials).toBe(1);
     expect(session.getWorkPhaseState()?.deniedAtInvocation).toBe(1);
     expect(vi.mocked(appendContextHandoffSignal).mock.calls.map(([signal]) => signal.action)).toEqual(['deny', 'reject']);
@@ -51,6 +54,37 @@ describe('gathering gate refusal accounting', () => {
     expect(gateContextToolCall({ toolName: 'edit', input: {} }, session)?.block).toBe(true);
     expect(vi.mocked(appendContextHandoffSignal).mock.calls.filter(([signal]) => signal.action === 'budget-exhausted'))
       .toHaveLength(1);
+  });
+
+  it('does not count a handoff rejected for its shape: calling again fixes it', () => {
+    const session = acquiringSession();
+    for (const [invocation, params] of [[1, { outcome: 'ready' }], [2, { ...READY, question: '' }], [3, { ...READY, deliverable: 'nonsense' }]] as const) {
+      session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, providerInvocation: invocation });
+      expect(submitContextHandoff(params, ROUTER_AUTO, session).accepted).toBe(false);
+    }
+    expect(session.getWorkPhaseState()).toMatchObject({ contextDenials: 0, contextStatus: 'acquiring' });
+  });
+
+  it('counts a handoff rejected for unread files', () => {
+    const session = acquiringSession();
+    const result = submitContextHandoff(READY, ROUTER_AUTO, session, UNREAD);
+    expect(result.text).toContain('Read them in full, then call it again: src/queue.ts.');
+    expect(session.getWorkPhaseState()?.contextDenials).toBe(1);
+  });
+
+  it('gives only the closing instruction when an unread-file rejection ends gathering', () => {
+    const session = acquiringSession();
+    session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, contextDenials: ACQUISITION_DENIAL_LIMIT - 1 });
+    const result = submitContextHandoff(READY, ROUTER_AUTO, session, UNREAD);
+    expect(session.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+    // The files stay named so the reply can ask for them; no instruction to read or call again.
+    expect(result.text).toBe(`Context not handed off: the request rests on files not read as they are now: src/queue.ts. ${CLARIFICATION_TEXT}`);
+  });
+
+  it('names a refused tool and says the next step can run it', () => {
+    const session = acquiringSession();
+    const refusal = gateContextToolCall({ toolName: 'bash', input: { command: 'rg retryDelayMs' } }, session);
+    expect(refusal?.reason).toMatch(/^Router: this call was not made: bash does not run until you call hand_off_context; the next step can run it\. /);
   });
 
   it('refuses a shell call without spending the mutation refusal budget', () => {
