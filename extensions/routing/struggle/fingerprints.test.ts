@@ -122,6 +122,26 @@ describe('search observation identity', () => {
   });
 });
 
+describe('verifier failure in output that exits 0', () => {
+  const signature = (text: string) => cycleFromToolResult({
+    toolName: 'bash', toolCallId: 't', input: { command: 'npm test 2>&1 | tail -20' }, content: [{ type: 'text', text }],
+  }, 1).progressHint.failureSignature;
+
+  it('reads no failure from a summary that counts zero failures', () => {
+    expect(signature('# tests 17\n# pass 17\n# fail 0\n# cancelled 0')).toBeUndefined();
+    expect(signature('Tests: 0 failed, 12 passed')).toBeUndefined();
+    expect(signature('Ran 12 tests. failures: 0')).toBeUndefined();
+    // A passing test whose name has a failure word: the summary count decides.
+    expect(signature('✔ a timeout counts as a failure and can be retried (6.9ms)\nℹ tests 17\nℹ pass 17\nℹ fail 0')).toBeUndefined();
+  });
+
+  it('reads a failure that piped output reports', () => {
+    expect(signature('# pass 15\n# fail 2')).toBeDefined();
+    expect(signature('Tests  1 failed | 4 passed')).toBeDefined();
+    expect(signature('not ok 3 - cancel frees its slot\n  error: failed assertion')).toBeDefined();
+  });
+});
+
 describe('oversized tool results', () => {
   const huge = 'x'.repeat(1_200_000);
 

@@ -56,6 +56,9 @@ import { classifyMutationCall, isMutationCall } from '../routing/policy/mutation
 import type { RouterSession } from './router-session-state.js';
 import { recordBoundary } from './context-resolution.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
+import { factsLog, parseDeclaredFacts, type ChangeMeasurements, type DeclaredFacts } from '../routing/policy/change-facts.js';
+import { changeFactsParameter } from './change-facts-schema.js';
+import { measureChange } from './change-measurements.js';
 
 const DESCRIPTION =
   `${ROUTER_TOOLS_CONDITION} ` +
@@ -119,6 +122,10 @@ function executionContractParameters() {
       ]),
       { minItems: 1, maxItems: MAX_CONTRACT_STEPS },
     ),
+    facts: changeFactsParameter({
+      changesAndCheck: false,
+      description: 'Facts that you observed about the remaining work. The router checks them. Omit a fact that you did not observe.',
+    }),
   });
 }
 
@@ -218,6 +225,18 @@ export interface ContractSubmission {
 export interface ContractParams {
   steps?: ExecutionStepInput[];
   remainingWork?: unknown;
+  facts?: unknown;
+}
+
+/** The plan's own changes and checks, in the form of declared facts. */
+function stepFacts(steps: readonly ExecutionStepInput[]): DeclaredFacts {
+  const paths = (...kinds: string[]) => steps.filter((step) => kinds.includes(step.kind) && typeof step.path === 'string')
+    .map((step) => step.path!.trim());
+  return {
+    modify: paths('edit', 'delete'),
+    create: paths('create'),
+    checkCommands: steps.filter((step) => step.kind === 'verify').map((step) => `${step.verifier ?? 'check'}${step.scope ? ` ${step.scope}` : ''}`),
+  };
 }
 
 /** Router-measured target facts that need I/O; the rest come from validation. */
@@ -261,7 +280,8 @@ async function countLines(path: string): Promise<number> {
   }
 }
 
-function withDeadline<T>(work: Promise<T>, ms: number, fallback: () => T): Promise<T> {
+/** Settle with `work`, or with `fallback()` once `ms` pass. */
+export function withDeadline<T>(work: Promise<T>, ms: number, fallback: () => T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback()), ms); });
   return Promise.race([work, expired]).finally(() => clearTimeout(timer));
@@ -439,6 +459,7 @@ export function submitExecutionContract(
   ctx: Pick<ExtensionContext, 'cwd' | 'model'> | undefined,
   session: RouterSession,
   observed: TargetObservations,
+  change: ChangeMeasurements = {},
 ): ContractSubmission {
   const steps = params?.steps;
   if (!ctx || !isRouterAuto(ctx)) {
@@ -492,10 +513,16 @@ export function submitExecutionContract(
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },
   });
-  // The context handoff this plan came from records that it led to one.
-  const next = accepted.reasoningHandoff && !accepted.reasoningHandoff.contractAccepted
-    ? { ...accepted, reasoningHandoff: { ...accepted.reasoningHandoff, contractAccepted: true } }
+  // The shadow requirement is logged next to the one routing uses; it does not route.
+  const declared = { ...parseDeclaredFacts(params?.facts), ...stepFacts(steps ?? []) };
+  const valued = accepted.contract
+    ? { ...accepted, contract: { ...accepted.contract,
+      facts: factsLog('implement', declared, change, accepted.contract.minimum ?? accepted.contract.requirement) } }
     : accepted;
+  // The context handoff this plan came from records that it led to one.
+  const next = valued.reasoningHandoff && !valued.reasoningHandoff.contractAccepted
+    ? { ...valued, reasoningHandoff: { ...valued.reasoningHandoff, contractAccepted: true } }
+    : valued;
   session.commitWorkPhaseState(next);
   const meta = contractMeta(next);
   appendExecutionContractSignal({ intentKey: state.intentKey, served, action: 'accept', meta });
@@ -530,10 +557,21 @@ export function registerExecutionContractTool(pi: ExtensionAPI, session: RouterS
         let result: ContractSubmission;
         try {
           const steps = params.steps as ExecutionStepInput[];
-          const observed = contractSubmissionOpen(ctx, session)
-            ? await observeTargets((command, args, options) => pi.exec(command, args, options), ctx.cwd, steps, signal)
-            : {};
-          result = submitExecutionContract({ steps, remainingWork: params.remainingWork }, ctx, session, observed);
+          const exec: Exec = (command, args, options) => pi.exec(command, args, options);
+          const open = contractSubmissionOpen(ctx, session);
+          const declared = parseDeclaredFacts(params.facts);
+          const planned = stepFacts(Array.isArray(steps) ? steps : []);
+          const [observed, change] = open
+            ? await Promise.all([
+              observeTargets(exec, ctx.cwd, steps, signal),
+              measureChange(exec, ctx.cwd, {
+                targets: { modify: planned.modify ?? [], create: planned.create ?? [] },
+                ...(declared?.precedent ? { precedent: declared.precedent } : {}),
+                ...(typeof pi.getActiveTools === 'function' ? { tools: pi.getActiveTools() } : {}),
+              }, signal),
+            ])
+            : [{}, {}];
+          result = submitExecutionContract({ steps, remainingWork: params.remainingWork, facts: params.facts }, ctx, session, observed, change);
         } catch {
           result = { accepted: false, text: 'Execution plan not accepted: internal router error. Continue with the current model.' };
         }

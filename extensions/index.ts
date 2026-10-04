@@ -102,6 +102,7 @@ import {
   remindContextHandoff,
   observeContextRead,
 } from './serve/gathering-gate.js';
+import { observeCheckVerdict } from './serve/check-verdicts.js';
 import { registerContextHandoffTool } from './serve/context-handoff-tool.js';
 
 /** Tool registered by pi-subagents that spawns child agents. */
@@ -861,6 +862,17 @@ export default async function autoModelRouterExtension(
     }
     handleTrajectoryToolResult(event, session);
     await observeContextRead(event, ctx, session);
+    observeCheckVerdict(
+      {
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        input: (event as { input?: unknown }).input,
+        content: event.content,
+        details: event.details,
+        isError: (event as { isError?: boolean }).isError,
+      },
+      session,
+    );
     trackContractToolResult(
       {
         toolName: event.toolName,

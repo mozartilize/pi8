@@ -18,6 +18,7 @@ import type {
   WorkContextMeta,
 } from '../types.js';
 import type { ContextReason } from '../routing/context/types.js';
+import type { CheckVerdicts, FactsLog } from '../routing/policy/change-facts.js';
 import { resolveStoragePath } from '../bench/store.js';
 import { servedKey } from './ui.js';
 import { sessionSidecarPath } from '../sessionpaths.js';
@@ -115,6 +116,10 @@ export interface DecisionLogEntry {
     deliverable?: Dimension;
     /** Why the entry owed context, as categories. */
     contextReasons?: ContextReason[];
+    /** Codes and measurements of the declared facts, and the shadow requirement. */
+    facts?: FactsLog;
+    /** Verifier results before and after the handoff. */
+    checks?: CheckVerdicts;
   };
   /** The entry's work-context resolution: tier, ids, categories; never titles. */
   workContext?: WorkContextMeta;
@@ -244,6 +249,8 @@ export interface ContextHandoffSignal {
   handoff?: ReasoningHandoffMeta;
   deliverable?: Dimension;
   contextReasons?: ContextReason[];
+  facts?: FactsLog;
+  checks?: CheckVerdicts;
 }
 
 /** Append a context handoff transition. Best-effort; never throws into the tool path. */
@@ -273,6 +280,8 @@ export function appendContextHandoffSignal(
         ...(signal.handoff ? { handoff: signal.handoff } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
         ...(signal.contextReasons?.length ? { contextReasons: signal.contextReasons } : {}),
+        ...(signal.facts ? { facts: signal.facts } : {}),
+        ...(signal.checks ? { checks: signal.checks } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

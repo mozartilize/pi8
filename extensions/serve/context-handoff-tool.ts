@@ -51,12 +51,16 @@ import { contextCheck } from '../routing/context/resolve.js';
 import { unmetArtifactPaths } from '../routing/context/grounding.js';
 import { CLARIFICATION_TEXT, countContextRefusal, logContextHandoff as log } from './gathering-gate.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
+import { factsLog, parseDeclaredFacts, type ChangeMeasurements } from '../routing/policy/change-facts.js';
+import { defaultRequirement } from '../routing/score/scorer.js';
+import { changeFactsParameter } from './change-facts-schema.js';
+import { measureChange } from './change-measurements.js';
 
 const DESCRIPTION =
   `${ROUTER_TOOLS_CONDITION} ` +
   'Stop collecting context and give the request to the next step. Call it with outcome "ready" once you have ' +
   'what the next step needs: the task type the user wants, your findings, and what the next step must decide or ' +
-  'do. For a plan or review, also rate the reasoning left. Call it with outcome "needs-user" when the request is ' +
+  'do. Give the facts that you observed about the remaining work. For a plan or review, also rate the reasoning left. Call it with outcome "needs-user" when the request is ' +
   'unclear or what it rests on cannot be read, with the question to ask. The router picks the next model. Do not ' +
   'write the plan, review, or change yourself.';
 
@@ -95,6 +99,11 @@ function contextHandoffParameters() {
       knowledge: level(`Knowledge needed beyond the evidence, ${LEVELS}. 1: none; 5: invariants across modules or external systems.`),
       uncertainty: level(`Open facts, ${LEVELS}. 1: the findings answer every question; 5: key facts are unknown and need experiments.`),
     }, { description: 'ready, for a plan or review: the reasoning left, rated per criterion.' })),
+    facts: changeFactsParameter({
+      changesAndCheck: true,
+      description: 'ready: facts that you observed about the remaining work. The router checks them and uses them to ' +
+        'choose the next model. Omit a fact that you did not observe.',
+    }),
     reason: Type.Optional(oneOf(NEEDS_USER_REASONS, 'needs-user: why the user must answer first.')),
   });
 }
@@ -114,7 +123,8 @@ const REJECTIONS = {
   'missing-findings': 'Context not handed off: a field is empty. Put what you found in findings. Put what the next step must do in question. Empty:',
   'missing-deliverable': 'Context not handed off: name the task type the user wants (deliverable). Call it again with it.',
   'missing-task-shape': 'Context not handed off: give complexity and scope for the declared task. Call it again with both.',
-  'artifact-not-read': 'Context not handed off: the request rests on files not read as they are now. Read them in full, then call it again:',
+  'artifact-not-read': 'Context not handed off: the request rests on files not read in full as they are now. A read with ' +
+    'offset or limit is not a full read. Read each file in one call without offset or limit, then call it again:',
   'no-next-step': 'Context not handed off: a gather entry hands off only to implement, review, or plan. Call it again with one of those, or continue.',
   'missing-work-choice': 'Context not handed off: choose a listed workItemId, NEW_WORK_ITEM, or NONE for a lightweight side question.',
   'invalid-work-choice': 'Context not handed off: the work and topic ids must be from this entry’s offered choices. Choose again.',
@@ -138,7 +148,7 @@ const CONTEXT_REJECTIONS: ReadonlySet<RejectCode> = new Set(['artifact-not-read'
 
 /** The reason alone, for a rejection that ends acquisition: the model must not read or call again. */
 const ENDING_REJECTIONS: Partial<Record<RejectCode, string>> = {
-  'artifact-not-read': 'Context not handed off: the request rests on files not read as they are now:',
+  'artifact-not-read': 'Context not handed off: the request rests on files not read in full as they are now:',
 };
 
 export interface ContextHandoffParams {
@@ -155,6 +165,7 @@ export interface ContextHandoffParams {
   files?: unknown;
   difficulty?: unknown;
   reason?: unknown;
+  facts?: unknown;
 }
 
 const filled = (value: unknown): value is string => typeof value === 'string' && value.trim() !== '';
@@ -194,7 +205,7 @@ function handoffKey(params: ContextHandoffParams | undefined): string {
     params?.workItemId, params?.topicId, params?.topicTitle, params?.workItemTitle,
     typeof params?.findings === 'string' ? params.findings.trim() : '',
     typeof params?.question === 'string' ? params.question.trim() : '',
-    files, params?.difficulty ?? null,
+    files, params?.difficulty ?? null, params?.facts ?? null,
   ]);
 }
 
@@ -236,6 +247,8 @@ function adoptedDeliverable(reported: Dimension): Dimension | undefined {
 /** I/O the submission needs, supplied by the caller so the decision itself stays synchronous. */
 export interface HandoffFacts {
   evidence?: ReasoningEvidence;
+  /** Router measurements of the declared change. */
+  change?: ChangeMeasurements;
   /** Referenced files not read as they are now. */
   unmet?: string[];
   selectionError?: Extract<RejectCode, 'missing-work-choice' | 'invalid-work-choice' | 'missing-work-title' | 'missing-topic-title' | 'stale-entry'>;
@@ -378,11 +391,18 @@ export function submitContextHandoff(
     const cached = session.getCachedIntent();
     if (cached?.key === state.intentKey) session.setCachedIntent({ ...cached, context: selected, dimension: deliverable });
   }
+  const declared = parseDeclaredFacts(params?.facts);
+  // The shadow requirement is logged next to the one routing uses; it does not route.
+  const changeFacts = {
+    ...(declared ? { declared } : {}),
+    log: factsLog(deliverable, declared, facts.change ?? {}, reasoning?.minimum ?? defaultRequirement(deliverable)),
+  };
   const next = acceptContextHandoff(materialized, { deliverable, key, ...(reasoning ? { reasoning } : {}) });
-  session.commitWorkPhaseState({ ...next, priorCompletion: undefined, completion: undefined });
+  session.commitWorkPhaseState({ ...next, changeFacts, priorCompletion: undefined, completion: undefined });
   log(state, served, 'accept', {
     ...(next.reasoningHandoff ? { handoff: next.reasoningHandoff } : {}),
     deliverable,
+    facts: changeFacts.log,
   });
   if (next.reasoningHandoff) {
     const role = deliverable === 'plan' ? 'planning' : 'review';
@@ -410,6 +430,7 @@ export async function prepareHandoffFacts(
   session: RouterSession,
   exec: Exec,
   signal?: AbortSignal,
+  tools?: readonly string[],
 ): Promise<HandoffFacts> {
   if (params?.outcome !== 'ready') return {};
   const opened = openFor(ctx, session);
@@ -474,10 +495,19 @@ export async function prepareHandoffFacts(
       if (facts.unmet.length > 0) return facts;
     }
   }
+  const declared = parseDeclaredFacts(params.facts);
+  const change = measureChange(exec, ctx.cwd, {
+    ...(declared?.modify || declared?.create ? { targets: { modify: declared.modify ?? [], create: declared.create ?? [] } } : {}),
+    ...(declared?.precedent ? { precedent: declared.precedent } : {}),
+    ...(tools ? { tools } : {}),
+    scoutFiles: opened.state.readPaths?.length ?? 0,
+    scoutRequests: opened.state.contextRequests ?? 0,
+  }, signal);
   if (deliverable === 'plan' || deliverable === 'review') {
     const paths = evidencePaths(declaredFiles(params, ctx.cwd), opened.state.readPaths);
     facts.evidence = await measureEvidence(exec, ctx.cwd, paths, signal);
   }
+  facts.change = await change;
   return facts;
 }
 
@@ -495,7 +525,8 @@ export function registerContextHandoffTool(pi: ExtensionAPI, session: RouterSess
         let result: ContextHandoffSubmission;
         try {
           const exec: Exec = (command, args, options) => pi.exec(command, args, options);
-          const facts = await prepareHandoffFacts(params, ctx, session, exec, signal);
+          const tools = typeof pi.getActiveTools === 'function' ? pi.getActiveTools() : undefined;
+          const facts = await prepareHandoffFacts(params, ctx, session, exec, signal, tools);
           result = submitContextHandoff(params, ctx, session, facts);
         } catch {
           result = { accepted: false, text: REJECTIONS.internal };

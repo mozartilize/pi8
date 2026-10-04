@@ -159,6 +159,19 @@ export function indexVersionWarning(version: string | undefined): string | undef
 export const FRONTIER_REQUIREMENT = 0.85;
 
 /**
+ * The task type's fixed minimums as one requirement: the largest share of an
+ * axis reference among them. The Omniscience minimum is not a share of a
+ * reference, so it does not count.
+ */
+export function defaultRequirement(dimension: Dimension): number {
+  const fixed = CAPABILITY_MINIMUMS[dimension];
+  const shares = (Object.keys(fixed) as QualityAxis[])
+    .filter((axis): axis is Exclude<QualityAxis, 'knowledge'> => axis !== 'knowledge')
+    .map((axis) => fixed[axis]! / AXIS_REFERENCE[axis]);
+  return Math.max(0, ...shares);
+}
+
+/**
  * The minimums a candidate must meet. Without a handoff, the task type's
  * fixed minimums. A handoff requirement replaces each axis with that share of
  * the reference, on the same axes. The Omniscience minimum does not scale:

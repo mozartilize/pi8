@@ -343,6 +343,22 @@ function observationKey(action: ActionFingerprint, event: ToolCycleInput): { key
   return { key: fingerprint(['obs', action.key, text]), verified: true };
 }
 
+/** A failure count in a test summary, such as `# fail 2`, `ℹ fail 0`, `1 failed`, or `Failures: 0`. */
+const FAILURE_COUNT = /\bfail(?:ed|ures?)?\b\s*[:=]?\s*(\d+)\b|\b(\d+)\s+fail(?:ed|ures?)?\b/gi;
+
+/**
+ * Whether a verifier's output reports a failure. The exit status alone is not
+ * enough: output piped through another command exits with that command's
+ * status. A summary count decides when the output has one, so a passing test
+ * whose name contains "failure" does not count; without a count, any failure
+ * word does.
+ */
+function reportsFailure(text: string): boolean {
+  const counts = [...text.matchAll(FAILURE_COUNT)].map((match) => Number(match[1] ?? match[2]));
+  if (counts.length > 0) return counts.some((count) => count > 0);
+  return /\bfail(?:ed|ure)?\b/i.test(text);
+}
+
 export function cycleFromToolResult(event: ToolCycleInput, invocation: number): ObservedCycle {
   const action = actionFromTool(event.toolName, event.input);
   const observation = observationKey(action, event);
@@ -353,7 +369,7 @@ export function cycleFromToolResult(event: ToolCycleInput, invocation: number): 
       || action.commandClass === 'typecheck'
       || action.commandClass === 'lint'
       || action.commandClass === 'build');
-  const failureSignature = verifier && (isError || /\bfail(?:ed|ure)?\b/i.test(text))
+  const failureSignature = verifier && (isError || reportsFailure(text))
     ? extractFailureSignature(text, action.commandClass ?? 'other')
     : undefined;
   const args = asRecord(event.input);

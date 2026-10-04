@@ -2,6 +2,7 @@ import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ScoredReason } from './routing/score/decision-reason.js';
 import type { ModelThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 import type { ContextReason, ContextRelation, ResolverTier } from './routing/context/types.js';
+import type { FactsLog } from './routing/policy/change-facts.js';
 
 export type { ExtensionContext };
 
@@ -267,6 +268,8 @@ export interface ExecutionContractMeta {
   keepReason?: ContractKeepReason;
   rubric: ExecutionRubric;
   measured: MeasuredFeatures;
+  /** Declared facts as codes, router measurements, and the shadow requirement. */
+  facts?: FactsLog;
   submitter: string;
   targets: number;
   steps: number;

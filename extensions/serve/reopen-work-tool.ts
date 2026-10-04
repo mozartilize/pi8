@@ -78,7 +78,8 @@ const REJECTIONS = {
   'stale-entry': 'Work not reopened: this request is no longer the active entry.',
   'already-handed-off': 'Work not reopened: this request already has a next step. Continue with it.',
   'collecting-context': 'Work not reopened: this request is still collecting context. Call hand_off_context.',
-  'artifact-not-read': 'Work not reopened: the request rests on files not read as they are now. Read them in full, then call it again:',
+  'artifact-not-read': 'Work not reopened: the request rests on files not read in full as they are now. A read with offset ' +
+    'or limit is not a full read. Read each file in one call without offset or limit, then call it again:',
   'not-recorded': 'Work not reopened: the router could not record it. Call it again.',
   internal: 'Work not reopened: internal router error. Continue, and reply to the user.',
 } as const;

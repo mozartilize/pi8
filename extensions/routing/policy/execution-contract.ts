@@ -26,6 +26,7 @@
  * Pure state transitions only: no I/O, no registry or session access.
  */
 import { homedir } from 'node:os';
+import type { FactsLog } from './change-facts.js';
 import { dirname, resolve } from 'node:path';
 import type {
   CapabilityBand,
@@ -104,6 +105,8 @@ export interface ExecutionContract {
   keepReason?: ContractKeepReason;
   rubric: ExecutionRubric;
   measured: MeasuredFeatures;
+  /** Declared facts as codes, router measurements, and the shadow requirement. */
+  facts?: FactsLog;
   /** Absolute paths of every declared edit/create/delete target. */
   targets: string[];
   /** Declared edit/create targets not yet edited successfully. */
@@ -448,6 +451,7 @@ export function contractMeta(state: WorkPhaseState): ExecutionContractMeta | und
     ...(contract.keepReason ? { keepReason: contract.keepReason } : {}),
     rubric: contract.rubric,
     measured: contract.measured,
+    ...(contract.facts ? { facts: contract.facts } : {}),
     submitter: contract.submitter,
     targets: contract.targets.length,
     steps: contract.steps,

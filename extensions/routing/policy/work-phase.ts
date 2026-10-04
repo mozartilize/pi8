@@ -2,6 +2,7 @@ import type { CapabilityBand, Dimension, ReasoningHandoffMeta, TerminalAssessmen
 import type { ExecutionContract } from './execution-contract.js';
 import type { ContextReason, EntryResolution } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
+import type { ChangeFactsState, CheckVerdicts } from './change-facts.js';
 import type { GroundedArtifact } from '../context/types.js';
 import type { PendingIdentity } from '../../serve/context-resolution.js';
 import { MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
@@ -43,6 +44,10 @@ export interface WorkPhaseState {
   readPaths?: string[];
   /** Context → planning/review handoff for this entry; never inherited. */
   reasoningHandoff?: ReasoningHandoffMeta;
+  /** Facts declared at this entry's accepted handoff, and their log record; never inherited. */
+  changeFacts?: ChangeFactsState;
+  /** Verifier results this entry observed, before and after its handoff; never inherited. */
+  checkVerdicts?: CheckVerdicts;
   /** Handoff of the entry before this one, joined to this entry's records. */
   previousHandoffId?: string;
   /** Where collecting context stands for the entry; absent until an invocation routes it. */

@@ -262,10 +262,14 @@ export function gateContextToolCall(
 export function closeContextEntry(state: WorkPhaseState, served: string | undefined): WorkPhaseState {
   if (state.contextClosed) return state;
   const handoff = state.reasoningHandoff;
+  const checks = state.checkVerdicts ? { checks: state.checkVerdicts } : {};
   if (handoff) {
-    logContextHandoff(state, handoff.owner ?? served ?? handoff.requester, 'phase-end', { handoff });
+    logContextHandoff(state, handoff.owner ?? served ?? handoff.requester, 'phase-end', { handoff, ...checks });
+  } else if (state.changeFacts) {
+    // An implement handoff: its check verdicts are the outcome its facts are fitted against.
+    logContextHandoff(state, served ?? 'unknown/unknown', 'phase-end', { ...(state.deliverable ? { deliverable: state.deliverable } : {}), ...checks });
   } else if (state.contextStatus === 'acquiring' || state.contextStatus === 'clarification-only') {
-    logContextHandoff(state, served ?? 'unknown/unknown', 'no-handoff', state.deliverable ? { deliverable: state.deliverable } : {});
+    logContextHandoff(state, served ?? 'unknown/unknown', 'no-handoff', { ...(state.deliverable ? { deliverable: state.deliverable } : {}), ...checks });
   } else {
     return state;
   }

@@ -24,6 +24,8 @@ import { gateCompletedWorkToolCall } from './completed-work-gate.js';
 import { ROUTER_TOOLS_ON_NOTE } from './router-tools-note.js';
 import type { RouterSession } from './router-session-state.js';
 import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition.js';
+import { contractMeta } from '../routing/policy/execution-contract.js';
+import type { FactsLog } from '../routing/policy/change-facts.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
 import { SessionTree } from '../test-support/session-tree.js';
@@ -2513,6 +2515,63 @@ describe('context acquisition', () => {
     function breakWithUndeclaredEdit(): void {
       handleContractToolCall({ toolName: 'edit', input: { path: 'src/other.ts' } }, { cwd: '/repo' }, harness.session);
     }
+
+    describe('declared facts', () => {
+      const HARD_FACTS = {
+        check: { commands: ['npm run secret-check'], state: 'fails' },
+        changes: { modify: ['src/secret-a.ts', 'src/secret-b.ts'], create: [] },
+        decisions: ['secret decision one', 'secret decision two', 'secret decision three'],
+        unknowns: ['secret unknown'],
+        answers: { rewrites: 'Y', ordering: 'Y', mapping: 'N' },
+        domains: ['backend'],
+      };
+
+      async function handOff(facts?: unknown) {
+        const session = await newSession();
+        await session.routeTurn(PLAN_PROMPT);
+        const params = { ...DESIGN_HANDOFF, workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC',
+          topicTitle: 'Work', workItemTitle: 'Migration roadmap', ...(facts ? { facts } : {}) };
+        const measured = await prepareHandoffFacts(params, routerCtx, harness.session,
+          async () => ({ stdout: '', stderr: '', code: 0 }) as never);
+        expect(submitContextHandoff(params, routerCtx, harness.session, measured).accepted).toBe(true);
+        const planning = await session.routeTurnAgainWithSameUserEntry();
+        return { session, planning, state: harness.session.getWorkPhaseState()! };
+      }
+
+      it('keeps the declaration in state and logs only codes, next to the minimum routing used', async () => {
+        const { session, state } = await handOff(HARD_FACTS);
+        expect(state.changeFacts?.declared?.decisions).toEqual(HARD_FACTS.decisions);
+        const records = await session.readDecisionRecords();
+        const accept = records.map((r) => r.investigationHandoff as { action?: string; facts?: FactsLog } | undefined)
+          .find((h) => h?.action === 'accept');
+        expect(accept?.facts?.declared).toMatchObject({ checkCommands: 1, checkState: 'fails', modify: 2, create: 0, decisions: 3, unknowns: 1 });
+        expect(accept?.facts?.shadow.used).toBe(state.reasoningHandoff?.minimum);
+        expect(JSON.stringify(records)).not.toContain('secret');
+      });
+
+      it('does not route on the shadow requirement', async () => {
+        const plain = await handOff();
+        const minimum = plain.state.reasoningHandoff?.minimum;
+        const withFacts = await handOff({ ...HARD_FACTS, decisions: [], answers: { mapping: 'Y', rewrites: 'N' } });
+        expect(withFacts.state.reasoningHandoff?.minimum).toBe(minimum);
+        expect(withFacts.planning?.chosen).toBe(plain.planning?.chosen);
+      });
+
+      it('logs a plan\'s targets and checks from its steps, and keeps the plan\'s minimum', async () => {
+        await planned();
+        expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+        const plain = harness.session.getWorkPhaseState()!.contract!;
+        await planned();
+        const facts = { decisions: ['secret open decision'], precedent: 'src/secret.ts', answers: { mapping: 'Y' } };
+        expect(submitExecutionContract({ ...smallPlan, facts }, routerCtx, harness.session, EXISTING_TARGETS, { files: 1 }).accepted).toBe(true);
+        const contract = harness.session.getWorkPhaseState()!.contract!;
+        expect(contract.facts?.declared).toMatchObject({ modify: 1, create: 0, checkCommands: 1, decisions: 1, precedent: true });
+        expect(contract.facts?.shadow.used).toBe(contract.minimum ?? contract.requirement);
+        expect({ minimum: contract.minimum, requirement: contract.requirement, band: contract.band })
+          .toEqual({ minimum: plain.minimum, requirement: plain.requirement, band: plain.band });
+        expect(JSON.stringify(contractMeta(harness.session.getWorkPhaseState()!))).not.toContain('secret');
+      });
+    });
 
     it('keeps plan/review after a mutation call without an accepted plan', async () => {
       const session = await planned();

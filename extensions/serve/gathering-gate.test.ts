@@ -6,7 +6,8 @@ import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { routingDecision } from '../test-support/router-fixtures.js';
 import { RouterSession } from './router-session-state.js';
 import { submitContextHandoff } from './context-handoff-tool.js';
-import { CLARIFICATION_TEXT, countContextRefusal, gateContextToolCall } from './gathering-gate.js';
+import { CLARIFICATION_TEXT, closeContextEntry, countContextRefusal, gateContextToolCall } from './gathering-gate.js';
+import { factsLog } from '../routing/policy/change-facts.js';
 
 vi.mock('../host/decisionlog.js', () => ({ appendContextHandoffSignal: vi.fn() }));
 
@@ -68,7 +69,7 @@ describe('gathering gate refusal accounting', () => {
   it('counts a handoff rejected for unread files', () => {
     const session = acquiringSession();
     const result = submitContextHandoff(READY, ROUTER_AUTO, session, UNREAD);
-    expect(result.text).toContain('Read them in full, then call it again: src/queue.ts.');
+    expect(result.text).toContain('A read with offset or limit is not a full read. Read each file in one call without offset or limit, then call it again: src/queue.ts.');
     expect(session.getWorkPhaseState()?.contextDenials).toBe(1);
   });
 
@@ -78,7 +79,7 @@ describe('gathering gate refusal accounting', () => {
     const result = submitContextHandoff(READY, ROUTER_AUTO, session, UNREAD);
     expect(session.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
     // The files stay named so the reply can ask for them; no instruction to read or call again.
-    expect(result.text).toBe(`Context not handed off: the request rests on files not read as they are now: src/queue.ts. ${CLARIFICATION_TEXT}`);
+    expect(result.text).toBe(`Context not handed off: the request rests on files not read in full as they are now: src/queue.ts. ${CLARIFICATION_TEXT}`);
   });
 
   it('names a refused tool and says the next step can run it', () => {
@@ -108,5 +109,26 @@ describe('gathering gate refusal accounting', () => {
       block: true,
       reason: 'Router: this call was not made: the router could not check it while collecting context.',
     });
+  });
+});
+
+describe('closing an entry', () => {
+  it('logs the check verdicts of an implement handoff at the end of the entry', () => {
+    const state: WorkPhaseState = {
+      intentKey: 'entry', deliverable: 'implement', contextStatus: 'served', providerInvocation: 3, observedMutationTools: 2,
+      changeFacts: { log: factsLog('implement', undefined, {}) },
+      checkVerdicts: { beforeHandoff: 'fail', afterHandoff: 'pass', runsAfterHandoff: 2 },
+    };
+    expect(closeContextEntry(state, 'a/model').contextClosed).toBe(true);
+    expect(vi.mocked(appendContextHandoffSignal)).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'phase-end', deliverable: 'implement',
+      checks: { beforeHandoff: 'fail', afterHandoff: 'pass', runsAfterHandoff: 2 },
+    }));
+  });
+
+  it('logs nothing for an entry without a handoff or collected context', () => {
+    const state: WorkPhaseState = { intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0 };
+    expect(closeContextEntry(state, 'a/model')).toBe(state);
+    expect(vi.mocked(appendContextHandoffSignal)).not.toHaveBeenCalled();
   });
 });
