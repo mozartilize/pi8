@@ -23,10 +23,12 @@ import { CONTEXT_LIMITS, activeWorkItem, getWorkItem } from '../routing/context/
 import { RESERVED_IDS, type AnchorKind, type AnchorRole, type WorkItemAnchor, type WorkItemPatch } from '../routing/context/types.js';
 import { currentSourceEntry } from './context-grounding.js';
 import type { RouterSession } from './router-session-state.js';
+import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 
 export const ROUTING_CONTEXT_TOOL = 'routing_context';
 
 const DESCRIPTION =
+  `${ROUTER_TOOLS_CONDITION} ` +
   'Keep the router\'s record of this session\'s work current. op="update": when you learn a better title, ' +
   'a short summary, or anchors (the files, symbols, or issues the work is about, with their role). ' +
   'To end the current work, call complete_work. It records metadata only: it never changes which model serves, ' +

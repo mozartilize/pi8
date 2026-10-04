@@ -27,8 +27,10 @@ import { bandRequirement, withContinuedPenalties, withStrongerTerminal, type Wor
 import type { PendingIdentity } from './context-resolution.js';
 import { closeContractEntry } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
+import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 
 const DESCRIPTION = [
+  ROUTER_TOOLS_CONDITION,
   'Call this tool to continue the completed work item you already own.',
   'The router knows that work item. Do not give an id, a title, or a topic.',
   'Call hand_off_context instead when the request is different work.',

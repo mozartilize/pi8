@@ -107,7 +107,8 @@ import {
   closeContextEntry,
   gatheringNote,
 } from './gathering-gate.js';
-import { planRequestNote, withRequestNotes } from './request-notes.js';
+import { applyNotePlans, planRequestNote } from './request-notes.js';
+import { planToolsNote } from './router-tools-note.js';
 import { completedIncumbent, incumbentWorkItem } from '../routing/policy/work-completion.js';
 import { activeWorkNote, completedWorkNote } from './completed-work-gate.js';
 
@@ -1076,9 +1077,11 @@ function countAcquisitionRequest(session: RouterSession, intentKey: string): voi
 
 /** Resolve the served effort, run the fallback walk, and settle the handoff. */
 /**
- * The delegated context with every recorded note, plus this invocation's
- * note when it differs from the entry's latest one. Without a routed entry
- * the recorded notes are still added, so the prefix stays the same.
+ * The delegated context with every recorded note, the tools note when the
+ * request does not already say that the router tools are on, and this
+ * invocation's note when it differs from the entry's latest one. Without a
+ * routed entry the recorded notes are still added, so the prefix stays the
+ * same.
  */
 function withEntryNotes(
   session: RouterSession,
@@ -1088,15 +1091,9 @@ function withEntryNotes(
   routedEntry: boolean,
 ): Context {
   const messages = context.messages ?? [];
-  const plan = routedEntry ? planRequestNote(session.notes.getNotes(), messages, intentKey, instruction) : {};
-  if (plan.record) session.notes.record(plan.record);
-  const noted = withRequestNotes(messages, session.notes.getNotes());
-  if (plan.unanchored && noted.length > 0) {
-    const last = noted[noted.length - 1]!;
-    const blocks = typeof last.content === 'string' ? [{ type: 'text' as const, text: last.content }] : last.content;
-    noted[noted.length - 1] = { ...last, content: [...blocks, { type: 'text', text: plan.unanchored }] } as typeof last;
-  }
-  return { ...context, messages: noted };
+  const tools = planToolsNote(session.notes.getNotes(), messages, true);
+  const entry = routedEntry ? planRequestNote(session.notes.getNotes(), messages, intentKey, instruction) : {};
+  return { ...context, messages: applyNotePlans(session.notes, messages, [tools, entry]) };
 }
 
 async function delegateRouterTurn(args: {

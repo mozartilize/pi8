@@ -83,7 +83,8 @@ import {
 } from './serve/router-session-state.js';
 import { isMutationCall } from './routing/policy/mutation-detector.js';
 import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, readBranch, requestRouting } from './routing/context/persistence.js';
-import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
+import { REQUEST_NOTE_ENTRY_TYPE, applyNotePlans, type NotableMessage } from './serve/request-notes.js';
+import { planToolsNote } from './serve/router-tools-note.js';
 import { CONTEXT_HANDOFF_TOOL } from './routing/policy/context-acquisition.js';
 import { COMPLETE_WORK_TOOL, REOPEN_WORK_TOOL } from './routing/policy/work-completion.js';
 import { EXECUTION_CONTRACT_TOOL } from './routing/policy/execution-contract.js';
@@ -156,23 +157,41 @@ const ROUTER_TOOLS: readonly string[] = [
 ];
 
 /**
- * Declare the router tools to the model only while router/auto is the
- * session model; a concrete model does not see them. Only these names are
- * added or removed, so other extensions' tools and `--tools` stay as they
- * are. A change of the tool set changes the prompt head: Pi records it in
- * the transcript, and the provider's cached prefix is lost at that switch.
- * An unchanged set is not set again, so no change is recorded.
+ * Declare the router tools for every session model. A change of the tool
+ * set changes the prompt head, and the provider's cached prefix is lost, so
+ * a switch between router/auto and a concrete model changes only the tools
+ * note (see router-tools-note.ts). Only these names are added, so other
+ * extensions' tools and `--tools` stay as they are. A set that already holds
+ * them is not set again, so Pi records no tool change.
  */
-function syncRouterTools(pi: ExtensionAPI, model: { provider?: string; id?: string } | undefined): void {
+function declareRouterTools(pi: ExtensionAPI): void {
   try {
     if (typeof pi.getActiveTools !== 'function' || typeof pi.setActiveTools !== 'function') return;
     const active = pi.getActiveTools();
-    const others = active.filter((name) => !ROUTER_TOOLS.includes(name));
-    const next = isRouterAutoActive(model) ? [...others, ...ROUTER_TOOLS] : others;
-    if (next.length === active.length && next.every((name) => active.includes(name))) return;
-    pi.setActiveTools(next);
+    const missing = ROUTER_TOOLS.filter((name) => !active.includes(name));
+    if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
   } catch {
-    // The router tools refuse calls outside router/auto, so a failed sync only shows them.
+    // The model then does not see the router tools; router/auto still serves the turn.
+  }
+}
+
+/**
+ * A request to a concrete model carries every recorded note, so its prefix
+ * matches the router/auto requests before it, and the tools note that turns
+ * the router tools off. Router/auto requests get their notes in the provider.
+ */
+function handleContext<M extends NotableMessage>(
+  event: { messages: M[] },
+  ctx: ExtensionContext | undefined,
+  session: RouterSession,
+): { messages: M[] } | undefined {
+  try {
+    if (isRouterAutoActive(ctx?.model)) return undefined;
+    const plan = planToolsNote(session.notes.getNotes(), event.messages, false);
+    return { messages: applyNotePlans(session.notes, event.messages, [plan]) };
+  } catch (err) {
+    debugLog('notes.context-error', { message: err instanceof Error ? err.message : String(err) });
+    return undefined;
   }
 }
 
@@ -283,7 +302,7 @@ async function handleSessionStart(
   } catch {
     // Ephemeral / no session manager: logs fall back to the shared store.
   }
-  syncRouterTools(pi, ctx?.model);
+  declareRouterTools(pi);
   debugLog('lifecycle.session_start.begin', {
     reason: event.reason,
     previousSessionFile: event.previousSessionFile,
@@ -416,7 +435,7 @@ function handleModelSelect(
       : undefined,
     ...session.blacklist.getDebugState(),
   });
-  syncRouterTools(pi, event.model);
+  declareRouterTools(pi);
   // A concrete model selection makes the previous router decision stale,
   // and ends the incumbent: switching back starts by collecting context.
   if (event.model.provider !== ROUTER_PROVIDER_ID || event.model.id !== AUTO_MODEL_ID) {
@@ -790,6 +809,8 @@ export default async function autoModelRouterExtension(
     restoreWorkLedger(ctx, session);
     carryPhaseAcrossTree(session, readBranch(ctx?.sessionManager));
   });
+
+  pi.on('context', (event, ctx) => handleContext(event, ctx, session));
 
   pi.on('before_agent_start', (event, ctx) => {
     recordModelSelection(pi, ctx);

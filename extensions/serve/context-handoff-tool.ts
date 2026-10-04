@@ -50,8 +50,10 @@ import { getWorkItem } from '../routing/context/ledger.js';
 import { contextCheck } from '../routing/context/resolve.js';
 import { unmetArtifactPaths } from '../routing/context/grounding.js';
 import { CLARIFICATION_TEXT, countContextRefusal, logContextHandoff as log } from './gathering-gate.js';
+import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 
 const DESCRIPTION =
+  `${ROUTER_TOOLS_CONDITION} ` +
   'Stop collecting context and give the request to the next step. Call it with outcome "ready" once you have ' +
   'what the next step needs: the task type the user wants, your findings, and what the next step must decide or ' +
   'do. For a plan or review, also rate the reasoning left. Call it with outcome "needs-user" when the request is ' +

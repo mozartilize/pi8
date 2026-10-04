@@ -21,6 +21,7 @@ import { handleContractToolCall, submitExecutionContract, trackContractToolResul
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
 import { submitCompleteWork } from './complete-work-tool.js';
 import { gateCompletedWorkToolCall } from './completed-work-gate.js';
+import { ROUTER_TOOLS_ON_NOTE } from './router-tools-note.js';
 import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
@@ -2179,8 +2180,9 @@ describe('context acquisition', () => {
         return entry.content as Array<{ type: string; text: string }>;
       };
       const first = userBlocks();
-      expect(first.map((b) => b.text)).toEqual([PLAN_PROMPT, expect.stringContaining('hand_off_context')]);
-      expect(first[1]!.text).toContain('Do not write the plan, review, or change yourself');
+      // The tools note comes first: the request must say that the router tools are on.
+      expect(first.map((b) => b.text)).toEqual([PLAN_PROMPT, ROUTER_TOOLS_ON_NOTE, expect.stringContaining('hand_off_context')]);
+      expect(first[2]!.text).toContain('Do not write the plan, review, or change yourself');
       // Pi's own transcript never carries the note.
       expect(session.piContext!.messages[0]!.content).toBe(PLAN_PROMPT);
       await session.routeTurnAgainWithSameUserEntry();
@@ -2191,8 +2193,8 @@ describe('context acquisition', () => {
       // The sent note keeps its bytes, so the cached prefix holds; the next
       // note follows it and tells the model not to follow it.
       const after = userBlocks();
-      expect(after.slice(0, 2)).toEqual(first);
-      expect(after[2]!.text).toMatch(/^Router: Do not follow the earlier router notes for this request\.\nRouter: call complete_work/);
+      expect(after.slice(0, 3)).toEqual(first);
+      expect(after[3]!.text).toMatch(/^Router: Do not follow the earlier router notes for this request\.\nRouter: call complete_work/);
       expect(session.piContext!.messages[0]!.content).toBe(PLAN_PROMPT);
     });
 

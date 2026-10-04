@@ -15,6 +15,8 @@ import { computeRoleModels } from './agents/subagents.js';
 import { routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
 import { DECISION_LOG_FILE, setDecisionLogBase } from './host/decisionlog.js';
 import { defaultRouterSession } from './serve/router-session-state.js';
+import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
+import { ROUTER_TOOLS_OFF_NOTE } from './serve/router-tools-note.js';
 import type { WorkPhaseState } from './routing/policy/work-phase.js';
 import { SessionTree } from './test-support/session-tree.js';
 import { activateEvent, createEvent, workItem } from './test-support/context-fixtures.js';
@@ -1805,25 +1807,73 @@ describe('router tool declaration', () => {
     return { handlers, setActiveTools, active: () => active };
   }
 
-  it('declares the router tools only while router/auto is the session model', async () => {
-    const { handlers, active } = await setup(['read', 'bash', ...ROUTER_TOOLS, 'other_ext']);
+  it('declares the router tools for every session model and keeps the other tools', async () => {
+    const { handlers, active } = await setup(['read', 'bash', 'other_ext']);
     const concrete = { provider: 'github-copilot', id: 'gpt-5.4' };
     await handlers.get('session_start')!({ reason: 'new' }, contextWithRegistry([registryModel('alpha/cheap')], concrete));
-    expect(active()).toEqual(['read', 'bash', 'other_ext']);
-
-    const auto = { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID };
-    await handlers.get('model_select')!({ model: auto }, contextWithRegistry([registryModel('alpha/cheap')], auto));
     expect(active()).toEqual(['read', 'bash', 'other_ext', ...ROUTER_TOOLS]);
 
+    // A model switch in either direction leaves the tool set, so the prompt head stays.
+    const auto = { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID };
+    await handlers.get('model_select')!({ model: auto }, contextWithRegistry([registryModel('alpha/cheap')], auto));
     await handlers.get('model_select')!({ model: concrete }, contextWithRegistry([registryModel('alpha/cheap')], concrete));
-    expect(active()).toEqual(['read', 'bash', 'other_ext']);
+    expect(active()).toEqual(['read', 'bash', 'other_ext', ...ROUTER_TOOLS]);
   });
 
   it('does not set an unchanged tool set again, so Pi records no tool change', async () => {
     const { handlers, setActiveTools } = await setup(['read', ...ROUTER_TOOLS]);
     const auto = { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID };
+    const concrete = { provider: 'github-copilot', id: 'gpt-5.4' };
     await handlers.get('session_start')!({ reason: 'new' }, contextWithRegistry([registryModel('alpha/cheap')], auto));
+    await handlers.get('model_select')!({ model: concrete }, contextWithRegistry([registryModel('alpha/cheap')], concrete));
     await handlers.get('model_select')!({ model: auto }, contextWithRegistry([registryModel('alpha/cheap')], auto));
     expect(setActiveTools).not.toHaveBeenCalled();
+  });
+});
+
+describe('router tools note on concrete-model requests', () => {
+  async function setup() {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const appendEntry = vi.fn();
+    const pi = {
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool: vi.fn(),
+      appendEntry,
+    } as unknown as ExtensionAPI;
+    await autoModelRouterExtension(pi);
+    return { context: handlers.get('context')!, appendEntry };
+  }
+  const concrete = { model: { provider: 'openai', id: 'gpt-5' } } as unknown as ExtensionContext;
+  const auto = { model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } } as unknown as ExtensionContext;
+  const user = (text: string, timestamp: number) => ({ role: 'user', content: [{ type: 'text', text }], timestamp });
+  const textsOf = (message: { content: Array<{ text: string }> }) => message.content.map((block) => block.text);
+
+  afterEach(() => {
+    defaultRouterSession.reset();
+  });
+
+  it('adds the off note once and keeps the notes that router/auto requests carried', async () => {
+    const { context, appendEntry } = await setup();
+    // A router/auto request carried an entry note on the first message.
+    defaultRouterSession.notes.record({ anchor: 'message:1', entry: 'abc123', instruction: 'Router: collect context.', text: 'Router: collect context.' });
+    const history = [user('refactor the cache', 1), { role: 'assistant', content: [{ type: 'text', text: 'done' }], timestamp: 2 }, user('add a TTL', 3)];
+
+    const first = (await context({ type: 'context', messages: history }, concrete)) as { messages: Array<{ content: Array<{ text: string }> }> };
+    expect(textsOf(first.messages[0]!)).toEqual(['refactor the cache', 'Router: collect context.']);
+    expect(textsOf(first.messages[2]!)).toEqual(['add a TTL', ROUTER_TOOLS_OFF_NOTE]);
+    expect(appendEntry).toHaveBeenCalledWith(REQUEST_NOTE_ENTRY_TYPE, expect.objectContaining({ anchor: 'message:3', text: ROUTER_TOOLS_OFF_NOTE }));
+
+    // The next request repeats the same bytes and records nothing new.
+    appendEntry.mockClear();
+    const second = (await context({ type: 'context', messages: [...history, user('and a size limit', 4)] }, concrete)) as typeof first;
+    expect(JSON.stringify(second.messages.slice(0, 3))).toBe(JSON.stringify(first.messages));
+    expect(textsOf(second.messages[3]!)).toEqual(['and a size limit']);
+    expect(appendEntry).not.toHaveBeenCalled();
+  });
+
+  it('leaves router/auto requests to the provider', async () => {
+    const { context, appendEntry } = await setup();
+    expect(await context({ type: 'context', messages: [user('hi', 1)] }, auto)).toBeUndefined();
+    expect(appendEntry).not.toHaveBeenCalled();
   });
 });

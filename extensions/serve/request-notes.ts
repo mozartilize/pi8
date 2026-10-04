@@ -14,8 +14,10 @@
  *   request starts by telling the model not to follow the earlier notes.
  *
  * The records are custom session entries, so they follow `/tree` and forks
- * and never reach the model by themselves. Only router/auto requests carry
- * notes: a concrete model has no router tools, so the notes do not apply.
+ * and never reach the model by themselves. Requests to every session model
+ * carry the recorded notes, so a model switch keeps the prefix. A request to
+ * a concrete model adds no entry note; its tools note tells the model not to
+ * call the router tools (see router-tools-note.ts).
  */
 import { createHash } from 'node:crypto';
 
@@ -36,7 +38,7 @@ export interface RequestNote {
 }
 
 /** The fields of a request message that notes read and change. */
-interface NotableMessage {
+export interface NotableMessage {
   role: string;
   content?: unknown;
   timestamp?: unknown;
@@ -119,6 +121,27 @@ export function planRequestNote(
   const anchor = messageAnchor(messages.at(-1));
   if (!anchor) return { unanchored: text };
   return { record: { anchor, entry, instruction: wanted, text } };
+}
+
+/**
+ * Record the note of each plan, then add every recorded note to its anchor.
+ * A note that has no anchor, or that the session could not record, is added
+ * to the last message of this request only.
+ */
+export function applyNotePlans<M extends NotableMessage>(
+  state: RequestNoteState,
+  messages: readonly M[],
+  plans: readonly NotePlan[],
+): M[] {
+  const unrecorded: string[] = [];
+  for (const plan of plans) {
+    if (plan.record && !state.record(plan.record)) unrecorded.push(plan.record.text);
+    if (plan.unanchored) unrecorded.push(plan.unanchored);
+  }
+  const noted = withRequestNotes(messages, state.getNotes());
+  const last = noted.at(-1);
+  if (last && unrecorded.length > 0) noted[noted.length - 1] = withText(last, unrecorded);
+  return noted;
 }
 
 function parseNote(data: unknown): RequestNote | undefined {

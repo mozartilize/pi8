@@ -21,8 +21,10 @@ import { activeWorkItem } from '../routing/context/ledger.js';
 import { COMPLETE_WORK_TOOL } from '../routing/policy/work-completion.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { RouterSession } from './router-session-state.js';
+import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 
 const DESCRIPTION = [
+  ROUTER_TOOLS_CONDITION,
   'Call this tool when the work that the user requested is complete.',
   'The user\'s request decides what "complete" means. Your own ideas do not change it.',
   'These items do NOT keep the work open:',

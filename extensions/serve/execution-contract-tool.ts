@@ -55,8 +55,10 @@ import { parseCandidateKey } from '../routing/score/scorer.js';
 import { classifyMutationCall, isMutationCall } from '../routing/policy/mutation-detector.js';
 import type { RouterSession } from './router-session-state.js';
 import { recordBoundary } from './context-resolution.js';
+import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 
 const DESCRIPTION =
+  `${ROUTER_TOOLS_CONDITION} ` +
   'Hand off the remaining implementation as a closed execution plan. Call it only when the user asked for the ' +
   'change to be made, never when the user asked only for a plan or a review, and only once every design decision ' +
   'is settled and all remaining work is concrete file edits, file creations, file deletions, and verification runs. The router validates the plan and chooses which model executes it. Do not call it to ask ' +
