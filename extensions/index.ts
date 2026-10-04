@@ -421,6 +421,7 @@ function handleModelSelect(
   // and ends the incumbent: switching back starts by collecting context.
   if (event.model.provider !== ROUTER_PROVIDER_ID || event.model.id !== AUTO_MODEL_ID) {
     session.context.clearIncumbent();
+    session.endServing();
   }
   if (event.model.provider !== ROUTER_PROVIDER_ID) {
     clearRouterStatus(ctx);

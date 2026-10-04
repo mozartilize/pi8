@@ -378,6 +378,18 @@ export class RouterSession {
     return this.previousServed;
   }
 
+  /**
+   * Pi switched to another model. The model the router served before the
+   * switch is not the incumbent of the next router entry, so neither its
+   * capability nor its thinking level is a minimum there. Warm caches stay;
+   * `noteRequest` clears them when the prompt head changed.
+   */
+  endServing(): void {
+    this.served = undefined;
+    this.previousServed = undefined;
+    this.chosenRegistryId = undefined;
+  }
+
   setSemiHold(intentKey: string, model: string): void {
     this.semiHold = { intentKey, model };
   }

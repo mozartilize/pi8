@@ -834,6 +834,28 @@ describe('provider orchestration', () => {
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
 
+  it.each([false, true])('sets incumbent minimums only from a model the router still serves (ended=%s)', async (ended) => {
+    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+      version: 2, syncedAt: Date.now(), aliases: {},
+      models: [
+        { registryId: 'alpha/first', benchSlug: 'a', active: true, effort: 'high', source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90 }, costPerTask: 5, timePerTaskSeconds: 5 },
+        { registryId: 'beta/second', benchSlug: 'b', active: true, effort: 'high', source: 'test', quality: { intelligence: 50, coding: 50, agenticCoding: 50 }, costPerTask: 1, timePerTaskSeconds: 1 },
+      ],
+    }));
+    harness = await setupProviderTest({ dir: temp.path, models: REGISTRY_MODELS, pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI });
+    // The router served the strong model, then Pi selected a concrete model
+    // (ended) or kept router/auto.
+    harness.session.setLastServed({ registryId: 'alpha/first', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
+    harness.session.context.clearIncumbent();
+    if (ended) harness.session.endServing();
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve({ messages: [{ role: 'user', content: 'what does the cache module do' }] } as unknown as Context);
+    const decision = harness.getProviderState().lastDecision!;
+    expect(decision.dimension).toBe('gather');
+    expect(decision.chosen).toBe(ended ? 'beta/second:high' : 'alpha/first:high');
+    expect(decision.incumbentEffort).toEqual(ended ? undefined : { model: 'alpha/first', effort: 'high' });
+  });
+
   it('sends the effort it scored, call after call, without a user thinking level', async () => {
     const row = (effort: string, intelligence: number, costPerTask: number) => ({
       registryId: 'alpha/first', benchSlug: `first-${effort}`, active: true, effort, source: 'test',

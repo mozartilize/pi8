@@ -949,6 +949,25 @@ describe('work ledger lifecycle', () => {
     expect(defaultRouterSession.context.getLedger().items.get('w_1')?.status).toBe('active');
   });
 
+  it('ends the served model when Pi selects a concrete model, so it sets no minimum after router/auto returns', async () => {
+    const tree = new SessionTree();
+    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
+    const { handlers, pi } = makePi(tree);
+    await autoModelRouterExtension(pi);
+    await handlers.get('session_start')!({ reason: 'new' }, ctxFor(tree));
+    defaultRouterSession.setLastDecision(routingDecision(['alpha/strong:high']));
+    defaultRouterSession.setLastServed({ registryId: 'alpha/strong', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
+
+    tree.modelChange('openai', 'gpt-5');
+    await handlers.get('model_select')!({ model: { provider: 'openai', id: 'gpt-5' } }, ctxFor(tree));
+    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
+    await handlers.get('model_select')!({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctxFor(tree));
+    defaultRouterSession.rotateServedForNewTurn();
+
+    expect(defaultRouterSession.getPreviousServed()).toBeUndefined();
+    expect(defaultRouterSession.getLastChosenRegistryId()).toBeUndefined();
+  });
+
   it('keeps the ledger across compaction', async () => {
     const tree = new SessionTree();
     const u = tree.user('first');
