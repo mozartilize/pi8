@@ -27,6 +27,7 @@ import {
 } from '../score/scorer.js';
 import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 import type { EntryResolution } from '../context/types.js';
+import type { PolicyVersion } from './policy-version.js';
 
 // ─── Public interfaces ───────────────────────────────────────────────
 
@@ -128,6 +129,7 @@ function applyTrajectoryRepick(
   trajectory: PendingTrajectoryEscalation | undefined,
   baseOpts: ScoreOpts,
   compareOpts: { userReasoning?: ThinkingLevel; userReasoningOverride?: boolean },
+  version: PolicyVersion,
 ): { decision: RoutingDecision; cause: DecisionCause; applied: boolean } {
   if (!trajectory) return { decision, cause, applied: false };
   const friction = {
@@ -144,7 +146,7 @@ function applyTrajectoryRepick(
   // pick all live in `escalationChain` so this and the pre-output hop can never
   // disagree on the target. No stronger reachable → keep the routed decision
   // and mark the friction unavailable (the provider gate owns what to do next).
-  const picked = escalationChain(candidates, dimension, trajectory.fromModel, baseOpts, compareOpts);
+  const picked = escalationChain(candidates, dimension, trajectory.fromModel, baseOpts, compareOpts, version);
   if (!picked) {
     decision.trajectoryFriction = { ...friction, unavailable: true };
     return { decision, cause, applied: false };
@@ -363,7 +365,23 @@ function annotateDecision(
  * one provider invocation. Pure: reads only its inputs and returns a fresh
  * RoutingDecision; never reads or writes module-level state.
  */
-export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicyResult {
+export function resolveRoutingDecisionLegacy(input: RoutingPolicyInput): RoutingPolicyResult {
+  return resolveWithPolicy(input, 'legacy');
+}
+
+/** The policy that production runs. */
+export const resolveRoutingDecision = resolveRoutingDecisionLegacy;
+
+/** The candidate policy. Only an evaluation process reaches it, through `evaluationPolicyVersion`. */
+export function resolveRoutingDecisionCheapestSufficient(input: RoutingPolicyInput): RoutingPolicyResult {
+  return resolveWithPolicy(input, 'cheapest-sufficient');
+}
+
+export function resolveRoutingDecisionForEvaluation(input: RoutingPolicyInput, version: PolicyVersion): RoutingPolicyResult {
+  return version === 'cheapest-sufficient' ? resolveRoutingDecisionCheapestSufficient(input) : resolveRoutingDecisionLegacy(input);
+}
+
+function resolveWithPolicy(input: RoutingPolicyInput, version: PolicyVersion): RoutingPolicyResult {
   const {
     candidates,
     baseDimension,
@@ -432,6 +450,7 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     trajectoryEscalation,
     baseOpts,
     { userReasoning, userReasoningOverride },
+    version,
   );
   decision = trajectory.decision;
   cause = trajectory.cause;
@@ -460,5 +479,6 @@ export function resolveRoutingDecision(input: RoutingPolicyInput): RoutingPolicy
     incumbentRegistryId,
   );
 
+  if (version !== 'legacy') decision.policyVersion = version;
   return { decision, candidates: pool, trajectoryApplied: trajectory.applied };
 }

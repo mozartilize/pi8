@@ -20,6 +20,7 @@ import type {
 } from '../../types.js';
 import { DEFAULT_DIMENSION_WEIGHTS, DEFAULT_SWITCH_MARGIN } from '../../constants.js';
 import { renderScoredReason, type ScoredReason } from './decision-reason.js';
+import type { PolicyVersion } from '../policy/policy-version.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
@@ -696,6 +697,7 @@ export function escalationChain(
   fromModel: string,
   opts: ScoreOpts,
   compareOpts: StrongerCompareOpts,
+  version: PolicyVersion = 'legacy',
 ): RoutingDecision | undefined {
   // `candidates` is the target pool (the pre-output hop passes only the
   // reachable, unattempted tail, which excludes the struggling source). The
@@ -711,6 +713,12 @@ export function escalationChain(
     isStrictlyStrongerCandidate(candidate, fromModel, dimension, source, strongerOpts),
   );
   if (stronger.length === 0) return undefined;
+  // `cheapest-sufficient` ranks every proven-stronger candidate by price. The cheapest one leads and the
+  // others follow in price order, so no named band limits the head pick.
+  if (version === 'cheapest-sufficient') {
+    const all = pickEscalation(stronger, dimension, fromModel, opts, ESCALATION_WEIGHTS);
+    return all && all.chosen !== '' ? all : undefined;
+  }
   const next = nextBandCandidates(stronger, source, dimension);
   const picked = pickEscalation(next, dimension, fromModel, opts, ESCALATION_WEIGHTS);
   if (!picked || picked.chosen === '') return undefined;

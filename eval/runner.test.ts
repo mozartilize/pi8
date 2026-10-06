@@ -27,6 +27,16 @@ describe('pi command line', () => {
     expect(piInvocation({ task, arm: auto }, '/repo').args).toEqual(['-ne', '--session-dir', '/out/sessions', '-e', '/repo', '--model', 'router/auto', '-p', 'Write made.txt']);
     expect(piInvocation({ task, arm: fixed }, '/repo').args).not.toContain('-e');
     expect(piInvocation({ task, arm: fixed }, '/repo').args).toContain('deepseek/deepseek-flash');
+    expect(piInvocation({ task, arm: auto }, '/repo').env).toBeUndefined();
+  });
+
+  it('names the candidate policy in the environment of the cheapest-sufficient selector arm, and rejects another selector', () => {
+    const candidate: EvaluationArm = { id: 'c', policy: { kind: 'shadow-selector', selectorVersion: 'cheapest-sufficient' }, continuation: 'normal-policy' };
+    const invocation = piInvocation({ task, arm: candidate }, '/repo');
+    expect(invocation.args).toEqual(['-ne', '--session-dir', '/out/sessions', '-e', '/repo', '--model', 'router/auto', '-p', 'Write made.txt']);
+    expect(invocation.env).toEqual({ PI8_POLICY_VERSION: 'cheapest-sufficient' });
+    const other: EvaluationArm = { id: 'o', policy: { kind: 'shadow-selector', selectorVersion: 'other-selector' }, continuation: 'normal-policy' };
+    expect(() => piInvocation({ task, arm: other }, '/repo')).toThrow(/does not run/);
   });
 });
 

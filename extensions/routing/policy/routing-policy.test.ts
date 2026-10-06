@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveRoutingDecision,
+  resolveRoutingDecisionForEvaluation,
   POLICY_PASSIVE_CAUSES,
   scoredIncumbentKey,
   type RoutingPolicyInput,
@@ -10,6 +11,7 @@ import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 import { DEFAULT_DIMENSION_WEIGHTS } from '../../constants.js';
 import { renderScoredReason } from '../score/decision-reason.js';
 import { candidate, benchRow } from '../../test-support/router-fixtures.js';
+import { evaluationPolicyVersion } from './policy-version.js';
 
 // ─── Fixtures ───────────────────────────────────────────────────────
 
@@ -921,5 +923,40 @@ describe('incumbent capability floor', () => {
     expect(result.decision.fallbackChain).not.toContain('bench/strong');
     expect(result.decision.chosen).toBe('bench/cheap');
     expect(result.decision.reason).not.toContain('incumbent-floor');
+  });
+});
+
+describe('policy version', () => {
+  it('runs the legacy policy unless the evaluation variable names the candidate policy exactly', () => {
+    expect(evaluationPolicyVersion({})).toBe('legacy');
+    expect(evaluationPolicyVersion({ PI8_POLICY_VERSION: 'cheapest-sufficient' })).toBe('cheapest-sufficient');
+    for (const value of ['', 'Cheapest-Sufficient', 'cheapest', 'legacy', '1']) {
+      expect(evaluationPolicyVersion({ PI8_POLICY_VERSION: value })).toBe('legacy');
+    }
+  });
+
+  it('marks a decision only when the candidate policy made it, and the production binding is the legacy policy', () => {
+    const input = makePolicyInput({ candidates: benchmarkCandidates });
+    const legacy = resolveRoutingDecisionForEvaluation(input, 'legacy').decision;
+    expect(legacy.policyVersion).toBeUndefined();
+    expect(resolveRoutingDecision(input).decision).toEqual(legacy);
+    expect(resolveRoutingDecisionForEvaluation(input, 'cheapest-sufficient').decision.policyVersion).toBe('cheapest-sufficient');
+  });
+
+  it('chooses the trajectory target by price among all stronger candidates under the candidate policy only', () => {
+    const at = (id: string, level: number, price: number) => candidate(id, {
+      bench: benchRow(id, { quality: { intelligence: 50, coding: 70, agenticCoding: level } }),
+      cost: { input: price, output: price * 4, cacheRead: 0, cacheWrite: 0 },
+    });
+    const pool = [at('test/source', 40, 1), at('test/mid', 45, 0.5), at('test/frontier', 50, 3)];
+    const input = makePolicyInput({
+      baseDimension: 'implement', candidates: pool,
+      trajectoryEscalation: {
+        fromModel: 'test/source', dimension: 'implement', tfi: 1, preOutput: false,
+        signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['a:o'], evidenceCount: 1 }],
+      },
+    });
+    expect(resolveRoutingDecisionForEvaluation(input, 'legacy').decision.chosen).toBe('test/frontier');
+    expect(resolveRoutingDecisionForEvaluation(input, 'cheapest-sufficient').decision.chosen).toBe('test/mid');
   });
 });

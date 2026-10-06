@@ -29,6 +29,7 @@ import {
 import { renderRouterStatus, notifyRouting, servedKey, type ServedInfo } from '../host/ui.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { appendDecision } from '../host/decisionlog.js';
+import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import {
   isStrictlyStrongerCandidate,
@@ -1262,6 +1263,7 @@ export async function runDelegationLoop(
       attempt.effectiveSource,
       escOpts,
       compareOpts(),
+      evaluationPolicyVersion(),
     );
     if (esc) {
       capabilityHop = {
@@ -1383,6 +1385,7 @@ export async function runDelegationLoop(
         effectiveSource,
         escOpts,
         compareOpts(),
+        evaluationPolicyVersion(),
       ) !== undefined;
     const prepared: PreparedCandidate = {
       candidateId,

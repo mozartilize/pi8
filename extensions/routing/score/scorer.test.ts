@@ -1808,6 +1808,34 @@ describe('escalation target', () => {
     expect(decision.fallbackChain).toEqual(['p/strong', 'p/strong-pricy', 'p/frontier']);
   });
 
+  describe('cheapest-sufficient ranks every strictly stronger candidate by price', () => {
+    const none = { estimatedContextTokens: 0 };
+
+    it('leads with the cheapest stronger candidate, and keeps the others behind it in price order', () => {
+      const pool = [at('p/source', 40, 1), at('p/mid', 45, 0.5), at('p/frontier-cheap', 50, 3), at('p/frontier-best', 56, 10)];
+      const decision = escalationChain(pool, 'implement', 'p/source', none, {}, 'cheapest-sufficient')!;
+      expect(decision.chosen).toBe('p/mid');
+      expect(decision.fallbackChain).toEqual(['p/mid', 'p/frontier-cheap', 'p/frontier-best']);
+    });
+
+    it.each(['legacy', 'cheapest-sufficient'] as const)('never returns the source or an equal or weaker candidate: %s', (version) => {
+      const pool = [at('p/source', 40, 1), at('p/equal', 40, 0.1), at('p/weaker', 35, 0.1), at('p/better', 45, 2)];
+      const decision = escalationChain(pool, 'implement', 'p/source', none, {}, version)!;
+      expect(decision.chosen).toBe('p/better');
+      expect(decision.fallbackChain).toEqual(['p/better']);
+    });
+
+    it.each(['legacy', 'cheapest-sufficient'] as const)('has no target when nothing is strictly stronger: %s', (version) => {
+      const pool = [at('p/source', 56, 1), at('p/weaker', 45, 0.1)];
+      expect(escalationChain(pool, 'implement', 'p/source', none, {}, version)).toBeUndefined();
+    });
+
+    it.each(['legacy', 'cheapest-sufficient'] as const)('does not treat a candidate with an estimated quality as stronger: %s', (version) => {
+      const estimated = candidate('p/estimated', { bench: benchRow('p/estimated', { quality: { intelligence: 50, coding: 70, agenticCoding: 56 }, qualityEstimated: true }) });
+      expect(escalationChain([at('p/source', 40, 1), estimated], 'implement', 'p/source', none, {}, version)).toBeUndefined();
+    });
+  });
+
   it('takes the cheapest stronger candidate in the source band when no band above has one', () => {
     const pool = [at('p/source', 40, 1), at('p/mid-pricy', 47, 2), at('p/mid', 45, 0.5)];
     expect(escalationChain(pool, 'implement', 'p/source', { estimatedContextTokens: 0 }, {})!.chosen).toBe('p/mid');

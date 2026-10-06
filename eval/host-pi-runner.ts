@@ -48,7 +48,7 @@ export interface HostPiAgentRunnerOptions {
  * The environment of the `pi` process. It has no host variable except `PATH`. The home directory is
  * a clean one, so the VM image store is named by a variable: a custom image is not in a clean home.
  */
-export function hostPiEnvironment(options: { homeDir: string; pi8Dir: string; statusFile: string; guestConfig: VmGuestConfig }): Record<string, string> {
+export function hostPiEnvironment(options: { homeDir: string; pi8Dir: string; statusFile: string; guestConfig: VmGuestConfig; extra?: Record<string, string> }): Record<string, string> {
   return {
     PATH: process.env.PATH ?? '/usr/bin:/bin',
     HOME: options.homeDir,
@@ -66,6 +66,7 @@ export function hostPiEnvironment(options: { homeDir: string; pi8Dir: string; st
     GIT_CONFIG_VALUE_0: 'false',
     GIT_CONFIG_KEY_1: 'core.hooksPath',
     GIT_CONFIG_VALUE_1: '/dev/null',
+    ...options.extra,
   };
 }
 
@@ -94,7 +95,7 @@ export class HostPiAgentRunner implements AgentRunner {
       cpSync(this.options.authFile, target);
       chmodSync(target, 0o600);
     }
-    const { args } = (this.options.invocation ?? ((value, dir) => piInvocation(value, this.options.repoRoot, dir)))(input, sessions);
+    const { args, env: invocationEnv } = (this.options.invocation ?? ((value, dir) => piInvocation(value, this.options.repoRoot, dir)))(input, sessions);
     const extensions = [VM_TOOLS, ...(this.options.extraExtensions ?? [])].flatMap((path) => ['-e', path]);
     const statusFile = join(sandbox.outDir, 'vm-status.txt');
     const command = this.options.piCommand ?? 'pi';
@@ -102,7 +103,7 @@ export class HostPiAgentRunner implements AgentRunner {
     const startedAt = Date.now();
     const spawnOptions = {
       cwd: sandbox.workDir,
-      env: hostPiEnvironment({ homeDir: sandbox.homeDir, pi8Dir: pi8, statusFile, guestConfig: this.options.vm.guestConfig }),
+      env: hostPiEnvironment({ homeDir: sandbox.homeDir, pi8Dir: pi8, statusFile, guestConfig: this.options.vm.guestConfig, ...(invocationEnv ? { extra: invocationEnv } : {}) }),
     };
     let result = await spawnPi(command, [...extensions, ...args], { ...spawnOptions, timeoutMs: totalMs });
     const followUp = this.options.followUp?.(input);

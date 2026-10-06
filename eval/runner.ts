@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { POLICY_VERSION_ENV } from '../extensions/routing/policy/policy-version.ts';
 import { copyTreeSafely, digestDirectory } from './fs-util.ts';
 import { policyDigest } from './recipe.ts';
 import { readRawUsage, type PriceSnapshotSource } from './spend.ts';
@@ -67,23 +68,33 @@ export function evaluationProfile(options: EvaluationProfileOptions): SandboxPro
 export interface PiInvocation {
   command: string;
   args: string[];
+  /** Environment variables for the `pi` process, in addition to the ones that the runner sets. */
+  env?: Record<string, string>;
 }
 
-/** The `pi` command line for one arm. The router arm loads the extension. A fixed candidate does not. */
+/**
+ * The `pi` command line for one arm. A router arm loads the extension. The `cheapest-sufficient` selector
+ * arm also names the candidate policy in the environment. A fixed candidate does not load the extension.
+ */
 export function piInvocation(input: Pick<AgentRunInput, 'task' | 'arm'>, repoRoot: string, sessionDir = `${SANDBOX_OUT}/sessions`): PiInvocation {
   const { policy } = input.arm;
   const base = ['-ne', '--session-dir', sessionDir];
   let model: string;
   const extensions: string[] = [];
+  let env: Record<string, string> | undefined;
   if (policy.kind === 'current-auto') {
     model = 'router/auto';
     extensions.push('-e', repoRoot);
+  } else if (policy.kind === 'shadow-selector' && policy.selectorVersion === 'cheapest-sufficient') {
+    model = 'router/auto';
+    extensions.push('-e', repoRoot);
+    env = { [POLICY_VERSION_ENV]: policy.selectorVersion };
   } else if (policy.kind === 'fixed-candidate') {
     model = policy.candidateKey;
   } else {
     throw new Error(`the whole-task runner does not run the ${policy.kind} policy`);
   }
-  return { command: 'pi', args: [...base, ...extensions, '--model', model, '-p', input.task.userRequest] };
+  return { command: 'pi', args: [...base, ...extensions, '--model', model, '-p', input.task.userRequest], ...(env ? { env } : {}) };
 }
 
 export interface PiAgentRunnerOptions {
@@ -111,12 +122,12 @@ export class PiAgentRunner implements AgentRunner {
     mkdirSync(pi8, { recursive: true });
     if (this.options.pi8Template) cpSync(this.options.pi8Template, pi8, { recursive: true });
     mkdirSync(join(sandbox.outDir, 'sessions'), { recursive: true });
-    const { command, args } = (this.options.invocation ?? ((value) => piInvocation(value, this.options.repoRoot)))(input);
+    const { command, args, env } = (this.options.invocation ?? ((value) => piInvocation(value, this.options.repoRoot)))(input);
     const result = await sandbox.run({
       command,
       args,
       timeoutMs: input.task.budget.wallTimeMs,
-      env: { PI8_DIR: `${SANDBOX_OUT}/pi8`, HOME: SANDBOX_HOME },
+      env: { PI8_DIR: `${SANDBOX_OUT}/pi8`, HOME: SANDBOX_HOME, ...env },
     });
     return agentOutput(result, readSessionFacts(join(sandbox.outDir, 'sessions')));
   }

@@ -70,7 +70,8 @@ import {
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop, type DelegationOptions } from './delegation.js';
 import { makeTerminalErrorEvent } from './error-event.js';
-import { resolveRoutingDecision, scoredIncumbentKey } from '../routing/policy/routing-policy.js';
+import { resolveRoutingDecisionForEvaluation, scoredIncumbentKey } from '../routing/policy/routing-policy.js';
+import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import {
   penaltiesOf,
   nextProviderInvocation,
@@ -656,7 +657,7 @@ interface ResolvedTurn {
 }
 
 interface ScoredTurn {
-  decision: ReturnType<typeof resolveRoutingDecision>['decision'];
+  decision: ReturnType<typeof resolveRoutingDecisionForEvaluation>['decision'];
   routableCandidates: Candidate[];
   requestedReasoning: string | undefined;
   /** A broken contract this invocation hands back; consumed only once it serves. */
@@ -966,7 +967,7 @@ function scoreRouterTurn(args: {
       warm.set(key, Math.max(warm.get(key) ?? 0, tokens));
     }
   }
-  const policy = resolveRoutingDecision({
+  const policy = resolveRoutingDecisionForEvaluation({
     candidates: execution?.pool ?? routableCandidates,
     baseDimension: routedDimension,
     baseCause: routedCause,
@@ -991,7 +992,7 @@ function scoreRouterTurn(args: {
         : resolved.context.resolution.relation,
     } : {}),
     config,
-  });
+  }, evaluationPolicyVersion());
   const decision = policy.decision;
   // The scored pool can hold an incumbent row at its served effort that the
   // routable pool does not; later lookups by chain key need it.

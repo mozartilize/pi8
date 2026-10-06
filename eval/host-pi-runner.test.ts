@@ -33,6 +33,12 @@ describe('host Pi environment', () => {
     expect(JSON.stringify(env)).not.toContain('host-env-secret');
     expect(Object.keys(env)).not.toContain('PI8_TEST_HOST_SECRET');
   });
+
+  it('adds only the variables that the arm names', () => {
+    const base = { homeDir: '/h', pi8Dir: '/p', statusFile: '/s', guestConfig: { image: 'x', network: 'none' as const } };
+    expect(hostPiEnvironment(base).PI8_POLICY_VERSION).toBeUndefined();
+    expect(hostPiEnvironment({ ...base, extra: { PI8_POLICY_VERSION: 'cheapest-sufficient' } }).PI8_POLICY_VERSION).toBe('cheapest-sufficient');
+  });
 });
 
 describe.skipIf(!available)('host Pi run with tools in a VM', () => {

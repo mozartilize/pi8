@@ -99,6 +99,8 @@ export interface DecisionLogEntry {
   baselineCost?: number;
   /** True when an attempt ended without observed usage; routed spend is a lower bound. */
   spendIncomplete?: boolean;
+  /** Set only when an evaluation process runs the candidate policy. */
+  policyVersion?: string;
   /** Objective trajectory-friction evidence when it influenced the pick. */
   trajectoryFriction?: RoutingDecision['trajectoryFriction'];
   /** Set on `kind: 'attempt-usage'` records only. */
@@ -421,6 +423,7 @@ export function appendDecision(
       spendIncomplete: decision.spend?.incomplete,
         intentKey: decision.intentKey,
         provenance: decision.provenanceCounts,
+      ...(decision.policyVersion ? { policyVersion: decision.policyVersion } : {}),
       trajectoryFriction: decision.trajectoryFriction,
       contextPressure: decision.contextPressure,
       candidateDiagnostics: decision.candidateDiagnostics,

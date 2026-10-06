@@ -9,7 +9,7 @@ import { nodeTestGraderRuntimeDigest, nodeTestOracle } from './oracle.ts';
 
 const available = vmSandboxAvailable();
 
-describe.skipIf(!available)('VM sandbox read boundary', () => {
+describe.skipIf(!available)('VM sandbox read boundary', { timeout: 60_000 }, () => {
   let host: string;
   let publicDir: string;
   let sandbox: SecureSandbox;

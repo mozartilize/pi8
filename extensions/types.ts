@@ -362,6 +362,8 @@ export interface AttemptUsageEvent {
 
 export interface RoutingDecision {
   dimension: Dimension;
+  /** Set only when an evaluation process runs the candidate policy. */
+  policyVersion?: import('./routing/policy/policy-version.js').PolicyVersion;
   /**
    * The incumbent's minimum thinking level: the model (`provider/id`) that
    * served the task and the effort it served at. Chain entries of that model
