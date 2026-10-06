@@ -38,7 +38,8 @@ import {
   reasoningMinimum,
   reasoningRequirement,
 } from '../routing/policy/execution-difficulty.js';
-import { bandRequirement, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { terminalMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import { observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
@@ -348,7 +349,8 @@ export function submitContextHandoff(
     return reject(session, 'use-reopen-work', state, served);
   }
   if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
-  const terminal = withStrongerTerminal(state, { kind: deliverable, complexity, scope });
+  const policyVersion = evaluationPolicyVersion();
+  const terminal = withStrongerTerminal(state, { kind: deliverable, complexity, scope }, policyVersion);
 
   let reasoning;
   if (deliverable === 'plan' || deliverable === 'review') {
@@ -357,7 +359,7 @@ export function submitContextHandoff(
     // Without a rubric the default minimums of the task type apply.
     const requirement = rubric ? reasoningRequirement(rubric, evidence) : undefined;
     // The final step's band only raises the rubric's minimum; see withStrongerTerminal.
-    const raised = bandRequirement(terminal.terminalBand);
+    const raised = terminalMinimum(terminal, deliverable, policyVersion);
     const minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : raised;
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence };
   }
@@ -396,7 +398,7 @@ export function submitContextHandoff(
   // The shadow requirement is logged next to the one routing uses; it does not route.
   const changeFacts = {
     ...(declared ? { declared } : {}),
-    log: factsLog(deliverable, declared, facts.change ?? {}, reasoning?.minimum ?? defaultRequirement(deliverable)),
+    log: factsLog(deliverable, declared, facts.change ?? {}, reasoning?.minimum ?? defaultRequirement(deliverable), policyVersion),
   };
   const next = acceptContextHandoff(materialized, { deliverable, key, ...(reasoning ? { reasoning } : {}) });
   session.commitWorkPhaseState({ ...next, changeFacts, priorCompletion: undefined, completion: undefined });

@@ -5,7 +5,8 @@ import type { ContextStatus } from './context-acquisition.js';
 import type { ChangeFactsState, CheckVerdicts } from './change-facts.js';
 import type { GroundedArtifact } from '../context/types.js';
 import type { PendingIdentity } from '../../serve/context-resolution.js';
-import { MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
+import { defaultRequirement, MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
+import type { PolicyVersion } from './policy-version.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
 const COMPLEXITY = { trivial: 0, routine: 0.25, moderate: 0.5, hard: 0.75, frontier: 1 } as const;
@@ -26,7 +27,10 @@ export interface WorkPhaseState {
   deliverable?: Dimension;
   /** The handoff's task shape; absent until a handoff declares it. */
   terminal?: TerminalAssessment;
+  /** The legacy policy keeps the final step as a band. */
   terminalBand?: CapabilityBand;
+  /** The candidate policy keeps the final step as its requirement. It never has a band. */
+  terminalRequirement?: number;
   providerInvocation: number;
   /** Mutation calls observed in this entry; drives the `editing` status only. */
   observedMutationTools: number;
@@ -123,12 +127,39 @@ export function bandRequirement(band: CapabilityBand | undefined): number | unde
   return band == null ? undefined : BAND_REQUIREMENT[band];
 }
 
+/** A `gather` entry whose final step has at least this requirement gets the handoff reminder on its first tool result. */
+export const GATHER_REMINDER_REQUIREMENT = 0.50;
+
 /** `state` with `terminal` as its final step when that one asks for more. */
-export function withStrongerTerminal(state: WorkPhaseState, terminal: TerminalAssessment): WorkPhaseState {
+export function withStrongerTerminal(
+  state: WorkPhaseState,
+  terminal: TerminalAssessment,
+  version: PolicyVersion = 'legacy',
+): WorkPhaseState {
   const requirement = terminalRequirement(terminal);
-  return !state.terminal || requirement > terminalRequirement(state.terminal)
-    ? { ...state, terminal, terminalBand: capabilityBandFor(requirement) }
-    : state;
+  if (state.terminal && requirement <= terminalRequirement(state.terminal)) return state;
+  return version === 'cheapest-sufficient'
+    ? { ...state, terminal, terminalRequirement: requirement }
+    : { ...state, terminal, terminalBand: capabilityBandFor(requirement) };
+}
+
+/**
+ * What the final step adds to the minimum of a plan or review handoff, or undefined when it adds
+ * nothing. The final step can only raise a minimum. Under the candidate policy the step's own
+ * requirement counts, and only when it is above the default requirement of the task type: a
+ * requirement below the default must not lower the default minimums.
+ */
+export function terminalMinimum(state: WorkPhaseState, target: Dimension, version: PolicyVersion = 'legacy'): number | undefined {
+  if (version !== 'cheapest-sufficient') return bandRequirement(state.terminalBand);
+  const requirement = state.terminalRequirement;
+  return requirement != null && requirement > defaultRequirement(target) ? requirement : undefined;
+}
+
+/** True when the final step is strong enough to remind a `gather` entry of the handoff at once. */
+export function strongFinalStep(state: WorkPhaseState, version: PolicyVersion = 'legacy'): boolean {
+  return version === 'cheapest-sufficient'
+    ? (state.terminalRequirement ?? -Infinity) >= GATHER_REMINDER_REQUIREMENT
+    : state.terminalBand === 'strong' || state.terminalBand === 'frontier';
 }
 
 /**
@@ -144,6 +175,7 @@ export function carryAcrossBranch(state: WorkPhaseState, deliverable: Dimension 
     ...(deliverable ? { deliverable } : {}),
     terminal: state.terminal,
     terminalBand: state.terminalBand,
+    terminalRequirement: state.terminalRequirement,
     providerInvocation: state.providerInvocation,
     observedMutationTools: 0,
   };

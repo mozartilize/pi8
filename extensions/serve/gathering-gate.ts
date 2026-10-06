@@ -23,7 +23,8 @@ import {
   owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { isMutationCall } from '../routing/policy/mutation-detector.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import { strongFinalStep, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import type { ContextReason } from '../routing/context/types.js';
 import type { RouterSession } from './router-session-state.js';
 import { insideCwd } from './context-grounding.js';
@@ -191,8 +192,7 @@ export function remindContextHandoff(
     if (!state || state.contextReminded || state.reasoningHandoff) return undefined;
     const acquiring = state.contextStatus === 'acquiring';
     if (!acquiring && (state.contextStatus != null || session.getLastDecision()?.dimension !== 'gather')) return undefined;
-    const strongFinalStep = state.terminalBand === 'strong' || state.terminalBand === 'frontier';
-    const anyResult = acquiring || strongFinalStep;
+    const anyResult = acquiring || strongFinalStep(state, evaluationPolicyVersion());
     if (!anyResult && event.toolName !== 'edit' && event.toolName !== 'write') return undefined;
     session.commitWorkPhaseState({ ...state, contextReminded: true });
     const lastServed = session.getLastServed();

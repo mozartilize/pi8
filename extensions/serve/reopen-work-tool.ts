@@ -23,7 +23,8 @@ import type { EntryResolution, GroundedArtifact, WorkItem } from '../routing/con
 import { CONVERSATION_EVIDENCE, acceptContextHandoff } from '../routing/policy/context-acquisition.js';
 import { parseReasoningRubric, reasoningMinimum, reasoningRequirement } from '../routing/policy/execution-difficulty.js';
 import { REOPEN_WORK_TOOL, completedIncumbent } from '../routing/policy/work-completion.js';
-import { bandRequirement, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { terminalMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import type { PendingIdentity } from './context-resolution.js';
 import { closeContractEntry } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -261,7 +262,7 @@ export function submitReopenWork(
   if (!recorded) return reject(state, served, 'not-recorded');
 
   const continued = withContinuedPenalties(
-    withStrongerTerminal(state, { kind: deliverable, complexity, scope }),
+    withStrongerTerminal(state, { kind: deliverable, complexity, scope }, evaluationPolicyVersion()),
     item.id,
     'reopen',
   );
@@ -272,7 +273,7 @@ export function submitReopenWork(
     const rubric = parseReasoningRubric(params?.difficulty);
     // Without a rubric the default minimums of the task type apply.
     const requirement = rubric ? reasoningRequirement(rubric, CONVERSATION_EVIDENCE) : undefined;
-    const raised = bandRequirement(continued.terminalBand);
+    const raised = terminalMinimum(continued, deliverable, evaluationPolicyVersion());
     minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : raised;
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence: CONVERSATION_EVIDENCE };
   }

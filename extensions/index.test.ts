@@ -1404,6 +1404,33 @@ describe('mutation observation hooks', () => {
     expect(await minimum(strong, { complexity: 'trivial', scope: 'bounded' })).toBeCloseTo(0.7);
   });
 
+  it('under the candidate policy, raises a planning minimum by the requirement of the final step and keeps the default minimums without a rubric', async () => {
+    vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient');
+    try {
+      const registerTool = vi.fn();
+      await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+      const easy = { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 };
+      const minimumFor = async (request: Record<string, unknown>) => {
+        investigating({ terminal: undefined, terminalBand: undefined });
+        const body = { outcome: 'ready', deliverable: 'plan', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', ...request };
+        const result = await handoffTool(registerTool).execute('p', body, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
+        expect(result.details.accepted).toBe(true);
+        return defaultRouterSession.getWorkPhaseState()!;
+      };
+      // A trivial plan without a rubric asks for nothing beyond the default minimums.
+      expect((await minimumFor({ difficulty: undefined })).reasoningHandoff?.minimum).toBeUndefined();
+      // A hard open-ended plan raises the minimum by its own requirement, with no band.
+      const hard = await minimumFor({ difficulty: undefined, complexity: 'hard', scope: 'open-ended' });
+      expect(hard.reasoningHandoff?.minimum).toBeCloseTo(0.825);
+      expect(hard.terminalBand).toBeUndefined();
+      expect(hard.terminalRequirement).toBeCloseTo(0.825);
+      // The rubric sets the minimum for an easy plan. No band raises it to 0.45.
+      expect((await minimumFor({ difficulty: easy })).reasoningHandoff?.minimum).toBeCloseTo(0.40);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(['complexity', 'scope'])(
     'rejects a ready handoff without %s', async (missing) => {
       const registerTool = vi.fn();

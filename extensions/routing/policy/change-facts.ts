@@ -18,6 +18,7 @@
  */
 import type { CapabilityBand, Dimension } from '../../types.js';
 import { bandForRequirement, defaultRequirement, FRONTIER_REQUIREMENT } from '../score/scorer.js';
+import type { PolicyVersion } from './policy-version.js';
 
 /** Yes/no questions the handing-off model answers; `FACT_STATEMENTS` words each one. */
 export const FACT_QUESTIONS = [
@@ -169,7 +170,8 @@ export interface FactCodes {
 /** The facts requirement of one handoff, with the requirement routing used. */
 export interface ShadowRequirement {
   requirement: number;
-  band: CapabilityBand;
+  /** Absent under the candidate policy, which names no band. */
+  band?: CapabilityBand;
   /** Requirement routing used for the same step: the handoff minimum, or the task type's default. */
   used: number;
 }
@@ -359,11 +361,16 @@ export function factsLog(
   facts: DeclaredFacts | undefined,
   measured: ChangeMeasurements,
   used?: number,
+  version: PolicyVersion = 'legacy',
 ): FactsLog {
   const requirement = factsRequirement(dimension, facts, measured);
   return {
     declared: factCodes(facts),
     measured,
-    shadow: { requirement, band: bandForRequirement(requirement), used: used ?? defaultRequirement(dimension) },
+    shadow: {
+      requirement,
+      ...(version === 'legacy' ? { band: bandForRequirement(requirement) } : {}),
+      used: used ?? defaultRequirement(dimension),
+    },
   };
 }

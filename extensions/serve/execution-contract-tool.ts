@@ -519,7 +519,7 @@ export function submitExecutionContract(
   const declared = { ...parseDeclaredFacts(params?.facts), ...stepFacts(steps ?? []) };
   const valued = accepted.contract
     ? { ...accepted, contract: { ...accepted.contract,
-      facts: factsLog('implement', declared, change, accepted.contract.minimum ?? accepted.contract.requirement) } }
+      facts: factsLog('implement', declared, change, accepted.contract.minimum ?? accepted.contract.requirement, evaluationPolicyVersion()) } }
     : accepted;
   // The context handoff this plan came from records that it led to one.
   const next = valued.reasoningHandoff && !valued.reasoningHandoff.contractAccepted
