@@ -31,7 +31,7 @@
     ]
   },
   "scripts": {
-    "tsc": "tsc --noEmit",
+    "tsc": "tsc --noEmit && tsc --noEmit -p tsconfig.eval.json",
     "build": "tsc",
     "prepublishOnly": "npm run tsc",
     "test": "vitest run",
