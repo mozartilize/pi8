@@ -33,6 +33,7 @@ import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter, loadConfig
 import { loadConfig } from '../config.js';
 
 import {
+  appendAttemptUsage,
   appendDecision,
   appendExecutionContractSignal,
   appendContextHandoffSignal,
@@ -1221,6 +1222,7 @@ async function delegateRouterTurn(args: {
     ...(acquiring ? {
       onRequest: () => countAcquisitionRequest(session, intentKey),
     } : {}),
+    onAttemptUsage: (event) => appendAttemptUsage(event, intentKey),
     candidates: routableCandidates,
     reasoning: explicitThinking ?? resolvedReasoning,
     userReasoningOverride: explicitThinking != null || (!inheritedReasoning && requestedReasoning != null),

@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import type {
+  AttemptUsageEvent,
   ContractOutcome,
   ExecutionContractMeta,
   CandidateDiagnostic,
@@ -63,7 +64,7 @@ export interface DecisionLogEntry {
   /** {@link DECISION_LOG_SCHEMA_VERSION} at write time; absent on unversioned records. */
   schemaVersion?: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'subagent-spend' | 'execution-contract' | 'investigation-handoff' | 'work-lifecycle';
+  kind?: 'decision' | 'subagent-spend' | 'attempt-usage' | 'execution-contract' | 'investigation-handoff' | 'work-lifecycle';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -100,6 +101,8 @@ export interface DecisionLogEntry {
   spendIncomplete?: boolean;
   /** Objective trajectory-friction evidence when it influenced the pick. */
   trajectoryFriction?: RoutingDecision['trajectoryFriction'];
+  /** Set on `kind: 'attempt-usage'` records only. */
+  attemptUsage?: AttemptUsageEvent;
   /** Set on `kind: 'subagent-spend'` records only. */
   subagentSpend?: {
     role?: string;
@@ -471,6 +474,35 @@ export function appendSubagentGapSignal(
         allowedTools: event.allowedTools,
         workaroundTool: event.workaroundTool,
       },
+    };
+    appendFileSync(path, serializeRecord(entry), 'utf8');
+  } catch {
+    // Best-effort logging only.
+  }
+}
+
+/**
+ * The accounting of one provider attempt. A turn record sums the attempts of a
+ * turn. This record keeps each attempt apart, so a later report can price a
+ * failed attempt, a retry, and a fallback on its own model.
+ */
+export function appendAttemptUsage(event: AttemptUsageEvent, intentKey?: string, storageBase?: string): void {
+  try {
+    const path = decisionLogPath(storageBase);
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const entry: DecisionLogEntry = {
+      ts: Date.now(),
+      kind: 'attempt-usage',
+      dimension: 'attempt',
+      chosen: event.candidateKey,
+      served: event.candidateKey,
+      viaFallback: false,
+      cause: 'heuristic',
+      reason: event.served ? 'attempt served' : 'attempt failed',
+      chain: [event.candidateKey],
+      ...(intentKey ? { intentKey } : {}),
+      attemptUsage: event,
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {

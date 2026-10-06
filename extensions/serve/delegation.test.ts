@@ -19,6 +19,7 @@ import { setDecisionLogBase } from '../host/decisionlog.js';
 import { defaultRouterSession } from './router-session-state.js';
 import { defaultBlacklistState } from './blacklist.js';
 import { setDelegationTimeouts } from './delegation.js';
+import type { AttemptUsageEvent } from '../types.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
@@ -1852,6 +1853,43 @@ describe('failure reporting and spend', () => {
     const result = await h.run();
     expect(result.success).toBe(false);
     expect(result.lastError).toContain('quota detail 7');
+  });
+
+  it('reports the accounting of each attempt on its own model', async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const h = createDelegationHarness({
+      chain: ['alpha/x', 'beta/y'],
+      scripts: {
+        'alpha/x': [[{ type: 'error', error: { stopReason: 'error', errorMessage: '421 misdirected', usage: { input: 10, output: 0, cost: { total: 0.25 } } } }]],
+        'beta/y': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop', usage: { input: 10, output: 5, cost: { total: 0.5 } } } }]],
+      },
+      onAttemptUsage: (event) => events.push(event as unknown as Record<string, unknown>),
+    });
+    expect((await h.run()).success).toBe(true);
+    // The misdirected request is retried once on its own model. The retry has no usage.
+    expect(events.map((event) => [event.candidateKey, event.served])).toEqual([['alpha/x', false], ['alpha/x', false], ['beta/y', true]]);
+    expect(events[0]).toMatchObject({ usage: { input: 10, output: 0 }, providerReportedUsd: 0.25, usageComplete: true });
+    expect(events[1]).toMatchObject({ usageComplete: false });
+    expect(events[2]).toMatchObject({ usage: { input: 10, output: 5 }, providerReportedUsd: 0.5, usageComplete: true });
+    expect(new Set(events.map((event) => event.usageEventId)).size).toBe(3);
+  });
+
+  it('marks an attempt without terminal usage as incomplete and survives a failing report', async () => {
+    const events: AttemptUsageEvent[] = [];
+    const h = createDelegationHarness({
+      chain: ['alpha/x', 'beta/y'],
+      scripts: {
+        'alpha/x': [[{ type: 'error', error: { stopReason: 'error', errorMessage: '421 misdirected' } }]],
+        'beta/y': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop', usage: { input: 1, output: 1 } } }]],
+      },
+      onAttemptUsage: (event) => {
+        events.push(event);
+        if (events.length === 1) throw new Error('report failed');
+      },
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(events[0]).toMatchObject({ served: false, usageComplete: false });
+    expect(events[0]?.usage).toBeUndefined();
   });
 
   it('adds the provider-reported cost of every attempt, failed ones included', async () => {

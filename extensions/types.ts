@@ -335,6 +335,31 @@ export type DecisionCause =
   | 'incumbent'
   | 'work-context';
 
+/**
+ * The terminal accounting of one provider attempt. The delegation loop emits
+ * one event for each attempt that reached the provider, including a failed
+ * attempt and a retry. It has ids, codes, and counts only.
+ */
+export interface AttemptUsageEvent {
+  /** Unique for each attempt. Deduplication uses only this value. */
+  usageEventId: string;
+  provider: string;
+  modelId: string;
+  /** The candidate key. It has the effort that the attempt requested. */
+  candidateKey: string;
+  servedEffort?: string;
+  /** True when the attempt ended without a failure. */
+  served: boolean;
+  /** Absent when the provider reported no usage. */
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  /** True when the provider reported a terminal usage. Otherwise the spend is a lower bound. */
+  usageComplete: boolean;
+  /** For a cross-check only. It is not on the scale of the registry price. */
+  providerReportedUsd?: number;
+  /** Registry price in USD per 1M tokens, when it is known. */
+  price?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+}
+
 export interface RoutingDecision {
   dimension: Dimension;
   /**

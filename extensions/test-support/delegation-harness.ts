@@ -17,7 +17,7 @@ import { defaultBlacklistState } from '../serve/blacklist.js';
 import { makeTerminalErrorEvent } from '../serve/error-event.js';
 import { routingDecision, registryModel } from './router-fixtures.js';
 import { scriptedRegistryStream } from './registry-stream.js';
-import type { Candidate, RoutingDecision } from '../types.js';
+import type { AttemptUsageEvent, Candidate, RoutingDecision } from '../types.js';
 
 /** One registryId maps to an ordered list of attempt scripts (one per retry). */
 export interface DelegationScript {
@@ -119,6 +119,8 @@ export interface DelegationHarnessOptions {
   beforeFallback?: (candidateId: string, previousId: string) => Promise<FallbackPlan>;
   /** Delegated conversation; defaults to a single user message. */
   context?: Context;
+  /** Receives the accounting event of each attempt that reached the provider. */
+  onAttemptUsage?: (event: AttemptUsageEvent) => void;
 }
 
 export interface DelegationHarness {
@@ -170,7 +172,7 @@ function buildRegistry(
 }
 
 export function createDelegationHarness(options: DelegationHarnessOptions): DelegationHarness {
-  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates, beforeFallback, context: contextOverride } = options;
+  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates, beforeFallback, context: contextOverride, onAttemptUsage } = options;
 
   // Per-model ordered attempt queues; each entry is consumed on one streamSimple call.
   type ScriptEntry = readonly unknown[] | Error | AsyncIterable<unknown>;
@@ -279,6 +281,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
         session,
         candidates,
         beforeFallback,
+        onAttemptUsage,
       };
       const result = await runDelegationLoop(
         delegationOptions,

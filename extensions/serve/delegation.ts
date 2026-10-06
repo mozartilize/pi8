@@ -21,7 +21,7 @@ import {
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { ROUTER_PROVIDER_ID } from '../types.js';
-import type { Candidate, DecisionCause, Dimension, RoutingDecision } from '../types.js';
+import type { AttemptUsageEvent, Candidate, DecisionCause, Dimension, RoutingDecision } from '../types.js';
 import {
   RouterSession,
   defaultRouterSession,
@@ -48,6 +48,7 @@ import { ReasoningLoopDetector } from '../routing/struggle/reasoning-loop.js';
 import type { PendingTrajectoryEscalation } from '../routing/struggle/types.js';
 import { isUsageLimitErrorMessage } from './usage-limit.js';
 import { priceTokens } from './baseline.js';
+import { randomUUID } from 'node:crypto';
 
 const AUTH_RESOLVE_TIMEOUT_MS = 5000;
 const FIRST_EVENT_TIMEOUT_MS = 30000;
@@ -201,6 +202,8 @@ export interface DelegationOptions {
   settleServed?: (lastServed: ServedInfo, decision: RoutingDecision) => RoutingDecision;
   /** Called before each provider request: retries and fallback attempts included. */
   onRequest?: () => void;
+  /** Called once for each attempt that reached the provider, after the attempt ends. */
+  onAttemptUsage?: (event: AttemptUsageEvent) => void;
 }
 
 export interface DelegationResult {
@@ -803,7 +806,7 @@ class AttemptController {
     }
   }
 
-  commitUsage(providerAttempted: boolean): void {
+  commitUsage(providerAttempted: boolean, served: boolean): void {
     if (this.usageCommitted) return;
     this.usageCommitted = true;
     if (this.observedUsage) {
@@ -822,6 +825,30 @@ class AttemptController {
       candidate: this.candidate.candidateId,
       usage: this.observedUsage ? 'observed' : 'missing',
     });
+    if (providerAttempted) this.reportAttemptUsage(served);
+  }
+
+  /** A report failure never changes the turn. */
+  private reportAttemptUsage(served: boolean): void {
+    try {
+      const usage = this.observedUsage;
+      this.ctx.opts.onAttemptUsage?.({
+        usageEventId: randomUUID(),
+        provider: this.candidate.provider,
+        modelId: this.candidate.modelId,
+        candidateKey: this.candidate.candidateId,
+        ...(this.candidate.effectiveReasoning ? { servedEffort: this.candidate.effectiveReasoning } : {}),
+        served,
+        ...(usage ? { usage: { input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 } } : {}),
+        usageComplete: usage !== undefined && this.terminalAccounting,
+        ...(usage?.cost?.total !== undefined ? { providerReportedUsd: usage.cost.total } : {}),
+        ...((this.candidate.chosen as unknown as { cost?: Candidate['cost'] }).cost
+          ? { price: (this.candidate.chosen as unknown as { cost?: Candidate['cost'] }).cost as NonNullable<Candidate['cost']> }
+          : {}),
+      });
+    } catch {
+      // Accounting is observational. It must not stop a turn.
+    }
   }
 }
 
@@ -1028,7 +1055,7 @@ async function runCandidateAttempt(
     }, tries);
   } finally {
     clearTimeout(deadline);
-    controller.commitUsage(requestReady);
+    controller.commitUsage(requestReady, failure === undefined);
     callerSignal?.removeEventListener('abort', forwardAbort);
     if (!attemptAbort.signal.aborted) attemptAbort.abort();
     if (iterator) closeIterator(iterator);
