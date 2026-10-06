@@ -366,7 +366,7 @@ function annotateDecision(
  * one provider invocation. Pure: reads only its inputs and returns a fresh
  * RoutingDecision; never reads or writes module-level state.
  */
-export function resolveRoutingDecisionLegacy(input: RoutingPolicyInput): RoutingPolicyResult {
+function resolveRoutingDecisionLegacy(input: RoutingPolicyInput): RoutingPolicyResult {
   return resolveWithPolicy(input, 'legacy');
 }
 
@@ -374,7 +374,7 @@ export function resolveRoutingDecisionLegacy(input: RoutingPolicyInput): Routing
 export const resolveRoutingDecision = resolveRoutingDecisionLegacy;
 
 /** The candidate policy. Only an evaluation process reaches it, through `evaluationPolicyVersion`. */
-export function resolveRoutingDecisionCheapestSufficient(input: RoutingPolicyInput): RoutingPolicyResult {
+function resolveRoutingDecisionCheapestSufficient(input: RoutingPolicyInput): RoutingPolicyResult {
   return resolveWithPolicy(input, 'cheapest-sufficient');
 }
 
@@ -435,9 +435,11 @@ function resolveWithPolicy(input: RoutingPolicyInput, version: PolicyVersion): R
     ...(warmPrefixTokens != null ? { warmPrefixTokens } : {}),
     protocolPenalties: input.protocolPenalties,
   };
-  const pickOpts: ScoreOpts = handoffMinimum != null
-    ? { ...baseOpts, handoffMinimum }
-    : baseOpts;
+  const pickOpts: ScoreOpts = {
+    ...baseOpts,
+    ...(handoffMinimum != null ? { handoffMinimum } : {}),
+    ...(version === 'cheapest-sufficient' ? { unknownPriceLast: true } : {}),
+  };
   // The candidate policy ranks the candidates of one capability tier by price alone.
   const weights = version === 'cheapest-sufficient' ? ECONOMICS_FIRST_WEIGHTS : config.dimensionWeights[dimension];
   let decision = pickBest(pool, dimension, weights, pickOpts);

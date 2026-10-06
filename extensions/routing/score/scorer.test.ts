@@ -1825,6 +1825,13 @@ describe('escalation target', () => {
       expect(decision.fallbackChain).toEqual(['p/better']);
     });
 
+    it('puts a stronger candidate without a price behind every stronger candidate with one', () => {
+      const unpriced: Candidate = { ...at('p/b-unpriced', 50, 1), cost: undefined };
+      const pool = [at('p/source', 40, 1), at('p/a-cheap', 45, 0.5), unpriced, at('p/z-dear', 47, 9)];
+      expect(escalationChain(pool, 'implement', 'p/source', none, {}, 'cheapest-sufficient')!.fallbackChain)
+        .toEqual(['p/a-cheap', 'p/z-dear', 'p/b-unpriced']);
+    });
+
     it.each(['legacy', 'cheapest-sufficient'] as const)('has no target when nothing is strictly stronger: %s', (version) => {
       const pool = [at('p/source', 56, 1), at('p/weaker', 45, 0.1)];
       expect(escalationChain(pool, 'implement', 'p/source', none, {}, version)).toBeUndefined();

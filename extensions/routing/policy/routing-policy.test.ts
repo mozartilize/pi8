@@ -994,6 +994,9 @@ describe('selection under the candidate policy', () => {
     });
     expect(unpriced.cost).toBeUndefined();
     expect(pick([unpriced, priced('p/priced', 35, 5)], 'cheapest-sufficient').chosen).toBe('p/priced');
+    // The unknown price also goes behind the dearest known price of its tier, but stays ahead of a weaker tier.
+    const chain = pick([priced('p/a-cheap', 35, 1), unpriced, priced('p/z-dear', 35, 10), priced('p/weak', 10, 0)], 'cheapest-sufficient').fallbackChain;
+    expect(chain).toEqual(['p/a-cheap', 'p/z-dear', 'p/unpriced', 'p/weak']);
   });
 
   it('keeps every candidate in the fallback chain', () => {

@@ -405,6 +405,12 @@ export interface ScoreOpts {
   handoffMinimum?: number;
   /** Measured compliance preference, bounded and applied inside capability tiers only. */
   protocolPenalties?: ReadonlyMap<string, number>;
+  /**
+   * Put each candidate without a known price behind every candidate of its capability tier that has
+   * one. The candidate policy sets it: a price-only ranking must not give an unknown price the place
+   * of the dearest known price.
+   */
+  unknownPriceLast?: boolean;
 }
 
 export interface ScoredCandidate extends Candidate {
@@ -415,6 +421,8 @@ export interface ScoredCandidate extends Candidate {
   speedComponent: number;
   switched: boolean;
   excludedReason?: QualityExclusionReason;
+  /** False when the pick had no price for the candidate on its cost basis. */
+  priceKnown?: boolean;
 }
 
 export function scoreCandidate(
@@ -722,7 +730,7 @@ export function escalationChain(
   // `cheapest-sufficient` ranks every proven-stronger candidate by price. The cheapest one leads and the
   // others follow in price order, so no named band limits the head pick.
   if (version === 'cheapest-sufficient') {
-    const all = pickEscalation(stronger, dimension, fromModel, opts, ESCALATION_WEIGHTS);
+    const all = pickEscalation(stronger, dimension, fromModel, { ...opts, unknownPriceLast: true }, ESCALATION_WEIGHTS);
     return all && all.chosen !== '' ? all : undefined;
   }
   const next = nextBandCandidates(stronger, source, dimension);
@@ -830,6 +838,7 @@ function scoreWithinTiers(
     if (qualityCeiling != null) s.qualityComponent = Math.min(s.qualityComponent, qualityCeiling);
     s.excludedReason = eligibility.get(candidateKey(s))?.excludedReason;
     const costUtility = costUtilities.get(candidateKey(c));
+    s.priceKnown = costUtility != null;
     s.costComponent = costUtility == null ? 0 : costUtility * weights.cost;
     if (speedBasis === 'task') s.speedComponent = (timeUtilities.get(candidateKey(c)) ?? 0) * weights.speed;
     s.score = s.qualityComponent + s.costComponent + s.speedComponent;
@@ -882,6 +891,7 @@ function assembleDecision(
   eligibility: Map<string, Eligibility>,
   costBasis: 'task' | 'per-1m',
   speedBasis: 'task' | 'tps',
+  unknownPriceLast = false,
 ): RoutingDecision {
   const compareScore = (a: ScoredCandidate, b: ScoredCandidate): number => {
     if (b.score !== a.score) return b.score - a.score;
@@ -892,7 +902,9 @@ function assembleDecision(
     return candidateKey(a).localeCompare(candidateKey(b));
   };
   const tierOf = (s: ScoredCandidate): number => eligibility.get(candidateKey(s))!.tier;
-  scored.sort((a, b) => (tierOf(a) - tierOf(b)) || compareScore(a, b));
+  const priceRank = (s: ScoredCandidate): number => (unknownPriceLast && s.priceKnown === false ? 1 : 0);
+  const order = (a: ScoredCandidate, b: ScoredCandidate): number => (tierOf(a) - tierOf(b)) || (priceRank(a) - priceRank(b));
+  scored.sort((a, b) => order(a, b) || compareScore(a, b));
 
   const top = scored[0]!;
   const candidateDiagnostics = scored
@@ -907,7 +919,7 @@ function assembleDecision(
     costBasis,
     details: [],
   };
-  const withoutPenalty = [...scored].sort((a, b) => (tierOf(a) - tierOf(b)) || compareScore(
+  const withoutPenalty = [...scored].sort((a, b) => order(a, b) || compareScore(
     { ...a, score: a.score + (a.protocolPenalty ?? 0) },
     { ...b, score: b.score + (b.protocolPenalty ?? 0) },
   ))[0]!;
@@ -985,7 +997,7 @@ export function pickBest(
     const penalty = isNonNegativeFinite(raw) ? Math.min(raw, opts.switchMargin ?? DEFAULT_SWITCH_MARGIN) : 0;
     if (penalty > 0) { candidate.protocolPenalty = penalty; candidate.score -= penalty; }
   }
-  return assembleDecision(scored, dimension, eligibility, costBasis, speedBasis);
+  return assembleDecision(scored, dimension, eligibility, costBasis, speedBasis, opts.unknownPriceLast === true);
 }
 
 const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
