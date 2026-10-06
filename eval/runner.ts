@@ -9,6 +9,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:f
 import { join } from 'node:path';
 import { digestDirectory } from './fs-util.ts';
 import { policyDigest } from './recipe.ts';
+import { readRawUsage } from './spend.ts';
 import {
   BASE_ETC_ENTRIES, BASE_READ_ONLY_PATHS, createSandbox, SANDBOX_HOME, SANDBOX_OUT,
   type SandboxProfile, type SecureSandbox,
@@ -241,8 +242,10 @@ export async function runWholeTask(params: WholeTaskParams): Promise<WholeTaskOu
       decisionLogDigest: sha256File(facts.decisionLogPath),
       realizedTrajectoryDigest: sha256File(facts.sessionPath),
       realizedWorkspaceDigest: artifact.digest,
-      // Usage is unknown until the usage reader fills it. Unknown usage is never zero.
-      rawUsage: { attempts: [], spendIncomplete: true },
+      rawUsage: readRawUsage({
+        ...(facts.decisionLogPath ? { decisionLogPath: facts.decisionLogPath } : {}),
+        ...(facts.sessionPath ? { sessionPath: facts.sessionPath } : {}),
+      }),
       wallTimeMs: endedAt.getTime() - startedAt.getTime(),
       providerFailures: facts.providerFailures,
       fallbackCount: facts.fallbackCount,

@@ -48,7 +48,7 @@ describe.skipIf(!available)('whole-task run', () => {
     // A stand-in for `pi`: it writes a file, a session, and a decision log.
     const script = [
       'echo "dir=$PI8_DIR"; cat "$PI8_DIR/config.json"; echo made > made.txt',
-      'echo \'{"type":"message","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","provider":"p","model":"m","stopReason":"stop"}}\' > /out/sessions/s.jsonl',
+      'echo \'{"type":"message","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","provider":"p","model":"m","stopReason":"stop","usage":{"input":3,"output":4,"cacheRead":0,"cacheWrite":0}}}\' > /out/sessions/s.jsonl',
       'echo \'{"kind":"decision","viaFallback":true,"cause":"error-fallback"}\' > /out/sessions/s.router-decisions.jsonl',
       'echo \'{"kind":"decision","cause":"trajectory-escalation"}\' >> /out/sessions/s.router-decisions.jsonl',
     ].join('\n');
@@ -62,7 +62,7 @@ describe.skipIf(!available)('whole-task run', () => {
       fallbackCount: 1,
       capabilityEscalations: 1,
       providerFailures: 0,
-      rawUsage: { attempts: [], spendIncomplete: true },
+      rawUsage: { attempts: [{ source: 'main-agent', candidateKey: 'p/m', inputTokens: 3, outputTokens: 4 }], spendIncomplete: false },
     });
     expect(readFileSync(join(out.result.finalArtifact.path, 'made.txt'), 'utf8')).toBe('made\n');
     expect(out.files.trajectoryPath).toBeTruthy();
