@@ -4,6 +4,8 @@
 //   node bench/queue/setup.mjs
 //   node bench/queue/probe.mjs            print the preflight matrix and stop
 //   node bench/queue/probe.mjs --run      record the approval and run the campaign
+//   node bench/queue/probe.mjs --vm ...   run pi on the host and the code of the model in a micro-VM
+//                                         (a new campaign; --run then needs --approval "<text>")
 //
 // Arms: the current router policy (router/auto with this extension) and a fixed
 // strong model. Tasks: queue-implement and queue-rename. Both have a hidden
@@ -28,11 +30,14 @@ import { FileGradeStore } from '../../eval/grade-store.ts';
 import { nodeTestGraderRuntimeDigest, nodeTestOracle, nodeTestOracleDigest } from '../../eval/oracle.ts';
 import { digestOf } from '../../eval/recipe.ts';
 import { buildReport } from '../../eval/report.ts';
+import { HostPiAgentRunner } from '../../eval/host-pi-runner.ts';
 import { PiAgentRunner, evaluationProfile, piInvocation } from '../../eval/runner.ts';
+import { vmSandboxFactory } from '../../eval/vm-sandbox.ts';
 
 const REPLICATES = [1, 2, 3];
 const BUDGET_USD = 3;
-const CAMPAIGN_ID = 'queue-probe-1';
+const useVm = process.argv.includes('--vm');
+const CAMPAIGN_ID = useVm ? 'queue-probe-vm-1' : 'queue-probe-1';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
 const flow = process.env.PI8_FLOW_DIR ?? '/tmp/pi8-flow';
@@ -40,6 +45,8 @@ const evalDir = defaultEvalDir();
 const home = homedir();
 const nodeRoot = process.execPath.replace(/\/bin\/node$/, '');
 const run = process.argv.includes('--run');
+const approvalAt = process.argv.indexOf('--approval');
+const approval = approvalAt >= 0 ? process.argv[approvalAt + 1] : undefined;
 
 const tasks = [
   {
@@ -63,6 +70,9 @@ if (!run) {
   console.log(`\nApproved limit for new evidence: $${BUDGET_USD}. Run again with --run to start.`);
   process.exit(0);
 }
+
+if (useVm && !approval) throw new Error('A VM campaign needs its own approval: pass --approval "<who approved which arms, replicates, and limit>"');
+const vm = useVm ? await vmSandboxFactory({ network: 'none' }) : undefined;
 
 // ── Router config and credentials for the sandbox ────────────────────────
 const prepared = join(evalDir, 'prepared', CAMPAIGN_ID);
@@ -109,12 +119,12 @@ const manifest = {
   unsafeCheapGate: { mode: 'conditional-when-available', independentUnit: 'task', minimumEligibleUnits: 10, maxUnsafeCheapUnitRate: 0.2 },
   reusePolicy: { mode: 'historical-analysis' },
   evidenceSelectionPolicy: { reuse: { mode: 'historical-analysis' }, choose: 'exact-compatible', cutoffAt: '2999-01-01T00:00:00Z' },
-  oracleDigest: 'queue-hidden-v1', graderRuntimeDigest: nodeTestGraderRuntimeDigest(), normalizedPriceDigest: priceTable.digest,
+  oracleDigest: 'queue-hidden-v1', graderRuntimeDigest: nodeTestGraderRuntimeDigest(vm), normalizedPriceDigest: priceTable.digest,
   retryPolicy, budget: { maxNewEvidenceUsd: BUDGET_USD, maxProviderInvocations: 1500, maxWallClockMs: 10_800_000, maxNewExecutions: 18 },
 };
 if (!existsSync(join(evalDir, 'campaigns', CAMPAIGN_ID, 'manifest.json'))) campaign.freeze(manifest);
 campaign.savePreflight(matrix);
-campaign.approve('operator (approved in chat: arms auto and sol, 3 replicates, $3)');
+campaign.approve(useVm ? `operator (${approval})` : 'operator (approved in chat: arms auto and sol, 3 replicates, $3)');
 if (!campaign.isApproved()) throw new Error('the campaign is not approved');
 
 // ── Execution ─────────────────────────────────────────────────────────────
@@ -122,7 +132,7 @@ const shell = (value) => `'${String(value).replaceAll("'", `'\\''`)}'`;
 const evidenceStore = new FileEvidenceStore(evalDir);
 const gradeStore = new FileGradeStore(evalDir);
 const cache = new EnvironmentCache(evalDir);
-const profile = evaluationProfile({
+const profile = vm ? undefined : evaluationProfile({
   repoRoot, nodeRoot, authFile, network: 'host',
   extraReadOnlyPaths: [join(store, 'embedding')],
 });
@@ -134,9 +144,9 @@ for (const task of tasks) {
   const privateDir = join(prepared, `oracle-${task.id}`);
   mkdirSync(join(privateDir, 'test'), { recursive: true });
   cpSync(join(flow, 'hidden', 'queue.hidden.test.ts'), join(privateDir, 'test', 'queue.hidden.test.ts'));
-  task.oracleOptions = { taskId: task.id, oracleVersion: 'queue-hidden-v1', privateDir, testFiles: ['test/queue.hidden.test.ts'], env: task.oracleEnv };
+  task.oracleOptions = { taskId: task.id, oracleVersion: 'queue-hidden-v1', privateDir, testFiles: ['test/queue.hidden.test.ts'], env: task.oracleEnv, ...(vm ? { runIn: vm } : {}) };
   task.environment = await cache.resolve(
-    { baseRevision: 'queue-bench', lockfileDigest: '', containerImageDigest: '', publicSetupDigest: task.caseDir, toolchainDigest: process.version, sandboxProfileDigest: 'probe' },
+    { baseRevision: 'queue-bench', lockfileDigest: '', containerImageDigest: '', publicSetupDigest: task.caseDir, toolchainDigest: process.version, sandboxProfileDigest: vm?.identity ?? 'probe' },
     async (staging) => cpSync(join(flow, task.caseDir), staging, { recursive: true }),
   );
 }
@@ -144,7 +154,12 @@ for (const task of tasks) {
 for (const replicate of REPLICATES) {
   for (const task of tasks) {
     for (const arm of arms) {
-      const runner = new PiAgentRunner({
+      const runner = vm ? new HostPiAgentRunner({
+        repoRoot, vm, authFile, pi8Template: join(prepared, 'pi8-template'),
+        invocation: (input, sessionDir) => piInvocation({ task: { ...input.task, userRequest: task.prompt }, arm: input.arm }, repoRoot, sessionDir),
+        // A model that stops before it writes the file gets one more prompt. Earlier probes did the same.
+        followUp: () => (task.followup ? { prompt: 'Continue. Implement the plan now and make `npm test` pass. Do not ask for approval.', when: (workDir) => !existsSync(join(workDir, 'src', 'queue.ts')) } : undefined),
+      }) : new PiAgentRunner({
         repoRoot, pi8Template: join(prepared, 'pi8-template'),
         invocation: (input) => {
           const first = piInvocation({ task: { ...input.task, userRequest: task.prompt }, arm: input.arm }, repoRoot);
@@ -157,13 +172,13 @@ for (const replicate of REPLICATES) {
         },
       });
       const report = await runFixedArm({
-        manifest: campaign.manifest(), ledger: campaign.ledger(), evidenceStore, gradeStore, runner, profile,
+        manifest: campaign.manifest(), ledger: campaign.ledger(), evidenceStore, gradeStore, runner, ...(profile ? { profile } : {}), ...(vm ? { sandboxFactory: vm } : {}),
         environmentPath: task.environment.path, oracle: nodeTestOracle(task.oracleOptions), oracleDigest: nodeTestOracleDigest(task.oracleOptions),
-        graderRuntimeDigest: nodeTestGraderRuntimeDigest(), priceTable, priceOf, evalDir,
+        graderRuntimeDigest: nodeTestGraderRuntimeDigest(vm), priceTable, priceOf, evalDir,
         runId: `${CAMPAIGN_ID}-${stamp}-${task.id}-${arm.id}-r${replicate}`, reservation: { usd: 0.5, providerInvocations: 40 },
       }, {
         arm, frozen: { task: { id: task.id, baseRevision: 'queue-bench', publicFixtureDigest: digestOf(task.caseDir), environmentDigest: task.environment.digest }, runtime },
-        task: { id: task.id, fixtureVersion: '1', workspace: { source: '', baseRevision: 'queue-bench', sandbox: 'os-isolated-process' }, userRequest: task.prompt, budget: { wallTimeMs: task.wallTimeMs } },
+        task: { id: task.id, fixtureVersion: '1', workspace: { source: '', baseRevision: 'queue-bench', sandbox: vm ? 'vm-isolated' : 'os-isolated-process' }, userRequest: task.prompt, budget: { wallTimeMs: task.wallTimeMs } },
         replicates: [replicate],
       });
       armReports.push(report);
