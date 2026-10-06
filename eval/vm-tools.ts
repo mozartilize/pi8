@@ -18,7 +18,8 @@ import {
   createBashTool, createEditTool, createReadTool, createWriteTool,
   type BashOperations, type EditOperations, type ExtensionAPI, type ReadOperations, type WriteOperations,
 } from '@earendil-works/pi-coding-agent';
-import { createHttpHooks, RealFSProvider, VM } from '@earendil-works/gondolin';
+import type { VM } from '@earendil-works/gondolin';
+import { bootVm } from './vm-boot.ts';
 import { VM_CONFIG_ENV, type VmGuestConfig } from './vm-config.ts';
 
 const HOST_TOOLS_TO_BLOCK = new Set(['grep', 'find', 'ls']);
@@ -108,19 +109,10 @@ export default function vmTools(pi: ExtensionAPI): void {
 
   const ensureVm = (): Promise<VM> => {
     if (vm) return Promise.resolve(vm);
-    starting ??= (async () => {
-      const { httpHooks, env } = createHttpHooks({ allowedHosts: config.network === 'none' ? [] : config.network.allowedHosts });
-      const created = await VM.create({
-        httpHooks,
-        env: { ...env, ...config.env },
-        sandbox: { imagePath: config.image },
-        ...(config.memory ? { memory: config.memory } : {}),
-        ...(config.cpus ? { cpus: config.cpus } : {}),
-        vfs: { mounts: { [cwd]: new RealFSProvider(cwd) } },
-      });
+    starting ??= bootVm(config, { [cwd]: cwd }).then((created) => {
       vm = created;
       return created;
-    })();
+    });
     return starting;
   };
 

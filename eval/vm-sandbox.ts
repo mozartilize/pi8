@@ -9,10 +9,12 @@
  * resolve in the guest. A host reader of /work must not follow it, so use
  * `copyTreeSafely` to read the directory.
  */
-import { accessSync, constants, mkdirSync, mkdtempSync, rmSync, cpSync } from 'node:fs';
+import { accessSync, closeSync, constants, cpSync, fstatSync, mkdirSync, mkdtempSync, openSync, readSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHttpHooks, ensureImageSelector, RealFSProvider, VM } from '@earendil-works/gondolin';
+import { ensureImageSelector, type VM } from '@earendil-works/gondolin';
+import { createHash } from 'node:crypto';
+import { bootVm } from './vm-boot.ts';
 import { digestOf } from './recipe.ts';
 import type { VmGuestConfig } from './vm-config.ts';
 import { SANDBOX_OUT, SANDBOX_WORK, type SandboxFactory, type SandboxRunOptions, type SandboxRunResult, type SecureSandbox } from './sandbox.ts';
@@ -29,6 +31,24 @@ export interface VmSandboxOptions {
   startTimeoutMs?: number;
   /** Environment variables of every command in the guest. */
   env?: Record<string, string>;
+  /** Host path of a disk checkpoint with a warm build cache. Each VM starts from a new overlay of it. */
+  checkpoint?: string;
+  /** Keep the scratch paths on the root disk. Builds need it. */
+  scratchOnDisk?: boolean;
+}
+
+/** Digest of a checkpoint file: its size and its last 64 KiB, where the metadata trailer is. */
+export function checkpointDigest(path: string): string {
+  const fd = openSync(path, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(65_536, size);
+    const tail = Buffer.alloc(length);
+    readSync(fd, tail, 0, length, size - length);
+    return createHash('sha256').update(String(size)).update(tail).digest('hex');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** True when this host can run the VM: QEMU is installed and the user can use KVM. */
@@ -59,13 +79,15 @@ export interface VmSandboxFactory extends SandboxFactory {
 export async function vmSandboxFactory(options: VmSandboxOptions): Promise<VmSandboxFactory> {
   const image = await ensureImageSelector(options.image ?? DEFAULT_VM_IMAGE);
   const buildId = image.buildId ?? image.selector;
-  const identity = digestOf({ kind: 'vm-isolated', imageBuildId: buildId, network: options.network, memory: options.memory ?? null, cpus: options.cpus ?? null, env: options.env ?? {} });
+  const identity = digestOf({ kind: 'vm-isolated', imageBuildId: buildId, network: options.network, memory: options.memory ?? null, cpus: options.cpus ?? null, env: options.env ?? {}, checkpoint: options.checkpoint ? checkpointDigest(options.checkpoint) : null, scratchOnDisk: options.scratchOnDisk ?? false });
   const factory: SandboxFactory = (publicWorkspace) => createVmSandbox({ ...options, image: buildId }, identity, publicWorkspace);
   const guestConfig: VmGuestConfig = {
     image: buildId, network: options.network,
     ...(options.memory ? { memory: options.memory } : {}),
     ...(options.cpus ? { cpus: options.cpus } : {}),
     ...(options.env ? { env: options.env } : {}),
+    ...(options.checkpoint ? { checkpoint: options.checkpoint } : {}),
+    ...(options.scratchOnDisk ? { scratchOnDisk: true } : {}),
   };
   return Object.assign(factory, { identity, guestConfig });
 }
@@ -78,19 +100,18 @@ export async function createVmSandbox(options: VmSandboxOptions, identity: strin
   for (const dir of [outDir, homeDir]) mkdirSync(dir, { recursive: true });
   // The candidate wrote nothing yet, so the public tree is the only source. Links stay as links.
   cpSync(publicWorkspace, workDir, { recursive: true, verbatimSymlinks: true });
-  const { httpHooks, env: hookEnv } = createHttpHooks({ allowedHosts: options.network === 'none' ? [] : options.network.allowedHosts });
   // The VM boots at the first command. A host Pi run starts its own VM and never runs a command here.
+  const config: VmGuestConfig = {
+    image: options.image ?? DEFAULT_VM_IMAGE, network: options.network,
+    ...(options.memory ? { memory: options.memory } : {}),
+    ...(options.cpus ? { cpus: options.cpus } : {}),
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.checkpoint ? { checkpoint: options.checkpoint } : {}),
+    ...(options.scratchOnDisk ? { scratchOnDisk: true } : {}),
+  };
   let booting: Promise<VM> | undefined;
   const boot = (): Promise<VM> => {
-    booting ??= VM.create({
-      httpHooks,
-      env: { ...hookEnv, ...options.env },
-      ...(options.image ? { sandbox: { imagePath: options.image } } : {}),
-      ...(options.memory ? { memory: options.memory } : {}),
-      ...(options.cpus ? { cpus: options.cpus } : {}),
-      ...(options.startTimeoutMs !== undefined ? { startTimeoutMs: options.startTimeoutMs } : {}),
-      vfs: { mounts: { [SANDBOX_WORK]: new RealFSProvider(workDir), [SANDBOX_OUT]: new RealFSProvider(outDir) } },
-    });
+    booting ??= bootVm(config, { [SANDBOX_WORK]: workDir, [SANDBOX_OUT]: outDir }, options.startTimeoutMs);
     return booting;
   };
   return {

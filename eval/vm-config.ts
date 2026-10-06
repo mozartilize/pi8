@@ -10,4 +10,8 @@ export interface VmGuestConfig {
   cpus?: number;
   /** Environment variables of every command in the guest. */
   env?: Record<string, string>;
+  /** Host path of a disk checkpoint. Each VM starts from a new overlay of this disk. */
+  checkpoint?: string;
+  /** Keep the scratch paths (/tmp, /root, and others) on the root disk, not in memory. Builds need it. */
+  scratchOnDisk?: boolean;
 }
