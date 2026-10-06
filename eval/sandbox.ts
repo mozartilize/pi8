@@ -59,7 +59,7 @@ export interface SandboxRunResult {
 }
 
 export interface SecureSandbox {
-  kind: 'os-isolated-process';
+  kind: 'os-isolated-process' | 'vm-isolated';
   profileDigest: string;
   /** Host path of the writable task directory. It appears as /work inside the sandbox. */
   workDir: string;
@@ -68,8 +68,11 @@ export interface SecureSandbox {
   /** Host path of the sandbox home. It appears as /home/eval inside the sandbox. */
   homeDir: string;
   run(options: SandboxRunOptions): Promise<SandboxRunResult>;
-  destroy(): void;
+  destroy(): void | Promise<void>;
 }
+
+/** Makes a sandbox with a copy of a public workspace. */
+export type SandboxFactory = (publicWorkspace: string) => Promise<SecureSandbox>;
 
 /** A directory with a read boundary of none. Only a development run of a public task can use it. */
 export interface PlainWorktree {
@@ -78,7 +81,7 @@ export interface PlainWorktree {
 }
 
 export function assertActivationGrade(sandbox: SecureSandbox | PlainWorktree): asserts sandbox is SecureSandbox {
-  if (sandbox.kind !== 'os-isolated-process') {
+  if (sandbox.kind !== 'os-isolated-process' && sandbox.kind !== 'vm-isolated') {
     throw new Error('A plain worktree has no read boundary. A private-oracle campaign needs an isolated sandbox.');
   }
 }

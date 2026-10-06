@@ -1,0 +1,9 @@
+{
+  "name": "pi8-eval",
+  "private": true,
+  "type": "module",
+  "description": "Evaluation harness. Its dependencies stay out of the extension package.",
+  "dependencies": {
+    "@earendil-works/gondolin": "0.13.0"
+  }
+}

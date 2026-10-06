@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { copyFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, normalize, sep } from 'node:path';
 
 /** Write the file under a temporary name, then rename it. A reader never sees a partial file. */
 export function writeJsonAtomic(path: string, value: unknown): void {
@@ -8,6 +8,43 @@ export function writeJsonAtomic(path: string, value: unknown): void {
   const temp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
   renameSync(temp, path);
+}
+
+export interface SafeCopyResult {
+  /** Entries that the copy left out: a special file, or a link that leaves the tree. */
+  dropped: string[];
+}
+
+/**
+ * Copy a tree that a candidate wrote. The candidate can create any entry in it, so the copy
+ * keeps only directories, regular files, and relative links that stay inside the tree. A copy
+ * with such links is safe to write into later: no write can pass through a link to a host path.
+ * A special file, such as a pipe, would block a plain copy, so it is left out.
+ */
+export function copyTreeSafely(source: string, destination: string, skipDirectories: readonly string[] = []): SafeCopyResult {
+  const dropped: string[] = [];
+  mkdirSync(destination, { recursive: true });
+  const walk = (relative: string): void => {
+    for (const name of readdirSync(join(source, relative)).sort()) {
+      const path = relative ? `${relative}/${name}` : name;
+      const from = join(source, path);
+      const info = lstatSync(from);
+      if (info.isDirectory()) {
+        if (skipDirectories.includes(name)) continue;
+        mkdirSync(join(destination, path), { recursive: true });
+        walk(path);
+      } else if (info.isFile()) {
+        copyFileSync(from, join(destination, path));
+      } else if (info.isSymbolicLink()) {
+        const target = readlinkSync(from);
+        const resolved = normalize(join(dirname(path), target));
+        if (isAbsolute(target) || resolved === '..' || resolved.startsWith(`..${sep}`)) dropped.push(path);
+        else symlinkSync(target, join(destination, path));
+      } else dropped.push(path);
+    }
+  };
+  walk('');
+  return { dropped };
 }
 
 export const sleepMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

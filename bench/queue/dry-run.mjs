@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Free probe of the evaluation harness on the queue bench. No model runs.
-//   node bench/queue/setup.mjs && node bench/queue/dry-run.mjs
+//   node bench/queue/setup.mjs && node bench/queue/dry-run.mjs [--vm]
+//
+// By default the agent and the oracle run in the process sandbox. With --vm, both run in a
+// micro-VM with no network, and the host process runs no candidate code.
 //
 // Two scripted agents stand in for a model. One writes the reference queue. The
 // other writes the queue with 6 planted defects. Each runs through the real
@@ -18,12 +21,15 @@ import { FileGradeStore } from '../../eval/grade-store.ts';
 import { nodeTestGraderRuntimeDigest, nodeTestOracle, nodeTestOracleDigest } from '../../eval/oracle.ts';
 import { buildReport } from '../../eval/report.ts';
 import { PiAgentRunner, evaluationProfile } from '../../eval/runner.ts';
+import { vmSandboxFactory } from '../../eval/vm-sandbox.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
 const flow = process.env.PI8_FLOW_DIR ?? '/tmp/pi8-flow';
 const evalDir = process.env.PI8_EVAL_DIR ?? mkdtempSync(join(tmpdir(), 'pi8-eval-dry-'));
 const nodeRoot = process.execPath.replace(/\/bin\/node$/, '');
+const useVm = process.argv.includes('--vm');
+const vm = useVm ? await vmSandboxFactory({ network: 'none' }) : undefined;
 
 // The hidden test imports ../src/queue.ts, so it lives in test/ of the artifact copy.
 const privateDir = join(evalDir, 'private-oracle');
@@ -48,14 +54,14 @@ const manifest = {
   unsafeCheapGate: { mode: 'conditional-when-available', independentUnit: 'task', minimumEligibleUnits: 10, maxUnsafeCheapUnitRate: 0.2 },
   reusePolicy: { mode: 'historical-analysis' },
   evidenceSelectionPolicy: { reuse: { mode: 'historical-analysis' }, choose: 'exact-compatible', cutoffAt: '2999-01-01T00:00:00Z' },
-  oracleDigest: 'queue-hidden-v1', graderRuntimeDigest: nodeTestGraderRuntimeDigest(), normalizedPriceDigest: 'none',
+  oracleDigest: 'queue-hidden-v1', graderRuntimeDigest: nodeTestGraderRuntimeDigest(vm), normalizedPriceDigest: 'none',
   retryPolicy: { maxProviderRetriesPerAttempt: 0, maxOperationalRerunsPerSlot: 0, retryableStatuses: [] },
   budget: { maxProviderInvocations: 100, maxWallClockMs: 3_600_000, maxNewExecutions: 20 },
 };
 const campaign = new CampaignStore(evalDir, manifest.campaignId);
 try { campaign.freeze(manifest); } catch { /* the manifest exists from an earlier run */ }
 
-const oracleOptions = { taskId: 'queue-implement', oracleVersion: 'queue-hidden-v1', privateDir, testFiles: ['test/queue.hidden.test.ts'] };
+const oracleOptions = { taskId: 'queue-implement', oracleVersion: 'queue-hidden-v1', privateDir, testFiles: ['test/queue.hidden.test.ts'], ...(vm ? { runIn: vm } : {}) };
 const reference = readFileSync(join(flow, 'ref', 'queue.ts'), 'utf8');
 const buggy = readFileSync(join(flow, 'buggy-queue.ts'), 'utf8');
 const agentFor = (source) => new PiAgentRunner({
@@ -66,7 +72,7 @@ const agentFor = (source) => new PiAgentRunner({
 const task = tasks[0];
 const cache = new EnvironmentCache(evalDir);
 const environment = await cache.resolve(
-  { baseRevision: 'bench', lockfileDigest: '', containerImageDigest: '', publicSetupDigest: 'none', toolchainDigest: process.version, sandboxProfileDigest: 'dry' },
+  { baseRevision: 'bench', lockfileDigest: '', containerImageDigest: '', publicSetupDigest: 'none', toolchainDigest: process.version, sandboxProfileDigest: vm?.identity ?? 'dry' },
   async (staging) => cpSync(join(flow, task.caseDir), staging, { recursive: true }),
 );
 
@@ -74,17 +80,17 @@ const arms = [
   { id: 'scripted-buggy', source: buggy },
   { id: 'scripted-reference', source: reference },
 ];
-const profile = evaluationProfile({ repoRoot, nodeRoot, network: 'none' });
+const profile = vm ? undefined : evaluationProfile({ repoRoot, nodeRoot, network: 'none' });
 const reports = [];
 for (const arm of arms) {
   const report = await runFixedArm({
     manifest: campaign.manifest(), ledger: campaign.ledger(), evidenceStore: new FileEvidenceStore(evalDir), gradeStore: new FileGradeStore(evalDir),
-    runner: agentFor(arm.source), profile, environmentPath: environment.path,
-    oracle: nodeTestOracle(oracleOptions), oracleDigest: nodeTestOracleDigest(oracleOptions), graderRuntimeDigest: nodeTestGraderRuntimeDigest(),
+    runner: agentFor(arm.source), ...(profile ? { profile } : {}), ...(vm ? { sandboxFactory: vm } : {}), environmentPath: environment.path,
+    oracle: nodeTestOracle(oracleOptions), oracleDigest: nodeTestOracleDigest(oracleOptions), graderRuntimeDigest: nodeTestGraderRuntimeDigest(vm),
     priceTable: { digest: 'none', prices: {} }, evalDir, runId: `dry-${Date.now()}-${arm.id}`, reservation: { providerInvocations: 1 },
   }, {
     arm: { id: arm.id, policy: { kind: 'fixed-candidate', candidateKey: `scripted/${arm.id}` }, continuation: 'normal-policy' },
-    task: { id: task.id, fixtureVersion: '1', workspace: { source: '', baseRevision: 'bench', sandbox: 'os-isolated-process' }, userRequest: 'scripted', budget: { wallTimeMs: 60_000 } },
+    task: { id: task.id, fixtureVersion: '1', workspace: { source: '', baseRevision: 'bench', sandbox: vm ? 'vm-isolated' : 'os-isolated-process' }, userRequest: 'scripted', budget: { wallTimeMs: 60_000 } },
     frozen: frozen(task), replicates: [1, 2],
   });
   reports.push(report);

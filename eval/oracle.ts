@@ -8,9 +8,10 @@ import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TaskOutcome } from '../extensions/routing/policy/outcome.ts';
-import { digestDirectory } from './fs-util.ts';
+import { copyTreeSafely, digestDirectory } from './fs-util.ts';
 import { gradeIdOf, type GradeStore } from './grade-store.ts';
 import { digestOf } from './recipe.ts';
+import type { SandboxFactory } from './sandbox.ts';
 import type { ExecutionEvidenceV1, FinalArtifact, GradeEvidenceV1, GradeKeyV1, OracleResult, PrivateOracleSpec } from './schema.ts';
 
 /** An oracle change needs a new execution when the artifact cannot be graded again. */
@@ -77,7 +78,13 @@ export interface NodeTestOracleOptions {
   /** Test files in the private directory, relative to it. */
   testFiles: string[];
   timeoutMs?: number;
+  /** Extra variables for the test process. The host run has no other variable than PATH. */
   env?: Record<string, string>;
+  /**
+   * Where the artifact code runs. The default is a host process, which is only for an artifact
+   * that the host may run. A factory runs the tests in the sandbox that it makes.
+   */
+  runIn?: SandboxFactory & { identity: string };
 }
 
 /** Digest of the private files and the version. A change of either makes a new oracle. */
@@ -86,8 +93,8 @@ export function nodeTestOracleDigest(options: NodeTestOracleOptions): string {
 }
 
 /** Digest of the runtime that runs the oracle. */
-export function nodeTestGraderRuntimeDigest(): string {
-  return digestOf({ runner: 'node-test-oracle', version: 1, node: process.version });
+export function nodeTestGraderRuntimeDigest(runIn?: { identity: string }): string {
+  return digestOf({ runner: 'node-test-oracle', version: 1, ...(runIn ? { sandbox: runIn.identity } : { node: process.version }) });
 }
 
 export function nodeTestOracle(options: NodeTestOracleOptions): PrivateOracleSpec {
@@ -98,17 +105,12 @@ export function nodeTestOracle(options: NodeTestOracleOptions): PrivateOracleSpe
       const copy = mkdtempSync(join(tmpdir(), 'pi8-oracle-'));
       const startedAt = Date.now();
       try {
-        cpSync(artifact.path, copy, { recursive: true, verbatimSymlinks: true });
+        // The artifact is candidate output. The copy keeps no link that leaves the tree, so the
+        // private files below cannot be written through a link to a host path.
+        copyTreeSafely(artifact.path, copy);
         cpSync(options.privateDir, copy, { recursive: true });
-        const output = await new Promise<{ code: number | null; text: string }>((resolve) => {
-          const child = spawn('node', ['--test', ...options.testFiles], { cwd: copy, env: { ...process.env, ...options.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-          let text = '';
-          child.stdout.on('data', (chunk) => { text += chunk; });
-          child.stderr.on('data', (chunk) => { text += chunk; });
-          const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs ?? 120_000);
-          child.on('close', (code) => { clearTimeout(timer); resolve({ code, text }); });
-          child.on('error', () => { clearTimeout(timer); resolve({ code: null, text }); });
-        });
+        const timeoutMs = options.timeoutMs ?? 120_000;
+        const output = options.runIn ? await runInSandbox(options.runIn, copy, options, timeoutMs) : await runOnHost(copy, options, timeoutMs);
         const count = (name: string): number => Number(new RegExp(`^ℹ ${name} (\\d+)`, 'm').exec(output.text)?.[1] ?? Number.NaN);
         const passed = count('pass');
         const failed = count('fail');
@@ -123,4 +125,28 @@ export function nodeTestOracle(options: NodeTestOracleOptions): PrivateOracleSpe
       }
     },
   };
+}
+
+async function runInSandbox(factory: SandboxFactory, copy: string, options: NodeTestOracleOptions, timeoutMs: number): Promise<{ code: number | null; text: string }> {
+  const sandbox = await factory(copy);
+  try {
+    const result = await sandbox.run({ command: 'node', args: ['--test', ...options.testFiles], timeoutMs, ...(options.env ? { env: options.env } : {}) });
+    return { code: result.code, text: `${result.stdout}${result.stderr}` };
+  } finally {
+    await sandbox.destroy();
+  }
+}
+
+function runOnHost(copy: string, options: NodeTestOracleOptions, timeoutMs: number): Promise<{ code: number | null; text: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('node', ['--test', ...options.testFiles], {
+      cwd: copy, env: { PATH: process.env.PATH ?? '/usr/bin:/bin', ...options.env }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let text = '';
+    child.stdout.on('data', (chunk) => { text += chunk; });
+    child.stderr.on('data', (chunk) => { text += chunk; });
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    child.on('close', (code) => { clearTimeout(timer); resolve({ code, text }); });
+    child.on('error', () => { clearTimeout(timer); resolve({ code: null, text }); });
+  });
 }

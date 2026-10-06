@@ -105,6 +105,8 @@ export interface FinalArtifact {
   /** False when the harness could not capture the external state. A change of grader then needs a new execution. */
   regradeable: boolean;
   stateKinds: Array<'git-worktree' | 'untracked-files' | 'database-dump' | 'service-snapshot'>;
+  /** Entries that the capture left out because they were unsafe to copy. Absent when none. */
+  droppedEntries?: string[];
 }
 
 export type ExecutionStatus =
@@ -236,7 +238,7 @@ export interface PublicTaskSpec {
   workspace: {
     source: string;
     baseRevision: string;
-    sandbox: 'container' | 'os-isolated-process';
+    sandbox: 'container' | 'os-isolated-process' | 'vm-isolated';
     imageDigest?: string;
   };
   userRequest: string;

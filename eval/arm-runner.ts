@@ -14,7 +14,7 @@ import { gradeExecution } from './oracle.ts';
 import type { GradeStore } from './grade-store.ts';
 import { slotKey, wholeTaskRecipe } from './recipe.ts';
 import { runWholeTask, type AgentRunner } from './runner.ts';
-import type { SandboxProfile } from './sandbox.ts';
+import type { SandboxFactory, SandboxProfile } from './sandbox.ts';
 import { historicalCost, normalizedCost, type PriceSnapshotSource, type PriceTable } from './spend.ts';
 import type {
   ActivationCampaignManifestV1, CompletedExecutionV1, EvaluationArm, ExecutionEvidenceV1, ExecutionRecipeV1, ExecutionRequestV1,
@@ -28,7 +28,10 @@ export interface ArmRunDeps {
   evidenceStore: ExecutionEvidenceStore;
   gradeStore: GradeStore;
   runner: AgentRunner;
-  profile: SandboxProfile;
+  /** The profile of a process sandbox. A run needs it when it has no sandbox factory. */
+  profile?: SandboxProfile;
+  /** Makes the sandbox for each run. It replaces the process sandbox that `profile` describes. */
+  sandboxFactory?: SandboxFactory;
   /** Host path of the immutable public environment. */
   environmentPath: string;
   oracle: PrivateOracleSpec;
@@ -123,7 +126,7 @@ export async function runFixedArm(deps: ArmRunDeps, request: ArmRunRequest): Pro
         if (!reserved.ok) throw new BudgetExhausted(reserved.limit);
         const runDir = join(deps.evalDir, 'runs', deps.runId, `${slot.recipeHash.slice(0, 12)}-${replicate}-${rerun}`);
         const output = await runWholeTask({
-          runner: deps.runner, profile: deps.profile, task, recipe: executionRequest.recipe, arm,
+          runner: deps.runner, ...(deps.profile ? { profile: deps.profile } : {}), ...(deps.sandboxFactory ? { sandboxFactory: deps.sandboxFactory } : {}), task, recipe: executionRequest.recipe, arm,
           environmentPath: deps.environmentPath, runDir, runId: deps.runId,
           ...(deps.priceOf ? { priceOf: deps.priceOf } : {}),
         });

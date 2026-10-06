@@ -7,12 +7,12 @@
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { digestDirectory } from './fs-util.ts';
+import { copyTreeSafely, digestDirectory } from './fs-util.ts';
 import { policyDigest } from './recipe.ts';
 import { readRawUsage, type PriceSnapshotSource } from './spend.ts';
 import {
   BASE_ETC_ENTRIES, BASE_READ_ONLY_PATHS, createSandbox, SANDBOX_HOME, SANDBOX_OUT,
-  type SandboxProfile, type SecureSandbox,
+  type SandboxFactory, type SandboxProfile, type SecureSandbox,
 } from './sandbox.ts';
 import type {
   CompletedExecutionV1, DeploymentProvenance, EvaluationArm, ExecutionRecipeV1, ExecutionStatus, FinalArtifact, PublicTaskSpec,
@@ -70,9 +70,9 @@ export interface PiInvocation {
 }
 
 /** The `pi` command line for one arm. The router arm loads the extension. A fixed candidate does not. */
-export function piInvocation(input: Pick<AgentRunInput, 'task' | 'arm'>, repoRoot: string): PiInvocation {
+export function piInvocation(input: Pick<AgentRunInput, 'task' | 'arm'>, repoRoot: string, sessionDir = `${SANDBOX_OUT}/sessions`): PiInvocation {
   const { policy } = input.arm;
-  const base = ['-ne', '--session-dir', `${SANDBOX_OUT}/sessions`];
+  const base = ['-ne', '--session-dir', sessionDir];
   let model: string;
   const extensions: string[] = [];
   if (policy.kind === 'current-auto') {
@@ -118,17 +118,21 @@ export class PiAgentRunner implements AgentRunner {
       timeoutMs: input.task.budget.wallTimeMs,
       env: { PI8_DIR: `${SANDBOX_OUT}/pi8`, HOME: SANDBOX_HOME },
     });
-    const facts = readSessionFacts(join(sandbox.outDir, 'sessions'));
-    let exit: AgentExit;
-    if (result.timedOut) exit = 'budget';
-    else if (result.code === 0) exit = 'completed';
-    else exit = facts.lastStopReason === 'error' ? 'provider-error' : 'harness-error';
-    return {
-      exit,
-      ...(facts.sessionPath ? { sessionPath: facts.sessionPath } : {}),
-      ...(facts.decisionLogPath ? { decisionLogPath: facts.decisionLogPath } : {}),
-    };
+    return agentOutput(result, readSessionFacts(join(sandbox.outDir, 'sessions')));
   }
+}
+
+/** The agent exit and the file paths of a finished `pi` process. */
+export function agentOutput(result: { timedOut: boolean; code: number | null }, facts: SessionFacts): AgentRunOutput {
+  let exit: AgentExit;
+  if (result.timedOut) exit = 'budget';
+  else if (result.code === 0) exit = 'completed';
+  else exit = facts.lastStopReason === 'error' ? 'provider-error' : 'harness-error';
+  return {
+    exit,
+    ...(facts.sessionPath ? { sessionPath: facts.sessionPath } : {}),
+    ...(facts.decisionLogPath ? { decisionLogPath: facts.decisionLogPath } : {}),
+  };
 }
 
 // ── Facts that the harness reads from the session and the decision log ───
@@ -191,11 +195,18 @@ export function readSessionFacts(sessionsDir: string): SessionFacts {
 const sha256File = (path: string | undefined): string =>
   createHash('sha256').update(path && existsSync(path) ? readFileSync(path) : '').digest('hex');
 
-/** Copy the task directory to the run directory and name it by digest. Dependency directories are not part of the artifact. */
+/**
+ * Copy the task directory to the run directory and name it by digest. Dependency directories
+ * are not part of the artifact. The candidate wrote the directory, so the copy drops every
+ * entry that could reach a host path or block a read.
+ */
 export function captureArtifact(workDir: string, runDir: string): FinalArtifact {
   const path = join(runDir, 'artifact');
-  cpSync(workDir, path, { recursive: true, verbatimSymlinks: true, filter: (source) => !source.split('/').includes('node_modules') });
-  return { digest: digestDirectory(path), path, regradeable: true, stateKinds: ['git-worktree', 'untracked-files'] };
+  const { dropped } = copyTreeSafely(workDir, path, ['node_modules']);
+  return {
+    digest: digestDirectory(path), path, regradeable: true, stateKinds: ['git-worktree', 'untracked-files'],
+    ...(dropped.length > 0 ? { droppedEntries: dropped } : {}),
+  };
 }
 
 const STATUS_OF_EXIT: Record<AgentExit, ExecutionStatus> = {
@@ -207,7 +218,10 @@ const STATUS_OF_EXIT: Record<AgentExit, ExecutionStatus> = {
 
 export interface WholeTaskParams {
   runner: AgentRunner;
-  profile: SandboxProfile;
+  /** The profile of a process sandbox. A run needs it when it has no sandbox factory. */
+  profile?: SandboxProfile;
+  /** Makes the sandbox for the run. It replaces the process sandbox that `profile` describes. */
+  sandboxFactory?: SandboxFactory;
   task: PublicTaskSpec;
   recipe: ExecutionRecipeV1;
   arm: EvaluationArm;
@@ -228,7 +242,9 @@ export interface WholeTaskOutput {
 export async function runWholeTask(params: WholeTaskParams): Promise<WholeTaskOutput> {
   const startedAt = new Date();
   mkdirSync(params.runDir, { recursive: true });
-  const sandbox = createSandbox(params.profile, params.environmentPath);
+  const { profile, sandboxFactory } = params;
+  if (!sandboxFactory && !profile) throw new Error('a run needs a sandbox profile or a sandbox factory');
+  const sandbox = sandboxFactory ? await sandboxFactory(params.environmentPath) : createSandbox(profile as SandboxProfile, params.environmentPath);
   try {
     const output = await params.runner.run({ sandbox, task: params.task, recipe: params.recipe, arm: params.arm, runDir: params.runDir });
     // The candidate process and all model calls are finished. Capture the evidence from the host.
@@ -265,6 +281,6 @@ export async function runWholeTask(params: WholeTaskParams): Promise<WholeTaskOu
       },
     };
   } finally {
-    sandbox.destroy();
+    await sandbox.destroy();
   }
 }
