@@ -23,7 +23,7 @@ import type { EntryResolution, GroundedArtifact, WorkItem } from '../routing/con
 import { CONVERSATION_EVIDENCE, acceptContextHandoff } from '../routing/policy/context-acquisition.js';
 import { parseReasoningRubric, reasoningMinimum, reasoningRequirement } from '../routing/policy/execution-difficulty.js';
 import { REOPEN_WORK_TOOL, completedIncumbent } from '../routing/policy/work-completion.js';
-import { terminalMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { aboveDefault, terminalMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import type { PendingIdentity } from './context-resolution.js';
 import { closeContractEntry } from './execution-contract-tool.js';
@@ -274,7 +274,7 @@ export function submitReopenWork(
     // Without a rubric the default minimums of the task type apply.
     const requirement = rubric ? reasoningRequirement(rubric, CONVERSATION_EVIDENCE) : undefined;
     const raised = terminalMinimum(continued, deliverable, evaluationPolicyVersion());
-    minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : raised;
+    minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : aboveDefault(raised, deliverable);
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence: CONVERSATION_EVIDENCE };
   }
   const resolution: EntryResolution = {

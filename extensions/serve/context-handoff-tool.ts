@@ -38,7 +38,7 @@ import {
   reasoningMinimum,
   reasoningRequirement,
 } from '../routing/policy/execution-difficulty.js';
-import { terminalMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { aboveDefault, terminalMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import { observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -360,7 +360,7 @@ export function submitContextHandoff(
     const requirement = rubric ? reasoningRequirement(rubric, evidence) : undefined;
     // The final step's band only raises the rubric's minimum; see withStrongerTerminal.
     const raised = terminalMinimum(terminal, deliverable, policyVersion);
-    const minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : raised;
+    const minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : aboveDefault(raised, deliverable);
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence };
   }
   const key = handoffKey(params);

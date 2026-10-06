@@ -1404,6 +1404,22 @@ describe('mutation observation hooks', () => {
     expect(await minimum(strong, { complexity: 'trivial', scope: 'bounded' })).toBeCloseTo(0.7);
   });
 
+  it.skipIf(candidatePolicyRun)('keeps the default minimums for a handoff without a rubric unless the final step asks for more than the default', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const tool = handoffTool(registerTool);
+    const minimum = async (over: Partial<WorkPhaseState>) => {
+      investigating(over);
+      const request = { outcome: 'ready', deliverable: 'plan', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q' };
+      await tool.execute('p', request, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
+      return defaultRouterSession.getWorkPhaseState()!.reasoningHandoff!.minimum;
+    };
+    const standard = { terminal: terminalAssessment({ kind: 'plan', complexity: 'trivial', scope: 'bounded' }), terminalBand: 'standard' as const };
+    const strong = { terminal: terminalAssessment({ kind: 'plan', complexity: 'moderate', scope: 'open-ended' }), terminalBand: 'strong' as const };
+    expect(await minimum(standard)).toBeUndefined();
+    expect(await minimum(strong)).toBeCloseTo(0.7);
+  });
+
   it('under the candidate policy, raises a planning minimum by the requirement of the final step and keeps the default minimums without a rubric', async () => {
     vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient');
     try {

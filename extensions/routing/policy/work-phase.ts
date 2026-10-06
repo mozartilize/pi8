@@ -155,6 +155,15 @@ export function terminalMinimum(state: WorkPhaseState, target: Dimension, versio
   return requirement != null && requirement > defaultRequirement(target) ? requirement : undefined;
 }
 
+/**
+ * `minimum` when it is above the default requirement of the task type, else undefined. A handoff
+ * without a difficulty rubric keeps the default minimums, so only a final step that asks for more
+ * than the default may set a handoff minimum.
+ */
+export function aboveDefault(minimum: number | undefined, target: Dimension): number | undefined {
+  return minimum != null && minimum > defaultRequirement(target) ? minimum : undefined;
+}
+
 /** True when the final step is strong enough to remind a `gather` entry of the handoff at once. */
 export function strongFinalStep(state: WorkPhaseState, version: PolicyVersion = 'legacy'): boolean {
   return version === 'cheapest-sufficient'
