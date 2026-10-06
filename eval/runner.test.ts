@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { wholeTaskRecipe } from './recipe.ts';
-import { evaluationProfile, PiAgentRunner, piInvocation, runWholeTask } from './runner.ts';
+import { evaluationProfile, PiAgentRunner, piInvocation, ranArmPolicy, runWholeTask } from './runner.ts';
 import { sandboxAvailable } from './sandbox.ts';
 import type { EvaluationArm, PublicTaskSpec } from './schema.ts';
 
@@ -37,6 +37,26 @@ describe('pi command line', () => {
     expect(invocation.env).toEqual({ PI8_POLICY_VERSION: 'cheapest-sufficient' });
     const other: EvaluationArm = { id: 'o', policy: { kind: 'shadow-selector', selectorVersion: 'other-selector' }, continuation: 'normal-policy' };
     expect(() => piInvocation({ task, arm: other }, '/repo')).toThrow(/does not run/);
+  });
+});
+
+describe('policy check of a router run', () => {
+  const auto: EvaluationArm = { id: 'a', policy: { kind: 'current-auto' }, continuation: 'normal-policy' };
+  const selector: EvaluationArm = { id: 'c', policy: { kind: 'shadow-selector', selectorVersion: 'cheapest-sufficient' }, continuation: 'normal-policy' };
+  const fixed: EvaluationArm = { id: 'f', policy: { kind: 'fixed-candidate', candidateKey: 'p/m' }, continuation: 'normal-policy' };
+
+  it('accepts a run only when every routing decision carries the version of the arm', () => {
+    expect(ranArmPolicy(auto, { policyVersions: [undefined, undefined] })).toBe(true);
+    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient'] })).toBe(true);
+    expect(ranArmPolicy(selector, { policyVersions: [undefined] })).toBe(false);
+    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient', undefined] })).toBe(false);
+    expect(ranArmPolicy(auto, { policyVersions: ['cheapest-sufficient'] })).toBe(false);
+  });
+
+  it('rejects a router run without a routing decision, and does not check a fixed candidate', () => {
+    expect(ranArmPolicy(auto, { policyVersions: [] })).toBe(false);
+    expect(ranArmPolicy(selector, { policyVersions: [] })).toBe(false);
+    expect(ranArmPolicy(fixed, { policyVersions: [] })).toBe(true);
   });
 });
 
@@ -80,6 +100,18 @@ describe.skipIf(!available)('whole-task run', () => {
     expect(readFileSync(out.files.decisionLogPath!, 'utf8')).toContain('trajectory-escalation');
     // The public environment stays unchanged.
     expect(() => readFileSync(join(environment, 'made.txt'))).toThrow();
+  });
+
+  it('reports a harness error when a selector arm ran without its policy', async () => {
+    const environment = join(dir, 'environment');
+    mkdirSync(environment);
+    const selector: EvaluationArm = { id: 'c', policy: { kind: 'shadow-selector', selectorVersion: 'cheapest-sufficient' }, continuation: 'normal-policy' };
+    const script = 'echo \'{"kind":"decision","cause":"heuristic"}\' > /out/sessions/s.router-decisions.jsonl';
+    const runner = new PiAgentRunner({ repoRoot: dir, invocation: () => ({ command: 'sh', args: ['-c', script] }) });
+    const out = await runWholeTask({
+      runner, profile: profile(), task, recipe: wholeTaskRecipe(selector, frozen), arm: selector, environmentPath: environment, runDir: join(dir, 'run'), runId: 'run-p',
+    });
+    expect(out.result.status).toBe('sandbox-error');
   });
 
   it('maps a time-out to an exhausted task budget', async () => {
