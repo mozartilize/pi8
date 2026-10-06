@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /** Write the file under a temporary name, then rename it. A reader never sees a partial file. */
@@ -31,4 +31,38 @@ export function digestDirectory(root: string, skip: readonly string[] = []): str
   };
   walk('');
   return hash.digest('hex');
+}
+
+export interface FileLockOptions {
+  /** A lock file older than this time has expired. */
+  expiryMs?: number;
+  pollMs?: number;
+  waitMs?: number;
+}
+
+/** Run `action` while this process holds an exclusive lock file. Several processes can use the same file. */
+export async function withFileLock<T>(path: string, action: () => T | Promise<T>, options: FileLockOptions = {}): Promise<T> {
+  const { expiryMs = 30_000, pollMs = 10, waitMs = 60_000 } = options;
+  mkdirSync(dirname(path), { recursive: true });
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    try {
+      writeFileSync(path, String(process.pid), { flag: 'wx' });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(path).mtimeMs > expiryMs) rmSync(path, { force: true });
+      } catch {
+        // Another process removed the lock file.
+      }
+      if (Date.now() > deadline) throw new Error(`lock wait timed out: ${path}`);
+      await sleepMs(pollMs);
+    }
+  }
+  try {
+    return await action();
+  } finally {
+    rmSync(path, { force: true });
+  }
 }

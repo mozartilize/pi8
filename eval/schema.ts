@@ -256,3 +256,73 @@ export interface PrivateOracleSpec {
   oracleVersion: string;
   evaluate(finalArtifact: FinalArtifact): Promise<OracleResult>;
 }
+
+// ── Campaigns ────────────────────────────────────────────────────────────
+
+export interface CampaignBudget {
+  maxNewEvidenceUsd?: number;
+  maxProviderInvocations: number;
+  maxWallClockMs: number;
+  maxNewExecutions: number;
+}
+
+export interface CampaignRetryPolicy {
+  maxProviderRetriesPerAttempt: number;
+  maxOperationalRerunsPerSlot: number;
+  retryableStatuses: Array<'provider-error' | 'sandbox-error' | 'oracle-error'>;
+}
+
+export type ActivationCheckStatus = 'pass' | 'fail' | 'inconclusive' | 'not-applicable';
+export type ActivationVerdict = 'go' | 'no-go' | 'inconclusive';
+
+/** The user approval of the budget and the preflight matrix. A campaign does not inherit another campaign's approval. */
+export interface CampaignApproval {
+  approvedAt: string;
+  approvedBy: string;
+  budgetDigest: string;
+  matrixDigest: string;
+}
+
+export interface ActivationCampaignManifestV1 {
+  campaignId: string;
+  taskSetDigest: string;
+  repositorySplitDigest: string;
+  candidatePoolDigest: string;
+  /** Digest of the frozen policy of each side of the paired comparison. */
+  policyDigests: { current: string; candidate: string };
+
+  repetitionsPerTask: number;
+  /** For example 0.95. The campaign sets it before it opens any outcome. */
+  confidenceLevel: number;
+  intervalMethod: 'paired-repository-bootstrap' | 'paired-task-bootstrap';
+  rareEventBoundMethod: 'one-sided-clopper-pearson';
+
+  margins: {
+    maxSolveRateDrop: number;
+    maxSilentFailureHarmRate: number;
+    maxNormalizedCostRatio: number;
+  };
+
+  minimumEvidence: {
+    distinctTasks: number;
+    distinctRepositories: number;
+    usablePairedTasks: number;
+  };
+
+  /** Boundary attribution is optional. A missing pair is never a zero error. */
+  unsafeCheapGate: {
+    mode: 'conditional-when-available';
+    independentUnit: 'task' | 'repository';
+    minimumEligibleUnits: number;
+    maxUnsafeCheapUnitRate: number;
+  };
+
+  reusePolicy: ReusePolicy;
+  evidenceSelectionPolicy: EvidenceSelectionPolicy;
+  oracleDigest: string;
+  graderRuntimeDigest: string;
+  normalizedPriceDigest: string;
+  retryPolicy: CampaignRetryPolicy;
+  budget: CampaignBudget;
+  approval?: CampaignApproval;
+}
