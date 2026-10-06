@@ -1,0 +1,22 @@
+{
+  "arch": "x86_64",
+  "distro": "alpine",
+  "oci": {
+    "image": "localhost/pi8-rust-dev:1",
+    "runtime": "podman",
+    "pullPolicy": "never"
+  },
+  "rootfs": {
+    "label": "gondolin-root",
+    "sizeMb": 12288
+  },
+  "env": {
+    "CARGO_HOME": "/cache/cargo",
+    "CARGO_TARGET_DIR": "/cache/target",
+    "RUSTUP_TOOLCHAIN": "1.99.0-x86_64-unknown-linux-gnu",
+    "CARGO_NET_GIT_FETCH_WITH_CLI": "true",
+    "TERM": "dumb",
+    "PATH": "/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "RUSTUP_HOME": "/usr/local/rustup"
+  }
+}

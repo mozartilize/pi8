@@ -1,0 +1,15 @@
+FROM docker.io/library/python:3.12
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      postgresql postgresql-contrib gettext git ca-certificates \
+      libpq5 libmagic1 libxslt1-dev libcurl4-openssl-dev libgdk-pixbuf-2.0-0 liblcms2-2 libopenjp2-7 libtiff6 libwebp7 media-types \
+      libpango-1.0-0 libpangoft2-1.0-0 \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.12.1 /uv /uvx /bin/
+ENV UV_PROJECT_ENVIRONMENT=/usr/local UV_SYSTEM_PYTHON=1 UV_LINK_MODE=copy
+COPY pyproject.toml uv.lock /build/
+RUN cd /build && uv sync --locked --no-install-project --all-groups
+RUN service postgresql start \
+ && su postgres -c "psql -c \"CREATE ROLE saleor WITH SUPERUSER LOGIN PASSWORD 'saleor'\"" \
+ && su postgres -c "createdb -O saleor saleor" \
+ && service postgresql stop \
+ && printf "fsync = off\nsynchronous_commit = off\nfull_page_writes = off\nmax_connections = 200\ndynamic_shared_memory_type = mmap\n" >> /etc/postgresql/17/main/postgresql.conf

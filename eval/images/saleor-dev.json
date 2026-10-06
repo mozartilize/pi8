@@ -1,0 +1,14 @@
+{
+  "arch": "x86_64",
+  "distro": "alpine",
+  "oci": { "image": "localhost/pi8-saleor-dev:2", "runtime": "podman", "pullPolicy": "never" },
+  "rootfs": { "label": "gondolin-root", "sizeMb": 6144 },
+  "init": { "rootfsInitExtra": "./saleor-dev/init-extra.sh" },
+  "env": {
+    "PATH": "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C.UTF-8",
+    "DATABASE_URL": "postgres://saleor:saleor@127.0.0.1:5432/saleor",
+    "SECRET_KEY": "test",
+    "TERM": "dumb"
+  }
+}
