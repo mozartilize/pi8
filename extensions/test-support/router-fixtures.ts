@@ -140,3 +140,11 @@ export function subagentResultRow(
     ...overrides,
   };
 }
+
+/**
+ * True when the process runs the whole suite under the candidate policy
+ * (`PI8_POLICY_VERSION=cheapest-sufficient npm run test:candidate-policy`). A test that pins the
+ * named bands of the legacy policy skips this run. It has a counterpart that pins the
+ * candidate behavior.
+ */
+export const candidatePolicyRun = process.env.PI8_POLICY_VERSION === 'cheapest-sufficient';

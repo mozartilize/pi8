@@ -35,6 +35,7 @@
     "build": "tsc",
     "prepublishOnly": "npm run tsc",
     "test": "vitest run",
+    "test:candidate-policy": "PI8_POLICY_VERSION=cheapest-sufficient vitest run extensions",
     "replay:local": "PI8_LOCAL_REPLAY=1 timeout 900 vitest run extensions/serve/context-replay.test.ts",
     "check": "npm run tsc && npm test"
   },

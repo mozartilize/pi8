@@ -27,7 +27,7 @@ import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition
 import { contractMeta } from '../routing/policy/execution-contract.js';
 import type { FactsLog } from '../routing/policy/change-facts.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
-import { registryModel, routingDecision } from '../test-support/router-fixtures.js';
+import { candidatePolicyRun, registryModel, routingDecision } from '../test-support/router-fixtures.js';
 import { SessionTree } from '../test-support/session-tree.js';
 import {
   asStream,
@@ -2003,7 +2003,7 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
     });
 
-    it('investigates a plan request until the handoff, then plans at the handoff minimum', async () => {
+    it.skipIf(candidatePolicyRun)('investigates a plan request until the handoff, then plans at the handoff minimum', async () => {
       const session = await newSession();
       const first = await session.routeTurn(PLAN_PROMPT);
       expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'gather' });
@@ -2025,6 +2025,26 @@ describe('context acquisition', () => {
       expect(logged.at(-1)).toMatchObject({ pending: false, owner: planning?.chosen });
       // A different second handoff no longer applies.
       expect((await submitPrepared(handoff(2))).accepted).toBe(false);
+    });
+
+    it('under the candidate policy, plans at the minimum of the rubric when the final step is easy', async () => {
+      vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient');
+      try {
+        const session = await newSession();
+        await session.routeTurn(PLAN_PROMPT);
+        await session.routeTurnAgainWithSameUserEntry();
+        const state = harness.session.getWorkPhaseState()!;
+        harness.session.commitWorkPhaseState({
+          ...state, terminal: { kind: 'plan', complexity: 'trivial', scope: 'bounded' }, terminalRequirement: 0.35,
+        });
+        expect((await submitPrepared(handoff(1))).accepted).toBe(true);
+        const planning = await session.routeTurnAgainWithSameUserEntry();
+        expect(planning).toMatchObject({ dimension: 'plan', cause: 'investigation-handoff', chosen: 'alpha/cheap' });
+        expect(planning?.reasoningHandoff?.minimum).toBeCloseTo(0.40);
+        expect(harness.session.getWorkPhaseState()?.terminalBand).toBeUndefined();
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it('raises the planning minimum from the task shape declared at the handoff', async () => {
@@ -2584,7 +2604,7 @@ describe('context acquisition', () => {
       expect(harness.getProviderState().lastDecision?.mutationObserved).toBe(true);
     });
 
-    it('hands a small accepted plan to a cheaper executor on the next invocation', async () => {
+    it.skipIf(candidatePolicyRun)('hands a small accepted plan to a cheaper executor on the next invocation', async () => {
       const session = await planned();
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
       const executing = await session.routeTurnAgainWithSameUserEntry();
@@ -2594,6 +2614,56 @@ describe('context acquisition', () => {
       expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'active', band: 'economy', release: true });
       // The executor keeps serving the rest of the entry.
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+    });
+
+    describe('under the candidate policy', () => {
+      beforeEach(() => { vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient'); });
+      afterEach(() => { vi.unstubAllEnvs(); });
+
+      it('hands a small accepted plan to a cheaper executor, and the plan has no band', async () => {
+        const session = await planned();
+        expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+        const executing = await session.routeTurnAgainWithSameUserEntry();
+        expect(executing).toMatchObject({ dimension: 'implement', cause: 'execution-contract', chosen: 'alpha/cheap', policyVersion: 'cheapest-sufficient' });
+        const meta = harness.getProviderState().lastDecision?.executionContract;
+        expect(meta).toMatchObject({ status: 'active', release: true });
+        expect(meta?.band).toBeUndefined();
+      });
+
+      it('replaces an executor that two broken plans excluded with a strictly stronger model, without raising the minimum', async () => {
+        const session = await planned();
+        submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
+        const firstMinimum = harness.session.getWorkPhaseState()!.contract!.minimum;
+        expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+        breakWithUndeclaredEdit();
+        await session.routeTurnAgainWithSameUserEntry();
+        submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
+        expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+        breakWithUndeclaredEdit();
+        await session.routeTurnAgainWithSameUserEntry();
+        expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
+
+        submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
+        const escalated = await session.routeTurnAgainWithSameUserEntry();
+        expect(escalated).toMatchObject({ dimension: 'implement', chosen: 'beta/strong' });
+        expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
+        const meta = harness.getProviderState().lastDecision?.executionContract;
+        expect(meta?.band).toBeUndefined();
+        expect(meta?.minimum).toBe(firstMinimum);
+      });
+
+      it('releases a plan whose excluded executor left the pool, and the submitter serves it when no stronger model is provable', async () => {
+        const session = await planned();
+        const state = harness.session.getWorkPhaseState()!;
+        harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });
+        submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
+        const contract = harness.session.getWorkPhaseState()?.contract;
+        expect(contract).toMatchObject({ release: true });
+        expect(contract?.band).toBeUndefined();
+        expect(contract?.keepReason).toBeUndefined();
+        const next = await session.routeTurnAgainWithSameUserEntry();
+        expect(next).toMatchObject({ dimension: 'implement', chosen: 'beta/strong' });
+      });
     });
 
     it('releases the incumbent once: the executor that served keeps the plan', async () => {
@@ -2694,7 +2764,7 @@ describe('context acquisition', () => {
       expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
     });
 
-    it('lets an executor break a plan once, then routes later plans to a stronger model', async () => {
+    it.skipIf(candidatePolicyRun)('lets an executor break a plan once, then routes later plans to a stronger model', async () => {
       const session = await planned();
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
@@ -2718,7 +2788,7 @@ describe('context acquisition', () => {
       expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ band: 'standard' });
     });
 
-    it('keeps the submitter when an excluded executor is no longer in the pool', async () => {
+    it.skipIf(candidatePolicyRun)('keeps the submitter when an excluded executor is no longer in the pool', async () => {
       const session = await planned();
       const state = harness.session.getWorkPhaseState()!;
       harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });

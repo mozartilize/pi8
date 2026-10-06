@@ -12,7 +12,7 @@ import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
 import { computeRoleModels } from './agents/subagents.js';
-import { routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
+import { candidatePolicyRun, routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
 import { DECISION_LOG_FILE, setDecisionLogBase } from './host/decisionlog.js';
 import { defaultRouterSession } from './serve/router-session-state.js';
 import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
@@ -1385,7 +1385,7 @@ describe('mutation observation hooks', () => {
     expect((await hand({}, { deliverable: 'review' })).deliverable).toBe('review');
   });
 
-  it('raises a planning minimum to the band of the final step, never lowers it', async () => {
+  it.skipIf(candidatePolicyRun)('raises a planning minimum to the band of the final step, never lowers it', async () => {
     const registerTool = vi.fn();
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
     const tool = handoffTool(registerTool);
