@@ -46,6 +46,8 @@ export interface ExecutionEvidenceStore {
     result: CompletedExecutionV1,
     files?: ExecutionFiles,
   ): Promise<ExecutionEvidenceV1>;
+  /** Store a failed attempt apart from the slot. It is not evidence, and it never fills the slot. */
+  recordOperationalAttempt(slot: ExecutionSlotKey, result: CompletedExecutionV1): Promise<void>;
 }
 
 export interface FileStoreOptions {
@@ -182,6 +184,10 @@ export class FileEvidenceStore implements ExecutionEvidenceStore {
     }
   }
 
+  async recordOperationalAttempt(slot: ExecutionSlotKey, result: CompletedExecutionV1): Promise<void> {
+    writeJsonAtomic(join(this.dir, 'operational', slot.recipeHash, String(slot.replicate), `${this.now()}-${randomBytes(4).toString('hex')}.json`), { slot, result });
+  }
+
   async appendExecution(
     slot: ExecutionSlotKey,
     recipe: ExecutionRecipeV1,
@@ -190,8 +196,7 @@ export class FileEvidenceStore implements ExecutionEvidenceStore {
   ): Promise<ExecutionEvidenceV1> {
     if (hashRecipe(recipe) !== slot.recipeHash) throw new Error('recipe does not match the slot');
     if (!isEvidenceStatus(result.status)) {
-      // Store an operational failure in a separate directory. It does not fill the slot.
-      writeJsonAtomic(join(this.dir, 'operational', slot.recipeHash, String(slot.replicate), `${this.now()}-${randomBytes(4).toString('hex')}.json`), { slot, result });
+      await this.recordOperationalAttempt(slot, result);
       throw new Error(`${result.status} is an operational failure, not execution evidence`);
     }
     writeJsonAtomic(join(this.dir, 'recipes', `${slot.recipeHash}.json`), recipe);
@@ -205,7 +210,8 @@ export class FileEvidenceStore implements ExecutionEvidenceStore {
     let artifact = result.finalArtifact;
     if (artifactSource && existsSync(artifactSource)) {
       cpSync(artifactSource, join(staging, 'artifact'), { recursive: true });
-      artifact = { ...artifact, path: 'artifact' };
+      // The path names the final place of the artifact, so a later grade can read it.
+      artifact = { ...artifact, path: join(finalDir, 'artifact') };
     }
     if (files.trajectoryPath && existsSync(files.trajectoryPath)) cpSync(files.trajectoryPath, join(staging, 'trajectory.jsonl'));
     if (files.decisionLogPath && existsSync(files.decisionLogPath)) cpSync(files.decisionLogPath, join(staging, 'decisions.jsonl'));

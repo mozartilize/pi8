@@ -127,8 +127,15 @@ export function attemptsFromDecisionLog(path: string): UsageAttemptV1[] {
   return attempts;
 }
 
-/** Attempts from a Pi session file. A run without the router has no decision log, so each assistant message is one served attempt. */
-export function attemptsFromSession(path: string): UsageAttemptV1[] {
+/** The price of a model at the time of a run, in USD per 1M tokens. The registry gives it. */
+export type PriceSnapshotSource = (provider: string, modelId: string) => Omit<NonNullable<UsageAttemptV1['executionPriceSnapshot']>, 'source'> | undefined;
+
+/**
+ * Attempts from a Pi session file. A run without the router has no decision
+ * log, so each assistant message is one served attempt. The session has no
+ * price, so the caller gives the registry price of each model.
+ */
+export function attemptsFromSession(path: string, priceOf?: PriceSnapshotSource): UsageAttemptV1[] {
   const attempts: UsageAttemptV1[] = [];
   for (const line of existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean) : []) {
     let entry: { type?: string; id?: string; message?: Record<string, unknown> };
@@ -158,6 +165,7 @@ export function attemptsFromSession(path: string): UsageAttemptV1[] {
       ...(usage?.cacheWrite !== undefined ? { cacheWriteTokens: usage.cacheWrite } : {}),
       usageComplete: usage?.input !== undefined && usage?.output !== undefined,
       ...(usage?.cost?.total !== undefined ? { providerReportedUsd: usage.cost.total } : {}),
+      ...(priceOf?.(provider, modelId) ? { executionPriceSnapshot: { source: REGISTRY_SOURCE, ...priceOf(provider, modelId) } } : {}),
     });
   }
   return attempts;
@@ -184,10 +192,10 @@ export function rawUsage(attempts: readonly UsageAttemptV1[]): RawExecutionUsage
 }
 
 /** Raw usage of a run: the decision log when it has attempt records, else the session. */
-export function readRawUsage(paths: { decisionLogPath?: string; sessionPath?: string }): RawExecutionUsage {
+export function readRawUsage(paths: { decisionLogPath?: string; sessionPath?: string; priceOf?: PriceSnapshotSource }): RawExecutionUsage {
   const fromLog = paths.decisionLogPath ? attemptsFromDecisionLog(paths.decisionLogPath) : [];
   if (fromLog.some((attempt) => attempt.source === 'main-agent')) return rawUsage(fromLog);
-  const fromSession = paths.sessionPath ? attemptsFromSession(paths.sessionPath) : [];
+  const fromSession = paths.sessionPath ? attemptsFromSession(paths.sessionPath, paths.priceOf) : [];
   return rawUsage([...fromSession, ...fromLog.filter((attempt) => attempt.source === 'subagent')]);
 }
 

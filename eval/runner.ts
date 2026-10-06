@@ -9,7 +9,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:f
 import { join } from 'node:path';
 import { digestDirectory } from './fs-util.ts';
 import { policyDigest } from './recipe.ts';
-import { readRawUsage } from './spend.ts';
+import { readRawUsage, type PriceSnapshotSource } from './spend.ts';
 import {
   BASE_ETC_ENTRIES, BASE_READ_ONLY_PATHS, createSandbox, SANDBOX_HOME, SANDBOX_OUT,
   type SandboxProfile, type SecureSandbox,
@@ -215,6 +215,8 @@ export interface WholeTaskParams {
   environmentPath: string;
   runDir: string;
   runId: string;
+  /** The registry price of each model at run time. A run without the router needs it for the historical cost. */
+  priceOf?: PriceSnapshotSource;
 }
 
 export interface WholeTaskOutput {
@@ -245,6 +247,7 @@ export async function runWholeTask(params: WholeTaskParams): Promise<WholeTaskOu
       rawUsage: readRawUsage({
         ...(facts.decisionLogPath ? { decisionLogPath: facts.decisionLogPath } : {}),
         ...(facts.sessionPath ? { sessionPath: facts.sessionPath } : {}),
+        ...(params.priceOf ? { priceOf: params.priceOf } : {}),
       }),
       wallTimeMs: endedAt.getTime() - startedAt.getTime(),
       providerFailures: facts.providerFailures,
