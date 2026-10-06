@@ -15,7 +15,7 @@ import type { GradeStore } from './grade-store.ts';
 import { slotKey, wholeTaskRecipe } from './recipe.ts';
 import { runWholeTask, type AgentRunner } from './runner.ts';
 import type { SandboxFactory, SandboxProfile } from './sandbox.ts';
-import { historicalCost, normalizedCost, type PriceSnapshotSource, type PriceTable } from './spend.ts';
+import { cacheFacts, historicalCost, normalizedCost, type PriceSnapshotSource, type PriceTable } from './spend.ts';
 import type {
   ActivationCampaignManifestV1, CompletedExecutionV1, EvaluationArm, ExecutionEvidenceV1, ExecutionRecipeV1, ExecutionRequestV1,
   GradeEvidenceV1, PrivateOracleSpec, PublicTaskSpec,
@@ -71,6 +71,8 @@ export interface EvaluatedAttempt {
   /** The run ended as completed and the oracle failed it. Nothing showed the failure to the user. */
   silentFailure?: boolean;
   fallbackCount: number;
+  modelSwitches: number;
+  cacheReadShare?: number;
 }
 
 export type SlotResult =
@@ -178,6 +180,7 @@ export async function runFixedArm(deps: ArmRunDeps, request: ArmRunRequest): Pro
         ...(evidence.providerFailures > 0 ? { providerFailure: true } : {}),
         ...(evidence.status === 'completed' && grade.outcome === 'verified-fail' ? { silentFailure: true } : {}),
         fallbackCount: evidence.fallbackCount,
+        ...cacheFacts(evidence.rawUsage),
       },
     });
   }

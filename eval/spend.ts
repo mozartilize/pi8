@@ -252,3 +252,36 @@ export function historicalCost(attempts: readonly UsageAttemptV1[]): PriceView {
 export function normalizedCost(attempts: readonly UsageAttemptV1[], table: PriceTable): PriceView {
   return sumView(table.digest, attempts, (attempt) => table.prices[`${attempt.provider}/${attempt.modelId}`]);
 }
+
+export interface CacheFacts {
+  /** Main-agent attempts that served on a different model than the attempt before. */
+  modelSwitches: number;
+  /** Cached prompt tokens over all prompt tokens. Undefined when an attempt has no token counts. */
+  cacheReadShare?: number;
+}
+
+/**
+ * Model switches and cache reuse of one execution, from its attempt usage. A switch loses the prompt
+ * cache of the model before it, so the two values show the cost of a policy that switches often.
+ * A change of effort on the same model is not a switch here.
+ */
+export function cacheFacts(usage: RawExecutionUsage): CacheFacts {
+  const main = usage.attempts
+    .filter((attempt) => attempt.source === 'main-agent' && attempt.outcome === 'served')
+    .sort((a, b) => a.sequence - b.sequence);
+  let modelSwitches = 0;
+  for (let index = 1; index < main.length; index += 1) {
+    const before = main[index - 1]!;
+    const after = main[index]!;
+    if (before.provider !== after.provider || before.modelId !== after.modelId) modelSwitches += 1;
+  }
+  let cached = 0;
+  let total = 0;
+  for (const attempt of usage.attempts) {
+    if (attempt.inputTokens === undefined) return { modelSwitches };
+    const read = attempt.cacheReadTokens ?? 0;
+    cached += read;
+    total += attempt.inputTokens + read + (attempt.cacheWriteTokens ?? 0);
+  }
+  return { modelSwitches, ...(total > 0 ? { cacheReadShare: cached / total } : {}) };
+}

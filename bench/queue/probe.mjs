@@ -202,7 +202,7 @@ const units = tasks.map((task) => ({ taskId: task.id, repositoryId: 'queue', cur
 const report = buildReport({ manifest: campaign.manifest(), units, armReports });
 const summary = {
   verdict: report.verdict, reasons: report.reasons, checks: report.checks, evidence: report.evidence, metrics: report.metrics, ledger: campaign.ledger().totals(),
-  perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((attempt) => ({ outcome: attempt.outcome, usd: attempt.historicalCostUsd, normalizedUsd: attempt.normalizedCostUsd, seconds: Math.round(attempt.wallTimeMs / 1000), served: attempt.candidateKey, fallbacks: attempt.fallbackCount }))])),
+  perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((attempt) => ({ outcome: attempt.outcome, usd: attempt.historicalCostUsd, normalizedUsd: attempt.normalizedCostUsd, seconds: Math.round(attempt.wallTimeMs / 1000), served: attempt.candidateKey, fallbacks: attempt.fallbackCount, switches: attempt.modelSwitches, cacheReadShare: attempt.cacheReadShare }))])),
 };
 const out = join(evalDir, 'reports', `${CAMPAIGN_ID}-${stamp}.summary.json`);
 mkdirSync(dirname(out), { recursive: true });

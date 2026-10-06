@@ -2,7 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { attemptsFromDecisionLog, dedupeAttempts, historicalCost, normalizedCost, rawUsage, readRawUsage } from './spend.ts';
+import { attemptsFromDecisionLog, cacheFacts, dedupeAttempts, historicalCost, normalizedCost, rawUsage, readRawUsage } from './spend.ts';
+import type { UsageAttemptV1 } from './schema.ts';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'pi8-spend-')); });
@@ -61,5 +62,27 @@ describe('attempt-level usage', () => {
     writeFileSync(session, `${JSON.stringify({ type: 'message', id: 'm1', message: { role: 'assistant', provider: 'p', model: 'm', stopReason: 'stop', usage: { input: 5, output: 6, cacheRead: 0, cacheWrite: 0, cost: { total: 0.1 } } } })}\n`);
     const usage = readRawUsage({ sessionPath: session });
     expect(usage).toMatchObject({ spendIncomplete: false, attempts: [{ source: 'main-agent', candidateKey: 'p/m', inputTokens: 5, providerReportedUsd: 0.1 }] });
+  });
+});
+
+describe('cache facts of an execution', () => {
+  const at = (sequence: number, model: string, over: Partial<UsageAttemptV1> = {}): UsageAttemptV1 => ({
+    usageEventId: `u${sequence}`, attemptId: `a${sequence}`, sequence, source: 'main-agent',
+    provider: model.split('/')[0]!, modelId: model.split('/')[1]!, candidateKey: model, outcome: 'served',
+    inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0, usageComplete: true, ...over,
+  });
+
+  it('counts a change of served model as a switch, but not a change of effort, a failed attempt, or a subagent', () => {
+    const usage = { spendIncomplete: false, attempts: [
+      at(1, 'p/a'), at(2, 'p/a', { candidateKey: 'p/a:high' }), at(3, 'p/b', { outcome: 'provider-failure' }),
+      at(4, 'p/a'), at(5, 'q/c', { source: 'subagent' }), at(6, 'p/b'), at(7, 'p/a'),
+    ] };
+    expect(cacheFacts(usage).modelSwitches).toBe(2);
+  });
+
+  it('gives the share of prompt tokens read from the cache, and no share without token counts', () => {
+    const usage = { spendIncomplete: false, attempts: [at(1, 'p/a', { cacheWriteTokens: 50 }), at(2, 'p/a', { inputTokens: 50, cacheReadTokens: 200 })] };
+    expect(cacheFacts(usage).cacheReadShare).toBeCloseTo(200 / 400);
+    expect(cacheFacts({ spendIncomplete: true, attempts: [at(1, 'p/a', { inputTokens: undefined })] }).cacheReadShare).toBeUndefined();
   });
 });
