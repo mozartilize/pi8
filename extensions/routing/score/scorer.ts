@@ -651,8 +651,14 @@ function nextBandCandidates(stronger: Candidate[], source: Candidate | undefined
   return above.filter((entry) => entry.rank === next).map((entry) => entry.candidate);
 }
 
+/**
+ * Price decides, with no credit for quality above the capability minimums. The cache credit and
+ * the protocol penalty still apply, bounded, and time and the key break ties.
+ */
+export const ECONOMICS_FIRST_WEIGHTS: ScoreWeights = { quality: 0, cost: 1, speed: 0 };
+
 /** An escalation target is already stronger, so among targets the price decides. */
-const ESCALATION_WEIGHTS: ScoreWeights = { quality: 0, cost: 1, speed: 0 };
+const ESCALATION_WEIGHTS: ScoreWeights = ECONOMICS_FIRST_WEIGHTS;
 
 /**
  * Pure same-dimension capability escalation: given the model that just

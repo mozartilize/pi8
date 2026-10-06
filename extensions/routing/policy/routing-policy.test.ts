@@ -960,3 +960,44 @@ describe('policy version', () => {
     expect(resolveRoutingDecisionForEvaluation(input, 'cheapest-sufficient').decision.chosen).toBe('test/mid');
   });
 });
+
+describe('selection under the candidate policy', () => {
+  const priced = (id: string, quality: number, price?: number) => candidate(id, {
+    bench: benchRow(id, { quality: { intelligence: quality, coding: quality, agenticCoding: quality } }),
+    ...(price != null ? { cost: { input: price, output: price * 4, cacheRead: 0, cacheWrite: 0 } } : {}),
+  });
+  const pick = (candidates: Candidate[], version: 'legacy' | 'cheapest-sufficient', over: Partial<RoutingPolicyInput> = {}) =>
+    resolveRoutingDecisionForEvaluation(makePolicyInput({
+      candidates,
+      baseDimension: 'implement',
+      config: makePolicyConfig({ dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS, implement: { quality: 1, cost: 0, speed: 0 } } }),
+      ...over,
+    }), version).decision;
+
+  it('gives no credit for quality above the minimums, whatever the configured weights say', () => {
+    const pool = [priced('p/strong', 56, 10), priced('p/adequate', 35, 1)];
+    expect(pick(pool, 'legacy').chosen).toBe('p/strong');
+    expect(pick(pool, 'cheapest-sufficient').chosen).toBe('p/adequate');
+  });
+
+  it('never lets a lower price offset a missed minimum', () => {
+    const pool = [priced('p/weak-free', 10, 0), priced('p/adequate', 35, 5)];
+    const decision = pick(pool, 'cheapest-sufficient');
+    expect(decision.chosen).toBe('p/adequate');
+    expect(decision.fallbackChain).toEqual(['p/adequate', 'p/weak-free']);
+  });
+
+  it('never counts an unknown price as free', () => {
+    const unpriced = makeCandidate({
+      registryId: 'p/unpriced', provider: 'p', id: 'unpriced',
+      bench: benchRow('p/unpriced', { quality: { intelligence: 35, coding: 35, agenticCoding: 35 } }),
+    });
+    expect(unpriced.cost).toBeUndefined();
+    expect(pick([unpriced, priced('p/priced', 35, 5)], 'cheapest-sufficient').chosen).toBe('p/priced');
+  });
+
+  it('keeps every candidate in the fallback chain', () => {
+    const pool = [priced('p/a', 56, 10), priced('p/b', 35, 1), priced('p/c', 10, 0)];
+    expect(new Set(pick(pool, 'cheapest-sufficient').fallbackChain)).toEqual(new Set(['p/a', 'p/b', 'p/c']));
+  });
+});

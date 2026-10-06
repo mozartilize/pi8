@@ -15,6 +15,7 @@ import { addReasonDetail } from '../score/decision-reason.js';
 import type { AutoRouterConfig } from '../../types.js';
 import type { ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
 import {
+  ECONOMICS_FIRST_WEIGHTS,
   pickBest,
   escalationChain,
   isValidEscalationCandidate,
@@ -437,7 +438,9 @@ function resolveWithPolicy(input: RoutingPolicyInput, version: PolicyVersion): R
   const pickOpts: ScoreOpts = handoffMinimum != null
     ? { ...baseOpts, handoffMinimum }
     : baseOpts;
-  let decision = pickBest(pool, dimension, config.dimensionWeights[dimension], pickOpts);
+  // The candidate policy ranks the candidates of one capability tier by price alone.
+  const weights = version === 'cheapest-sufficient' ? ECONOMICS_FIRST_WEIGHTS : config.dimensionWeights[dimension];
+  let decision = pickBest(pool, dimension, weights, pickOpts);
 
   // Objective trajectory friction may repick away from the source
   // model when scoring would keep it. An applied repick skips both incumbent

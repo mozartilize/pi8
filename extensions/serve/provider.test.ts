@@ -28,6 +28,8 @@ import { contractMeta } from '../routing/policy/execution-contract.js';
 import type { FactsLog } from '../routing/policy/change-facts.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { candidatePolicyRun, registryModel, routingDecision } from '../test-support/router-fixtures.js';
+
+afterEach(() => { vi.unstubAllEnvs(); });
 import { SessionTree } from '../test-support/session-tree.js';
 import {
   asStream,
@@ -687,7 +689,7 @@ describe('provider orchestration', () => {
     expectDecisionContract({ ...handles, match: { cause: 'investigation' } });
   });
 
-  it('uses JSON-configured dimension weights when serving a turn', async () => {
+  it.skipIf(candidatePolicyRun)('uses JSON-configured dimension weights when serving a turn', async () => {
     writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ dimensionWeights: {
         implement: { quality: 1, cost: 0, speed: 0 },
       },
@@ -707,6 +709,30 @@ describe('provider orchestration', () => {
     // With default implement weights the much cheaper beta candidate wins;
     // the JSON override makes quality decisive.
     expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first');
+  });
+
+  it('under the candidate policy, ignores configured dimension weights and serves the cheaper candidate that meets the minimums', async () => {
+    vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient');
+    try {
+      writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ dimensionWeights: {
+          implement: { quality: 1, cost: 0, speed: 0 },
+        },
+      }));
+      writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+        version: 2,
+        syncedAt: Date.now(),
+        aliases: {},
+        models: [
+          { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, } },
+          { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90, } },
+        ],
+      }));
+      const { routedContext } = await selectedTurn('implement the parser');
+      await harness.serve(routedContext);
+      expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('never delegates to its own router/auto model, even as a last resort', async () => {
@@ -3121,7 +3147,13 @@ describe('trajectory capability escalation', () => {
     expect(escalation?.trajectoryFriction?.fromModel).toBe(fromModel);
   });
 
-  it('does not consume pending evidence when a weaker recovery candidate serves', async () => {
+  // The candidate policy serves the cheapest candidate that meets the minimums, so the weaker
+  // recovery candidate must cost more than the source for the source to serve first.
+  it.each([
+    ['legacy', { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 }],
+    ['cheapest-sufficient', { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }],
+  ] as const)('does not consume pending evidence when a weaker recovery candidate serves: %s', async (version, weakerCost) => {
+    vi.stubEnv('PI8_POLICY_VERSION', version);
     const harness = await setupProviderTest({
       dir: temp.path,
       config: { switchMargin: 0.15 },
@@ -3163,7 +3195,7 @@ describe('trajectory capability escalation', () => {
         registryModel('delta/cheap', {
           contextWindow: 200000,
           maxTokens: 8192,
-          cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 },
+          cost: weakerCost,
         }),
       ],
     });
@@ -3197,6 +3229,7 @@ describe('trajectory capability escalation', () => {
     await harness.serve(context);
     expect(harness.getProviderState().lastDecision?.chosen).toBe('delta/cheap');
     expect(harness.session.peekPendingTrajectoryEscalation()).toBe(stored);
+    vi.unstubAllEnvs();
   });
 });
 
