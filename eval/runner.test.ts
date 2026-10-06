@@ -65,8 +65,9 @@ describe.skipIf(!available)('whole-task run', () => {
       rawUsage: { attempts: [{ source: 'main-agent', candidateKey: 'p/m', inputTokens: 3, outputTokens: 4 }], spendIncomplete: false },
     });
     expect(readFileSync(join(out.result.finalArtifact.path, 'made.txt'), 'utf8')).toBe('made\n');
-    expect(out.files.trajectoryPath).toBeTruthy();
-    expect(out.files.decisionLogPath).toBeTruthy();
+    // The files outlive the sandbox.
+    expect(readFileSync(out.files.trajectoryPath!, 'utf8')).toContain('"provider":"p"');
+    expect(readFileSync(out.files.decisionLogPath!, 'utf8')).toContain('trajectory-escalation');
     // The public environment stays unchanged.
     expect(() => readFileSync(join(environment, 'made.txt'))).toThrow();
   });

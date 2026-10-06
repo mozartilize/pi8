@@ -233,6 +233,9 @@ export async function runWholeTask(params: WholeTaskParams): Promise<WholeTaskOu
     const output = await params.runner.run({ sandbox, task: params.task, recipe: params.recipe, arm: params.arm, runDir: params.runDir });
     // The candidate process and all model calls are finished. Capture the evidence from the host.
     const facts = readSessionFacts(join(sandbox.outDir, 'sessions'));
+    // The sandbox is destroyed below. Keep the session and the decision log in the run directory first.
+    if (facts.sessionPath) cpSync(facts.sessionPath, join(params.runDir, 'session.jsonl'));
+    if (facts.decisionLogPath) cpSync(facts.decisionLogPath, join(params.runDir, 'decisions.jsonl'));
     const artifact = captureArtifact(sandbox.workDir, params.runDir);
     const endedAt = new Date();
     const result: CompletedExecutionV1 = {
@@ -257,8 +260,8 @@ export async function runWholeTask(params: WholeTaskParams): Promise<WholeTaskOu
     return {
       result,
       files: {
-        ...(facts.sessionPath ? { trajectoryPath: facts.sessionPath } : {}),
-        ...(facts.decisionLogPath ? { decisionLogPath: facts.decisionLogPath } : {}),
+        ...(facts.sessionPath ? { trajectoryPath: join(params.runDir, 'session.jsonl') } : {}),
+        ...(facts.decisionLogPath ? { decisionLogPath: join(params.runDir, 'decisions.jsonl') } : {}),
       },
     };
   } finally {
