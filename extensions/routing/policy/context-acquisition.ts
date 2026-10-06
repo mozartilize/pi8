@@ -190,6 +190,12 @@ export function noteContextRead(state: WorkPhaseState, path: string): WorkPhaseS
   return { ...state, readPaths };
 }
 
+/** Count a read of part of a file, until the entry's handoff. It has no effect on routing. */
+export function notePartialRead(state: WorkPhaseState): WorkPhaseState {
+  if (state.reasoningHandoff || state.contextStatus === 'ready-pending' || state.contextStatus === 'served') return state;
+  return { ...state, partialReadCount: (state.partialReadCount ?? 0) + 1 };
+}
+
 /**
  * Files a handoff is measured on: the declared files first, then the most
  * recently read ones, deduplicated. Reads count even when the model declares

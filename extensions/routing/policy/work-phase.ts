@@ -42,6 +42,8 @@ export interface WorkPhaseState {
   contractReminded?: boolean;
   /** Files the entry's tools looked at, most recent first; router-observed, never inherited. */
   readPaths?: string[];
+  /** Reads with `offset` or `limit` before the entry's handoff; router-observed, never inherited. */
+  partialReadCount?: number;
   /** Context → planning/review handoff for this entry; never inherited. */
   reasoningHandoff?: ReasoningHandoffMeta;
   /** Facts declared at this entry's accepted handoff, and their log record; never inherited. */

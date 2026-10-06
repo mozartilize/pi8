@@ -61,6 +61,15 @@ export type CheckState = typeof CHECK_STATES[number];
 /** Result of one verifier run: `timeout` is a check that did not finish. */
 export type CheckVerdict = 'pass' | 'fail' | 'timeout';
 
+/**
+ * What a check can establish, apart from its verdict. `none`: no executable
+ * test ran. `partial`: a check ran, but its authority and assertions are not
+ * established; this is the default for checks the executor wrote or chose.
+ * `contract`: a user or project accepted the check as the acceptance result.
+ * The router never assigns `contract` from an observed run.
+ */
+export type CheckStrength = 'none' | 'partial' | 'contract';
+
 /** Most items kept from one declared list. */
 export const MAX_FACT_ITEMS = 20;
 /** Longest declared item kept, in characters. */
@@ -82,6 +91,34 @@ export interface DeclaredFacts {
   irreversible?: string[];
   answers?: Partial<Record<FactQuestion, FactAnswer>>;
   domains?: ChangeDomain[];
+}
+
+export type MeasurementStatus = 'measured' | 'partial' | 'unsupported' | 'unavailable' | 'limit' | 'timeout' | 'cancelled';
+
+/** A version of Git's non-ignored working files, not the commit or the runtime environment. */
+export interface WorkspaceSnapshot {
+  status: MeasurementStatus;
+  scope: 'git-worktree';
+  digest?: string;
+  files?: number;
+}
+
+/** Reported execution evidence. It never establishes semantic coverage or independent authority. */
+export interface CheckReceipt {
+  id: string;
+  kind: 'test' | 'typecheck' | 'lint' | 'build';
+  verdict: CheckVerdict;
+  strength: CheckStrength;
+  report: 'tap' | 'vitest' | 'unknown' | 'truncated';
+  tests?: number;
+  passed?: number;
+  failed?: number;
+  skipped?: number;
+  cancelled?: number;
+  elapsedMs?: number;
+  snapshot: WorkspaceSnapshot;
+  freshness: 'current' | 'stale' | 'unknown';
+  outcome: 'unverified';
 }
 
 /** Router measurements. An undefined field is a measurement that failed or did not apply. */
@@ -158,6 +195,8 @@ export interface CheckVerdicts {
   beforeHandoff?: CheckVerdict;
   afterHandoff?: CheckVerdict;
   runsAfterHandoff: number;
+  /** Bounded evidence from observed checks. No paths, commands, or test names. */
+  receipts?: CheckReceipt[];
 }
 
 /** Record one verifier result. A result after the accepted handoff counts as a run of the next step. */

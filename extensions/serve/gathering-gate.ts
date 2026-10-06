@@ -19,6 +19,7 @@ import {
   acquisitionRestricted,
   countDenial,
   noteContextRead,
+  notePartialRead,
   owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { isMutationCall } from '../routing/policy/mutation-detector.js';
@@ -99,7 +100,11 @@ export async function observeContextRead(
     // The state may have moved on while the files were checked.
     const state = session.getWorkPhaseState();
     if (files.length === 0 || !state || state.intentKey !== intentKey) return;
-    const next = files.reduce(noteContextRead, state);
+    const read = files.reduce(noteContextRead, state);
+    // A read with offset or limit is not a full read of the file.
+    const input = (event.input ?? {}) as { offset?: unknown; limit?: unknown };
+    const partial = event.toolName === 'read' && (input.offset !== undefined || input.limit !== undefined);
+    const next = partial ? notePartialRead(read) : read;
     if (next !== state) session.commitWorkPhaseState(next);
   } catch {
     // Observation must never fail a tool call.

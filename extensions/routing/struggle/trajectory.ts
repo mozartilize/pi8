@@ -130,6 +130,14 @@ export class TrajectoryState {
     };
   }
 
+  /** Warning and severe signals of the evidence so far. Read-only: it escalates and records nothing. */
+  observedSignals(): Array<{ kind: string; severity: 'warning' | 'severe'; evidenceCount: number }> {
+    return classifyTrajectoryStruggle(this.snapshot()).signals.flatMap((signal) =>
+      signal.severity === 'warning' || signal.severity === 'severe'
+        ? [{ kind: signal.kind, severity: signal.severity, evidenceCount: signal.evidenceCount }]
+        : []);
+  }
+
   observeToolResult(event: ToolCycleInput, invocation: number): StruggleDecision | undefined {
     if (this.completedIds.has(event.toolCallId)) {
       return undefined;

@@ -12,6 +12,7 @@ import {
   evidencePaths,
   evidenceShape,
   noteContextRead,
+  notePartialRead,
   serveContextHandoff,
 } from './context-acquisition.js';
 import type { WorkPhaseState } from './work-phase.js';
@@ -158,5 +159,13 @@ describe('evidence', () => {
     expect(evidenceShape(['/repo/a/x.ts', '/repo/a/y.ts', '/repo/b/z.ts']))
       .toEqual({ applicable: true, files: 3, directories: 2 });
     expect(evidenceShape([])).toEqual({ applicable: false, files: 0, directories: 0 });
+  });
+});
+
+describe('notePartialRead', () => {
+  it('counts partial reads until the handoff is served', () => {
+    const counted = notePartialRead(notePartialRead(state()));
+    expect(counted.partialReadCount).toBe(2);
+    expect(notePartialRead(state({ contextStatus: 'served', partialReadCount: 2 })).partialReadCount).toBe(2);
   });
 });

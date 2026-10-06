@@ -19,6 +19,7 @@ import type {
 } from '../types.js';
 import type { ContextReason } from '../routing/context/types.js';
 import type { CheckVerdicts, FactsLog } from '../routing/policy/change-facts.js';
+import type { DecisionEvidenceV1 } from '../routing/policy/decision-evidence.js';
 import { resolveStoragePath } from '../bench/store.js';
 import { servedKey } from './ui.js';
 import { sessionSidecarPath } from '../sessionpaths.js';
@@ -120,6 +121,8 @@ export interface DecisionLogEntry {
     facts?: FactsLog;
     /** Verifier results before and after the handoff. */
     checks?: CheckVerdicts;
+    /** What the router knew before it chose the next model. */
+    evidence?: DecisionEvidenceV1;
   };
   /** The entry's work-context resolution: tier, ids, categories; never titles. */
   workContext?: WorkContextMeta;
@@ -146,6 +149,8 @@ export interface DecisionLogEntry {
     /** Set on `outcome` records: how the contract ended. */
     outcome?: ContractOutcome;
     meta?: ExecutionContractMeta;
+    /** What the router knew before it chose the executor. */
+    evidence?: DecisionEvidenceV1;
   };
   /** Message-origin census; a spike in compaction-summary explains drift. */
   provenance?: Record<string, number>;
@@ -190,6 +195,7 @@ export interface ExecutionContractSignal {
   rejectReason?: string;
   outcome?: ContractOutcome;
   meta?: ExecutionContractMeta;
+  evidence?: DecisionEvidenceV1;
 }
 
 /** Append an execution-contract transition. Best-effort; never throws into the tool path. */
@@ -218,6 +224,7 @@ export function appendExecutionContractSignal(
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
         ...(signal.outcome ? { outcome: signal.outcome } : {}),
         ...(signal.meta ? { meta: signal.meta } : {}),
+        ...(signal.evidence ? { evidence: signal.evidence } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');
@@ -251,6 +258,7 @@ export interface ContextHandoffSignal {
   contextReasons?: ContextReason[];
   facts?: FactsLog;
   checks?: CheckVerdicts;
+  evidence?: DecisionEvidenceV1;
 }
 
 /** Append a context handoff transition. Best-effort; never throws into the tool path. */
@@ -282,6 +290,7 @@ export function appendContextHandoffSignal(
         ...(signal.contextReasons?.length ? { contextReasons: signal.contextReasons } : {}),
         ...(signal.facts ? { facts: signal.facts } : {}),
         ...(signal.checks ? { checks: signal.checks } : {}),
+        ...(signal.evidence ? { evidence: signal.evidence } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

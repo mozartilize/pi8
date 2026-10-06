@@ -2542,9 +2542,10 @@ describe('context acquisition', () => {
         const { session, state } = await handOff(HARD_FACTS);
         expect(state.changeFacts?.declared?.decisions).toEqual(HARD_FACTS.decisions);
         const records = await session.readDecisionRecords();
-        const accept = records.map((r) => r.investigationHandoff as { action?: string; facts?: FactsLog } | undefined)
+        const accept = records.map((r) => r.investigationHandoff as { action?: string; facts?: FactsLog; evidence?: { version: number; declaredFacts: { decisions?: number } } } | undefined)
           .find((h) => h?.action === 'accept');
         expect(accept?.facts?.declared).toMatchObject({ checkCommands: 1, checkState: 'fails', modify: 2, create: 0, decisions: 3, unknowns: 1 });
+          expect(accept?.evidence).toMatchObject({ version: 1, declaredFacts: { decisions: 3 } });
         expect(accept?.facts?.shadow.used).toBe(state.reasoningHandoff?.minimum);
         expect(JSON.stringify(records)).not.toContain('secret');
       });

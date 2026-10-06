@@ -59,6 +59,7 @@ import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 import { factsLog, parseDeclaredFacts, type ChangeMeasurements, type DeclaredFacts } from '../routing/policy/change-facts.js';
 import { changeFactsParameter } from './change-facts-schema.js';
 import { measureChange } from './change-measurements.js';
+import { decisionEvidence } from '../routing/policy/decision-evidence.js';
 
 const DESCRIPTION =
   `${ROUTER_TOOLS_CONDITION} ` +
@@ -525,7 +526,20 @@ export function submitExecutionContract(
     : valued;
   session.commitWorkPhaseState(next);
   const meta = contractMeta(next);
-  appendExecutionContractSignal({ intentKey: state.intentKey, served, action: 'accept', meta });
+  appendExecutionContractSignal({
+    intentKey: state.intentKey,
+    served,
+    action: 'accept',
+    meta,
+    ...(next.contract?.facts
+      ? {
+          evidence: decisionEvidence('implement', next.contract.facts, state.checkVerdicts, {
+            partialReadCount: state.partialReadCount ?? 0,
+            trajectorySignals: session.trajectorySignals(),
+          }),
+        }
+      : {}),
+  });
   recordBoundary(session, next, 'execution-contract', state.intentKey);
   const contract = next.contract!;
   const header = contract.release

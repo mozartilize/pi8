@@ -615,6 +615,11 @@ export class RouterSession {
     return this.trajectory.observeToolResult(event, invocation);
   }
 
+  /** Warning and severe trajectory signals so far. Read-only. */
+  trajectorySignals(): ReturnType<TrajectoryState['observedSignals']> {
+    return this.trajectory.observedSignals();
+  }
+
   /**
    * Bind struggle evidence to whichever capability is serving before that
    * evidence is recorded. Every owner change goes through here — a trajectory

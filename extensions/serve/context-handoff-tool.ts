@@ -50,6 +50,7 @@ import { getWorkItem } from '../routing/context/ledger.js';
 import { contextCheck } from '../routing/context/resolve.js';
 import { unmetArtifactPaths } from '../routing/context/grounding.js';
 import { CLARIFICATION_TEXT, countContextRefusal, logContextHandoff as log } from './gathering-gate.js';
+import { decisionEvidence } from '../routing/policy/decision-evidence.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 import { factsLog, parseDeclaredFacts, type ChangeMeasurements } from '../routing/policy/change-facts.js';
 import { defaultRequirement } from '../routing/score/scorer.js';
@@ -403,6 +404,10 @@ export function submitContextHandoff(
     ...(next.reasoningHandoff ? { handoff: next.reasoningHandoff } : {}),
     deliverable,
     facts: changeFacts.log,
+    evidence: decisionEvidence(deliverable, changeFacts.log, state.checkVerdicts, {
+      partialReadCount: state.partialReadCount ?? 0,
+      trajectorySignals: session.trajectorySignals(),
+    }),
   });
   if (next.reasoningHandoff) {
     const role = deliverable === 'plan' ? 'planning' : 'review';
