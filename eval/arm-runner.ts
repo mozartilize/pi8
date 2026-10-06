@@ -65,6 +65,9 @@ export interface EvaluatedAttempt {
   costComplete: boolean;
   wallTimeMs: number;
   providerFailure?: boolean;
+  /** The run ended as completed and the oracle failed it. Nothing showed the failure to the user. */
+  silentFailure?: boolean;
+  fallbackCount: number;
 }
 
 export type SlotResult =
@@ -170,6 +173,8 @@ export async function runFixedArm(deps: ArmRunDeps, request: ArmRunRequest): Pro
         costComplete: historical.complete && normalized.complete,
         wallTimeMs: evidence.wallTimeMs,
         ...(evidence.providerFailures > 0 ? { providerFailure: true } : {}),
+        ...(evidence.status === 'completed' && grade.outcome === 'verified-fail' ? { silentFailure: true } : {}),
+        fallbackCount: evidence.fallbackCount,
       },
     });
   }
