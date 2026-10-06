@@ -188,7 +188,7 @@ function contractPlanLine(contract: ExecutionContractMeta): string {
   switch (contract.status) {
     case 'active':
       return contract.release
-        ? `accepted, ${contract.band} (${size}; executor minimum ${contract.minimum?.toFixed(2)}); an executor model runs it`
+        ? `accepted${contract.band ? `, ${contract.band}` : ''} (${size}; executor minimum ${contract.minimum?.toFixed(2)}); an executor model runs it`
         : `accepted (${size}); ${contract.submitter} keeps running it: ${CONTRACT_KEEP_LABELS[contract.keepReason ?? 'difficulty']}`;
     case 'executed': {
       const how = contract.executedReason === 'budget' ? ' (step budget used up)' : '';

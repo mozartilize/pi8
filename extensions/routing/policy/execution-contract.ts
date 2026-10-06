@@ -44,6 +44,8 @@ import {
   executionRequirement,
   isTestPath,
 } from './execution-difficulty.js';
+import { FRONTIER_REQUIREMENT } from '../score/scorer.js';
+import type { PolicyVersion } from './policy-version.js';
 
 export const EXECUTION_CONTRACT_TOOL = 'commit_execution';
 
@@ -91,7 +93,8 @@ export interface ExecutionContract {
    * own decision.
    */
   submitterTemporary?: boolean;
-  band: CapabilityBand;
+  /** The named band of the legacy policy. The candidate policy names none. */
+  band?: CapabilityBand;
   /** False when only the submitter executes the plan. */
   release: boolean;
   /** Implementation requirement the executor must meet; undefined when not released. */
@@ -167,6 +170,23 @@ export function contractShapeBand(targets: number, steps: number): CapabilityBan
   return undefined;
 }
 
+/** Executor minimum of a plan with up to five files and eight steps. */
+const MEDIUM_PLAN_REQUIREMENT = 0.45;
+
+/**
+ * An executor must meet at least a requirement of this size when the plan is
+ * larger than one of two files and four steps. Undefined means that the plan is
+ * too large to hand off: the submitter keeps it.
+ */
+export function contractShapeRequirement(targets: number, steps: number): number | undefined {
+  if (targets <= 2 && steps <= 4) return BASE_REQUIREMENT;
+  if (targets <= 5 && steps <= 8) return MEDIUM_PLAN_REQUIREMENT;
+  return undefined;
+}
+
+/** A plan whose requirement reaches this value stays with the submitter. */
+export const MAX_DELEGATABLE_REQUIREMENT = FRONTIER_REQUIREMENT;
+
 export function raiseBand(band: CapabilityBand, steps: number): CapabilityBand {
   const index = Math.min(BAND_ORDER.length - 1, BAND_ORDER.indexOf(band) + Math.max(0, steps));
   return BAND_ORDER[index]!;
@@ -234,16 +254,54 @@ export function validateContract(steps: readonly ExecutionStepInput[] | undefine
   };
 }
 
-export function acceptContract(
-  state: WorkPhaseState,
-  input: {
-    submitter: string;
-    submitterTemporary?: boolean;
-    validation: ValidatedContract;
-    rubric: ExecutionRubric;
-    measured: MeasuredFeatures;
-  },
-): WorkPhaseState {
+interface AcceptInput {
+  submitter: string;
+  submitterTemporary?: boolean;
+  validation: ValidatedContract;
+  rubric: ExecutionRubric;
+  measured: MeasuredFeatures;
+}
+
+/**
+ * The candidate policy. The executor minimum is the larger of the assessed requirement and the
+ * shape requirement. An excluded executor does not raise it: the executor pool of an excluded
+ * model holds only candidates that measure stronger than that model, and the submitter keeps a
+ * plan when none qualifies.
+ */
+function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput): WorkPhaseState {
+  const { validation, rubric, measured } = input;
+  const requirement = executionRequirement(rubric, measured);
+  const shape = contractShapeRequirement(validation.targets.length, validation.steps);
+  const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
+    ? 'unknown-target'
+    : validation.deletes
+      ? 'delete'
+      : shape == null
+        ? 'size'
+        : requirement >= MAX_DELEGATABLE_REQUIREMENT
+          ? 'difficulty'
+          : undefined;
+  const minimum = keepReason == null && shape != null ? Math.max(requirement, shape) : undefined;
+  const contract: ExecutionContract = {
+    status: 'active',
+    submitter: input.submitter,
+    ...(input.submitterTemporary ? { submitterTemporary: true } : {}),
+    release: minimum != null,
+    ...(minimum != null ? { minimum, releasePending: true } : {}),
+    requirement,
+    ...(keepReason ? { keepReason } : {}),
+    rubric,
+    measured,
+    targets: validation.targets,
+    pending: validation.editTargets,
+    steps: validation.steps,
+    acceptedAt: state.providerInvocation,
+  };
+  return { ...state, contract };
+}
+
+export function acceptContract(state: WorkPhaseState, input: AcceptInput, version: PolicyVersion = 'legacy'): WorkPhaseState {
+  if (version === 'cheapest-sufficient') return acceptContractByRequirement(state, input);
   const { validation, rubric, measured } = input;
   const requirement = executionRequirement(rubric, measured);
   const assessed = bandForRequirement(requirement);
@@ -444,7 +502,7 @@ export function contractMeta(state: WorkPhaseState): ExecutionContractMeta | und
   const handoffId = state.reasoningHandoff?.id ?? state.previousHandoffId;
   return {
     status: contract.status,
-    band: contract.band,
+    ...(contract.band ? { band: contract.band } : {}),
     release: contract.release,
     ...(contract.minimum != null ? { minimum: contract.minimum } : {}),
     requirement: contract.requirement,

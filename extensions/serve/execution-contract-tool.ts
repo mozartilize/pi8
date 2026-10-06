@@ -60,6 +60,7 @@ import { factsLog, parseDeclaredFacts, type ChangeMeasurements, type DeclaredFac
 import { changeFactsParameter } from './change-facts-schema.js';
 import { measureChange } from './change-measurements.js';
 import { decisionEvidence } from '../routing/policy/decision-evidence.js';
+import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 
 const DESCRIPTION =
   `${ROUTER_TOOLS_CONDITION} ` +
@@ -513,7 +514,7 @@ export function submitExecutionContract(
     validation,
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },
-  });
+  }, evaluationPolicyVersion());
   // The shadow requirement is logged next to the one routing uses; it does not route.
   const declared = { ...parseDeclaredFacts(params?.facts), ...stepFacts(steps ?? []) };
   const valued = accepted.contract
@@ -543,7 +544,7 @@ export function submitExecutionContract(
   recordBoundary(session, next, 'execution-contract', state.intentKey);
   const contract = next.contract!;
   const header = contract.release
-    ? `Execution plan accepted (${contract.band}, executor minimum ${contract.minimum!.toFixed(2)}). A model ` +
+    ? `Execution plan accepted (${contract.band ? `${contract.band}, ` : ''}executor minimum ${contract.minimum!.toFixed(2)}). A model ` +
       'chosen for this plan executes it from the next step. When every listed file is edited, the work returns ' +
       'to the submitting model for review.'
     : `Execution plan accepted. The current model keeps executing it: ${KEEP_REASONS[contract.keepReason ?? 'difficulty']}.`;

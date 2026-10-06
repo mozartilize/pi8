@@ -6,6 +6,7 @@ import {
   breakContract,
   contractBudget,
   contractShapeBand,
+  contractShapeRequirement,
   entryEndOutcome,
   executionMinimum,
   expireContract,
@@ -20,6 +21,7 @@ import {
 } from './execution-contract.js';
 import { BASE_REQUIREMENT } from './execution-difficulty.js';
 import { penaltiesOf, withContinuedPenalties, type WorkPhaseState } from './work-phase.js';
+import type { PolicyVersion } from './policy-version.js';
 
 const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
   intentKey: 'intent-a',
@@ -46,6 +48,7 @@ function accepted(
   base = state(),
   rubric: Partial<ExecutionRubric> = {},
   observed: Partial<MeasuredFeatures> = {},
+  version: PolicyVersion = 'legacy',
 ): WorkPhaseState {
   const validation = validateContract(steps, '/repo');
   if (!validation.ok) throw new Error(validation.reason);
@@ -54,7 +57,7 @@ function accepted(
     validation,
     rubric: { ...EASY, ...rubric },
     measured: { ...validation.structural, ...QUIET, ...observed },
-  });
+  }, version);
 }
 
 describe('execution contract validation', () => {
@@ -319,5 +322,71 @@ describe('execution contract completion and outcome', () => {
     expect(executed.contract).toMatchObject({ status: 'executed', release: false });
     expect(noteContractEdit(executed, '/repo', 'src/b.ts', 'codex/sol:max')).toBe(executed);
     expect(entryEndOutcome(executed.contract!)).toBe('clean');
+  });
+});
+
+describe('execution contract under the candidate policy', () => {
+  const candidate = (
+    steps: Parameters<typeof validateContract>[0],
+    base = state(),
+    rubric: Partial<ExecutionRubric> = {},
+    observed: Partial<MeasuredFeatures> = {},
+  ) => accepted(steps, base, rubric, observed, 'cheapest-sufficient').contract!;
+  const files = (count: number) => Array.from({ length: count }, (_, index) => edit(`f${index}.ts`));
+
+  it('gives a plan shape a minimum requirement, and no minimum when the plan is too large', () => {
+    expect(contractShapeRequirement(2, 4)).toBe(BASE_REQUIREMENT);
+    expect(contractShapeRequirement(3, 4)).toBe(0.45);
+    expect(contractShapeRequirement(5, 8)).toBe(0.45);
+    expect(contractShapeRequirement(6, 8)).toBeUndefined();
+    expect(contractShapeRequirement(2, 9)).toBeUndefined();
+  });
+
+  it('names no band, releases a small plan, and keeps a large plan with its submitter', () => {
+    const small = candidate([edit('a.ts'), verify]);
+    expect(small).toMatchObject({ status: 'active', release: true, minimum: BASE_REQUIREMENT, releasePending: true });
+    expect(small.band).toBeUndefined();
+    const large = candidate(files(6));
+    expect(large).toMatchObject({ release: false, keepReason: 'size' });
+    expect(large.minimum).toBeUndefined();
+    expect(large.band).toBeUndefined();
+  });
+
+  it('requires the larger of the assessed requirement and the shape requirement, and keeps a plan at the delegation limit', () => {
+    const raised = candidate([edit('a.ts')], state(), { openDecisions: 2 });
+    expect(raised.minimum).toBeCloseTo(raised.requirement);
+    expect(raised.minimum).toBeGreaterThan(BASE_REQUIREMENT);
+    expect(candidate(files(3)).minimum).toBe(0.45);
+    expect(candidate([edit('a.ts')], state(), { openDecisions: 5 })).toMatchObject({ release: false, keepReason: 'difficulty' });
+  });
+
+  it.each([
+    ['a missing target', { missingTargets: 1 }],
+    ['an unmeasured target', { missingTargets: undefined }],
+  ])('keeps the submitter for %s', (_name, observed) => {
+    expect(candidate([edit('a.ts')], state(), {}, observed)).toMatchObject({ release: false, keepReason: 'unknown-target' });
+  });
+
+  it('keeps the submitter for a plan that deletes a file', () => {
+    expect(candidate([edit('a.ts'), { kind: 'delete', path: 'b.ts' }])).toMatchObject({ release: false, keepReason: 'delete' });
+  });
+
+  it('does not raise the minimum for an excluded executor, which the executor pool handles', () => {
+    const none = candidate([edit('a.ts')]);
+    const excluded = candidate([edit('a.ts')], state({ excludedExecutors: ['x/luna:high', 'x/flash', 'x/terra'] }));
+    expect(excluded).toMatchObject({ release: true, minimum: none.minimum });
+    expect(excluded.keepReason).toBeUndefined();
+  });
+
+  it('releases, keeps, and sets the minimum like the legacy policy when no executor is excluded', () => {
+    const plans = [[edit('a.ts')], files(2), files(3), files(5), files(6), [edit('a.ts'), { kind: 'delete', path: 'b.ts' }]];
+    for (const steps of plans) {
+      for (const openDecisions of [1, 2, 3, 4, 5]) {
+        const legacy = accepted(steps, state(), { openDecisions }).contract!;
+        const next = candidate(steps, state(), { openDecisions });
+        expect({ release: next.release, minimum: next.minimum, keepReason: next.keepReason })
+          .toEqual({ release: legacy.release, minimum: legacy.minimum, keepReason: legacy.keepReason });
+      }
+    }
   });
 });

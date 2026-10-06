@@ -258,7 +258,8 @@ export type ContractOutcome = 'clean' | 'fixed' | 'rework' | 'broken' | 'unfinis
 export interface ExecutionContractMeta {
   /** `executed`: every declared edit/create target was edited, or the step budget ran out. */
   status: 'active' | 'executed' | 'broken';
-  band: CapabilityBand;
+  /** Absent under the candidate policy, which names no band. */
+  band?: CapabilityBand;
   /** False when the submitting model keeps executing the plan. */
   release: boolean;
   /** Implementation requirement the executor must meet; absent when the submitter keeps the plan. */
