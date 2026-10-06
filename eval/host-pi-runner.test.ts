@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { HostPiAgentRunner } from './host-pi-runner.ts';
+import { getImageStoreDirectory } from '@earendil-works/gondolin';
+import { HostPiAgentRunner, hostPiEnvironment } from './host-pi-runner.ts';
 import { wholeTaskRecipe } from './recipe.ts';
 import { runWholeTask } from './runner.ts';
 import type { EvaluationArm, PublicTaskSpec } from './schema.ts';
@@ -21,6 +22,17 @@ const frozen = {
 const arm: EvaluationArm = { id: 'a', policy: { kind: 'fixed-candidate', candidateKey: 'scripted/script' }, continuation: 'normal-policy' };
 const taskOf = (command: string): PublicTaskSpec => ({
   id: 't', fixtureVersion: '1', workspace: { source: '', baseRevision: 'r', sandbox: 'vm-isolated' }, userRequest: command, budget: { wallTimeMs: 120_000 },
+});
+
+describe('host Pi environment', () => {
+  it('names the image store of the harness, because the clean home directory has none, and passes no host variable', () => {
+    process.env.PI8_TEST_HOST_SECRET = 'host-env-secret';
+    const env = hostPiEnvironment({ homeDir: '/clean/home', pi8Dir: '/clean/pi8', statusFile: '/clean/status', guestConfig: { image: 'x', network: 'none' } });
+    expect(env.GONDOLIN_IMAGE_STORE).toBe(getImageStoreDirectory());
+    expect(env.HOME).toBe('/clean/home');
+    expect(JSON.stringify(env)).not.toContain('host-env-secret');
+    expect(Object.keys(env)).not.toContain('PI8_TEST_HOST_SECRET');
+  });
 });
 
 describe.skipIf(!available)('host Pi run with tools in a VM', () => {
@@ -77,6 +89,19 @@ describe.skipIf(!available)('host Pi run with tools in a VM', () => {
     const session = readFileSync(out.files.trajectoryPath!, 'utf8');
     expect(session.match(/"role":"user"/g)).toHaveLength(2);
   }, 240_000);
+
+  it('reports a harness error, not a failed solution, when the VM cannot start', async () => {
+    const environment = join(dir, 'environment-noboot');
+    mkdirSync(environment);
+    const broken = new HostPiAgentRunner({
+      repoRoot: dir, vm: { guestConfig: { image: 'no-such-image', network: 'none' } }, extraExtensions: [join(here, 'test-support', 'scripted-model.ts')],
+    });
+    const recipe = wholeTaskRecipe(arm, frozen);
+    const out = await runWholeTask({
+      runner: broken, sandboxFactory: factory, task: taskOf('echo hi'), recipe, arm, environmentPath: environment, runDir: join(dir, 'run-noboot'), runId: 'run-3',
+    });
+    expect(out.result.status).toBe('sandbox-error');
+  }, 120_000);
 
   it('rejects a sandbox that is not a VM', async () => {
     const fake = { kind: 'os-isolated-process' } as never;

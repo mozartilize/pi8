@@ -1,6 +1,9 @@
 /** The VM settings that the harness gives to the VM tools extension of a host Pi run. */
 export const VM_CONFIG_ENV = 'PI8_VM_CONFIG';
 
+/** A file that the VM tools extension writes when the VM cannot start. The harness reads it. */
+export const VM_STATUS_ENV = 'PI8_VM_STATUS';
+
 export interface VmGuestConfig {
   /** The build id of the guest image. The extension does not resolve a name. */
   image: string;

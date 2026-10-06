@@ -9,12 +9,13 @@
  * of the process turns off the Git settings that a repository can use to run a command.
  */
 import { spawn } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { policyDigest } from './recipe.ts';
 import { agentOutput, piInvocation, readSessionFacts, type AgentRunInput, type AgentRunner, type AgentRunOutput, type PiInvocation } from './runner.ts';
-import { VM_CONFIG_ENV, type VmGuestConfig } from './vm-config.ts';
+import { getImageStoreDirectory } from '@earendil-works/gondolin';
+import { VM_CONFIG_ENV, VM_STATUS_ENV, type VmGuestConfig } from './vm-config.ts';
 
 const VM_TOOLS = join(dirname(fileURLToPath(import.meta.url)), 'vm-tools.ts');
 
@@ -41,6 +42,31 @@ export interface HostPiAgentRunnerOptions {
   followUp?: (input: AgentRunInput) => { prompt: string; when: (workDir: string) => boolean } | undefined;
   /** Replaces the `pi` arguments. It gets the host path of the session directory. Tests use it. */
   invocation?: (input: AgentRunInput, sessionDir: string) => PiInvocation;
+}
+
+/**
+ * The environment of the `pi` process. It has no host variable except `PATH`. The home directory is
+ * a clean one, so the VM image store is named by a variable: a custom image is not in a clean home.
+ */
+export function hostPiEnvironment(options: { homeDir: string; pi8Dir: string; statusFile: string; guestConfig: VmGuestConfig }): Record<string, string> {
+  return {
+    PATH: process.env.PATH ?? '/usr/bin:/bin',
+    HOME: options.homeDir,
+    TERM: 'dumb',
+    PI8_DIR: options.pi8Dir,
+    PI_SKIP_VERSION_CHECK: '1',
+    GONDOLIN_IMAGE_STORE: getImageStoreDirectory(),
+    [VM_CONFIG_ENV]: JSON.stringify(options.guestConfig),
+    [VM_STATUS_ENV]: options.statusFile,
+    // A repository can name a command in its Git settings. These values come first.
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.fsmonitor',
+    GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_KEY_1: 'core.hooksPath',
+    GIT_CONFIG_VALUE_1: '/dev/null',
+  };
 }
 
 export class HostPiAgentRunner implements AgentRunner {
@@ -70,27 +96,13 @@ export class HostPiAgentRunner implements AgentRunner {
     }
     const { args } = (this.options.invocation ?? ((value, dir) => piInvocation(value, this.options.repoRoot, dir)))(input, sessions);
     const extensions = [VM_TOOLS, ...(this.options.extraExtensions ?? [])].flatMap((path) => ['-e', path]);
+    const statusFile = join(sandbox.outDir, 'vm-status.txt');
     const command = this.options.piCommand ?? 'pi';
     const totalMs = input.task.budget.wallTimeMs;
     const startedAt = Date.now();
     const spawnOptions = {
       cwd: sandbox.workDir,
-      env: {
-        PATH: process.env.PATH ?? '/usr/bin:/bin',
-        HOME: sandbox.homeDir,
-        TERM: 'dumb',
-        PI8_DIR: pi8,
-        PI_SKIP_VERSION_CHECK: '1',
-        [VM_CONFIG_ENV]: JSON.stringify(this.options.vm.guestConfig),
-        // A repository can name a command in its Git settings. These values come first.
-        GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_GLOBAL: '/dev/null',
-        GIT_CONFIG_COUNT: '2',
-        GIT_CONFIG_KEY_0: 'core.fsmonitor',
-        GIT_CONFIG_VALUE_0: 'false',
-        GIT_CONFIG_KEY_1: 'core.hooksPath',
-        GIT_CONFIG_VALUE_1: '/dev/null',
-      },
+      env: hostPiEnvironment({ homeDir: sandbox.homeDir, pi8Dir: pi8, statusFile, guestConfig: this.options.vm.guestConfig }),
     };
     let result = await spawnPi(command, [...extensions, ...args], { ...spawnOptions, timeoutMs: totalMs });
     const followUp = this.options.followUp?.(input);
@@ -102,6 +114,8 @@ export class HostPiAgentRunner implements AgentRunner {
         ? await spawnPi(command, [...extensions, ...args.slice(0, at), '-c', '-p', followUp.prompt], { ...spawnOptions, timeoutMs: remainingMs })
         : { ...result, timedOut: true };
     }
+    // A VM that did not start is a failure of the harness, not of the candidate.
+    if (existsSync(statusFile)) return { ...agentOutput(result, readSessionFacts(sessions)), exit: 'harness-error' };
     return agentOutput(result, readSessionFacts(sessions));
   }
 }

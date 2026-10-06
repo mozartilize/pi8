@@ -20,7 +20,8 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import type { VM } from '@earendil-works/gondolin';
 import { bootVm } from './vm-boot.ts';
-import { VM_CONFIG_ENV, type VmGuestConfig } from './vm-config.ts';
+import { writeFileSync } from 'node:fs';
+import { VM_CONFIG_ENV, VM_STATUS_ENV, type VmGuestConfig } from './vm-config.ts';
 
 const HOST_TOOLS_TO_BLOCK = new Set(['grep', 'find', 'ls']);
 
@@ -112,6 +113,11 @@ export default function vmTools(pi: ExtensionAPI): void {
     starting ??= bootVm(config, { [cwd]: cwd }).then((created) => {
       vm = created;
       return created;
+    }, (error: unknown) => {
+      // Every tool call fails from now on. The harness must not count the run as a solution that failed.
+      const file = process.env[VM_STATUS_ENV];
+      if (file) writeFileSync(file, `vm-boot-failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      throw error;
     });
     return starting;
   };
