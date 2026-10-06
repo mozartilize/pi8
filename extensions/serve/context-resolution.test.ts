@@ -308,7 +308,8 @@ describe('work-context resolution through the provider', () => {
     expect(item).toMatchObject({ legacySourceEntryId: seed, grounding: [] });
     expect(ledgerEvents().slice(0, 2)).toEqual(['work-create', 'activate']);
     const raw = readFileSync(join(temp.path, 'decisions.jsonl'), 'utf8');
-    expect(raw).not.toContain(seed);
+    // An entry id is a short string. Search for it as a whole JSON string: random ids in other records can contain it as text.
+    expect(raw).not.toContain(`"${seed}"`);
     expect(raw).not.toContain('LOGIN_FILE_CONTENTS');
   });
 
