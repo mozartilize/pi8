@@ -22,7 +22,7 @@ function manifest(over: Partial<ActivationCampaignManifestV1> = {}): ActivationC
 let counter = 0;
 function attempt(over: Partial<EvaluatedAttempt> = {}): EvaluatedAttempt {
   counter += 1;
-  return { decisionEvidenceId: `d${counter}`, executionId: `e${counter}`, gradeId: `g${counter}`, candidateKey: 'p/m', outcome: 'verified-pass', normalizedCostUsd: 1, costComplete: true, wallTimeMs: 100, fallbackCount: 0, modelSwitches: 0, ...over };
+  return { decisionEvidenceId: `d${counter}`, executionId: `e${counter}`, gradeId: `g${counter}`, candidateKey: 'p/m', outcome: 'verified-pass', normalizedCostUsd: 1, costComplete: true, wallTimeMs: 100, fallbackCount: 0, capabilityEscalations: 0, servedModels: ['p/m'], modelSwitches: 0, ...over };
 }
 
 /** Units for 25 tasks in 5 repositories. `shape` decides the attempts of each unit. */

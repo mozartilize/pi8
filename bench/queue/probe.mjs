@@ -92,16 +92,18 @@ writeFileSync(authFile, JSON.stringify({ 'openai-codex': auth['openai-codex'], d
 
 // ── Frozen inputs. Pi gives no digest of its prompt or tools, so those are coarse. ──
 const text = (command, args) => execFileSync(command, args, { cwd: repoRoot, encoding: 'utf8' }).trim();
+const untracked = text('git', ['ls-files', '--others', '--exclude-standard', '--', 'extensions', 'eval']).split('\n').filter(Boolean);
+const dirtyContent = untracked.map((path) => `${path}\0${readFileSync(join(repoRoot, path))}`).join('\0');
 const models = ['openai-codex', 'deepseek'].flatMap((provider) => getModels(provider).map((model) => ({ provider, model })));
 const prices = Object.fromEntries(models.map(({ provider, model }) => [`${provider}/${model.id}`, { inputPer1M: model.cost?.input, outputPer1M: model.cost?.output, cacheReadPer1M: model.cost?.cacheRead, cacheWritePer1M: model.cost?.cacheWrite }]));
 const priceTable = { digest: digestOf(prices), prices };
 const priceOf = (provider, modelId) => prices[`${provider}/${modelId}`];
 const runtime = {
   piRevision: text('pi', ['--version']),
-  pi8Commit: `${text('git', ['rev-parse', 'HEAD'])}+${digestOf(text('git', ['status', '--porcelain', '--', 'extensions', 'eval']))}`.slice(0, 80),
+  pi8Commit: `${text('git', ['rev-parse', 'HEAD'])}+${digestOf(text('git', ['diff', 'HEAD', '--', 'extensions', 'eval']) + dirtyContent)}`.slice(0, 80),
   configDigest: digestOf(config),
   benchmarkStoreDigest: digestOf(readFileSync(join(prepared, 'pi8-template', 'benchmarks.json'), 'utf8')),
-  candidateRegistryDigest: priceTable.digest,
+  candidateRegistryDigest: digestOf(models),
   providerEndpointDigest: digestOf(['openai-codex', 'deepseek']),
   systemPromptDigest: 'pi-default',
   toolsetDigest: 'pi-default',
@@ -202,7 +204,7 @@ const units = tasks.map((task) => ({ taskId: task.id, repositoryId: 'queue', cur
 const report = buildReport({ manifest: campaign.manifest(), units, armReports });
 const summary = {
   verdict: report.verdict, reasons: report.reasons, checks: report.checks, evidence: report.evidence, metrics: report.metrics, ledger: campaign.ledger().totals(),
-  perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((attempt) => ({ outcome: attempt.outcome, usd: attempt.historicalCostUsd, normalizedUsd: attempt.normalizedCostUsd, seconds: Math.round(attempt.wallTimeMs / 1000), served: attempt.candidateKey, fallbacks: attempt.fallbackCount, switches: attempt.modelSwitches, cacheReadShare: attempt.cacheReadShare }))])),
+  perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((attempt) => ({ outcome: attempt.outcome, usd: attempt.historicalCostUsd, normalizedUsd: attempt.normalizedCostUsd, seconds: Math.round(attempt.wallTimeMs / 1000), served: attempt.candidateKey, fallbacks: attempt.fallbackCount, escalations: attempt.capabilityEscalations, switches: attempt.modelSwitches, cacheReadShare: attempt.cacheReadShare, servedModels: attempt.servedModels }))])),
 };
 const out = join(evalDir, 'reports', `${CAMPAIGN_ID}-${stamp}.summary.json`);
 mkdirSync(dirname(out), { recursive: true });

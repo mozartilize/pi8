@@ -71,6 +71,10 @@ export interface EvaluatedAttempt {
   /** The run ended as completed and the oracle failed it. Nothing showed the failure to the user. */
   silentFailure?: boolean;
   fallbackCount: number;
+  /** Routing decisions whose cause is a capability or trajectory escalation. */
+  capabilityEscalations: number;
+  /** Every model that served the execution, in the order of its first answer. */
+  servedModels: string[];
   modelSwitches: number;
   cacheReadShare?: number;
 }
@@ -180,6 +184,8 @@ export async function runFixedArm(deps: ArmRunDeps, request: ArmRunRequest): Pro
         ...(evidence.providerFailures > 0 ? { providerFailure: true } : {}),
         ...(evidence.status === 'completed' && grade.outcome === 'verified-fail' ? { silentFailure: true } : {}),
         fallbackCount: evidence.fallbackCount,
+        capabilityEscalations: evidence.capabilityEscalations,
+        servedModels: evidence.deployment.map((deployment) => `${deployment.provider}/${deployment.modelId}`),
         ...cacheFacts(evidence.rawUsage),
       },
     });

@@ -5,6 +5,8 @@
 //   node bench/real/run.mjs --dry                        free: scripted agents (the true fix, and no change)
 //   node bench/real/run.mjs --run --baseline <model> --approval "<text>" [--limit-usd N] [--replicates N] [--tasks a,b]
 //                                                        paid: router/auto (candidate) against a fixed baseline
+//   node bench/real/run.mjs --run --candidate-policy cheapest-sufficient --approval "<text>" [...]
+//                                                        paid: the candidate routing policy against router/auto
 //
 // Every run uses a micro-VM: the agent tools and the hidden tests run in a guest with no
 // credentials, and only a Rust run can reach the crate registry hosts. Tasks come from the
@@ -33,8 +35,16 @@ const arg = (name) => { const at = process.argv.indexOf(name); return at >= 0 ? 
 const dry = process.argv.includes('--dry');
 const run = process.argv.includes('--run');
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const replicates = Array.from({ length: Number(arg('--replicates') ?? (dry ? 1 : 3)) }, (_, i) => i + 1);
+const replicateCount = Number(arg('--replicates') ?? (dry ? 1 : 3));
+if (!Number.isInteger(replicateCount) || replicateCount < 1) throw new Error('--replicates must be a positive integer');
+const replicates = Array.from({ length: replicateCount }, (_, i) => i + 1);
 const only = arg('--tasks')?.split(',');
+const text = (command, args) => execFileSync(command, args, { cwd: repoRoot, encoding: 'utf8' }).trim();
+const workingTreeIdentity = () => {
+  const untracked = text('git', ['ls-files', '--others', '--exclude-standard', '--', 'extensions', 'eval']).split('\n').filter(Boolean);
+  const content = untracked.map((path) => `${path}\0${readFileSync(join(repoRoot, path))}`).join('\0');
+  return `${text('git', ['rev-parse', 'HEAD'])}+${digestOf(text('git', ['diff', 'HEAD', '--', 'extensions', 'eval']) + content)}`.slice(0, 80);
+};
 
 // ── Tasks from the validation files ────────────────────────────────────────
 const validationDir = join(root, 'validation');
@@ -49,22 +59,41 @@ const tasks = readdirSync(validationDir).filter((name) => name.endsWith('.json')
     wallTimeMs: 1_500_000,
   }));
 console.log(`${tasks.length} tasks: ${Object.entries(Object.groupBy(tasks, (t) => t.repo)).map(([repo, list]) => `${repo}=${list.length}`).join(' ')}`);
+if (tasks.length === 0) throw new Error('the task selection is empty');
 
 const baseline = arg('--baseline');
+const candidatePolicy = arg('--candidate-policy');
+const budgetUsd = Number(arg('--limit-usd') ?? 0);
+if (candidatePolicy && candidatePolicy !== 'cheapest-sufficient') throw new Error(`unknown candidate policy: ${candidatePolicy}`);
+// arms[0] is the candidate and arms[1] the current policy of the report.
 const arms = dry
   ? [
-    { id: 'scripted-nochange', policy: { kind: 'fixed-candidate', candidateKey: 'scripted/nochange' }, continuation: 'normal-policy' },
     { id: 'scripted-truefix', policy: { kind: 'fixed-candidate', candidateKey: 'scripted/truefix' }, continuation: 'normal-policy' },
+    { id: 'scripted-nochange', policy: { kind: 'fixed-candidate', candidateKey: 'scripted/nochange' }, continuation: 'normal-policy' },
   ]
-  : [
-    { id: 'auto', policy: { kind: 'current-auto' }, continuation: 'normal-policy' },
-    { id: 'baseline', policy: { kind: 'fixed-candidate', candidateKey: baseline ?? 'unset/unset' }, continuation: 'normal-policy' },
-  ];
+  : candidatePolicy
+    ? [
+      { id: candidatePolicy, policy: { kind: 'shadow-selector', selectorVersion: candidatePolicy }, continuation: 'normal-policy' },
+      { id: 'auto', policy: { kind: 'current-auto' }, continuation: 'normal-policy' },
+    ]
+    : [
+      { id: 'auto', policy: { kind: 'current-auto' }, continuation: 'normal-policy' },
+      { id: 'baseline', policy: { kind: 'fixed-candidate', candidateKey: baseline ?? 'unset/unset' }, continuation: 'normal-policy' },
+    ];
 const retryPolicy = { maxProviderRetriesPerAttempt: 0, maxOperationalRerunsPerSlot: 1, retryableStatuses: ['provider-error', 'sandbox-error'] };
+const armOrder = (taskIndex, replicate) => (taskIndex + replicate) % 2 === 0 ? arms : [...arms].reverse();
+const plannedRunOrder = replicates.flatMap((replicate) => tasks.flatMap((task, taskIndex) => armOrder(taskIndex, replicate).map((arm) => ({ task: task.id, replicate, arm: arm.id }))));
 const matrix = preflightMatrix({ taskCount: tasks.length, wholeTaskArms: arms.length, probesPerTask: 0, repetitions: replicates.length, retryPolicy, providerCallsPerExecution: 60, usdPerExecution: 0.4 });
 console.log('preflight matrix', JSON.stringify(matrix));
 if (!dry && !run) process.exit(0);
-if (run && (!baseline || !arg('--approval'))) throw new Error('A paid run needs --baseline <provider/model> and --approval "<who approved which arms, replicates, and limit>"');
+if (run && ((!baseline && !candidatePolicy) || !arg('--approval'))) {
+  throw new Error('A paid run needs --baseline <provider/model> or --candidate-policy <name>, and --approval "<who approved which arms, replicates, and limit>"');
+}
+if (run && (!Number.isFinite(budgetUsd) || budgetUsd <= 0)) throw new Error('A paid run needs --limit-usd greater than zero');
+if (run) {
+  const relevantStatus = text('git', ['status', '--porcelain', '--', 'extensions', 'eval', 'bench/real', 'package.json', 'tsconfig.eval.json']);
+  if (relevantStatus) throw new Error(`A paid run needs a clean routing and evaluation tree. Commit or revert:\n${relevantStatus}`);
+}
 
 // ── Sandboxes: one factory for each repository ─────────────────────────────
 const factories = {};
@@ -87,17 +116,16 @@ for (const task of tasks) {
 }
 
 // ── Campaign ───────────────────────────────────────────────────────────────
-const CAMPAIGN_ID = dry ? 'real-dry-1' : arg('--campaign') ?? 'real-probe-1';
-const budgetUsd = Number(arg('--limit-usd') ?? 0);
+const CAMPAIGN_ID = arg('--campaign') ?? (dry ? 'real-dry-1' : 'real-probe-1');
 const manifest = {
-  campaignId: CAMPAIGN_ID, taskSetDigest: digestOf(tasks.map((task) => task.id)), repositorySplitDigest: digestOf(tasks.map((task) => task.repo)), candidatePoolDigest: digestOf(arms),
+  campaignId: CAMPAIGN_ID, taskSetDigest: digestOf(tasks.map((task) => ({ id: task.id, repository: task.repo, baseRevision: task.base, fixRevision: task.fix, prompt: task.prompt, oracleDigest: task.oracleDigest, graderRuntimeDigest: task.graderDigest }))), repositorySplitDigest: digestOf(tasks.map((task) => task.repo)), candidatePoolDigest: digestOf(arms), executionOrderDigest: digestOf(plannedRunOrder),
   policyDigests: { current: digestOf(arms[1]), candidate: digestOf(arms[0]) },
   repetitionsPerTask: replicates.length, confidenceLevel: 0.95, intervalMethod: 'paired-task-bootstrap', rareEventBoundMethod: 'one-sided-clopper-pearson',
   margins: { maxSolveRateDrop: 0.05, maxSilentFailureHarmRate: 0.2, maxNormalizedCostRatio: 1 },
   minimumEvidence: { distinctTasks: 10, distinctRepositories: 2, usablePairedTasks: 10 },
   unsafeCheapGate: { mode: 'conditional-when-available', independentUnit: 'task', minimumEligibleUnits: 10, maxUnsafeCheapUnitRate: 0.2 },
-  reusePolicy: { mode: 'historical-analysis' },
-  evidenceSelectionPolicy: { reuse: { mode: 'historical-analysis' }, choose: 'exact-compatible', cutoffAt: '2999-01-01T00:00:00Z' },
+  reusePolicy: { mode: 'opaque-model-max-age', maxAgeMs: 24 * 3600_000 },
+  evidenceSelectionPolicy: { reuse: { mode: 'opaque-model-max-age', maxAgeMs: 24 * 3600_000 }, choose: 'freshest-compatible', cutoffAt: '2999-01-01T00:00:00Z' },
   oracleDigest: digestOf(tasks.map((task) => task.oracleDigest)), graderRuntimeDigest: digestOf(tasks.map((task) => task.graderDigest)), normalizedPriceDigest: 'see-price-table',
   retryPolicy, budget: { ...(budgetUsd > 0 ? { maxNewEvidenceUsd: budgetUsd } : {}), maxProviderInvocations: 20_000, maxWallClockMs: 86_400_000, maxNewExecutions: matrix.maxExecutionsWithReruns + 10 },
 };
@@ -106,6 +134,7 @@ let priceTable = { digest: 'none', prices: {} };
 let priceOf;
 let runtime = Object.fromEntries(['piRevision', 'pi8Commit', 'configDigest', 'benchmarkStoreDigest', 'candidateRegistryDigest', 'providerEndpointDigest', 'systemPromptDigest', 'toolsetDigest', 'generationParametersDigest'].map((key) => [key, 'dry-run']));
 let prepared;
+let snapshotDir;
 let authFile;
 if (run) {
   const home = homedir();
@@ -119,10 +148,6 @@ if (run) {
   delete config.artificialAnalysisApiKey;
   config.models = ['openai-codex/*', 'deepseek/*'];
   writeFileSync(join(prepared, 'pi8-template', 'config.json'), JSON.stringify(config, null, 2));
-  const auth = JSON.parse(readFileSync(join(home, '.pi', 'agent', 'auth.json'), 'utf8'));
-  authFile = join(prepared, 'auth.json');
-  writeFileSync(authFile, JSON.stringify({ 'openai-codex': auth['openai-codex'], deepseek: auth.deepseek }), { mode: 0o600 });
-  const text = (command, args) => execFileSync(command, args, { cwd: repoRoot, encoding: 'utf8' }).trim();
   const models = ['openai-codex', 'deepseek'].flatMap((provider) => getModels(provider).map((model) => ({ provider, model })));
   const prices = Object.fromEntries(models.map(({ provider, model }) => [`${provider}/${model.id}`, { inputPer1M: model.cost?.input, outputPer1M: model.cost?.output, cacheReadPer1M: model.cost?.cacheRead, cacheWritePer1M: model.cost?.cacheWrite }]));
   priceTable = { digest: digestOf(prices), prices };
@@ -130,15 +155,36 @@ if (run) {
   manifest.normalizedPriceDigest = priceTable.digest;
   runtime = {
     piRevision: text('pi', ['--version']),
-    pi8Commit: `${text('git', ['rev-parse', 'HEAD'])}+${digestOf(text('git', ['status', '--porcelain', '--', 'extensions', 'eval']))}`.slice(0, 80),
+    // Uncommitted changes count by content, so two different edits of one file never share an identity.
+    pi8Commit: workingTreeIdentity(),
     configDigest: digestOf(config), benchmarkStoreDigest: digestOf(readFileSync(join(prepared, 'pi8-template', 'benchmarks.json'), 'utf8')),
-    candidateRegistryDigest: priceTable.digest, providerEndpointDigest: digestOf(['openai-codex', 'deepseek']),
+    candidateRegistryDigest: digestOf(models), providerEndpointDigest: digestOf(['openai-codex', 'deepseek']),
     systemPromptDigest: 'pi-default', toolsetDigest: 'pi-default+vm-tools', generationParametersDigest: 'pi-default',
   };
+  // A later analysis reads the model qualities that routing saw. The prepared directory is rebuilt on each
+  // start, so the snapshot is kept apart under its digest and never removed.
+  snapshotDir = join(evalDir, 'snapshots', digestOf({ benchmark: runtime.benchmarkStoreDigest, config: runtime.configDigest, registry: runtime.candidateRegistryDigest }));
+  mkdirSync(snapshotDir, { recursive: true });
+  cpSync(join(prepared, 'pi8-template', 'benchmarks.json'), join(snapshotDir, 'benchmarks.json'));
+  cpSync(join(prepared, 'pi8-template', 'config.json'), join(snapshotDir, 'config.json'));
+  writeFileSync(join(snapshotDir, 'registry.json'), `${JSON.stringify(models, null, 2)}\n`);
+  writeFileSync(join(snapshotDir, 'normalized-prices.json'), `${JSON.stringify(priceTable, null, 2)}\n`);
 }
-try { campaign.freeze(manifest); } catch { /* the manifest exists from an earlier run */ }
+try {
+  campaign.freeze(manifest);
+} catch (error) {
+  // Resume only the exact frozen campaign. A reused id with changed arms, tasks, prices, or limits
+  // must stop before it can spend money under the old manifest.
+  if (digestOf(campaign.manifest()) !== digestOf(manifest)) throw error;
+}
 campaign.savePreflight(matrix);
 campaign.approve(dry ? 'operator (free dry run with scripted agents)' : `operator (${arg('--approval')})`);
+if (run) {
+  const auth = JSON.parse(readFileSync(join(homedir(), '.pi', 'agent', 'auth.json'), 'utf8'));
+  authFile = join(prepared, 'auth.json');
+  writeFileSync(authFile, JSON.stringify({ 'openai-codex': auth['openai-codex'], deepseek: auth.deepseek }), { mode: 0o600 });
+  process.once('exit', () => rmSync(authFile, { force: true }));
+}
 
 // ── Execution ──────────────────────────────────────────────────────────────
 const evidenceStore = new FileEvidenceStore(evalDir);
@@ -161,9 +207,13 @@ const scriptedRunner = (task, arm) => ({
 const stamp = Date.now();
 const results = new Map();
 const armReports = [];
+const runOrder = [];
 for (const replicate of replicates) {
-  for (const task of tasks) {
-    for (const arm of arms) {
+  for (const [taskIndex, task] of tasks.entries()) {
+    // Counterbalance arm order. Provider drift or machine load must not always favor one arm.
+    const orderedArms = armOrder(taskIndex, replicate);
+    for (const arm of orderedArms) {
+      runOrder.push({ task: task.id, replicate, arm: arm.id });
       const runner = dry
         ? scriptedRunner(task, arm)
         : new HostPiAgentRunner({
@@ -194,15 +244,21 @@ for (const replicate of replicates) {
   }
 }
 if (authFile) rmSync(authFile, { force: true });
+if (digestOf(runOrder) !== digestOf(plannedRunOrder)) throw new Error('execution order did not match the frozen campaign order');
 
 const units = tasks.map((task) => ({ taskId: task.id, repositoryId: task.repo, current: results.get(`${task.id}/${arms[1].id}`) ?? [], candidate: results.get(`${task.id}/${arms[0].id}`) ?? [] }));
 const report = buildReport({ manifest: campaign.manifest(), units, armReports });
 const summary = {
-  verdict: report.verdict, reasons: report.reasons, checks: report.checks, evidence: report.evidence, metrics: report.metrics, ledger: campaign.ledger().totals(),
-  perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((a) => ({ outcome: a.outcome, usd: a.historicalCostUsd, normalizedUsd: a.normalizedCostUsd, seconds: Math.round(a.wallTimeMs / 1000), served: a.candidateKey, fallbacks: a.fallbackCount, switches: a.modelSwitches, cacheReadShare: a.cacheReadShare }))])),
+  purpose: candidatePolicy ? 'development' : dry ? 'harness-check' : 'fixed-baseline-probe',
+  diagnosticVerdict: report.verdict,
+  activationVerdict: candidatePolicy ? null : report.verdict,
+  reasons: report.reasons, checks: report.checks, evidence: report.evidence, metrics: report.metrics, ledger: campaign.ledger().totals(),
+  arms: { candidate: arms[0].id, current: arms[1].id }, runtime, ...(snapshotDir ? { snapshotDir } : {}), runOrder,
+  taskSet: tasks.map((task) => ({ id: task.id, repository: task.repo, baseRevision: task.base, fixRevision: task.fix, subject: task.subject, prompt: task.prompt, oracleDigest: task.oracleDigest, graderRuntimeDigest: task.graderDigest })),
+  perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((a) => ({ outcome: a.outcome, usd: a.historicalCostUsd, normalizedUsd: a.normalizedCostUsd, seconds: Math.round(a.wallTimeMs / 1000), served: a.candidateKey, fallbacks: a.fallbackCount, escalations: a.capabilityEscalations, switches: a.modelSwitches, cacheReadShare: a.cacheReadShare, servedModels: a.servedModels }))])),
 };
 const out = join(evalDir, 'reports', `${CAMPAIGN_ID}-${stamp}.summary.json`);
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(summary, null, 2));
-console.log(JSON.stringify({ verdict: summary.verdict, reasons: summary.reasons, checks: summary.checks, evidence: summary.evidence }, null, 1));
+console.log(JSON.stringify({ purpose: summary.purpose, diagnosticVerdict: summary.diagnosticVerdict, activationVerdict: summary.activationVerdict, reasons: summary.reasons, checks: summary.checks, evidence: summary.evidence }, null, 1));
 console.log(`summary: ${out}`);

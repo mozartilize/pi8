@@ -10,7 +10,7 @@
  * lookup) is owned directly by `delegation.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { Api, Context, Model } from '@earendil-works/pi-ai';
@@ -730,6 +730,12 @@ describe('provider orchestration', () => {
       const { routedContext } = await selectedTurn('implement the parser');
       await harness.serve(routedContext);
       expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second');
+      const { DECISION_LOG_FILE } = await import('../host/decisionlog.js');
+      const decisions = readFileSync(join(temp.path, DECISION_LOG_FILE), 'utf8').trim().split('\n')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .filter((record) => record.kind == null || record.kind === 'decision');
+      expect(decisions.length).toBeGreaterThan(0);
+      expect(new Set(decisions.map((record) => record.policyVersion))).toEqual(new Set(['cheapest-sufficient']));
     } finally {
       vi.unstubAllEnvs();
     }
