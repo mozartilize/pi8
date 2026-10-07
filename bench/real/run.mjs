@@ -32,6 +32,7 @@ import { digestOf } from '../../eval/recipe.ts';
 import { REGISTRY_SNAPSHOT_ENV } from '../../eval/registry-snapshot-extension.ts';
 import { buildReport } from '../../eval/report.ts';
 import { pytestGraderRuntimeDigest, pytestOracle, pytestOracleDigest } from '../../eval/pytest-oracle.ts';
+import { leakHits } from './leaks.mjs';
 import { evalDir, git, hiddenTestsFor, makeTree, REPOS, root } from './lib.mjs';
 
 const arg = (name) => { const at = process.argv.indexOf(name); return at >= 0 ? process.argv[at + 1] : undefined; };
@@ -281,45 +282,13 @@ const scriptedRunner = (task, arm) => ({
  * child process: its tool calls are not in the session file, and its usage has no price.
  */
 const EXCLUDED_TOOLS = ['*web_search*', 'fetch_content', 'get_search_content', 'source_check', '*fetch_and_index*', 'mcp', 'mcp__context_mode', 'subagent', 'subagent_supervisor', 'bg_wait', 'intercom'];
-/**
- * Signs in the tool call arguments that an agent looked for the fix outside its task directory: the
- * evaluation store, the upstream repository, a published copy of the crate, or the fix commit. The
- * namespace hides the store, but bash can still reach the network. Only the arguments count: a tool
- * result can show an upstream URL that the source code contains.
- */
-const leakPatterns = (task) => [
-  /pi8-eval/, /real-bench/, new RegExp(task.fix.slice(0, 7)), /\bgit\b[^"]*\b(?:fetch|clone|pull|remote add)\b/,
-  /(?:github\.com|githubusercontent\.com|api\.github\.com\/repos)\/[\w.-]+\/(?:tantivy|wealthfolio|saleor)/i, /\.cargo\/registry\/src\/[^"]*\/tantivy-/,
-  /crates\.io\/(?:api\/v1\/)?crates\/tantivy|static\.crates\.io\/crates\/tantivy|\bcargo (?:add|install|download)\b[^"]*\btantivy/,
-];
-const findSessions = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).filter((name) => String(name).endsWith('session.jsonl')).map((name) => join(dir, String(name))) : []);
-/** A tool result that shows that the blocked host refused the connection. Such a call got nothing. */
-const REFUSED = /Connection refused|Errno 111|ECONNREFUSED|Failed to connect|curl: \(7\)/;
-const toolCallText = (path) => {
-  const calls = new Map();
-  const refused = new Set();
-  for (const line of readFileSync(path, 'utf8').split('\n').filter(Boolean)) {
-    const message = JSON.parse(line).message;
-    if (!Array.isArray(message?.content)) continue;
-    if (message.role === 'assistant') {
-      for (const part of message.content) if (part.type === 'toolCall') calls.set(part.id, `${part.name} ${JSON.stringify(part.arguments)}`);
-    } else if (message.role === 'toolResult' && REFUSED.test(JSON.stringify(message.content))) {
-      refused.add(message.toolCallId);
-    }
-  }
-  return [...calls].filter(([id]) => !refused.has(id)).map(([, text]) => text).join('\n');
-};
-const leakHits = (task, runId) => {
-  const text = findSessions(join(evalDir, 'runs', runId)).map(toolCallText).join('\n');
-  return leakPatterns(task).filter((pattern) => pattern.test(text)).map((pattern) => pattern.source);
-};
-
 const stamp = Date.now();
 const leaks = {};
 const results = new Map();
 const armReports = [];
 const runOrder = [];
-for (const replicate of replicates) {
+let stoppedEarly = false;
+campaign: for (const replicate of replicates) {
   for (const [taskIndex, task] of tasks.entries()) {
     // Counterbalance arm order. Provider drift or machine load must not always favor one arm.
     const orderedArms = armOrder(taskIndex, replicate);
@@ -348,11 +317,17 @@ for (const replicate of replicates) {
       const list = results.get(`${task.id}/${arm.id}`) ?? [];
       if (slot.kind === 'evaluated') list.push(slot.attempt);
       results.set(`${task.id}/${arm.id}`, list);
-      if (slot.kind === 'campaign-budget-exhausted') break;
+      // The budget cannot pay for a later execution either. A partial pair would only add noise.
+      if (slot.kind === 'campaign-budget-exhausted') {
+        stoppedEarly = true;
+        break campaign;
+      }
     }
   }
 }
-if (digestOf(runOrder) !== digestOf(plannedRunOrder)) throw new Error('execution order did not match the frozen campaign order');
+// A campaign that stops at the budget limit runs a prefix of the frozen order.
+const plannedPrefix = plannedRunOrder.slice(0, runOrder.length);
+if (digestOf(runOrder) !== digestOf(stoppedEarly ? plannedPrefix : plannedRunOrder)) throw new Error('execution order did not match the frozen campaign order');
 
 const units = tasks.map((task) => ({ taskId: task.id, repositoryId: task.repo, current: results.get(`${task.id}/${arms[1].id}`) ?? [], candidate: results.get(`${task.id}/${arms[0].id}`) ?? [] }));
 // A task with a leak in any execution leaves the comparison in both arms, so the pairs stay matched.
@@ -364,7 +339,7 @@ const summary = {
   diagnosticVerdict: report.verdict,
   activationVerdict: candidatePolicy ? null : report.verdict,
   reasons: report.reasons, checks: report.checks, evidence: report.evidence, metrics: report.metrics, ledger: campaign.ledger().totals(),
-  arms: { candidate: arms[0].id, current: arms[1].id }, runtime, ...(snapshotDir ? { snapshotDir } : {}), runOrder, leaks, excludedTasks,
+  arms: { candidate: arms[0].id, current: arms[1].id }, runtime, ...(snapshotDir ? { snapshotDir } : {}), runOrder, stoppedEarly, leaks, excludedTasks,
   allTasks: { verdict: allTasksReport.verdict, reasons: allTasksReport.reasons, checks: allTasksReport.checks, evidence: allTasksReport.evidence },
   taskSet: tasks.map((task) => ({ id: task.id, repository: task.repo, baseRevision: task.base, fixRevision: task.fix, subject: task.subject, prompt: task.prompt, oracleDigest: task.oracleDigest, graderRuntimeDigest: task.graderDigest })),
   perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((a) => ({ outcome: a.outcome, usd: a.historicalCostUsd, normalizedUsd: a.normalizedCostUsd, seconds: Math.round(a.wallTimeMs / 1000), served: a.candidateKey, fallbacks: a.fallbackCount, escalations: a.capabilityEscalations, switches: a.modelSwitches, cacheReadShare: a.cacheReadShare, servedModels: a.servedModels }))])),
