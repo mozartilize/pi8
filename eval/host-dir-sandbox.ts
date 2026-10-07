@@ -7,11 +7,12 @@
  * Each command runs in a private mount namespace (`unshare -Urm`). An empty tmpfs covers each
  * hidden path, so the candidate cannot read the evaluation store, the hidden tests, the clones
  * that hold the fix commits, or the session history. The namespace maps the user to root, so the
- * files that a command writes belong to the user on the host. Network and every other path are
- * the same as on the host.
+ * files that a command writes belong to the user on the host. A blocked host name resolves to an
+ * address that nothing listens on, because the namespace sees its own copy of `/etc/hosts`. Every
+ * other host and every other path are the same as on the host.
  */
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { digestOf } from './recipe.ts';
@@ -37,6 +38,11 @@ export interface HostDirSandboxOptions {
   env?: Record<string, string>;
   /** Variables that name a path of the run directory, such as the mount point of a bind. The key is the variable. */
   runDirEnv?: Record<string, string>;
+  /**
+   * Host names that a command cannot reach, such as the host of the upstream repository. The block is
+   * by name only: an address or a host name that is not in the list still works.
+   */
+  blockedHosts?: readonly string[];
 }
 
 export interface HostDirSandboxFactory extends SandboxFactory {
@@ -46,8 +52,9 @@ export interface HostDirSandboxFactory extends SandboxFactory {
 const quote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
 /** The shell script that runs first in the namespace. It prepares the mounts and starts the command. */
-export function namespaceScript(runDir: string, workDir: string, options: Pick<HostDirSandboxOptions, 'hiddenPaths' | 'binds'>): string {
+export function namespaceScript(runDir: string, workDir: string, options: Pick<HostDirSandboxOptions, 'hiddenPaths' | 'binds' | 'blockedHosts'>): string {
   const lines = ['set -e'];
+  if (options.blockedHosts?.length) lines.push(`mount --bind ${quote(join(runDir, 'hosts'))} /etc/hosts`);
   for (const [name, source] of Object.entries(options.binds ?? {})) {
     lines.push(`mount --bind ${quote(source)} ${quote(join(runDir, name))}`);
   }
@@ -57,7 +64,7 @@ export function namespaceScript(runDir: string, workDir: string, options: Pick<H
 }
 
 export function hostDirSandboxFactory(options: HostDirSandboxOptions): HostDirSandboxFactory {
-  const identity = digestOf({ kind: 'host-directory', hiddenPaths: options.hiddenPaths, binds: Object.keys(options.binds ?? {}), env: options.env ?? {}, runDirEnv: options.runDirEnv ?? {} });
+  const identity = digestOf({ kind: 'host-directory', hiddenPaths: options.hiddenPaths, binds: Object.keys(options.binds ?? {}), env: options.env ?? {}, runDirEnv: options.runDirEnv ?? {}, blockedHosts: options.blockedHosts ?? [] });
   const factory: SandboxFactory = async (publicWorkspace) => {
     mkdirSync(options.workRoot, { recursive: true });
     const runDir = mkdtempSync(join(options.workRoot, 'run-'));
@@ -69,6 +76,10 @@ export function hostDirSandboxFactory(options: HostDirSandboxOptions): HostDirSa
     for (const [name, source] of Object.entries(options.binds ?? {})) {
       mkdirSync(source, { recursive: true });
       mkdirSync(join(runDir, name));
+    }
+    if (options.blockedHosts?.length) {
+      const blocked = options.blockedHosts.flatMap((host) => [`0.0.0.0 ${host}`, `:: ${host}`]);
+      writeFileSync(join(runDir, 'hosts'), `${readFileSync('/etc/hosts', 'utf8').trimEnd()}\n${blocked.join('\n')}\n`);
     }
     const script = namespaceScript(runDir, workDir, options);
     const runEnv = Object.fromEntries(Object.entries(options.runDirEnv ?? {}).map(([name, relative]) => [name, join(runDir, relative)]));

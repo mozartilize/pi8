@@ -40,6 +40,21 @@ describe.skipIf(!hostDirSandboxAvailable())('host directory sandbox', () => {
     expect(() => assertActivationGrade(sandbox)).toThrow(/read boundary/);
   });
 
+  it('resolves a blocked host to an address that nothing listens on, and leaves another host unchanged', async () => {
+    const workspace = join(dir, 'workspace');
+    mkdirSync(workspace);
+    const factory = hostDirSandboxFactory({ workRoot: join(dir, 'runs'), hiddenPaths: [], blockedHosts: ['blocked.example'] });
+    const sandbox = await factory(workspace);
+    try {
+      const result = await sandbox.run({ command: 'sh', args: ['-c', 'getent ahostsv4 blocked.example | head -1; getent hosts localhost | head -1'], timeoutMs: 30_000 });
+      expect(result.stdout).toMatch(/^0\.0\.0\.0\s/);
+      expect(result.stdout).toMatch(/\n(?:127\.0\.0\.1|::1)\s+localhost/);
+    } finally {
+      await sandbox.destroy();
+    }
+    expect(readFileSync('/etc/hosts', 'utf8')).not.toContain('blocked.example');
+  });
+
   it('stops a command at its time limit', async () => {
     const factory = hostDirSandboxFactory({ workRoot: join(dir, 'runs'), hiddenPaths: [] });
     const workspace = join(dir, 'workspace');

@@ -108,6 +108,12 @@ rmSync(workRoot, { recursive: true, force: true });
 // The agent cannot read these paths: the evaluation store has the hidden tests and the clones with the
 // fix commits, and the two histories have the sessions of earlier runs.
 const hiddenPaths = [evalDir, join(home, '.pi', 'agent', 'sessions'), join(home, '.claude', 'projects')];
+// The agent cannot reach these hosts: they serve the upstream repositories, the fix commits, and the
+// source of published crates. Cargo still needs crates.io, so the leak scan watches that host.
+const BLOCKED_HOSTS = [
+  'github.com', 'www.github.com', 'api.github.com', 'codeload.github.com', 'gist.github.com', 'raw.githubusercontent.com',
+  'objects.githubusercontent.com', 'gist.githubusercontent.com', 'docs.rs', 'gitlab.com', 'codeberg.org', 'bitbucket.org', 'sourcegraph.com',
+];
 const graders = {};
 for (const repo of new Set(tasks.map((task) => task.repo))) {
   // The build cache of the grader holds the hidden tests, so it stays in the evaluation store.
@@ -119,7 +125,7 @@ const agentFactory = (arm, repo) => {
   const key = `${arm.id}/${repo}`;
   if (!agentFactories.has(key)) {
     agentFactories.set(key, hostDirSandboxFactory({
-      workRoot: join(workRoot, 'agent'), hiddenPaths,
+      workRoot: join(workRoot, 'agent'), hiddenPaths, blockedHosts: BLOCKED_HOSTS,
       binds: { target: join(evalDir, 'cache', 'agent-target', CAMPAIGN_ID, arm.id, repo) },
       runDirEnv: { CARGO_TARGET_DIR: 'target' },
     }));
@@ -216,6 +222,13 @@ if (run) {
   }
   priceTable = { digest: digestOf(prices), prices };
   manifest.normalizedPriceDigest = priceTable.digest;
+  // The agent cannot reach api.github.com, so Pi cannot get a new GitHub Copilot token during the campaign.
+  // An execution takes about 7 minutes on average. 10 minutes for each execution leaves a margin.
+  const copilot = JSON.parse(readFileSync(join(home, '.pi', 'agent', 'auth.json'), 'utf8'))['github-copilot'];
+  const plannedMs = tasks.length * replicates.length * arms.length * 10 * 60_000;
+  if (copilot && (copilot.expires ?? 0) - Date.now() < plannedMs) {
+    throw new Error(`the GitHub Copilot token expires before the planned end of the campaign: start Pi once with a GitHub Copilot model, then start the campaign again`);
+  }
   const settings = JSON.parse(readFileSync(join(home, '.pi', 'agent', 'settings.json'), 'utf8'));
   runtime = {
     piRevision: text('pi', ['--version']),
@@ -277,6 +290,7 @@ const EXCLUDED_TOOLS = ['*web_search*', 'fetch_content', 'get_search_content', '
 const leakPatterns = (task) => [
   /pi8-eval/, /real-bench/, new RegExp(task.fix.slice(0, 7)), /\bgit\b[^"]*\b(?:fetch|clone|pull|remote add)\b/,
   /(?:github\.com|githubusercontent\.com|api\.github\.com\/repos)\/[\w.-]+\/(?:tantivy|wealthfolio|saleor)/i, /\.cargo\/registry\/src\/[^"]*\/tantivy-/,
+  /crates\.io\/(?:api\/v1\/)?crates\/tantivy|static\.crates\.io\/crates\/tantivy|\bcargo (?:add|install|download)\b[^"]*\btantivy/,
 ];
 const findSessions = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).filter((name) => String(name).endsWith('session.jsonl')).map((name) => join(dir, String(name))) : []);
 const toolCallText = (path) => readFileSync(path, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
