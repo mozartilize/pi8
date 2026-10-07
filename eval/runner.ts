@@ -78,9 +78,10 @@ export interface PiInvocation {
  * With `userExtensions`, Pi loads the user's own settings and packages, which already name the router,
  * so the command line names no extension.
  */
-export function piInvocation(input: Pick<AgentRunInput, 'task' | 'arm'>, repoRoot: string, sessionDir = `${SANDBOX_OUT}/sessions`, options: { userExtensions?: boolean } = {}): PiInvocation {
+export function piInvocation(input: Pick<AgentRunInput, 'task' | 'arm'>, repoRoot: string, sessionDir = `${SANDBOX_OUT}/sessions`, options: { userExtensions?: boolean; excludeTools?: readonly string[] } = {}): PiInvocation {
   const { policy } = input.arm;
   const base = options.userExtensions ? ['--session-dir', sessionDir] : ['-ne', '--session-dir', sessionDir];
+  if (options.excludeTools?.length) base.push('--exclude-tools', options.excludeTools.join(','));
   let model: string;
   const extensions: string[] = [];
   let env: Record<string, string> | undefined;

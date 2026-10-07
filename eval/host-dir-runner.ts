@@ -14,6 +14,8 @@ export interface HostDirPiRunnerOptions {
   pi8Template: string;
   /** Variables for the `pi` process, such as a build cache path. */
   env?: Record<string, string>;
+  /** Tool names or `*` patterns that the agent cannot use. */
+  excludeTools?: readonly string[];
 }
 
 export class HostDirPiRunner implements AgentRunner {
@@ -33,7 +35,7 @@ export class HostDirPiRunner implements AgentRunner {
     cpSync(this.options.pi8Template, pi8, { recursive: true });
     const sessions = join(sandbox.outDir, 'sessions');
     mkdirSync(sessions, { recursive: true });
-    const { command, args, env } = piInvocation(input, this.options.repoRoot, sessions, { userExtensions: true });
+    const { command, args, env } = piInvocation(input, this.options.repoRoot, sessions, { userExtensions: true, ...(this.options.excludeTools ? { excludeTools: this.options.excludeTools } : {}) });
     const result = await sandbox.run({
       command,
       args,

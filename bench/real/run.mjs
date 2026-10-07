@@ -264,14 +264,28 @@ const scriptedRunner = (task, arm) => ({
 });
 
 /**
- * Signs that an agent looked for the fix outside its task directory: the evaluation store, the upstream
- * repository, or the fix commit. The namespace hides the store, but the upstream repository is public.
- * A run with a hit is reported, so a reader can exclude it.
+ * The agent cannot use these tools. The web tools and the MCP gateways can download the upstream fix. A subagent runs in a
+ * child process: its tool calls are not in the session file, and its usage has no price.
  */
-const leakPatterns = (task) => [/pi8-eval/, /real-bench/, new RegExp(task.fix.slice(0, 10)), /git (?:fetch|clone|remote add)/, /github\.com\/[\w.-]+\/(?:tantivy|wealthfolio|saleor)/i];
+const EXCLUDED_TOOLS = ['*web_search*', 'fetch_content', 'get_search_content', 'source_check', '*fetch_and_index*', 'mcp', 'mcp__context_mode', 'subagent', 'subagent_supervisor', 'bg_wait', 'intercom'];
+/**
+ * Signs in the tool call arguments that an agent looked for the fix outside its task directory: the
+ * evaluation store, the upstream repository, a published copy of the crate, or the fix commit. The
+ * namespace hides the store, but bash can still reach the network. Only the arguments count: a tool
+ * result can show an upstream URL that the source code contains.
+ */
+const leakPatterns = (task) => [
+  /pi8-eval/, /real-bench/, new RegExp(task.fix.slice(0, 7)), /\bgit\b[^"]*\b(?:fetch|clone|pull|remote add)\b/,
+  /(?:github\.com|githubusercontent\.com|api\.github\.com\/repos)\/[\w.-]+\/(?:tantivy|wealthfolio|saleor)/i, /\.cargo\/registry\/src\/[^"]*\/tantivy-/,
+];
 const findSessions = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).filter((name) => String(name).endsWith('session.jsonl')).map((name) => join(dir, String(name))) : []);
+const toolCallText = (path) => readFileSync(path, 'utf8').split('\n').filter(Boolean).flatMap((line) => {
+  const content = JSON.parse(line).message;
+  if (content?.role !== 'assistant' || !Array.isArray(content.content)) return [];
+  return content.content.filter((part) => part.type === 'toolCall').map((part) => `${part.name} ${JSON.stringify(part.arguments)}`);
+}).join('\n');
 const leakHits = (task, runId) => {
-  const text = findSessions(join(evalDir, 'runs', runId)).map((path) => readFileSync(path, 'utf8')).join('\n');
+  const text = findSessions(join(evalDir, 'runs', runId)).map(toolCallText).join('\n');
   return leakPatterns(task).filter((pattern) => pattern.test(text)).map((pattern) => pattern.source);
 };
 
@@ -286,7 +300,7 @@ for (const replicate of replicates) {
     const orderedArms = armOrder(taskIndex, replicate);
     for (const arm of orderedArms) {
       runOrder.push({ task: task.id, replicate, arm: arm.id });
-      const runner = dry ? scriptedRunner(task, arm) : new HostDirPiRunner({ repoRoot, pi8Template: join(prepared, 'pi8-template') });
+      const runner = dry ? scriptedRunner(task, arm) : new HostDirPiRunner({ repoRoot, pi8Template: join(prepared, 'pi8-template'), excludeTools: EXCLUDED_TOOLS });
       const runId = `${CAMPAIGN_ID}-${stamp}-${task.id}-${arm.id}-r${replicate}`;
       const report = await runFixedArm({
         manifest: campaign.manifest(), ledger: campaign.ledger(), evidenceStore, gradeStore, runner, sandboxFactory: agentFactory(arm, task.repo),
@@ -316,13 +330,17 @@ for (const replicate of replicates) {
 if (digestOf(runOrder) !== digestOf(plannedRunOrder)) throw new Error('execution order did not match the frozen campaign order');
 
 const units = tasks.map((task) => ({ taskId: task.id, repositoryId: task.repo, current: results.get(`${task.id}/${arms[1].id}`) ?? [], candidate: results.get(`${task.id}/${arms[0].id}`) ?? [] }));
-const report = buildReport({ manifest: campaign.manifest(), units, armReports });
+// A task with a leak in any execution leaves the comparison in both arms, so the pairs stay matched.
+const excludedTasks = [...new Set(Object.keys(leaks).map((key) => key.split('/')[0]))].sort();
+const report = buildReport({ manifest: campaign.manifest(), units: units.filter((unit) => !excludedTasks.includes(unit.taskId)), armReports });
+const allTasksReport = excludedTasks.length > 0 ? buildReport({ manifest: campaign.manifest(), units, armReports }) : report;
 const summary = {
   purpose: candidatePolicy ? 'development' : dry ? 'harness-check' : 'fixed-baseline-probe',
   diagnosticVerdict: report.verdict,
   activationVerdict: candidatePolicy ? null : report.verdict,
   reasons: report.reasons, checks: report.checks, evidence: report.evidence, metrics: report.metrics, ledger: campaign.ledger().totals(),
-  arms: { candidate: arms[0].id, current: arms[1].id }, runtime, ...(snapshotDir ? { snapshotDir } : {}), runOrder, leaks,
+  arms: { candidate: arms[0].id, current: arms[1].id }, runtime, ...(snapshotDir ? { snapshotDir } : {}), runOrder, leaks, excludedTasks,
+  allTasks: { verdict: allTasksReport.verdict, reasons: allTasksReport.reasons, checks: allTasksReport.checks, evidence: allTasksReport.evidence },
   taskSet: tasks.map((task) => ({ id: task.id, repository: task.repo, baseRevision: task.base, fixRevision: task.fix, subject: task.subject, prompt: task.prompt, oracleDigest: task.oracleDigest, graderRuntimeDigest: task.graderDigest })),
   perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((a) => ({ outcome: a.outcome, usd: a.historicalCostUsd, normalizedUsd: a.normalizedCostUsd, seconds: Math.round(a.wallTimeMs / 1000), served: a.candidateKey, fallbacks: a.fallbackCount, escalations: a.capabilityEscalations, switches: a.modelSwitches, cacheReadShare: a.cacheReadShare, servedModels: a.servedModels }))])),
 };

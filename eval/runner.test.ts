@@ -38,6 +38,12 @@ describe('pi command line', () => {
     const other: EvaluationArm = { id: 'o', policy: { kind: 'shadow-selector', selectorVersion: 'other-selector' }, continuation: 'normal-policy' };
     expect(() => piInvocation({ task, arm: other }, '/repo')).toThrow(/does not run/);
   });
+
+  it('keeps the user extensions and removes each excluded tool in a host directory run', () => {
+    const auto: EvaluationArm = { id: 'a', policy: { kind: 'current-auto' }, continuation: 'normal-policy' };
+    expect(piInvocation({ task, arm: auto }, '/repo', '/s', { userExtensions: true, excludeTools: ['web_search', 'subagent'] }).args)
+      .toEqual(['--session-dir', '/s', '--exclude-tools', 'web_search,subagent', '--model', 'router/auto', '-p', 'Write made.txt']);
+  });
 });
 
 describe('policy check of a router run', () => {
