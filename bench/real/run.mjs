@@ -8,28 +8,31 @@
 //   node bench/real/run.mjs --run --candidate-policy cheapest-sufficient --approval "<text>" [...]
 //                                                        paid: the candidate routing policy against router/auto
 //
-// Every run uses a micro-VM: the agent tools and the hidden tests run in a guest with no
-// credentials, and only a Rust run can reach the crate registry hosts. Tasks come from the
-// validation files that `validate.mjs` writes: the hidden tests fail on the base and pass on the fix.
+// Each execution runs `pi` on the host in a new task directory, with the user's own settings,
+// extensions, and credentials (`eval/host-dir-sandbox.ts`). A private mount namespace hides the
+// evaluation store, the session history, and the Claude Code history, so the agent cannot read the
+// hidden tests or the clones that hold the fix commits. The host grades each artifact with the hidden
+// tests. This is a development run: it is never activation evidence. Tasks come from the validation
+// files that `validate.mjs` writes: the hidden tests fail on the base and pass on the fix. A Python task
+// needs a database on the host, so only `--include-python` selects one.
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getModels } from '@earendil-works/pi-ai/compat';
 import { runFixedArm } from '../../eval/arm-runner.ts';
 import { CampaignStore, preflightMatrix } from '../../eval/budget.ts';
 import { cargoGraderRuntimeDigest, cargoTestOracle, cargoTestOracleDigest } from '../../eval/cargo-oracle.ts';
 import { EnvironmentCache } from '../../eval/environment-cache.ts';
 import { FileEvidenceStore } from '../../eval/evidence-store.ts';
 import { FileGradeStore } from '../../eval/grade-store.ts';
-import { HostPiAgentRunner } from '../../eval/host-pi-runner.ts';
+import { HostDirPiRunner } from '../../eval/host-dir-runner.ts';
+import { hostDirSandboxFactory } from '../../eval/host-dir-sandbox.ts';
 import { digestOf } from '../../eval/recipe.ts';
+import { REGISTRY_SNAPSHOT_ENV } from '../../eval/registry-snapshot-extension.ts';
 import { buildReport } from '../../eval/report.ts';
-import { piInvocation } from '../../eval/runner.ts';
 import { pytestGraderRuntimeDigest, pytestOracle, pytestOracleDigest } from '../../eval/pytest-oracle.ts';
-import { vmSandboxFactory } from '../../eval/vm-sandbox.ts';
-import { evalDir, git, hiddenTestsFor, makeTree, REPOS, root, sandboxOptions } from './lib.mjs';
+import { evalDir, git, hiddenTestsFor, makeTree, REPOS, root } from './lib.mjs';
 
 const arg = (name) => { const at = process.argv.indexOf(name); return at >= 0 ? process.argv[at + 1] : undefined; };
 const dry = process.argv.includes('--dry');
@@ -39,6 +42,8 @@ const replicateCount = Number(arg('--replicates') ?? (dry ? 1 : 3));
 if (!Number.isInteger(replicateCount) || replicateCount < 1) throw new Error('--replicates must be a positive integer');
 const replicates = Array.from({ length: replicateCount }, (_, i) => i + 1);
 const only = arg('--tasks')?.split(',');
+const includePython = process.argv.includes('--include-python');
+const home = homedir();
 const text = (command, args) => execFileSync(command, args, { cwd: repoRoot, encoding: 'utf8' }).trim();
 const workingTreeIdentity = () => {
   const untracked = text('git', ['ls-files', '--others', '--exclude-standard', '--', 'extensions', 'eval']).split('\n').filter(Boolean);
@@ -50,7 +55,7 @@ const workingTreeIdentity = () => {
 const validationDir = join(root, 'validation');
 const tasks = readdirSync(validationDir).filter((name) => name.endsWith('.json'))
   .map((name) => JSON.parse(readFileSync(join(validationDir, name), 'utf8')))
-  .filter((record) => record.valid && (!only || only.includes(`${record.repo}-${record.fix.slice(0, 10)}`)))
+  .filter((record) => record.valid && (includePython || REPOS[record.repo].lang !== 'python') && (!only || only.includes(`${record.repo}-${record.fix.slice(0, 10)}`)))
   .sort((a, b) => `${a.repo}${a.fix}`.localeCompare(`${b.repo}${b.fix}`))
   .map((record) => ({
     ...record,
@@ -95,13 +100,36 @@ if (run) {
   if (relevantStatus) throw new Error(`A paid run needs a clean routing and evaluation tree. Commit or revert:\n${relevantStatus}`);
 }
 
-// ── Sandboxes: one factory for each repository ─────────────────────────────
-const factories = {};
-for (const repo of new Set(tasks.map((task) => task.repo))) factories[repo] = await vmSandboxFactory(sandboxOptions(repo));
+// ── Task directories ───────────────────────────────────────────────────────
+const CAMPAIGN_ID = arg('--campaign') ?? (dry ? 'real-dry-1' : 'real-probe-1');
+const workRoot = join(home, '.cache', 'pi8-work', CAMPAIGN_ID);
+// A run that stopped early can leave a task directory. It must not be readable by a later run.
+rmSync(workRoot, { recursive: true, force: true });
+// The agent cannot read these paths: the evaluation store has the hidden tests and the clones with the
+// fix commits, and the two histories have the sessions of earlier runs.
+const hiddenPaths = [evalDir, join(home, '.pi', 'agent', 'sessions'), join(home, '.claude', 'projects')];
+const graders = {};
+for (const repo of new Set(tasks.map((task) => task.repo))) {
+  // The build cache of the grader holds the hidden tests, so it stays in the evaluation store.
+  graders[repo] = hostDirSandboxFactory({ workRoot: join(workRoot, 'grade'), hiddenPaths: [], env: { CARGO_TARGET_DIR: join(evalDir, 'cache', 'grade-target', repo), CARGO_TERM_COLOR: 'never' } });
+}
+// One build cache for each arm and repository: an arm never reads the build output of the other arm.
+const agentFactories = new Map();
+const agentFactory = (arm, repo) => {
+  const key = `${arm.id}/${repo}`;
+  if (!agentFactories.has(key)) {
+    agentFactories.set(key, hostDirSandboxFactory({
+      workRoot: join(workRoot, 'agent'), hiddenPaths,
+      binds: { target: join(evalDir, 'cache', 'agent-target', CAMPAIGN_ID, arm.id, repo) },
+      runDirEnv: { CARGO_TARGET_DIR: 'target' },
+    }));
+  }
+  return agentFactories.get(key);
+};
 
 // ── Oracles ────────────────────────────────────────────────────────────────
 for (const task of tasks) {
-  const factory = factories[task.repo];
+  const factory = graders[task.repo];
   const { dir } = REPOS[task.repo];
   task.hiddenTests = hiddenTestsFor(task.repo, task.base, task.fix).hidden;
   const common = { taskId: task.id, oracleVersion: 'real-bench-v1', hidden: task.hiddenTests, runIn: factory, minPassed: Math.max(1, task.atFix.passed) };
@@ -116,7 +144,6 @@ for (const task of tasks) {
 }
 
 // ── Campaign ───────────────────────────────────────────────────────────────
-const CAMPAIGN_ID = arg('--campaign') ?? (dry ? 'real-dry-1' : 'real-probe-1');
 const manifest = {
   campaignId: CAMPAIGN_ID, taskSetDigest: digestOf(tasks.map((task) => ({ id: task.id, repository: task.repo, baseRevision: task.base, fixRevision: task.fix, prompt: task.prompt, oracleDigest: task.oracleDigest, graderRuntimeDigest: task.graderDigest }))), repositorySplitDigest: digestOf(tasks.map((task) => task.repo)), candidatePoolDigest: digestOf(arms), executionOrderDigest: digestOf(plannedRunOrder),
   policyDigests: { current: digestOf(arms[1]), candidate: digestOf(arms[0]) },
@@ -135,31 +162,68 @@ let priceOf;
 let runtime = Object.fromEntries(['piRevision', 'pi8Commit', 'configDigest', 'benchmarkStoreDigest', 'candidateRegistryDigest', 'providerEndpointDigest', 'systemPromptDigest', 'toolsetDigest', 'generationParametersDigest'].map((key) => [key, 'dry-run']));
 let prepared;
 let snapshotDir;
-let authFile;
+/** The providers and models that both router arms can serve. The user's blacklist still applies. */
+const MODEL_POOL = ['openai-codex/*', 'deepseek/*', 'github-copilot/gemini*', 'claude-bridge/*', 'cursor/grok*'];
+const inPool = (registryId) => MODEL_POOL.some((pattern) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*')}$`, 'i').test(registryId));
 if (run) {
-  const home = homedir();
   prepared = join(evalDir, 'prepared', CAMPAIGN_ID);
   rmSync(prepared, { recursive: true, force: true });
   mkdirSync(join(prepared, 'pi8-template'), { recursive: true });
   const store = join(home, '.pi', 'agent', 'pi8');
   cpSync(join(store, 'benchmarks.json'), join(prepared, 'pi8-template', 'benchmarks.json'));
-  cpSync(join(store, 'embedding'), join(prepared, 'pi8-template', 'embedding'), { recursive: true });
+  // The embedding model is large and read-only. Each run gets a link, not a copy.
+  symlinkSync(join(store, 'embedding'), join(prepared, 'pi8-template', 'embedding'));
   const config = JSON.parse(readFileSync(join(store, 'config.json'), 'utf8'));
   delete config.artificialAnalysisApiKey;
-  config.models = ['openai-codex/*', 'deepseek/*'];
+  config.models = MODEL_POOL;
+  config.blacklist = (config.blacklist ?? []).filter((pattern) => pattern !== '*/gemini*');
   writeFileSync(join(prepared, 'pi8-template', 'config.json'), JSON.stringify(config, null, 2));
-  const models = ['openai-codex', 'deepseek'].flatMap((provider) => getModels(provider).map((model) => ({ provider, model })));
-  const prices = Object.fromEntries(models.map(({ provider, model }) => [`${provider}/${model.id}`, { inputPer1M: model.cost?.input, outputPer1M: model.cost?.output, cacheReadPer1M: model.cost?.cacheRead, cacheWritePer1M: model.cost?.cacheWrite }]));
+
+  // The registry of a Pi process with the provider extensions. pi-ai alone does not list Claude Bridge or Cursor.
+  const snapshotFile = join(mkdtempSync(join(tmpdir(), 'pi8-registry-')), 'registry.json');
+  const packages = join(home, '.pi', 'agent', 'git', 'github.com');
+  execFileSync('pi', ['--no-extensions', '--no-tools', '--no-session',
+    '-e', join(packages, 'fitchmultz', 'pi-cursor-sdk'), '-e', join(packages, 'elidickinson', 'pi-claude-bridge'),
+    '-e', join(repoRoot, 'eval', 'registry-snapshot-extension.ts'), '--print', 'registry snapshot'],
+  { env: { ...process.env, [REGISTRY_SNAPSHOT_ENV]: snapshotFile }, stdio: 'ignore', timeout: 120_000 });
+  const models = JSON.parse(readFileSync(snapshotFile, 'utf8')).filter((model) => inPool(`${model.provider}/${model.id}`));
+  rmSync(dirname(snapshotFile), { recursive: true, force: true });
+
+  // Normalized prices. A subscription provider (Claude Bridge, Cursor) reports a price of zero. It gets the
+  // list price of its benchmark row, so that the cost of the two arms stays comparable. Claude Bridge also
+  // gets the cache multipliers that Anthropic publishes (read 0.1, write 1.25 of input). Another provider
+  // without a cache price pays the input price for cache tokens, which is an upper bound.
+  const rows = JSON.parse(readFileSync(join(store, 'benchmarks.json'), 'utf8')).models ?? [];
+  const listRow = (registryId) => rows.find((row) => row.registryId === registryId && Number.isFinite(row.priceInputPer1M) && Number.isFinite(row.priceOutputPer1M));
+  const baseId = (id) => id.replace(/:(fast|slow)$/, '').replace(/@[^:]*$/, '');
+  const prices = {};
+  const priceSources = {};
+  for (const model of models) {
+    const key = `${model.provider}/${model.id}`;
+    const cost = model.cost ?? {};
+    if ((cost.input ?? 0) > 0 || (cost.output ?? 0) > 0) {
+      prices[key] = { inputPer1M: cost.input, outputPer1M: cost.output, cacheReadPer1M: cost.cacheRead, cacheWritePer1M: cost.cacheWrite };
+      priceSources[key] = 'registry';
+      continue;
+    }
+    const row = listRow(`${model.provider}/${baseId(model.id)}`);
+    if (!row) { priceSources[key] = 'none'; continue; }
+    prices[key] = {
+      inputPer1M: row.priceInputPer1M, outputPer1M: row.priceOutputPer1M,
+      ...(model.provider === 'claude-bridge' ? { cacheReadPer1M: row.priceInputPer1M * 0.1, cacheWritePer1M: row.priceInputPer1M * 1.25 } : {}),
+    };
+    priceSources[key] = 'benchmark-list-price';
+  }
   priceTable = { digest: digestOf(prices), prices };
-  priceOf = (provider, modelId) => prices[`${provider}/${modelId}`];
   manifest.normalizedPriceDigest = priceTable.digest;
+  const settings = JSON.parse(readFileSync(join(home, '.pi', 'agent', 'settings.json'), 'utf8'));
   runtime = {
     piRevision: text('pi', ['--version']),
     // Uncommitted changes count by content, so two different edits of one file never share an identity.
     pi8Commit: workingTreeIdentity(),
     configDigest: digestOf(config), benchmarkStoreDigest: digestOf(readFileSync(join(prepared, 'pi8-template', 'benchmarks.json'), 'utf8')),
-    candidateRegistryDigest: digestOf(models), providerEndpointDigest: digestOf(['openai-codex', 'deepseek']),
-    systemPromptDigest: 'pi-default', toolsetDigest: 'pi-default+vm-tools', generationParametersDigest: 'pi-default',
+    candidateRegistryDigest: digestOf(models), providerEndpointDigest: digestOf([...new Set(models.map((model) => model.provider))].sort()),
+    systemPromptDigest: 'pi-default', toolsetDigest: digestOf({ packages: settings.packages ?? [], extensions: settings.extensions ?? [] }), generationParametersDigest: 'pi-default',
   };
   // A later analysis reads the model qualities that routing saw. The prepared directory is rebuilt on each
   // start, so the snapshot is kept apart under its digest and never removed.
@@ -168,7 +232,8 @@ if (run) {
   cpSync(join(prepared, 'pi8-template', 'benchmarks.json'), join(snapshotDir, 'benchmarks.json'));
   cpSync(join(prepared, 'pi8-template', 'config.json'), join(snapshotDir, 'config.json'));
   writeFileSync(join(snapshotDir, 'registry.json'), `${JSON.stringify(models, null, 2)}\n`);
-  writeFileSync(join(snapshotDir, 'normalized-prices.json'), `${JSON.stringify(priceTable, null, 2)}\n`);
+  writeFileSync(join(snapshotDir, 'normalized-prices.json'), `${JSON.stringify({ ...priceTable, sources: priceSources }, null, 2)}\n`);
+  console.log(`pool: ${models.length} models, ${Object.values(priceSources).filter((source) => source === 'none').length} without a price`);
 }
 try {
   campaign.freeze(manifest);
@@ -179,12 +244,6 @@ try {
 }
 campaign.savePreflight(matrix);
 campaign.approve(dry ? 'operator (free dry run with scripted agents)' : `operator (${arg('--approval')})`);
-if (run) {
-  const auth = JSON.parse(readFileSync(join(homedir(), '.pi', 'agent', 'auth.json'), 'utf8'));
-  authFile = join(prepared, 'auth.json');
-  writeFileSync(authFile, JSON.stringify({ 'openai-codex': auth['openai-codex'], deepseek: auth.deepseek }), { mode: 0o600 });
-  process.once('exit', () => rmSync(authFile, { force: true }));
-}
 
 // ── Execution ──────────────────────────────────────────────────────────────
 const evidenceStore = new FileEvidenceStore(evalDir);
@@ -192,7 +251,7 @@ const gradeStore = new FileGradeStore(evalDir);
 const cache = new EnvironmentCache(evalDir);
 for (const task of tasks) {
   task.environment = await cache.resolve(
-    { baseRevision: task.base, lockfileDigest: '', containerImageDigest: factories[task.repo].identity, publicSetupDigest: task.id, toolchainDigest: 'vm', sandboxProfileDigest: factories[task.repo].identity },
+    { baseRevision: task.base, lockfileDigest: '', containerImageDigest: 'host-directory', publicSetupDigest: task.id, toolchainDigest: 'host', sandboxProfileDigest: 'host-directory' },
     async (staging) => makeTree(task.repo, task.base, staging),
   );
 }
@@ -204,7 +263,20 @@ const scriptedRunner = (task, arm) => ({
   },
 });
 
+/**
+ * Signs that an agent looked for the fix outside its task directory: the evaluation store, the upstream
+ * repository, or the fix commit. The namespace hides the store, but the upstream repository is public.
+ * A run with a hit is reported, so a reader can exclude it.
+ */
+const leakPatterns = (task) => [/pi8-eval/, /real-bench/, new RegExp(task.fix.slice(0, 10)), /git (?:fetch|clone|remote add)/, /github\.com\/[\w.-]+\/(?:tantivy|wealthfolio|saleor)/i];
+const findSessions = (dir) => (existsSync(dir) ? readdirSync(dir, { recursive: true }).filter((name) => String(name).endsWith('session.jsonl')).map((name) => join(dir, String(name))) : []);
+const leakHits = (task, runId) => {
+  const text = findSessions(join(evalDir, 'runs', runId)).map((path) => readFileSync(path, 'utf8')).join('\n');
+  return leakPatterns(task).filter((pattern) => pattern.test(text)).map((pattern) => pattern.source);
+};
+
 const stamp = Date.now();
+const leaks = {};
 const results = new Map();
 const armReports = [];
 const runOrder = [];
@@ -214,20 +286,16 @@ for (const replicate of replicates) {
     const orderedArms = armOrder(taskIndex, replicate);
     for (const arm of orderedArms) {
       runOrder.push({ task: task.id, replicate, arm: arm.id });
-      const runner = dry
-        ? scriptedRunner(task, arm)
-        : new HostPiAgentRunner({
-          repoRoot, vm: factories[task.repo], authFile, pi8Template: join(prepared, 'pi8-template'),
-          invocation: (input, sessionDir) => piInvocation({ task: { ...input.task, userRequest: task.prompt }, arm: input.arm }, repoRoot, sessionDir),
-        });
+      const runner = dry ? scriptedRunner(task, arm) : new HostDirPiRunner({ repoRoot, pi8Template: join(prepared, 'pi8-template') });
+      const runId = `${CAMPAIGN_ID}-${stamp}-${task.id}-${arm.id}-r${replicate}`;
       const report = await runFixedArm({
-        manifest: campaign.manifest(), ledger: campaign.ledger(), evidenceStore, gradeStore, runner, sandboxFactory: factories[task.repo],
+        manifest: campaign.manifest(), ledger: campaign.ledger(), evidenceStore, gradeStore, runner, sandboxFactory: agentFactory(arm, task.repo),
         environmentPath: task.environment.path, oracle: task.oracle, oracleDigest: task.oracleDigest, graderRuntimeDigest: task.graderDigest,
         priceTable, ...(priceOf ? { priceOf } : {}), evalDir,
-        runId: `${CAMPAIGN_ID}-${stamp}-${task.id}-${arm.id}-r${replicate}`, reservation: { ...(run ? { usd: 1.5 } : {}), providerInvocations: 100 },
+        runId, reservation: { ...(run ? { usd: 1.5 } : {}), providerInvocations: 100 },
       }, {
         arm, frozen: { task: { id: task.id, baseRevision: task.base, publicFixtureDigest: digestOf(task.id), environmentDigest: task.environment.digest }, runtime },
-        task: { id: task.id, fixtureVersion: '1', workspace: { source: '', baseRevision: task.base, sandbox: 'vm-isolated' }, userRequest: task.prompt, budget: { wallTimeMs: task.wallTimeMs } },
+        task: { id: task.id, fixtureVersion: '1', workspace: { source: '', baseRevision: task.base, sandbox: 'host-directory' }, userRequest: task.prompt, budget: { wallTimeMs: task.wallTimeMs } },
         replicates: [replicate],
       });
       armReports.push(report);
@@ -235,7 +303,9 @@ for (const replicate of replicates) {
       const line = slot.kind === 'evaluated'
         ? `${slot.attempt.outcome} cost=$${(slot.attempt.historicalCostUsd ?? NaN).toFixed(4)} ${Math.round(slot.attempt.wallTimeMs / 1000)}s ${slot.attempt.candidateKey}${slot.reused ? ' (reused)' : ''}`
         : slot.kind;
-      console.log(`r${replicate} ${task.id} ${arm.id}: ${line}`);
+      const hits = dry ? [] : leakHits(task, runId);
+      if (hits.length > 0) leaks[`${task.id}/${arm.id}/r${replicate}`] = hits;
+      console.log(`r${replicate} ${task.id} ${arm.id}: ${line}${hits.length > 0 ? ` LEAK? ${hits.join(',')}` : ''}`);
       const list = results.get(`${task.id}/${arm.id}`) ?? [];
       if (slot.kind === 'evaluated') list.push(slot.attempt);
       results.set(`${task.id}/${arm.id}`, list);
@@ -243,7 +313,6 @@ for (const replicate of replicates) {
     }
   }
 }
-if (authFile) rmSync(authFile, { force: true });
 if (digestOf(runOrder) !== digestOf(plannedRunOrder)) throw new Error('execution order did not match the frozen campaign order');
 
 const units = tasks.map((task) => ({ taskId: task.id, repositoryId: task.repo, current: results.get(`${task.id}/${arms[1].id}`) ?? [], candidate: results.get(`${task.id}/${arms[0].id}`) ?? [] }));
@@ -253,7 +322,7 @@ const summary = {
   diagnosticVerdict: report.verdict,
   activationVerdict: candidatePolicy ? null : report.verdict,
   reasons: report.reasons, checks: report.checks, evidence: report.evidence, metrics: report.metrics, ledger: campaign.ledger().totals(),
-  arms: { candidate: arms[0].id, current: arms[1].id }, runtime, ...(snapshotDir ? { snapshotDir } : {}), runOrder,
+  arms: { candidate: arms[0].id, current: arms[1].id }, runtime, ...(snapshotDir ? { snapshotDir } : {}), runOrder, leaks,
   taskSet: tasks.map((task) => ({ id: task.id, repository: task.repo, baseRevision: task.base, fixRevision: task.fix, subject: task.subject, prompt: task.prompt, oracleDigest: task.oracleDigest, graderRuntimeDigest: task.graderDigest })),
   perTask: Object.fromEntries([...results].map(([key, attempts]) => [key, attempts.map((a) => ({ outcome: a.outcome, usd: a.historicalCostUsd, normalizedUsd: a.normalizedCostUsd, seconds: Math.round(a.wallTimeMs / 1000), served: a.candidateKey, fallbacks: a.fallbackCount, escalations: a.capabilityEscalations, switches: a.modelSwitches, cacheReadShare: a.cacheReadShare, servedModels: a.servedModels }))])),
 };

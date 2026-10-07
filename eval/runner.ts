@@ -75,19 +75,21 @@ export interface PiInvocation {
 /**
  * The `pi` command line for one arm. A router arm loads the extension. The `cheapest-sufficient` selector
  * arm also names the candidate policy in the environment. A fixed candidate does not load the extension.
+ * With `userExtensions`, Pi loads the user's own settings and packages, which already name the router,
+ * so the command line names no extension.
  */
-export function piInvocation(input: Pick<AgentRunInput, 'task' | 'arm'>, repoRoot: string, sessionDir = `${SANDBOX_OUT}/sessions`): PiInvocation {
+export function piInvocation(input: Pick<AgentRunInput, 'task' | 'arm'>, repoRoot: string, sessionDir = `${SANDBOX_OUT}/sessions`, options: { userExtensions?: boolean } = {}): PiInvocation {
   const { policy } = input.arm;
-  const base = ['-ne', '--session-dir', sessionDir];
+  const base = options.userExtensions ? ['--session-dir', sessionDir] : ['-ne', '--session-dir', sessionDir];
   let model: string;
   const extensions: string[] = [];
   let env: Record<string, string> | undefined;
   if (policy.kind === 'current-auto') {
     model = 'router/auto';
-    extensions.push('-e', repoRoot);
+    if (!options.userExtensions) extensions.push('-e', repoRoot);
   } else if (policy.kind === 'shadow-selector' && policy.selectorVersion === 'cheapest-sufficient') {
     model = 'router/auto';
-    extensions.push('-e', repoRoot);
+    if (!options.userExtensions) extensions.push('-e', repoRoot);
     env = { [POLICY_VERSION_ENV]: policy.selectorVersion };
   } else if (policy.kind === 'fixed-candidate') {
     model = policy.candidateKey;

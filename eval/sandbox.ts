@@ -59,7 +59,8 @@ export interface SandboxRunResult {
 }
 
 export interface SecureSandbox {
-  kind: 'os-isolated-process' | 'vm-isolated';
+  /** `host-directory` has no read boundary for credentials. Only a development run can use it. */
+  kind: 'os-isolated-process' | 'vm-isolated' | 'host-directory';
   profileDigest: string;
   /** Host path of the writable task directory. It appears as /work inside the sandbox. */
   workDir: string;

@@ -238,7 +238,7 @@ export interface PublicTaskSpec {
   workspace: {
     source: string;
     baseRevision: string;
-    sandbox: 'container' | 'os-isolated-process' | 'vm-isolated';
+    sandbox: 'container' | 'os-isolated-process' | 'vm-isolated' | 'host-directory';
     imageDigest?: string;
   };
   userRequest: string;
