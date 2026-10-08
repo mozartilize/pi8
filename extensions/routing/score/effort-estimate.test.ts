@@ -36,6 +36,21 @@ const corpus = (): BenchModel[] => {
 };
 
 describe('effortDropsPerStep', () => {
+  it('estimates the AA Agentic Index from higher measured efforts only', () => {
+    const rows = Array.from({ length: 8 }, (_, i) => [
+      row(`test/index-${i}`, 'low', { agenticIndex: 20 }),
+      row(`test/index-${i}`, 'high', { agenticIndex: 40 }),
+    ]).flat();
+    const drops = effortDropsPerStep(rows);
+    expect(drops.agenticIndex).toBe(10);
+    const measured = rows.filter((m) => m.registryId === 'test/index-0');
+    expect(estimateRow('medium', measured, drops)).toMatchObject({
+      quality: { agenticIndex: 30 }, qualityEstimated: true,
+    });
+    expect(estimateRow('max', measured, drops)).toBeUndefined();
+    expect(completeMeasuredRow(row('test/index-0', 'medium', { agenticIndex: 35 }), measured, drops)?.quality.agenticIndex).toBe(35);
+  });
+
   it('derives a per-step drop from observed adjacent-level pairs', () => {
     const drops = effortDropsPerStep(corpus());
     // 20 pairs at 2.0/step plus one 15.0/step outlier: a percentile resists

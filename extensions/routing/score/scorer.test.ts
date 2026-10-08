@@ -1321,6 +1321,52 @@ describe('scorer — fixed capability minimums', () => {
     }
   });
 
+  it.each([0.30, 0.44])('uses the AA Agentic Index for an explicit implement requirement of %s', (requirement) => {
+    const cheap = make('p/cheap', { agenticIndex: 35, agenticCoding: 2.5 }, 1);
+    const strong = make('p/strong', { agenticIndex: 55, agenticCoding: 60 }, 100);
+    const unknown = make('p/unknown', { agenticCoding: 90 }, 0);
+    const weak = make('p/weak', { agenticIndex: 1, agenticCoding: 100 }, 0);
+    for (const weights of [undefined, { quality: 0, cost: 1, speed: 0 }]) {
+      const result = pickBest([weak, unknown, strong, cheap], 'implement', weights, {
+        estimatedContextTokens: 100, handoffMinimum: requirement,
+      });
+      expect(result.fallbackChain).toEqual(['p/cheap', 'p/strong', 'p/unknown', 'p/weak']);
+      expect(result.candidateDiagnostics).toEqual(expect.arrayContaining([
+        { candidateKey: 'p/unknown', excludedReason: 'unknown-quality' },
+        { candidateKey: 'p/weak', excludedReason: 'below-agenticIndex-minimum' },
+      ]));
+    }
+  });
+
+  it.each([undefined, 0.45, 0.70])('keeps Terminal-Bench 4.0 for a default or higher implement requirement of %s', (requirement) => {
+    const cheap = make('p/cheap', { agenticIndex: 100, agenticCoding: 2.5 }, 0);
+    const strong = make('p/strong', { agenticCoding: 60 }, 100);
+    const result = pickBest([cheap, strong], 'implement', undefined, {
+      estimatedContextTokens: 100, handoffMinimum: requirement,
+    });
+    expect(result.chosen).toBe('p/strong');
+    expect(result.candidateDiagnostics).toContainEqual({ candidateKey: 'p/cheap', excludedReason: 'below-agenticCoding-minimum' });
+  });
+
+  it('uses the fixed AA Agentic Index reference, not the strongest value in the pool', () => {
+    const opts = { estimatedContextTokens: 100, handoffMinimum: 0.30 };
+    const good = make('p/good', { agenticIndex: 0.30 * 57.9 }, 10);
+    const weak = make('p/weak', { agenticIndex: 0.30 * 57.9 - 0.01 }, 0);
+    const giant = make('p/giant', { agenticIndex: 100 }, 100);
+    for (const pool of [[weak, good], [giant, weak, good]]) {
+      expect(pickBest(pool, 'implement', undefined, opts).chosen).toBe('p/good');
+    }
+  });
+
+  it('ranks economy implementation quality on the AA Agentic Index, not Terminal-Bench 4.0', () => {
+    const lowTerminal = make('p/low-terminal', { agenticIndex: 35, agenticCoding: 2.5 });
+    const highTerminal = make('p/high-terminal', { agenticIndex: 35, agenticCoding: 60 });
+    const weights = { quality: 1, cost: 0, speed: 0 };
+    const opts = { estimatedContextTokens: 100, handoffMinimum: 0.30 };
+    expect(scoreCandidate(lowTerminal, 'implement', weights, opts).qualityComponent)
+      .toBe(scoreCandidate(highTerminal, 'implement', weights, opts).qualityComponent);
+  });
+
   it('keeps coding-only implementations unknown, not weak', () => {
     const codingOnly = make('p/coding', { coding: 78 }, 0);
     const weak = make('p/weak', { agenticCoding: 5 }, 0);

@@ -34,6 +34,11 @@ export interface BenchModel {
      */
     agenticCoding?: number;
     /**
+     * AA Agentic Index. Explicit implement requirements below 0.45 use this
+     * axis. Default and higher requirements use Terminal-Bench 4.0.
+     */
+    agenticIndex?: number;
+    /**
      * AA-Omniscience Index: 100 * (correct - incorrect) / questions, closed
      * book. Zero is where correct and incorrect answers balance; negative
      * values mean wrong answers outnumber correct ones.

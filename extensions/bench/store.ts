@@ -112,6 +112,7 @@ function sanitizeBenchModel(value: unknown): BenchModel | undefined {
     intelligence: optionalFinite(quality.intelligence),
     coding: optionalFinite(quality.coding),
     agenticCoding: optionalFinite(quality.agenticCoding),
+    agenticIndex: optionalFinite(quality.agenticIndex),
     knowledge: optionalFinite(quality.knowledge),
     research: optionalFinite(quality.research),
     longContext: optionalFinite(quality.longContext),

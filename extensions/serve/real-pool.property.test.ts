@@ -77,6 +77,15 @@ describe('real candidate pool', () => {
 });
 
 describe('real pool decisions', () => {
+  it.each([0.30, 0.40, 0.44, 0.45, 0.70])('meets the implement requirement of %s on its selected axis', (requirement) => {
+    const decision = pickBest(candidates, 'implement', undefined, { estimatedContextTokens: 20_000, handoffMinimum: requirement });
+    const chosen = candidates.find((c) => candidateKey(c) === decision.chosen)!;
+    const axis = requirement < 0.45 ? 'agenticIndex' : 'agenticCoding';
+    const reference = requirement < 0.45 ? 57.9 : 63.6;
+    expect(chosen.bench?.quality[axis]).toBeGreaterThanOrEqual(requirement * reference);
+    expect(decision.candidateDiagnostics?.find((d) => d.candidateKey === decision.chosen)).toBeUndefined();
+  });
+
   it.each(DIMENSIONS)('%s chooses a candidate that meets every minimum', (dimension) => {
     const { decision } = decisions.find((d) => d.dimension === dimension)!;
     const reason = decision.candidateDiagnostics?.find((d) => d.candidateKey === decision.chosen)?.excludedReason;

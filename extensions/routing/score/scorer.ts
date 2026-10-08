@@ -83,15 +83,18 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 
 /**
  * Ranking axis: the measurement a candidate's quality credit is read from.
- * Plan, review, and gather rank on intelligence; implementation ranks on the
- * agentic coding score and falls back to coding so a model measured on coding
- * only still ranks on evidence (it stays in the unknown-capability tier,
- * because its minimum is on the agentic coding score).
+ * Plan, review, and gather rank on intelligence. Implementation ranks on the
+ * axis that its requirement selects, with coding as a ranking-only fallback.
+ * A missing measurement on the required axis keeps the candidate unknown.
  */
-function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension): number | undefined {
-  return dim === 'implement'
-    ? b.quality.agenticCoding ?? b.quality.coding
-    : b.quality.intelligence;
+function rankingAxis(dim: Dimension, requirement?: number): 'agenticIndex' | 'agenticCoding' | 'intelligence' {
+  if (dim !== 'implement') return 'intelligence';
+  return requirement != null && requirement < 0.45 ? 'agenticIndex' : 'agenticCoding';
+}
+
+function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension, requirement?: number): number | undefined {
+  const measured = b.quality[rankingAxis(dim, requirement)];
+  return dim === 'implement' ? measured ?? b.quality.coding : measured;
 }
 
 /**
@@ -118,9 +121,9 @@ type Minimums = Readonly<Partial<Record<QualityAxis, number>>>;
  *   from many source files holds up when checked.
  * - implement: agentic coding 34, the Terminal-Bench 4.0 pass rate in
  *   percent (calibrated on 2026-10-08). 34 is 0.53 of the reference, so the
- *   default implement requirement stays in the standard band. The AA agentic
- *   index does not separate current models: GPT-5.6 Luna high scores 34.6 on
- *   it but passes 2.5% of Terminal-Bench 4.0.
+ *   default implement requirement stays in the standard band. Explicit
+ *   requirements below 0.45 use the AA Agentic Index for eligibility and
+ *   ranking. Default and higher requirements use Terminal-Bench 4.0.
  * - lightweight: none; trivial work goes to the cheapest model.
  */
 const CAPABILITY_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
@@ -140,6 +143,7 @@ export const AXIS_REFERENCE: Readonly<Record<Exclude<QualityAxis, 'knowledge'>, 
   intelligence: 57.6,
   coding: 78.3,
   agenticCoding: 63.6,
+  agenticIndex: 57.9,
   research: 0.61,
   longContext: 1,
   visionReasoning: 1,
@@ -186,6 +190,11 @@ export function defaultRequirement(dimension: Dimension): number {
 function minimumsFor(dimension: Dimension, requirement?: number): Minimums {
   const fixed = CAPABILITY_MINIMUMS[dimension];
   if (requirement == null) return fixed;
+  // An explicit requirement below 0.45 selects the AA Agentic Index.
+  // Default and higher requirements keep Terminal-Bench 4.0.
+  if (rankingAxis(dimension, requirement) === 'agenticIndex') {
+    return { agenticIndex: clamp(requirement, 0, 1) * AXIS_REFERENCE.agenticIndex };
+  }
   return Object.fromEntries(
     (Object.keys(fixed) as QualityAxis[]).map((axis) => [
       axis,
@@ -401,10 +410,9 @@ export interface ScoreOpts {
   warmPrefixTokens?: ReadonlyMap<string, number>;
   /**
    * Requirement an accepted handoff sets for the next phase's model: the
-   * executor of an execution contract, or the planner or reviewer after a
-   * context handoff. The candidate must meet that share of each axis's
-   * reference strength (`minimumsFor`), and quality above it earns no
-   * credit; absent applies the task type's fixed minimums.
+   * executor of an execution contract, or the model after a context handoff.
+   * The candidate must meet that share of each required axis's reference strength.
+   * Quality above it earns no credit. An absent requirement uses the task type's fixed minimums.
    */
   handoffMinimum?: number;
   /** Measured compliance preference, bounded and applied inside capability tiers only. */
@@ -438,7 +446,7 @@ export function scoreCandidate(
   let qualityNorm = 0;
   let qualityAvailable = false;
   if (c.bench) {
-    const q = qualityForDimension(c.bench, dimension);
+    const q = qualityForDimension(c.bench, dimension, opts.handoffMinimum);
     if (q != null) {
       qualityNorm = clamp(q / 100, 0, 1);
       qualityAvailable = true;
@@ -814,7 +822,6 @@ function scoreWithinTiers(
   eligibility: Map<string, Eligibility>,
   costOf: (c: Candidate) => number | undefined,
   speedBasis: 'task' | 'tps',
-  minimums: Minimums,
 ): ScoredCandidate[] {
   const costUtilities = new Map<string, number | undefined>();
   const timeUtilities = new Map<string, number | undefined>();
@@ -832,10 +839,10 @@ function scoreWithinTiers(
   // Quality above it earns no credit, so among candidates that clear it the
   // economic components — cost, speed, and the cache credit — decide;
   // otherwise a quality-heavy task weighting would pick the strongest model
-  // whatever the minimum says. The ceiling is the minimum on the ranking axis.
-  const rankingMinimum = minimums[dimension === 'implement' ? 'agenticCoding' : 'intelligence'];
-  const qualityCeiling = opts.handoffMinimum != null && rankingMinimum != null
-    ? clamp(rankingMinimum / 100, 0, 1) * weights.quality
+  // whatever the minimum says. The ceiling uses the selected ranking axis.
+  const axis = rankingAxis(dimension, opts.handoffMinimum);
+  const qualityCeiling = opts.handoffMinimum != null
+    ? clamp(clamp(opts.handoffMinimum, 0, 1) * AXIS_REFERENCE[axis] / 100, 0, 1) * weights.quality
     : undefined;
   return filtered.map((c) => {
     const s = scoreCandidate(c, dimension, weights, opts);
@@ -993,7 +1000,6 @@ export function pickBest(
     eligibility,
     costOf,
     speedBasis,
-    minimums,
   );
   applySwitchBonus(scored, opts);
   for (const candidate of scored) {

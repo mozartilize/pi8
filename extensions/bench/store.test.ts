@@ -123,6 +123,21 @@ describe('store', () => {
     }
   });
 
+  it('preserves the AA Agentic Index on load and discards invalid values', () => {
+    const row = { registryId: 'p/model', benchSlug: 'model', active: true, source: 'fixture' };
+    writeJsonAtomic(join(tmpDir, 'benchmarks.json'), {
+      ...emptyStore(), models: [
+        { ...row, quality: { agenticIndex: 34.6, agenticCoding: 2.5 } },
+        { ...row, quality: { agenticIndex: '34.6', agenticCoding: 2.5 } },
+        { ...row, quality: { agenticCoding: 2.5 } },
+      ],
+    });
+    const models = loadStore(tmpDir)!.models;
+    expect(models[0].quality).toEqual({ agenticIndex: 34.6, agenticCoding: 2.5 });
+    expect(models[1].quality.agenticIndex).toBeUndefined();
+    expect(models[2].quality.agenticIndex).toBeUndefined();
+  });
+
   it('keeps effort variants of one registryId as separate merged rows', () => {
     const base = {
       registryId: 'a/b',

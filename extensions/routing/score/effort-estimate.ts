@@ -35,8 +35,8 @@ const LEVELS: readonly ModelThinkingLevel[] = [
   'max',
 ];
 
-type LadderAxis = 'intelligence' | 'coding' | 'agenticCoding';
-const AXES: readonly LadderAxis[] = ['intelligence', 'coding', 'agenticCoding'];
+type LadderAxis = 'intelligence' | 'coding' | 'agenticCoding' | 'agenticIndex';
+const AXES: readonly LadderAxis[] = ['intelligence', 'coding', 'agenticCoding', 'agenticIndex'];
 
 /** Percentile of observed drops used as the per-step estimate. */
 const DROP_PERCENTILE = 0.9;
@@ -82,6 +82,7 @@ export function effortDropsPerStep(rows: readonly BenchModel[]): EffortDrops {
     intelligence: [],
     coding: [],
     agenticCoding: [],
+    agenticIndex: [],
   };
   for (const perModel of byModel.values()) {
     const ordered = [...perModel.entries()].sort(

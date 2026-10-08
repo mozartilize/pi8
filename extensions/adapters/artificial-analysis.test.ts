@@ -172,6 +172,14 @@ describe('artificial-analysis adapter', () => {
       expect(lunaMax?.qualityEstimated).toBeUndefined();
     });
 
+    it('keeps the AA Agentic Index separate from Terminal-Bench 4.0', () => {
+      const raw = [{ slug: 'example', name: 'Example (high)', evaluations: { artificial_analysis_agentic_index: 34.6 } }];
+      const [row] = normalize(raw, [{ slug: 'example', name: 'Example (high)', terminalBench40: 0.025 }]);
+      expect(row?.quality).toMatchObject({ agenticIndex: 34.6, agenticCoding: 2.5 });
+      expect(normalize([{ slug: 'example' }])[0]?.quality.agenticIndex).toBeUndefined();
+      expect(normalize([{ slug: 'example', evaluations: { artificial_analysis_agentic_index: NaN } }])[0]?.quality.agenticIndex).toBeUndefined();
+    });
+
     it('reads the agentic coding score from Terminal-Bench 4.0 in percent', () => {
       const lunaHigh = joined.find((r) => r.benchSlug === 'gpt-5-6-luna-high');
       expect(lunaHigh?.quality.agenticCoding).toBeCloseTo(2.525, 3);

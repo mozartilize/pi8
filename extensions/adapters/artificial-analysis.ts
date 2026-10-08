@@ -227,6 +227,7 @@ export function normalize(
           intelligence: asNumber(ev.artificial_analysis_intelligence_index),
           coding: asNumber(ev.artificial_analysis_coding_index),
           agenticCoding: agentic[index]?.value,
+          agenticIndex: asNumber(ev.artificial_analysis_agentic_index),
           knowledge: page?.omniscience,
           research: page?.briefcaseRubricPassRate,
           longContext: page?.lcr,

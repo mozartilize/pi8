@@ -1,674 +1,83 @@
 {
- "source": "Active benchmark rows from a /router-sync of 2026-10-08, and pi-ai catalog entries for the providers claude-bridge (the anthropic catalog), openai-codex, github-copilot, and deepseek. Regenerate both together.",
+ "source": "Artificial Analysis API and models page with the Pi provider registry",
  "registry": [
   {
-   "provider": "claude-bridge",
-   "id": "claude-fable-5",
-   "name": "Claude Fable 5",
-   "api": "anthropic-messages",
+   "provider": "deepseek",
+   "id": "deepseek-flash",
+   "api": "openai-completions",
+   "contextWindow": 1000000,
+   "maxTokens": 384000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
-    "input": 10,
-    "output": 50,
-    "cacheRead": 1,
-    "cacheWrite": 12.5
+    "input": 0.3,
+    "output": 1.2,
+    "cacheRead": 0.006,
+    "cacheWrite": 0
    },
    "thinkingLevelMap": {
-    "off": null,
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-fable-5-1",
-   "name": "Claude Fable 5.1",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 10,
-    "output": 50,
-    "cacheRead": 0.25,
-    "cacheWrite": 12.5
-   },
-   "thinkingLevelMap": {
-    "off": null,
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-haiku-4-5",
-   "name": "Claude Haiku 4.5 (latest)",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 200000,
-   "maxTokens": 64000,
-   "cost": {
-    "input": 1,
-    "output": 5,
-    "cacheRead": 0.1,
-    "cacheWrite": 1.25
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-haiku-4-5-20251001",
-   "name": "Claude Haiku 4.5",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 200000,
-   "maxTokens": 64000,
-   "cost": {
-    "input": 1,
-    "output": 5,
-    "cacheRead": 0.1,
-    "cacheWrite": 1.25
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-opus-4-5",
-   "name": "Claude Opus 4.5 (latest)",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 200000,
-   "maxTokens": 64000,
-   "cost": {
-    "input": 5,
-    "output": 25,
-    "cacheRead": 0.5,
-    "cacheWrite": 6.25
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-opus-4-5-20251101",
-   "name": "Claude Opus 4.5",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 200000,
-   "maxTokens": 64000,
-   "cost": {
-    "input": 5,
-    "output": 25,
-    "cacheRead": 0.5,
-    "cacheWrite": 6.25
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-opus-4-6",
-   "name": "Claude Opus 4.6",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 5,
-    "output": 25,
-    "cacheRead": 0.5,
-    "cacheWrite": 6.25
-   },
-   "thinkingLevelMap": {
-    "max": "max"
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-opus-4-7",
-   "name": "Claude Opus 4.7",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 5,
-    "output": 25,
-    "cacheRead": 0.5,
-    "cacheWrite": 6.25
-   },
-   "thinkingLevelMap": {
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-opus-4-8",
-   "name": "Claude Opus 4.8",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 5,
-    "output": 25,
-    "cacheRead": 0.5,
-    "cacheWrite": 6.25
-   },
-   "thinkingLevelMap": {
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-opus-5",
-   "name": "Claude Opus 5",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 5,
-    "output": 25,
-    "cacheRead": 0.5,
-    "cacheWrite": 6.25
-   },
-   "thinkingLevelMap": {
-    "off": null,
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-opus-5-5",
-   "name": "Claude Opus 5.5",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 4,
-    "output": 20,
-    "cacheRead": 0.2,
-    "cacheWrite": 5
-   },
-   "thinkingLevelMap": {
-    "off": null,
     "minimal": null,
     "low": "low",
-    "medium": "medium",
+    "medium": null,
     "high": "high",
-    "xhigh": "xhigh",
     "max": "max"
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-sonnet-4-5",
-   "name": "Claude Sonnet 4.5 (latest)",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 64000,
-   "cost": {
-    "input": 3,
-    "output": 15,
-    "cacheRead": 0.3,
-    "cacheWrite": 3.75
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-sonnet-4-5-20250929",
-   "name": "Claude Sonnet 4.5",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 64000,
-   "cost": {
-    "input": 3,
-    "output": 15,
-    "cacheRead": 0.3,
-    "cacheWrite": 3.75
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-sonnet-4-6",
-   "name": "Claude Sonnet 4.6",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 3,
-    "output": 15,
-    "cacheRead": 0.3,
-    "cacheWrite": 3.75
    },
-   "thinkingLevelMap": {
-    "max": "max"
+   "compat": {
+    "supportsStore": false,
+    "supportsDeveloperRole": false,
+    "maxTokensField": "max_tokens",
+    "requiresReasoningContentOnAssistantMessages": true,
+    "thinkingFormat": "deepseek",
+    "supportsStrictMode": true
    }
   },
   {
-   "provider": "claude-bridge",
-   "id": "claude-sonnet-5",
-   "name": "Claude Sonnet 5",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
+   "provider": "deepseek",
+   "id": "deepseek-v4-pro",
+   "api": "openai-completions",
    "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 2,
-    "output": 10,
-    "cacheRead": 0.2,
-    "cacheWrite": 2.5
-   },
-   "thinkingLevelMap": {
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "claude-bridge",
-   "id": "claude-sonnet-5-5",
-   "name": "Claude Sonnet 5.5",
-   "api": "anthropic-messages",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 2,
-    "output": 10,
-    "cacheRead": 0.2,
-    "cacheWrite": 2.5
-   },
-   "thinkingLevelMap": {
-    "off": null,
-    "minimal": null,
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-5.3-codex-spark",
-   "name": "GPT-5.3 Codex Spark",
-   "api": "openai-codex-responses",
+   "maxTokens": 384000,
    "reasoning": true,
    "input": [
     "text"
    ],
-   "contextWindow": 128000,
-   "maxTokens": 128000,
    "cost": {
-    "input": 1.75,
-    "output": 14,
-    "cacheRead": 0.175,
+    "input": 1.32,
+    "output": 3.96,
+    "cacheRead": 0.044,
     "cacheWrite": 0
    },
    "thinkingLevelMap": {
-    "xhigh": "xhigh",
-    "minimal": "low"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-5.5",
-   "name": "GPT-5.5",
-   "api": "openai-codex-responses",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 272000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 5,
-    "output": 30,
-    "cacheRead": 0.5,
-    "cacheWrite": 0,
-    "tiers": [
-     {
-      "inputTokensAbove": 272000,
-      "input": 10,
-      "output": 45,
-      "cacheRead": 1,
-      "cacheWrite": 0
-     }
-    ]
-   },
-   "thinkingLevelMap": {
-    "xhigh": "xhigh",
-    "minimal": "low"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-5.6-luna",
-   "name": "GPT-5.6 Luna",
-   "api": "openai-codex-responses",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 272000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 0.2,
-    "output": 1.2,
-    "cacheRead": 0.02,
-    "cacheWrite": 0.25,
-    "tiers": [
-     {
-      "inputTokensAbove": 272000,
-      "input": 0.4,
-      "output": 1.8,
-      "cacheRead": 0.04,
-      "cacheWrite": 0.5
-     }
-    ]
-   },
-   "thinkingLevelMap": {
-    "xhigh": "xhigh",
-    "max": "max",
-    "minimal": "low"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-5.6-sol",
-   "name": "GPT-5.6 Sol",
-   "api": "openai-codex-responses",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 272000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 4,
-    "output": 20,
-    "cacheRead": 0.4,
-    "cacheWrite": 5,
-    "tiers": [
-     {
-      "inputTokensAbove": 272000,
-      "input": 8,
-      "output": 30,
-      "cacheRead": 0.8,
-      "cacheWrite": 10
-     }
-    ]
-   },
-   "thinkingLevelMap": {
-    "xhigh": "xhigh",
-    "max": "max",
-    "minimal": "low"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-5.6-terra",
-   "name": "GPT-5.6 Terra",
-   "api": "openai-codex-responses",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 272000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 2,
-    "output": 12,
-    "cacheRead": 0.2,
-    "cacheWrite": 2.5,
-    "tiers": [
-     {
-      "inputTokensAbove": 272000,
-      "input": 4,
-      "output": 18,
-      "cacheRead": 0.4,
-      "cacheWrite": 5
-     }
-    ]
-   },
-   "thinkingLevelMap": {
-    "xhigh": "xhigh",
-    "max": "max",
-    "minimal": "low"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-6-astra",
-   "name": "GPT-6 Astra",
-   "api": "openai-codex-responses",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 272000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 10,
-    "output": 50,
-    "cacheRead": 1,
-    "cacheWrite": 12.5,
-    "tiers": [
-     {
-      "inputTokensAbove": 272000,
-      "input": 20,
-      "output": 75,
-      "cacheRead": 2,
-      "cacheWrite": 25
-     }
-    ]
-   },
-   "thinkingLevelMap": {
-    "off": null,
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
+    "minimal": null,
+    "low": null,
+    "medium": null,
     "high": "high",
-    "xhigh": "xhigh",
     "max": "max"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-6-luna",
-   "name": "GPT-6 Luna",
-   "api": "openai-codex-responses",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 272000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 0.1,
-    "output": 0.5,
-    "cacheRead": 0.01,
-    "cacheWrite": 0.125,
-    "tiers": [
-     {
-      "inputTokensAbove": 272000,
-      "input": 0.2,
-      "output": 0.75,
-      "cacheRead": 0.02,
-      "cacheWrite": 0.25
-     }
-    ]
    },
-   "thinkingLevelMap": {
-    "off": "none",
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-6-sol",
-   "name": "GPT-6 Sol",
-   "api": "openai-codex-responses",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 272000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 2,
-    "output": 10,
-    "cacheRead": 0.2,
-    "cacheWrite": 2.5,
-    "tiers": [
-     {
-      "inputTokensAbove": 272000,
-      "input": 4,
-      "output": 15,
-      "cacheRead": 0.4,
-      "cacheWrite": 5
-     }
-    ]
-   },
-   "thinkingLevelMap": {
-    "off": "none",
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "xhigh",
-    "max": "max"
-   }
-  },
-  {
-   "provider": "openai-codex",
-   "id": "gpt-6.1-sol",
-   "name": "GPT-6.1 Sol",
-   "api": "openai-codex-responses",
-   "reasoning": true,
-   "input": [
-    "text",
-    "image"
-   ],
-   "contextWindow": 272000,
-   "maxTokens": 128000,
-   "cost": {
-    "input": 2,
-    "output": 10,
-    "cacheRead": 0.1,
-    "cacheWrite": 2.5,
-    "tiers": [
-     {
-      "inputTokensAbove": 272000,
-      "input": 4,
-      "output": 15,
-      "cacheRead": 0.2,
-      "cacheWrite": 5
-     }
-    ]
-   },
-   "thinkingLevelMap": {
-    "off": null,
-    "minimal": "low",
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "xhigh",
-    "max": "max"
+   "compat": {
+    "supportsStore": false,
+    "supportsDeveloperRole": false,
+    "maxTokensField": "max_tokens",
+    "requiresReasoningContentOnAssistantMessages": true,
+    "thinkingFormat": "deepseek",
+    "supportsStrictMode": true,
+    "supportsMidConvoSystemMessages": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-fable-5",
-   "name": "Claude Fable 5",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 10,
     "output": 50,
@@ -679,20 +88,23 @@
     "off": null,
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsMidConvoSystemMessages": true,
+    "forceAdaptiveThinking": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-fable-5.1",
-   "name": "Claude Fable 5.1",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 10,
     "output": 50,
@@ -703,39 +115,44 @@
     "off": null,
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsMidConvoSystemMessages": true,
+    "forceAdaptiveThinking": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-haiku-4.5",
-   "name": "Claude Haiku 4.5 (latest)",
    "api": "anthropic-messages",
+   "contextWindow": 200000,
+   "maxTokens": 64000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 200000,
-   "maxTokens": 64000,
    "cost": {
     "input": 1,
     "output": 5,
     "cacheRead": 0.1,
     "cacheWrite": 1.25
+   },
+   "compat": {
+    "supportsEagerToolInputStreaming": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-opus-4.7",
-   "name": "Claude Opus 4.7",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 32000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 32000,
    "cost": {
     "input": 5,
     "output": 25,
@@ -746,20 +163,23 @@
     "xhigh": "xhigh",
     "max": "max",
     "minimal": "low"
+   },
+   "compat": {
+    "forceAdaptiveThinking": true,
+    "supportsTemperature": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-opus-4.8",
-   "name": "Claude Opus 4.8",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 64000,
    "cost": {
     "input": 5,
     "output": 25,
@@ -770,20 +190,24 @@
     "xhigh": "xhigh",
     "max": "max",
     "minimal": "low"
+   },
+   "compat": {
+    "supportsMidConvoSystemMessages": true,
+    "forceAdaptiveThinking": true,
+    "supportsTemperature": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-opus-5",
-   "name": "Claude Opus 5",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 64000,
    "cost": {
     "input": 5,
     "output": 25,
@@ -794,20 +218,24 @@
     "xhigh": "xhigh",
     "max": "max",
     "minimal": "low"
+   },
+   "compat": {
+    "supportsMidConvoSystemMessages": true,
+    "forceAdaptiveThinking": true,
+    "supportsTemperature": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-opus-5.5",
-   "name": "Claude Opus 5.5",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 4,
     "output": 20,
@@ -822,20 +250,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsMidConvoSystemMessages": true,
+    "forceAdaptiveThinking": true,
+    "supportsTemperature": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-sonnet-4.6",
-   "name": "Claude Sonnet 4.6",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 32000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 32000,
    "cost": {
     "input": 3,
     "output": 15,
@@ -845,20 +277,22 @@
    "thinkingLevelMap": {
     "max": "max",
     "minimal": "low"
+   },
+   "compat": {
+    "forceAdaptiveThinking": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-sonnet-5",
-   "name": "Claude Sonnet 5",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2,
     "output": 10,
@@ -868,20 +302,22 @@
    "thinkingLevelMap": {
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "forceAdaptiveThinking": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "claude-sonnet-5.5",
-   "name": "Claude Sonnet 5.5",
    "api": "anthropic-messages",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2,
     "output": 10,
@@ -891,134 +327,169 @@
    "thinkingLevelMap": {
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsMidConvoSystemMessages": true,
+    "forceAdaptiveThinking": true,
+    "supportsTemperature": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "gemini-3.5-flash",
-   "name": "Gemini 3.5 Flash",
    "api": "openai-completions",
+   "contextWindow": 200000,
+   "maxTokens": 64000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 200000,
-   "maxTokens": 64000,
    "cost": {
     "input": 1.5,
     "output": 9,
     "cacheRead": 0.15,
     "cacheWrite": 0
+   },
+   "compat": {
+    "supportsStrictMode": true,
+    "supportsStore": false,
+    "supportsDeveloperRole": false,
+    "supportsReasoningEffort": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "gemini-3.6-flash",
-   "name": "Gemini 3.6 Flash",
    "api": "openai-completions",
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 64000,
    "cost": {
     "input": 0.75,
     "output": 3.75,
     "cacheRead": 0.075,
     "cacheWrite": 0
+   },
+   "compat": {
+    "supportsStrictMode": true,
+    "supportsStore": false,
+    "supportsDeveloperRole": false,
+    "supportsReasoningEffort": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "gemini-3.7-flash",
-   "name": "Gemini 3.7 Flash",
    "api": "openai-completions",
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 64000,
    "cost": {
     "input": 0.75,
     "output": 3.75,
     "cacheRead": 0.075,
     "cacheWrite": 0
+   },
+   "compat": {
+    "supportsStrictMode": true,
+    "supportsStore": false,
+    "supportsDeveloperRole": false,
+    "supportsReasoningEffort": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "gemini-3.8-flash",
-   "name": "Gemini 3.8 Flash",
    "api": "openai-completions",
+   "contextWindow": 1000000,
+   "maxTokens": 64000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 64000,
    "cost": {
     "input": 0.75,
     "output": 3.75,
     "cacheRead": 0.075,
     "cacheWrite": 0
+   },
+   "compat": {
+    "supportsStrictMode": true,
+    "supportsStore": false,
+    "supportsDeveloperRole": false,
+    "supportsReasoningEffort": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "kimi-k2.7-code",
-   "name": "Kimi K2.7 Code",
    "api": "openai-completions",
+   "contextWindow": 256000,
+   "maxTokens": 32000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 256000,
-   "maxTokens": 32000,
    "cost": {
     "input": 0.95,
     "output": 4,
     "cacheRead": 0.19,
     "cacheWrite": 0
+   },
+   "compat": {
+    "supportsStrictMode": true,
+    "supportsStore": false,
+    "supportsDeveloperRole": false,
+    "supportsReasoningEffort": false
    }
   },
   {
    "provider": "github-copilot",
    "id": "kimi-k3",
-   "name": "Kimi K3",
    "api": "openai-completions",
+   "contextWindow": 1048576,
+   "maxTokens": 131072,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1048576,
-   "maxTokens": 131072,
    "cost": {
     "input": 3,
     "output": 15,
     "cacheRead": 0.3,
     "cacheWrite": 0
+   },
+   "compat": {
+    "supportsStrictMode": true,
+    "supportsStore": false,
+    "supportsDeveloperRole": false,
+    "supportsReasoningEffort": false,
+    "supportsMidConvoSystemMessages": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5-mini",
-   "name": "GPT-5 Mini",
    "api": "openai-responses",
+   "contextWindow": 264000,
+   "maxTokens": 64000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 264000,
-   "maxTokens": 64000,
    "cost": {
     "input": 0.25,
     "output": 2,
@@ -1033,20 +504,22 @@
     "high": "high",
     "xhigh": null,
     "max": null
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5.3-codex",
-   "name": "GPT-5.3 Codex",
    "api": "openai-responses",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 1.75,
     "output": 14,
@@ -1061,20 +534,22 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": null
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5.4",
-   "name": "GPT-5.4",
    "api": "openai-responses",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2.5,
     "output": 15,
@@ -1098,20 +573,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": null
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5.4-mini",
-   "name": "GPT-5.4 mini",
    "api": "openai-responses",
+   "contextWindow": 400000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 400000,
-   "maxTokens": 128000,
    "cost": {
     "input": 0.75,
     "output": 4.5,
@@ -1126,20 +605,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": null
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5.4-nano",
-   "name": "GPT-5.4 nano",
    "api": "openai-responses",
+   "contextWindow": 400000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 400000,
-   "maxTokens": 128000,
    "cost": {
     "input": 0.2,
     "output": 1.25,
@@ -1150,20 +633,22 @@
     "off": null,
     "minimal": "low",
     "xhigh": "xhigh"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5.5",
-   "name": "GPT-5.5",
    "api": "openai-responses",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 5,
     "output": 30,
@@ -1187,20 +672,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": null
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5.6-luna",
-   "name": "GPT-5.6 Luna",
    "api": "openai-responses",
+   "contextWindow": 1050000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1050000,
-   "maxTokens": 128000,
    "cost": {
     "input": 0.2,
     "output": 1.2,
@@ -1224,20 +713,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5.6-sol",
-   "name": "GPT-5.6 Sol",
    "api": "openai-responses",
+   "contextWindow": 1050000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1050000,
-   "maxTokens": 128000,
    "cost": {
     "input": 4,
     "output": 20,
@@ -1261,20 +754,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-5.6-terra",
-   "name": "GPT-5.6 Terra",
    "api": "openai-responses",
+   "contextWindow": 1050000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1050000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2,
     "output": 12,
@@ -1298,20 +795,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-6-astra",
-   "name": "GPT-6 Astra",
    "api": "openai-responses",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 10,
     "output": 50,
@@ -1335,20 +836,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-6-luna",
-   "name": "GPT-6 Luna",
    "api": "openai-responses",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 0.1,
     "output": 0.5,
@@ -1372,20 +877,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-6-sol",
-   "name": "GPT-6 Sol",
    "api": "openai-responses",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2,
     "output": 10,
@@ -1409,20 +918,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "gpt-6.1-sol",
-   "name": "GPT-6.1 Sol",
    "api": "openai-responses",
+   "contextWindow": 1050000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1050000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2,
     "output": 10,
@@ -1446,20 +959,24 @@
     "high": "high",
     "xhigh": "xhigh",
     "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsMidConvoSystemMessages": true,
+    "supportsAdditionalTools": true
    }
   },
   {
    "provider": "github-copilot",
    "id": "grok-4.5",
-   "name": "Grok 4.5",
    "api": "openai-responses",
+   "contextWindow": 500000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 500000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2,
     "output": 6,
@@ -1488,15 +1005,14 @@
   {
    "provider": "github-copilot",
    "id": "grok-4.6",
-   "name": "Grok 4.6",
    "api": "openai-responses",
+   "contextWindow": 500000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 500000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2,
     "output": 6,
@@ -1525,15 +1041,14 @@
   {
    "provider": "github-copilot",
    "id": "grok-4.7",
-   "name": "Grok 4.7",
    "api": "openai-responses",
+   "contextWindow": 500000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 500000,
-   "maxTokens": 128000,
    "cost": {
     "input": 2,
     "output": 6,
@@ -1562,14 +1077,13 @@
   {
    "provider": "github-copilot",
    "id": "mai-code-1-flash-picker",
-   "name": "MAI-Code-1-Flash",
    "api": "openai-responses",
+   "contextWindow": 256000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text"
    ],
-   "contextWindow": 256000,
-   "maxTokens": 128000,
    "cost": {
     "input": 0.75,
     "output": 4.5,
@@ -1589,15 +1103,14 @@
   {
    "provider": "github-copilot",
    "id": "mai-code-1.1-flash",
-   "name": "MAI-Code-1.1-Flash",
    "api": "openai-responses",
+   "contextWindow": 256000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 256000,
-   "maxTokens": 128000,
    "cost": {
     "input": 0.2,
     "output": 1.2,
@@ -1615,54 +1128,630 @@
    }
   },
   {
-   "provider": "deepseek",
-   "id": "deepseek-flash",
-   "name": "DeepSeek V4.1 Flash",
-   "api": "openai-completions",
+   "provider": "openai-codex",
+   "id": "gpt-5.3-codex-spark",
+   "api": "openai-codex-responses",
+   "contextWindow": 128000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text"
+   ],
+   "cost": {
+    "input": 1.75,
+    "output": 14,
+    "cacheRead": 0.175,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "minimal": "low"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.5",
+   "api": "openai-codex-responses",
+   "contextWindow": 272000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
     "text",
     "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 384000,
    "cost": {
-    "input": 0.3,
+    "input": 5,
+    "output": 30,
+    "cacheRead": 0.5,
+    "cacheWrite": 0,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 10,
+      "output": 45,
+      "cacheRead": 1,
+      "cacheWrite": 0
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "minimal": "low"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsToolSearch": true,
+    "supportsMidConvoSystemMessages": true
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.6-luna",
+   "api": "openai-codex-responses",
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0.2,
     "output": 1.2,
-    "cacheRead": 0.006,
+    "cacheRead": 0.02,
+    "cacheWrite": 0.25,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 0.4,
+      "output": 1.8,
+      "cacheRead": 0.04,
+      "cacheWrite": 0.5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsAdditionalTools": true,
+    "supportsToolSearch": true,
+    "supportsMidConvoSystemMessages": true
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.6-sol",
+   "api": "openai-codex-responses",
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 4,
+    "output": 20,
+    "cacheRead": 0.4,
+    "cacheWrite": 5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 8,
+      "output": 30,
+      "cacheRead": 0.8,
+      "cacheWrite": 10
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsAdditionalTools": true,
+    "supportsToolSearch": true,
+    "supportsMidConvoSystemMessages": true
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-5.6-terra",
+   "api": "openai-codex-responses",
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 2,
+    "output": 12,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 18,
+      "cacheRead": 0.4,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max",
+    "minimal": "low"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsAdditionalTools": true,
+    "supportsToolSearch": true,
+    "supportsMidConvoSystemMessages": true
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-6-astra",
+   "api": "openai-codex-responses",
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 10,
+    "output": 50,
+    "cacheRead": 1,
+    "cacheWrite": 12.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 20,
+      "output": 75,
+      "cacheRead": 2,
+      "cacheWrite": 25
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsAdditionalTools": true,
+    "supportsToolSearch": true,
+    "supportsMidConvoSystemMessages": true
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-6-luna",
+   "api": "openai-codex-responses",
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0.1,
+    "output": 0.5,
+    "cacheRead": 0.01,
+    "cacheWrite": 0.125,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 0.2,
+      "output": 0.75,
+      "cacheRead": 0.02,
+      "cacheWrite": 0.25
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": "none",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsAdditionalTools": true,
+    "supportsToolSearch": true,
+    "supportsMidConvoSystemMessages": true
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-6-sol",
+   "api": "openai-codex-responses",
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.2,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 15,
+      "cacheRead": 0.4,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": "none",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsAdditionalTools": true,
+    "supportsToolSearch": true,
+    "supportsMidConvoSystemMessages": true
+   }
+  },
+  {
+   "provider": "openai-codex",
+   "id": "gpt-6.1-sol",
+   "api": "openai-codex-responses",
+   "contextWindow": 272000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 2,
+    "output": 10,
+    "cacheRead": 0.1,
+    "cacheWrite": 2.5,
+    "tiers": [
+     {
+      "inputTokensAbove": 272000,
+      "input": 4,
+      "output": 15,
+      "cacheRead": 0.2,
+      "cacheWrite": 5
+     }
+    ]
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   },
+   "compat": {
+    "supportsOpenAIGrammarTools": true,
+    "supportsAdditionalTools": true,
+    "supportsToolSearch": true,
+    "supportsMidConvoSystemMessages": true
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-fable-5-1",
+   "api": "claude-bridge",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
     "cacheWrite": 0
    },
    "thinkingLevelMap": {
-    "minimal": null,
-    "low": "low",
-    "medium": null,
-    "high": "high",
+    "off": null,
+    "xhigh": "xhigh",
     "max": "max"
    }
   },
   {
-   "provider": "deepseek",
-   "id": "deepseek-v4-pro",
-   "name": "DeepSeek V4 Pro",
-   "api": "openai-completions",
+   "provider": "claude-bridge",
+   "id": "claude-fable-5",
+   "api": "claude-bridge",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
    "reasoning": true,
    "input": [
-    "text"
+    "text",
+    "image"
    ],
-   "contextWindow": 1000000,
-   "maxTokens": 384000,
    "cost": {
-    "input": 1.32,
-    "output": 3.96,
-    "cacheRead": 0.044,
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
     "cacheWrite": 0
    },
    "thinkingLevelMap": {
-    "minimal": null,
-    "low": null,
-    "medium": null,
-    "high": "high",
+    "off": null,
+    "xhigh": "xhigh",
     "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-5-5",
+   "api": "claude-bridge",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-5",
+   "api": "claude-bridge",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-8",
+   "api": "claude-bridge",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-7",
+   "api": "claude-bridge",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-6",
+   "api": "claude-bridge",
+   "contextWindow": 200000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-opus-4-5",
+   "api": "claude-bridge",
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-5-5",
+   "api": "claude-bridge",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "off": null,
+    "minimal": null,
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-5",
+   "api": "claude-bridge",
+   "contextWindow": 1000000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "xhigh": "xhigh",
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-4-6",
+   "api": "claude-bridge",
+   "contextWindow": 200000,
+   "maxTokens": 128000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   },
+   "thinkingLevelMap": {
+    "max": "max"
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-sonnet-4-5",
+   "api": "claude-bridge",
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
+   }
+  },
+  {
+   "provider": "claude-bridge",
+   "id": "claude-haiku-4-5",
+   "api": "claude-bridge",
+   "contextWindow": 200000,
+   "maxTokens": 64000,
+   "reasoning": true,
+   "input": [
+    "text",
+    "image"
+   ],
+   "cost": {
+    "input": 0,
+    "output": 0,
+    "cacheRead": 0,
+    "cacheWrite": 0
    }
   }
  ],
@@ -1673,6 +1762,7 @@
     "intelligence": 32.6,
     "coding": 70.1,
     "agenticCoding": 6.56565656565657,
+    "agenticIndex": 26,
     "knowledge": 21.183333333333334,
     "research": 0.2773207990599295,
     "longContext": 0.733333333333333,
@@ -1801,6 +1891,7 @@
     "intelligence": 21,
     "coding": 44.2,
     "agenticCoding": 0,
+    "agenticIndex": 16.1,
     "knowledge": -14.65,
     "research": 0.13079299691040164,
     "longContext": 0.7,
@@ -1824,6 +1915,7 @@
     "intelligence": 21,
     "coding": 44.2,
     "agenticCoding": 0,
+    "agenticIndex": 16.1,
     "knowledge": -14.65,
     "research": 0.13079299691040164,
     "longContext": 0.7,
@@ -1847,6 +1939,7 @@
     "intelligence": 46.8,
     "coding": 75.2,
     "agenticCoding": 40.4040404040404,
+    "agenticIndex": 47.1,
     "knowledge": 34.13333333333333,
     "research": 0.5535353535353535,
     "longContext": 0.823333333333333
@@ -1869,6 +1962,7 @@
     "intelligence": 46.8,
     "coding": 75.2,
     "agenticCoding": 40.4040404040404,
+    "agenticIndex": 47.1,
     "knowledge": 34.13333333333333,
     "research": 0.5535353535353535,
     "longContext": 0.823333333333333
@@ -1891,6 +1985,7 @@
     "intelligence": 33.5,
     "coding": 69.7,
     "agenticCoding": 1.01010101010101,
+    "agenticIndex": 31.6,
     "knowledge": 18.866666666666667,
     "research": 0.23939393939393938,
     "longContext": 0.78,
@@ -1914,6 +2009,7 @@
     "intelligence": 33.5,
     "coding": 69.7,
     "agenticCoding": 1.01010101010101,
+    "agenticIndex": 31.6,
     "knowledge": 18.866666666666667,
     "research": 0.23939393939393938,
     "longContext": 0.78,
@@ -1981,6 +2077,7 @@
     "intelligence": 49.7,
     "coding": 77,
     "agenticCoding": 46.4646464646465,
+    "agenticIndex": 55.6,
     "knowledge": 35.38333333333333,
     "research": 0.5797979797979798,
     "longContext": 0.803333333333333,
@@ -2004,6 +2101,7 @@
     "intelligence": 49.7,
     "coding": 77,
     "agenticCoding": 46.4646464646465,
+    "agenticIndex": 55.6,
     "knowledge": 35.38333333333333,
     "research": 0.5797979797979798,
     "longContext": 0.803333333333333,
@@ -2037,7 +2135,7 @@
    "latencyMsTtfa": 1220,
    "effort": "low",
    "costPerTask": 0.5088,
-   "timePerTaskSeconds": 141.06888777323698,
+   "timePerTaskSeconds": 146.99073733994945,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-sonnet-5",
    "active": true
@@ -2058,7 +2156,7 @@
    "latencyMsTtfa": 1220,
    "effort": "low",
    "costPerTask": 0.5088,
-   "timePerTaskSeconds": 141.06888777323698,
+   "timePerTaskSeconds": 146.99073733994945,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-sonnet-5",
    "active": true
@@ -2113,6 +2211,7 @@
     "intelligence": 38.4,
     "coding": 74.9,
     "agenticCoding": 14.6464646464646,
+    "agenticIndex": 36.4,
     "knowledge": 20.516666666666666,
     "research": 0.33438818565400846,
     "longContext": 0.843333333333333,
@@ -2136,6 +2235,7 @@
     "intelligence": 38.4,
     "coding": 74.9,
     "agenticCoding": 14.6464646464646,
+    "agenticIndex": 36.4,
     "knowledge": 20.516666666666666,
     "research": 0.33438818565400846,
     "longContext": 0.843333333333333,
@@ -2159,6 +2259,7 @@
     "intelligence": 52.4,
     "coding": 75.9,
     "agenticCoding": 59.5959595959596,
+    "agenticIndex": 50.2,
     "knowledge": 43.416666666666664,
     "research": 0.5232323232323233,
     "longContext": 0.8,
@@ -2182,6 +2283,7 @@
     "intelligence": 52.4,
     "coding": 75.9,
     "agenticCoding": 59.5959595959596,
+    "agenticIndex": 50.2,
     "knowledge": 43.416666666666664,
     "research": 0.5232323232323233,
     "longContext": 0.8,
@@ -2216,7 +2318,7 @@
    "latencyMsTtfa": 5570,
    "effort": "low",
    "costPerTask": 1.248,
-   "timePerTaskSeconds": 424.33914291943887,
+   "timePerTaskSeconds": 404.22768182517325,
    "source": "artificial-analysis",
    "registryId": "github-copilot/grok-4.7",
    "active": true
@@ -2227,6 +2329,7 @@
     "intelligence": 39.4,
     "coding": 66.9,
     "agenticCoding": 26.2626262626263,
+    "agenticIndex": 36,
     "knowledge": 28.55,
     "research": 0.38181818181818183,
     "longContext": 0.813333333333333,
@@ -2250,6 +2353,7 @@
     "intelligence": 39.4,
     "coding": 66.9,
     "agenticCoding": 26.2626262626263,
+    "agenticIndex": 36,
     "knowledge": 28.55,
     "research": 0.38181818181818183,
     "longContext": 0.813333333333333,
@@ -2273,6 +2377,7 @@
     "intelligence": 38.2,
     "coding": 71.5,
     "agenticCoding": 14.1414141414141,
+    "agenticIndex": 43.6,
     "knowledge": 16.45,
     "research": 0.42323232323232324,
     "longContext": 0.82,
@@ -2285,7 +2390,7 @@
    "latencyMsTtfa": 227510,
    "effort": "max",
    "costPerTask": 5.0912,
-   "timePerTaskSeconds": 882.0330868487132,
+   "timePerTaskSeconds": 882.7193116724492,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-sonnet-5",
    "active": true
@@ -2296,6 +2401,7 @@
     "intelligence": 38.2,
     "coding": 71.5,
     "agenticCoding": 14.1414141414141,
+    "agenticIndex": 43.6,
     "knowledge": 16.45,
     "research": 0.42323232323232324,
     "longContext": 0.82,
@@ -2308,7 +2414,7 @@
    "latencyMsTtfa": 227510,
    "effort": "max",
    "costPerTask": 5.0912,
-   "timePerTaskSeconds": 882.0330868487132,
+   "timePerTaskSeconds": 882.7193116724492,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-sonnet-5",
    "active": true
@@ -2337,6 +2443,7 @@
     "intelligence": 42.8,
     "coding": 74.4,
     "agenticCoding": 13.1313131313131,
+    "agenticIndex": 50.6,
     "knowledge": 28,
     "research": 0.5252525252525253,
     "longContext": 0.81
@@ -2348,7 +2455,7 @@
    "latencyMsTtfa": 31470,
    "effort": "medium",
    "costPerTask": 1.1438,
-   "timePerTaskSeconds": 421.5257931597027,
+   "timePerTaskSeconds": 440.92027475296527,
    "source": "artificial-analysis",
    "registryId": "github-copilot/grok-4.6",
    "active": true
@@ -2369,7 +2476,7 @@
    "latencyMsTtfa": 13040,
    "effort": "high",
    "costPerTask": 0.8844,
-   "timePerTaskSeconds": 226.897206120158,
+   "timePerTaskSeconds": 217.3528844209707,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-sonnet-5-5",
    "active": true
@@ -2390,7 +2497,7 @@
    "latencyMsTtfa": 13040,
    "effort": "high",
    "costPerTask": 0.8844,
-   "timePerTaskSeconds": 226.897206120158,
+   "timePerTaskSeconds": 217.3528844209707,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-sonnet-5.5",
    "active": true
@@ -2401,6 +2508,7 @@
     "intelligence": 30.1,
     "coding": 64.7,
     "agenticCoding": 1.01010101010101,
+    "agenticIndex": 30.4,
     "knowledge": -5.133333333333334,
     "research": 0.2202020202020202,
     "longContext": 0.74,
@@ -2413,7 +2521,7 @@
    "latencyMsTtfa": 1750,
    "effort": "medium",
    "costPerTask": 0.1834,
-   "timePerTaskSeconds": 59.23670323810784,
+   "timePerTaskSeconds": 58.999962058474246,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.6-terra",
    "active": true
@@ -2424,6 +2532,7 @@
     "intelligence": 30.1,
     "coding": 64.7,
     "agenticCoding": 1.01010101010101,
+    "agenticIndex": 30.4,
     "knowledge": -5.133333333333334,
     "research": 0.2202020202020202,
     "longContext": 0.74,
@@ -2436,7 +2545,7 @@
    "latencyMsTtfa": 1750,
    "effort": "medium",
    "costPerTask": 0.1834,
-   "timePerTaskSeconds": 59.23670323810784,
+   "timePerTaskSeconds": 58.999962058474246,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-5.6-terra",
    "active": true
@@ -2468,6 +2577,7 @@
     "intelligence": 16.8,
     "coding": 15.6,
     "agenticCoding": 0,
+    "agenticIndex": 6.8,
     "knowledge": -17.316666666666666,
     "research": 0.08282828282828283,
     "longContext": 0.723333333333333,
@@ -2480,7 +2590,7 @@
    "latencyMsTtfa": 59660,
    "effort": "high",
    "costPerTask": 0.0535,
-   "timePerTaskSeconds": 136.9865232619172,
+   "timePerTaskSeconds": 131.06418304565972,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5-mini",
    "active": true
@@ -2529,6 +2639,7 @@
     "intelligence": 52.7,
     "coding": 76.9,
     "agenticCoding": 59.09090909090911,
+    "agenticIndex": 51,
     "knowledge": 43.4,
     "research": 0.5202020202020202,
     "longContext": 0.806666666666667,
@@ -2541,7 +2652,7 @@
    "latencyMsTtfa": 410560,
    "effort": "max",
    "costPerTask": 3.2575,
-   "timePerTaskSeconds": 573.1978695316003,
+   "timePerTaskSeconds": 574.3275909388693,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-6-astra",
    "active": true
@@ -2552,6 +2663,7 @@
     "intelligence": 52.7,
     "coding": 76.9,
     "agenticCoding": 59.09090909090911,
+    "agenticIndex": 51,
     "knowledge": 43.4,
     "research": 0.5202020202020202,
     "longContext": 0.806666666666667,
@@ -2564,7 +2676,7 @@
    "latencyMsTtfa": 410560,
    "effort": "max",
    "costPerTask": 3.2575,
-   "timePerTaskSeconds": 573.1978695316003,
+   "timePerTaskSeconds": 574.3275909388693,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-6-astra",
    "active": true
@@ -2714,6 +2826,7 @@
     "intelligence": 48.9,
     "coding": 77.1,
     "agenticCoding": 44.949494949495,
+    "agenticIndex": 50.2,
     "knowledge": 37.6,
     "research": 0.5606060606060606,
     "longContext": 0.846666666666667
@@ -2736,6 +2849,7 @@
     "intelligence": 48.9,
     "coding": 77.1,
     "agenticCoding": 44.949494949495,
+    "agenticIndex": 50.2,
     "knowledge": 37.6,
     "research": 0.5606060606060606,
     "longContext": 0.846666666666667
@@ -2802,6 +2916,7 @@
     "intelligence": 53.4,
     "coding": 81.6,
     "agenticCoding": 52.020202020202,
+    "agenticIndex": 57.9,
     "knowledge": 43.45,
     "research": 0.6151515151515151,
     "longContext": 0.853333333333333
@@ -2813,7 +2928,7 @@
    "latencyMsTtfa": 295210,
    "effort": "max",
    "costPerTask": 7.6297,
-   "timePerTaskSeconds": 739.1068289279727,
+   "timePerTaskSeconds": 732.0566654220795,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-fable-5-1",
    "active": true
@@ -2824,6 +2939,7 @@
     "intelligence": 53.4,
     "coding": 81.6,
     "agenticCoding": 52.020202020202,
+    "agenticIndex": 57.9,
     "knowledge": 43.45,
     "research": 0.6151515151515151,
     "longContext": 0.853333333333333
@@ -2835,7 +2951,7 @@
    "latencyMsTtfa": 295210,
    "effort": "max",
    "costPerTask": 7.6297,
-   "timePerTaskSeconds": 739.1068289279727,
+   "timePerTaskSeconds": 732.0566654220795,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-fable-5.1",
    "active": true
@@ -2865,6 +2981,7 @@
     "intelligence": 37.3,
     "coding": 71.4,
     "agenticCoding": 11.6161616161616,
+    "agenticIndex": 42.1,
     "knowledge": -10.283333333333333,
     "research": 0.3797979797979798,
     "longContext": 0.836666666666667,
@@ -2877,7 +2994,7 @@
    "latencyMsTtfa": 128979.99999999999,
    "effort": "max",
    "costPerTask": 0.1783,
-   "timePerTaskSeconds": 347.64409917391816,
+   "timePerTaskSeconds": 348.92211567696864,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.6-luna",
    "active": true
@@ -2888,6 +3005,7 @@
     "intelligence": 37.3,
     "coding": 71.4,
     "agenticCoding": 11.6161616161616,
+    "agenticIndex": 42.1,
     "knowledge": -10.283333333333333,
     "research": 0.3797979797979798,
     "longContext": 0.836666666666667,
@@ -2900,7 +3018,7 @@
    "latencyMsTtfa": 128979.99999999999,
    "effort": "max",
    "costPerTask": 0.1783,
-   "timePerTaskSeconds": 347.64409917391816,
+   "timePerTaskSeconds": 348.92211567696864,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-5.6-luna",
    "active": true
@@ -3013,6 +3131,7 @@
     "intelligence": 30.1,
     "coding": 72,
     "agenticCoding": 12.6262626262626,
+    "agenticIndex": 29.3,
     "knowledge": 3.9166666666666665,
     "research": 0.2606060606060606,
     "longContext": 0.793333333333333,
@@ -3025,7 +3144,7 @@
    "latencyMsTtfa": 52600,
    "effort": "low",
    "costPerTask": 1.1463,
-   "timePerTaskSeconds": 293.11564120294105,
+   "timePerTaskSeconds": 292.898170720183,
    "source": "artificial-analysis",
    "registryId": "github-copilot/kimi-k3",
    "active": true
@@ -3118,6 +3237,7 @@
     "intelligence": 25,
     "coding": 50.7,
     "agenticCoding": 0.505050505050505,
+    "agenticIndex": 23.9,
     "knowledge": -13.183333333333334,
     "research": 0.20202020202020202,
     "longContext": 0.75,
@@ -3141,6 +3261,7 @@
     "intelligence": 25,
     "coding": 50.7,
     "agenticCoding": 0.505050505050505,
+    "agenticIndex": 23.9,
     "knowledge": -13.183333333333334,
     "research": 0.20202020202020202,
     "longContext": 0.75,
@@ -3236,7 +3357,7 @@
    "latencyMsTtfa": 760,
    "effort": "off",
    "costPerTask": 0.0113,
-   "timePerTaskSeconds": 31.488783365601474,
+   "timePerTaskSeconds": 31.24513948341253,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-6-luna",
    "active": true
@@ -3258,7 +3379,7 @@
    "latencyMsTtfa": 760,
    "effort": "off",
    "costPerTask": 0.0113,
-   "timePerTaskSeconds": 31.488783365601474,
+   "timePerTaskSeconds": 31.24513948341253,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-6-luna",
    "active": true
@@ -3269,6 +3390,7 @@
     "intelligence": 33.8,
     "coding": 71.5,
     "agenticCoding": 5.05050505050505,
+    "agenticIndex": 29.5,
     "knowledge": 18.1,
     "research": 0.26565656565656565,
     "longContext": 0.83,
@@ -3281,7 +3403,7 @@
    "latencyMsTtfa": 8180,
    "effort": "medium",
    "costPerTask": 0.9017,
-   "timePerTaskSeconds": 105.31238562321951,
+   "timePerTaskSeconds": 103.10879866962597,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.5",
    "active": true
@@ -3292,6 +3414,7 @@
     "intelligence": 33.8,
     "coding": 71.5,
     "agenticCoding": 5.05050505050505,
+    "agenticIndex": 29.5,
     "knowledge": 18.1,
     "research": 0.26565656565656565,
     "longContext": 0.83,
@@ -3304,7 +3427,7 @@
    "latencyMsTtfa": 8180,
    "effort": "medium",
    "costPerTask": 0.9017,
-   "timePerTaskSeconds": 105.31238562321951,
+   "timePerTaskSeconds": 103.10879866962597,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-5.5",
    "active": true
@@ -3315,6 +3438,7 @@
     "intelligence": 39.2,
     "coding": 76.3,
     "agenticCoding": 14.6464646464646,
+    "agenticIndex": 39.7,
     "knowledge": 19.4,
     "research": 0.3181818181818182,
     "longContext": 0.803333333333333,
@@ -3338,6 +3462,7 @@
     "intelligence": 39.2,
     "coding": 76.3,
     "agenticCoding": 14.6464646464646,
+    "agenticIndex": 39.7,
     "knowledge": 19.4,
     "research": 0.3181818181818182,
     "longContext": 0.803333333333333,
@@ -3412,7 +3537,7 @@
    "latencyMsTtfa": 111310,
    "effort": "max",
    "costPerTask": 0.0678,
-   "timePerTaskSeconds": 388.56052182638547,
+   "timePerTaskSeconds": 389.64310200309603,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-6-luna",
    "active": true
@@ -3434,7 +3559,7 @@
    "latencyMsTtfa": 111310,
    "effort": "max",
    "costPerTask": 0.0678,
-   "timePerTaskSeconds": 388.56052182638547,
+   "timePerTaskSeconds": 389.64310200309603,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-6-luna",
    "active": true
@@ -3445,6 +3570,7 @@
     "intelligence": 48.1,
     "coding": 76.5,
     "agenticCoding": 45.959595959596,
+    "agenticIndex": 52.3,
     "knowledge": 33.71666666666667,
     "research": 0.5383838383838384,
     "longContext": 0.79,
@@ -3468,6 +3594,7 @@
     "intelligence": 48.1,
     "coding": 76.5,
     "agenticCoding": 45.959595959596,
+    "agenticIndex": 52.3,
     "knowledge": 33.71666666666667,
     "research": 0.5383838383838384,
     "longContext": 0.79,
@@ -3491,6 +3618,7 @@
     "intelligence": 39.8,
     "coding": 74.1,
     "agenticCoding": 19.6969696969697,
+    "agenticIndex": 39.7,
     "knowledge": 28.583333333333332,
     "research": 0.4111111111111111,
     "longContext": 0.84,
@@ -3546,6 +3674,7 @@
     "intelligence": 34,
     "coding": 69.2,
     "agenticCoding": 7.07070707070707,
+    "agenticIndex": 29,
     "knowledge": 22.133333333333333,
     "research": 0.2808080808080808,
     "longContext": 0.8,
@@ -3569,6 +3698,7 @@
     "intelligence": 38.8,
     "coding": 72.4,
     "agenticCoding": 10.6060606060606,
+    "agenticIndex": 41.2,
     "knowledge": 25.316666666666666,
     "research": 0.4070707070707071,
     "longContext": 0.793333333333333,
@@ -3592,6 +3722,7 @@
     "intelligence": 28.3,
     "coding": 65.1,
     "agenticCoding": 0,
+    "agenticIndex": 28.1,
     "knowledge": 1.1,
     "research": 0.2383838383838384,
     "longContext": 0.623333333333333,
@@ -3614,6 +3745,7 @@
     "intelligence": 28.3,
     "coding": 65.1,
     "agenticCoding": 0,
+    "agenticIndex": 28.1,
     "knowledge": 1.1,
     "research": 0.2383838383838384,
     "longContext": 0.623333333333333,
@@ -3680,6 +3812,7 @@
     "intelligence": 34.2,
     "coding": 67.1,
     "agenticCoding": 1.51515151515152,
+    "agenticIndex": 36.7,
     "knowledge": -3.466666666666667,
     "research": 0.29797979797979796,
     "longContext": 0.776666666666667,
@@ -3703,6 +3836,7 @@
     "intelligence": 34.2,
     "coding": 67.1,
     "agenticCoding": 1.51515151515152,
+    "agenticIndex": 36.7,
     "knowledge": -3.466666666666667,
     "research": 0.29797979797979796,
     "longContext": 0.776666666666667,
@@ -3726,6 +3860,7 @@
     "intelligence": 36,
     "coding": 68.8,
     "agenticCoding": 14.1414141414141,
+    "agenticIndex": 41.3,
     "knowledge": 0.8333333333333334,
     "research": 0.4351851851851852,
     "longContext": 0.803333333333333
@@ -3748,6 +3883,7 @@
     "intelligence": 34.6,
     "coding": 68.6,
     "agenticCoding": 3.53535353535354,
+    "agenticIndex": 38.7,
     "knowledge": -10.766666666666667,
     "research": 0.3484848484848485,
     "longContext": 0.816666666666667,
@@ -3771,6 +3907,7 @@
     "intelligence": 34.6,
     "coding": 68.6,
     "agenticCoding": 3.53535353535354,
+    "agenticIndex": 38.7,
     "knowledge": -10.766666666666667,
     "research": 0.3484848484848485,
     "longContext": 0.816666666666667,
@@ -3813,6 +3950,7 @@
     "intelligence": 40.9,
     "coding": 76.3,
     "agenticCoding": 19.6969696969697,
+    "agenticIndex": 40.2,
     "knowledge": 29.55,
     "research": 0.4212121212121212,
     "longContext": 0.813333333333333,
@@ -3836,6 +3974,7 @@
     "intelligence": 42.3,
     "coding": 77.2,
     "agenticCoding": 20.7070707070707,
+    "agenticIndex": 44.2,
     "knowledge": 20.366666666666667,
     "research": 0.38585858585858585,
     "longContext": 0.816666666666667,
@@ -3848,7 +3987,7 @@
    "latencyMsTtfa": 12840,
    "effort": "high",
    "costPerTask": 0.808,
-   "timePerTaskSeconds": 177.38881673930211,
+   "timePerTaskSeconds": 178.9550179236248,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.6-sol",
    "active": true
@@ -3859,6 +3998,7 @@
     "intelligence": 42.3,
     "coding": 77.2,
     "agenticCoding": 20.7070707070707,
+    "agenticIndex": 44.2,
     "knowledge": 20.366666666666667,
     "research": 0.38585858585858585,
     "longContext": 0.816666666666667,
@@ -3871,7 +4011,7 @@
    "latencyMsTtfa": 12840,
    "effort": "high",
    "costPerTask": 0.808,
-   "timePerTaskSeconds": 177.38881673930211,
+   "timePerTaskSeconds": 178.9550179236248,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-5.6-sol",
    "active": true
@@ -3882,6 +4022,7 @@
     "intelligence": 25.8,
     "coding": 60.8,
     "agenticCoding": 1.01010101010101,
+    "agenticIndex": 21,
     "knowledge": -10.216666666666667,
     "research": 0.2070393374741201,
     "longContext": 0.793333333333333
@@ -3892,7 +4033,7 @@
    "latencyMsTtft": 2890,
    "latencyMsTtfa": 29750,
    "costPerTask": 0.5412,
-   "timePerTaskSeconds": 346.4909468632662,
+   "timePerTaskSeconds": 347.88511880355173,
    "source": "artificial-analysis",
    "registryId": "github-copilot/kimi-k2.7-code",
    "active": true
@@ -3945,6 +4086,7 @@
     "intelligence": 41.8,
     "coding": 74.3,
     "agenticCoding": 21.7171717171717,
+    "agenticIndex": 41.9,
     "knowledge": 28.75,
     "research": 0.38686868686868686,
     "longContext": 0.776666666666667
@@ -3956,7 +4098,7 @@
    "latencyMsTtfa": 41410,
    "effort": "max",
    "costPerTask": 4.081,
-   "timePerTaskSeconds": 690.1193844846554,
+   "timePerTaskSeconds": 707.4108394328106,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-opus-4-8",
    "active": true
@@ -3967,6 +4109,7 @@
     "intelligence": 41.8,
     "coding": 74.3,
     "agenticCoding": 21.7171717171717,
+    "agenticIndex": 41.9,
     "knowledge": 28.75,
     "research": 0.38686868686868686,
     "longContext": 0.776666666666667
@@ -3978,7 +4121,7 @@
    "latencyMsTtfa": 41410,
    "effort": "max",
    "costPerTask": 4.081,
-   "timePerTaskSeconds": 690.1193844846554,
+   "timePerTaskSeconds": 707.4108394328106,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-opus-4.8",
    "active": true
@@ -3999,7 +4142,7 @@
    "latencyMsTtfa": 29000,
    "effort": "xhigh",
    "costPerTask": 2.872,
-   "timePerTaskSeconds": 578.0394188799721,
+   "timePerTaskSeconds": 585.7660422159025,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-sonnet-5",
    "active": true
@@ -4020,7 +4163,7 @@
    "latencyMsTtfa": 29000,
    "effort": "xhigh",
    "costPerTask": 2.872,
-   "timePerTaskSeconds": 578.0394188799721,
+   "timePerTaskSeconds": 585.7660422159025,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-sonnet-5",
    "active": true
@@ -4031,6 +4174,7 @@
     "intelligence": 53.2,
     "coding": 80.7,
     "agenticCoding": 55.050505050505,
+    "agenticIndex": 57.2,
     "knowledge": 42.38333333333333,
     "research": 0.6060606060606061,
     "longContext": 0.83
@@ -4053,6 +4197,7 @@
     "intelligence": 53.2,
     "coding": 80.7,
     "agenticCoding": 55.050505050505,
+    "agenticIndex": 57.2,
     "knowledge": 42.38333333333333,
     "research": 0.6060606060606061,
     "longContext": 0.83
@@ -4075,6 +4220,7 @@
     "intelligence": 20.8,
     "coding": 52.3,
     "agenticCoding": 0.505050505050505,
+    "agenticIndex": 23.5,
     "knowledge": -23.216666666666665,
     "research": 0.2111111111111111,
     "longContext": 0.586666666666667,
@@ -4087,7 +4233,7 @@
    "latencyMsTtfa": 770,
    "effort": "off",
    "costPerTask": 0.1397,
-   "timePerTaskSeconds": 33.90471156619147,
+   "timePerTaskSeconds": 33.86617235045816,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.6-terra",
    "active": true
@@ -4098,6 +4244,7 @@
     "intelligence": 20.8,
     "coding": 52.3,
     "agenticCoding": 0.505050505050505,
+    "agenticIndex": 23.5,
     "knowledge": -23.216666666666665,
     "research": 0.2111111111111111,
     "longContext": 0.586666666666667,
@@ -4110,7 +4257,7 @@
    "latencyMsTtfa": 770,
    "effort": "off",
    "costPerTask": 0.1397,
-   "timePerTaskSeconds": 33.90471156619147,
+   "timePerTaskSeconds": 33.86617235045816,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-5.6-terra",
    "active": true
@@ -4121,6 +4268,7 @@
     "intelligence": 51.2,
     "coding": 79.1,
     "agenticCoding": 52.020202020202,
+    "agenticIndex": 53.1,
     "knowledge": 40.8,
     "research": 0.5717171717171717,
     "longContext": 0.836666666666667
@@ -4143,6 +4291,7 @@
     "intelligence": 51.2,
     "coding": 79.1,
     "agenticCoding": 52.020202020202,
+    "agenticIndex": 53.1,
     "knowledge": 40.8,
     "research": 0.5717171717171717,
     "longContext": 0.836666666666667
@@ -4165,6 +4314,7 @@
     "intelligence": 38,
     "coding": 70.6,
     "agenticCoding": 10.1010101010101,
+    "agenticIndex": 41.4,
     "knowledge": -2.9833333333333334,
     "research": 0.35353535353535354,
     "longContext": 0.79,
@@ -4188,6 +4338,7 @@
     "intelligence": 38,
     "coding": 70.6,
     "agenticCoding": 10.1010101010101,
+    "agenticIndex": 41.4,
     "knowledge": -2.9833333333333334,
     "research": 0.35353535353535354,
     "longContext": 0.79,
@@ -4222,7 +4373,7 @@
    "latencyMsTtfa": 6970,
    "effort": "medium",
    "costPerTask": 0.2137,
-   "timePerTaskSeconds": 157.99454283801373,
+   "timePerTaskSeconds": 156.78125927943069,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-6.1-sol",
    "active": true
@@ -4244,7 +4395,7 @@
    "latencyMsTtfa": 6970,
    "effort": "medium",
    "costPerTask": 0.2137,
-   "timePerTaskSeconds": 157.99454283801373,
+   "timePerTaskSeconds": 156.78125927943069,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-6.1-sol",
    "active": true
@@ -4255,6 +4406,7 @@
     "intelligence": 45.8,
     "coding": 75.7,
     "agenticCoding": 41.9191919191919,
+    "agenticIndex": 38.8,
     "knowledge": 40.55,
     "research": 0.402020202020202,
     "longContext": 0.8,
@@ -4267,7 +4419,7 @@
    "latencyMsTtfa": 2880,
    "effort": "low",
    "costPerTask": 0.8175,
-   "timePerTaskSeconds": 96.41144522277456,
+   "timePerTaskSeconds": 99.4362486505824,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-6-astra",
    "active": true
@@ -4278,6 +4430,7 @@
     "intelligence": 45.8,
     "coding": 75.7,
     "agenticCoding": 41.9191919191919,
+    "agenticIndex": 38.8,
     "knowledge": 40.55,
     "research": 0.402020202020202,
     "longContext": 0.8,
@@ -4290,7 +4443,7 @@
    "latencyMsTtfa": 2880,
    "effort": "low",
    "costPerTask": 0.8175,
-   "timePerTaskSeconds": 96.41144522277456,
+   "timePerTaskSeconds": 99.4362486505824,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-6-astra",
    "active": true
@@ -4321,6 +4474,7 @@
     "intelligence": 32.1,
     "coding": 63.3,
     "agenticCoding": 2.52525252525253,
+    "agenticIndex": 34.6,
     "knowledge": -12,
     "research": 0.298989898989899,
     "longContext": 0.803333333333333,
@@ -4333,7 +4487,7 @@
    "latencyMsTtfa": 9060,
    "effort": "high",
    "costPerTask": 0.044,
-   "timePerTaskSeconds": 122.99799734084552,
+   "timePerTaskSeconds": 122.38244568403721,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.6-luna",
    "active": true
@@ -4344,6 +4498,7 @@
     "intelligence": 32.1,
     "coding": 63.3,
     "agenticCoding": 2.52525252525253,
+    "agenticIndex": 34.6,
     "knowledge": -12,
     "research": 0.298989898989899,
     "longContext": 0.803333333333333,
@@ -4356,7 +4511,7 @@
    "latencyMsTtfa": 9060,
    "effort": "high",
    "costPerTask": 0.044,
-   "timePerTaskSeconds": 122.99799734084552,
+   "timePerTaskSeconds": 122.38244568403721,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-5.6-luna",
    "active": true
@@ -4386,6 +4541,7 @@
     "intelligence": 37,
     "coding": 71.6,
     "agenticCoding": 9.09090909090909,
+    "agenticIndex": 34.3,
     "knowledge": 18.75,
     "research": 0.30606060606060603,
     "longContext": 0.843333333333333,
@@ -4409,6 +4565,7 @@
     "intelligence": 37,
     "coding": 71.6,
     "agenticCoding": 9.09090909090909,
+    "agenticIndex": 34.3,
     "knowledge": 18.75,
     "research": 0.30606060606060603,
     "longContext": 0.843333333333333,
@@ -4474,6 +4631,7 @@
     "intelligence": 39.1,
     "coding": 76.1,
     "agenticCoding": 13.6363636363636,
+    "agenticIndex": 35.2,
     "knowledge": 26.483333333333334,
     "research": 0.36363636363636365,
     "longContext": 0.816666666666667,
@@ -4541,6 +4699,7 @@
     "intelligence": 50.8,
     "coding": 78,
     "agenticCoding": 48.989898989899,
+    "agenticIndex": 56.5,
     "knowledge": 37.06666666666667,
     "research": 0.5717171717171717,
     "longContext": 0.793333333333333,
@@ -4564,6 +4723,7 @@
     "intelligence": 50.8,
     "coding": 78,
     "agenticCoding": 48.989898989899,
+    "agenticIndex": 56.5,
     "knowledge": 37.06666666666667,
     "research": 0.5717171717171717,
     "longContext": 0.793333333333333,
@@ -4629,6 +4789,7 @@
     "intelligence": 24.1,
     "coding": 56.1,
     "agenticCoding": 2.02020202020202,
+    "agenticIndex": 17.9,
     "knowledge": -18.916666666666668,
     "research": 0.1254355400696864,
     "longContext": 0.77,
@@ -4641,7 +4802,7 @@
    "latencyMsTtfa": 101850,
    "effort": "xhigh",
    "costPerTask": 0.4474,
-   "timePerTaskSeconds": 191.1774512572189,
+   "timePerTaskSeconds": 188.40532390168008,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.4-mini",
    "active": true
@@ -4662,7 +4823,7 @@
    "latencyMsTtfa": 1110,
    "effort": "low",
    "costPerTask": 0.3452,
-   "timePerTaskSeconds": 89.61256530342979,
+   "timePerTaskSeconds": 88.03462563993602,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-sonnet-5-5",
    "active": true
@@ -4683,7 +4844,7 @@
    "latencyMsTtfa": 1110,
    "effort": "low",
    "costPerTask": 0.3452,
-   "timePerTaskSeconds": 89.61256530342979,
+   "timePerTaskSeconds": 88.03462563993602,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-sonnet-5.5",
    "active": true
@@ -4713,6 +4874,7 @@
     "intelligence": 42.1,
     "coding": 76.7,
     "agenticCoding": 35.3535353535354,
+    "agenticIndex": 43.2,
     "knowledge": 0.05,
     "research": 0.3414141414141414,
     "longContext": 0.83,
@@ -4736,6 +4898,7 @@
     "intelligence": 42.1,
     "coding": 76.7,
     "agenticCoding": 35.3535353535354,
+    "agenticIndex": 43.2,
     "knowledge": 0.05,
     "research": 0.3414141414141414,
     "longContext": 0.83,
@@ -4770,7 +4933,7 @@
    "latencyMsTtfa": 3050,
    "effort": "low",
    "costPerTask": 0.0045,
-   "timePerTaskSeconds": 17.179241278568487,
+   "timePerTaskSeconds": 16.89439400789959,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-6-luna",
    "active": true
@@ -4792,7 +4955,7 @@
    "latencyMsTtfa": 3050,
    "effort": "low",
    "costPerTask": 0.0045,
-   "timePerTaskSeconds": 17.179241278568487,
+   "timePerTaskSeconds": 16.89439400789959,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-6-luna",
    "active": true
@@ -4803,6 +4966,7 @@
     "intelligence": 35.1,
     "coding": 66.3,
     "agenticCoding": 3.03030303030303,
+    "agenticIndex": 41.2,
     "knowledge": 25.9,
     "research": 0.402020202020202,
     "longContext": 0.806666666666667
@@ -4947,6 +5111,7 @@
     "intelligence": 44.3,
     "coding": 76.8,
     "agenticCoding": 21.2121212121212,
+    "agenticIndex": 53,
     "knowledge": 30.483333333333334,
     "research": 0.5282828282828282,
     "longContext": 0.803333333333333
@@ -4969,6 +5134,7 @@
     "intelligence": 27.5,
     "coding": 58.1,
     "agenticCoding": 1.51515151515152,
+    "agenticIndex": 25.9,
     "knowledge": -6.833333333333333,
     "research": 0.23333333333333334,
     "longContext": 0.713333333333333,
@@ -4981,7 +5147,7 @@
    "latencyMsTtfa": 1440,
    "effort": "low",
    "costPerTask": 0.1445,
-   "timePerTaskSeconds": 44.66722165330766,
+   "timePerTaskSeconds": 43.415405709395664,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.6-terra",
    "active": true
@@ -4992,6 +5158,7 @@
     "intelligence": 27.5,
     "coding": 58.1,
     "agenticCoding": 1.51515151515152,
+    "agenticIndex": 25.9,
     "knowledge": -6.833333333333333,
     "research": 0.23333333333333334,
     "longContext": 0.713333333333333,
@@ -5004,7 +5171,7 @@
    "latencyMsTtfa": 1440,
    "effort": "low",
    "costPerTask": 0.1445,
-   "timePerTaskSeconds": 44.66722165330766,
+   "timePerTaskSeconds": 43.415405709395664,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-5.6-terra",
    "active": true
@@ -5015,6 +5182,7 @@
     "intelligence": 49.6,
     "coding": 76.5,
     "agenticCoding": 42.4242424242424,
+    "agenticIndex": 50.7,
     "knowledge": 43.3,
     "research": 0.5595959595959596,
     "longContext": 0.823333333333333
@@ -5037,6 +5205,7 @@
     "intelligence": 49.6,
     "coding": 76.5,
     "agenticCoding": 42.4242424242424,
+    "agenticIndex": 50.7,
     "knowledge": 43.3,
     "research": 0.5595959595959596,
     "longContext": 0.823333333333333
@@ -5124,6 +5293,7 @@
     "intelligence": 20.7,
     "coding": 56.1,
     "agenticCoding": 0.505050505050505,
+    "agenticIndex": 16,
     "knowledge": -29.466666666666665,
     "research": 0.14621676891615543,
     "longContext": 0.766666666666667,
@@ -5136,7 +5306,7 @@
    "latencyMsTtfa": 69490,
    "effort": "xhigh",
    "costPerTask": 0.1831,
-   "timePerTaskSeconds": 408.98746806547626,
+   "timePerTaskSeconds": 408.3884934631703,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.4-nano",
    "active": true
@@ -5187,6 +5357,7 @@
     "intelligence": 44.2,
     "coding": 75.9,
     "agenticCoding": 17.171717171717198,
+    "agenticIndex": 52.5,
     "knowledge": 29.316666666666666,
     "research": 0.5383838383838384,
     "longContext": 0.81
@@ -5198,7 +5369,7 @@
    "latencyMsTtfa": 38700,
    "effort": "xhigh",
    "costPerTask": 1.7523,
-   "timePerTaskSeconds": 576.1758058649646,
+   "timePerTaskSeconds": 608.413563704891,
    "source": "artificial-analysis",
    "registryId": "github-copilot/grok-4.6",
    "active": true
@@ -5209,6 +5380,7 @@
     "intelligence": 47,
     "coding": 77.4,
     "agenticCoding": 39.8989898989899,
+    "agenticIndex": 50.2,
     "knowledge": 21.966666666666665,
     "research": 0.4184839044652129,
     "longContext": 0.84,
@@ -5232,6 +5404,7 @@
     "intelligence": 47,
     "coding": 77.4,
     "agenticCoding": 39.8989898989899,
+    "agenticIndex": 50.2,
     "knowledge": 21.966666666666665,
     "research": 0.4184839044652129,
     "longContext": 0.84,
@@ -5255,6 +5428,7 @@
     "intelligence": 44,
     "coding": 78.3,
     "agenticCoding": 24.747474747474698,
+    "agenticIndex": 47.4,
     "knowledge": 20.983333333333334,
     "research": 0.4131313131313131,
     "longContext": 0.823333333333333,
@@ -5278,6 +5452,7 @@
     "intelligence": 44,
     "coding": 78.3,
     "agenticCoding": 24.747474747474698,
+    "agenticIndex": 47.4,
     "knowledge": 20.983333333333334,
     "research": 0.4131313131313131,
     "longContext": 0.823333333333333,
@@ -5345,6 +5520,7 @@
     "intelligence": 15.5,
     "coding": 39.3,
     "agenticCoding": 1.01010101010101,
+    "agenticIndex": 13.4,
     "knowledge": -24.95,
     "research": 0.12857142857142856,
     "longContext": 0.426666666666667,
@@ -5357,7 +5533,7 @@
    "latencyMsTtfa": 740,
    "effort": "off",
    "costPerTask": 0.0101,
-   "timePerTaskSeconds": 19.993154573538085,
+   "timePerTaskSeconds": 19.567351972570098,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-5.6-luna",
    "active": true
@@ -5368,6 +5544,7 @@
     "intelligence": 15.5,
     "coding": 39.3,
     "agenticCoding": 1.01010101010101,
+    "agenticIndex": 13.4,
     "knowledge": -24.95,
     "research": 0.12857142857142856,
     "longContext": 0.426666666666667,
@@ -5380,7 +5557,7 @@
    "latencyMsTtfa": 740,
    "effort": "off",
    "costPerTask": 0.0101,
-   "timePerTaskSeconds": 19.993154573538085,
+   "timePerTaskSeconds": 19.567351972570098,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-5.6-luna",
    "active": true
@@ -5455,6 +5632,7 @@
     "intelligence": 30.1,
     "coding": 63,
     "agenticCoding": 3.03030303030303,
+    "agenticIndex": 31.8,
     "knowledge": 12.216666666666667,
     "research": 0.289198606271777,
     "longContext": 0.8,
@@ -5478,6 +5656,7 @@
     "intelligence": 30.1,
     "coding": 63,
     "agenticCoding": 3.03030303030303,
+    "agenticIndex": 31.8,
     "knowledge": 12.216666666666667,
     "research": 0.289198606271777,
     "longContext": 0.8,
@@ -5501,6 +5680,7 @@
     "intelligence": 50.9,
     "coding": 77.1,
     "agenticCoding": 54.040404040404,
+    "agenticIndex": 48.2,
     "knowledge": 43.733333333333334,
     "research": 0.5080808080808081,
     "longContext": 0.8,
@@ -5524,6 +5704,7 @@
     "intelligence": 50.9,
     "coding": 77.1,
     "agenticCoding": 54.040404040404,
+    "agenticIndex": 48.2,
     "knowledge": 43.733333333333334,
     "research": 0.5080808080808081,
     "longContext": 0.8,
@@ -5558,7 +5739,7 @@
    "latencyMsTtfa": 3190,
    "effort": "low",
    "costPerTask": 0.1308,
-   "timePerTaskSeconds": 79.48028993698021,
+   "timePerTaskSeconds": 79.01164561193899,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-6.1-sol",
    "active": true
@@ -5580,7 +5761,7 @@
    "latencyMsTtfa": 3190,
    "effort": "low",
    "costPerTask": 0.1308,
-   "timePerTaskSeconds": 79.48028993698021,
+   "timePerTaskSeconds": 79.01164561193899,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-6.1-sol",
    "active": true
@@ -5591,6 +5772,7 @@
     "intelligence": 49.6,
     "coding": 76.7,
     "agenticCoding": 49.494949494949495,
+    "agenticIndex": 46,
     "knowledge": 42.21666666666667,
     "research": 0.47474747474747475,
     "longContext": 0.796666666666667,
@@ -5603,7 +5785,7 @@
    "latencyMsTtfa": 5610,
    "effort": "medium",
    "costPerTask": 1.5406,
-   "timePerTaskSeconds": 207.64402786487756,
+   "timePerTaskSeconds": 209.24492291799118,
    "source": "artificial-analysis",
    "registryId": "github-copilot/gpt-6-astra",
    "active": true
@@ -5614,6 +5796,7 @@
     "intelligence": 49.6,
     "coding": 76.7,
     "agenticCoding": 49.494949494949495,
+    "agenticIndex": 46,
     "knowledge": 42.21666666666667,
     "research": 0.47474747474747475,
     "longContext": 0.796666666666667,
@@ -5626,7 +5809,7 @@
    "latencyMsTtfa": 5610,
    "effort": "medium",
    "costPerTask": 1.5406,
-   "timePerTaskSeconds": 207.64402786487756,
+   "timePerTaskSeconds": 209.24492291799118,
    "source": "artificial-analysis",
    "registryId": "openai-codex/gpt-6-astra",
    "active": true
@@ -5637,6 +5820,7 @@
     "intelligence": 40.7,
     "coding": 73.6,
     "agenticCoding": 16.694554373659056,
+    "agenticIndex": 38.6,
     "knowledge": 27.266666666666666,
     "research": 0.39337474120082816,
     "longContext": 0.786666666666667,
@@ -5659,6 +5843,7 @@
     "intelligence": 40.7,
     "coding": 73.6,
     "agenticCoding": 16.694554373659056,
+    "agenticIndex": 38.6,
     "knowledge": 27.266666666666666,
     "research": 0.39337474120082816,
     "longContext": 0.786666666666667,
@@ -5755,7 +5940,7 @@
    "latencyMsTtfa": 1500,
    "effort": "medium",
    "costPerTask": 0.9991,
-   "timePerTaskSeconds": 255.30728160379581,
+   "timePerTaskSeconds": 257.23944669070966,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-sonnet-5",
    "active": true
@@ -5776,7 +5961,7 @@
    "latencyMsTtfa": 1500,
    "effort": "medium",
    "costPerTask": 0.9991,
-   "timePerTaskSeconds": 255.30728160379581,
+   "timePerTaskSeconds": 257.23944669070966,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-sonnet-5",
    "active": true
@@ -5798,7 +5983,7 @@
    "latencyMsTtfa": 37620,
    "effort": "high",
    "costPerTask": 1.8225,
-   "timePerTaskSeconds": 282.07566133589734,
+   "timePerTaskSeconds": 286.3147330115973,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-opus-5-5",
    "active": true
@@ -5820,7 +6005,7 @@
    "latencyMsTtfa": 37620,
    "effort": "high",
    "costPerTask": 1.8225,
-   "timePerTaskSeconds": 282.07566133589734,
+   "timePerTaskSeconds": 286.3147330115973,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-opus-5.5",
    "active": true
@@ -5831,6 +6016,7 @@
     "intelligence": 33.5,
     "coding": 73.5,
     "agenticCoding": 10.1010101010101,
+    "agenticIndex": 32.6,
     "knowledge": 21.35,
     "research": 0.35454545454545455,
     "longContext": 0.806666666666667,
@@ -5849,6 +6035,7 @@
     "intelligence": 43.6,
     "coding": 76.2,
     "agenticCoding": 12.6262626262626,
+    "agenticIndex": 50,
     "knowledge": 19.7,
     "research": 0.5097236438075742,
     "longContext": 0.886666666666667,
@@ -5861,7 +6048,7 @@
    "latencyMsTtfa": 50990,
    "effort": "max",
    "costPerTask": 2.0001,
-   "timePerTaskSeconds": 1106.3464786876305,
+   "timePerTaskSeconds": 1077.5752464821066,
    "source": "artificial-analysis",
    "registryId": "github-copilot/kimi-k3",
    "active": true
@@ -5872,6 +6059,7 @@
     "intelligence": 44.8,
     "coding": 74.3,
     "agenticCoding": 34.343434343434296,
+    "agenticIndex": 46.2,
     "knowledge": 31.016666666666666,
     "research": 0.48484848484848486,
     "longContext": 0.82,
@@ -5884,7 +6072,7 @@
    "latencyMsTtfa": 4530,
    "effort": "medium",
    "costPerTask": 2.1895,
-   "timePerTaskSeconds": 316.08900744161224,
+   "timePerTaskSeconds": 328.3371736482305,
    "source": "artificial-analysis",
    "registryId": "claude-bridge/claude-opus-5",
    "active": true
@@ -5895,6 +6083,7 @@
     "intelligence": 44.8,
     "coding": 74.3,
     "agenticCoding": 34.343434343434296,
+    "agenticIndex": 46.2,
     "knowledge": 31.016666666666666,
     "research": 0.48484848484848486,
     "longContext": 0.82,
@@ -5907,7 +6096,7 @@
    "latencyMsTtfa": 4530,
    "effort": "medium",
    "costPerTask": 2.1895,
-   "timePerTaskSeconds": 316.08900744161224,
+   "timePerTaskSeconds": 328.3371736482305,
    "source": "artificial-analysis",
    "registryId": "github-copilot/claude-opus-5",
    "active": true
