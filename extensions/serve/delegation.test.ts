@@ -19,6 +19,7 @@ import { setDecisionLogBase } from '../host/decisionlog.js';
 import { defaultRouterSession } from './router-session-state.js';
 import { defaultBlacklistState } from './blacklist.js';
 import { setDelegationTimeouts } from './delegation.js';
+import { pickBest, ECONOMICS_FIRST_WEIGHTS } from '../routing/score/scorer.js';
 import type { AttemptUsageEvent } from '../types.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
@@ -1398,6 +1399,36 @@ const loopCheap = candidate('gamma/cheap', {
 });
 
 describe('pre-output reasoning-loop handoff', () => {
+    it.each(['longContext', 'visionReasoning'] as const)('retains the captured policy and %s minimum during recovery', async (axis) => {
+      vi.stubEnv('PI8_POLICY_VERSION', 'legacy');
+      try {
+        const at = (id: string, intelligence: number, agenticCoding: number, price: number, weakInput = false) => candidate(id, {
+          vision: true,
+          bench: benchRow(id, { quality: { intelligence, agenticCoding, longContext: 0.5, visionReasoning: 0.5, ...(weakInput ? { [axis]: 0.1 } : {}) } }),
+          cost: { input: price, output: price, cacheRead: 0, cacheWrite: 0 },
+        });
+        const pool = [at('p/source', 35, 50, 1), at('p/cheap', 48, 100, 0, true), at('p/sufficient', 49, 1, 10)];
+        const decision = pickBest(pool, 'implement', ECONOMICS_FIRST_WEIGHTS, {
+          policyVersion: 'cheapest-sufficient', estimatedContextTokens: 70_000, needsVision: true, handoffMinimum: 0.8,
+          benchmarkSnapshotDigest: 'frozen-benchmark', benchmarkIndexVersion: '4.3.2',
+        });
+        // A served fallback can struggle below the request minimum. Recovery keeps that minimum.
+        decision.chosen = 'p/source';
+        decision.fallbackChain = ['p/source', 'p/cheap', 'p/sufficient'];
+        const answer = [{ type: 'text_delta', delta: 'answer' }, { type: 'done', message: { stopReason: 'stop' } }];
+        const h = createDelegationHarness({ chain: decision.fallbackChain, decision, candidates: pool, scripts: {
+          'p/source': [reasoningLoopEvents()], 'p/cheap': [answer], 'p/sufficient': [answer],
+        } });
+        const result = await h.run();
+        expect(result.success).toBe(true);
+        expect(h.attempts).toEqual(['p/source', 'p/sufficient']);
+        expect(result.capabilityHandoff?.served).toMatch(/^p\/sufficient/);
+        expect(h.session.getLastDecision()?.capabilityEvidence).toEqual(decision.capabilityEvidence);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
   it('hops to a stronger candidate, records trajectory cause, and does not blacklist', async () => {
     const h = createDelegationHarness({
       chain: ['alpha/loop', 'beta/strong', 'gamma/cheap'],

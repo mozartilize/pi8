@@ -383,6 +383,15 @@ export interface RoutingDecision {
   dimension: Dimension;
   /** Set only when an evaluation process runs the candidate policy. */
   policyVersion?: import('./routing/policy/policy-version.js').PolicyVersion;
+  /** Frozen capability inputs of the development comparator. No task text or paths. */
+  capabilityEvidence?: {
+    policyDigest: string;
+    comparisonAxis: QualityAxis;
+    metricVersion: string;
+    benchmarkIndexVersion?: string;
+    benchmarkSnapshotDigest?: string;
+    minimums: Readonly<Partial<Record<QualityAxis, number>>>;
+  };
   /**
    * The incumbent's minimum thinking level: the model (`provider/id`) that
    * served the task and the effort it served at. Chain entries of that model

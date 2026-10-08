@@ -2652,6 +2652,79 @@ describe('context acquisition', () => {
       beforeEach(() => { vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient'); });
       afterEach(() => { vi.unstubAllEnvs(); });
 
+      it.each([false, true])('requires measured Intelligence for an excluded executor replacement: estimated=%s', async (estimated) => {
+        const session = await planned();
+        const { loadStore, saveStore } = await import('../bench/store.js');
+        const store = loadStore()!;
+        saveStore({ ...store, syncedAt: store.syncedAt + 1, models: store.models.map((row) => row.registryId === 'alpha/cheap'
+          ? { ...row, quality: { ...row.quality, intelligence: 60 }, qualityEstimated: estimated }
+          : row) });
+        const state = harness.session.getWorkPhaseState()!;
+        harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['beta/strong'] });
+        expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+        const next = await session.routeTurnAgainWithSameUserEntry();
+        expect(next?.chosen).toBe(estimated ? 'beta/strong' : 'alpha/cheap');
+        if (!estimated) expect(next?.fallbackChain).not.toContain('beta/strong');
+      });
+
+      it('scores the replaced rows when the store keeps its timestamp and row count', async () => {
+        const session = await planned();
+        const { loadStore, saveStore } = await import('../bench/store.js');
+        const { createHash } = await import('node:crypto');
+        const store = loadStore()!;
+        const replaced = { ...store, models: store.models.map((row) => row.registryId === 'alpha/cheap'
+          ? { ...row, quality: { ...row.quality, intelligence: 60 }, qualityEstimated: false }
+          : row) };
+        saveStore(replaced);
+        const state = harness.session.getWorkPhaseState()!;
+        harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['beta/strong'] });
+        expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+        const next = await session.routeTurnAgainWithSameUserEntry();
+        expect(next?.chosen).toBe('alpha/cheap');
+        const digest = createHash('sha256').update(JSON.stringify(loadStore() ?? null)).digest('hex');
+        expect(harness.getProviderState().lastDecision?.capabilityEvidence?.benchmarkSnapshotDigest).toBe(digest);
+      });
+
+      it('recomputes a resumed route when the benchmark snapshot changed', async () => {
+        const session = await planned();
+        const saved = await session.routeTurnAgainWithSameUserEntry();
+        expect(harness.getProviderState().lastDecision?.capabilityEvidence?.benchmarkSnapshotDigest).toBeDefined();
+        void saved;
+        harness.session.setManualModel('alpha/first');
+        expect(harness.session.resumeManual()).toBe(true);
+        const { loadStore, saveStore } = await import('../bench/store.js');
+        const store = loadStore()!;
+        saveStore({ ...store, models: store.models.map((row) => row.registryId === 'alpha/cheap'
+          ? { ...row, quality: { ...row.quality, intelligence: 60 } }
+          : row) });
+        const next = await session.routeTurnAgainWithSameUserEntry();
+        expect(next?.cause).not.toBe('resume');
+      });
+
+      it('resumes a route when the benchmark snapshot is unchanged', async () => {
+        const session = await planned();
+        await session.routeTurnAgainWithSameUserEntry();
+        harness.session.setManualModel('alpha/first');
+        expect(harness.session.resumeManual()).toBe(true);
+        expect((await session.routeTurnAgainWithSameUserEntry())?.cause).toBe('resume');
+      });
+
+      it('records the complete benchmark snapshot and required minimums without task text', async () => {
+        const session = await planned();
+        submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
+        await session.routeTurnAgainWithSameUserEntry();
+        const decision = harness.getProviderState().lastDecision!;
+        const { loadStore } = await import('../bench/store.js');
+        const { createHash } = await import('node:crypto');
+        const digest = createHash('sha256').update(JSON.stringify(loadStore() ?? null)).digest('hex');
+        expect(decision.capabilityEvidence?.benchmarkSnapshotDigest).toBe(digest);
+        expect(decision.capabilityEvidence?.minimums).toEqual({ intelligence: decision.executionContract!.minimum! * 57.6 });
+        const records = await session.readDecisionRecords();
+        const record = records.filter((row) => row.kind == null && row.dimension === 'implement').at(-1)!;
+        expect(record.capabilityEvidence).toEqual(decision.capabilityEvidence);
+        expect(JSON.stringify(record.capabilityEvidence)).not.toContain('src/a.ts');
+      });
+
       it('hands a small accepted plan to a cheaper executor, and the plan has no band', async () => {
         const session = await planned();
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);

@@ -1837,7 +1837,7 @@ describe('cost scale with weaker candidates', () => {
 describe('escalation target', () => {
   // Bands on the implement axis: agenticCoding / 63.6. 34 is standard, 45-51 strong, 57-63 frontier.
   const at = (id: string, agenticCoding: number, price: number): Candidate =>
-    candidate(id, { bench: benchRow(id, { quality: { intelligence: 50, coding: 70, agenticCoding } }), cost: { input: price, output: price * 4 } });
+    candidate(id, { bench: benchRow(id, { quality: { intelligence: agenticCoding, coding: 70, agenticCoding } }), cost: { input: price, output: price * 4 } });
 
   it('takes the cheapest candidate in the next band above the source, not the strongest', () => {
     const pool = [at('p/source', 45, 1), at('p/mid', 51, 0.5), at('p/frontier-cheap', 57, 3), at('p/frontier-best', 63, 10)];
@@ -1854,7 +1854,7 @@ describe('escalation target', () => {
     expect(decision.fallbackChain).toEqual(['p/strong', 'p/strong-pricy', 'p/frontier']);
   });
 
-  describe('cheapest-sufficient ranks every strictly stronger candidate by price', () => {
+  describe('cheapest-sufficient ranks proven-stronger candidates within tiers by price', () => {
     const none = { estimatedContextTokens: 0 };
 
     it('leads with the cheapest stronger candidate, and keeps the others behind it in price order', () => {

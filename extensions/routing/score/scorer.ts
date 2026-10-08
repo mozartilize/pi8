@@ -6,6 +6,7 @@
  *
  * No I/O. No registry access. Testable with fixture tables.
  */
+import { createHash } from 'node:crypto';
 import { identityKey } from '../../bench/matcher.js';
 import type {
   CapabilityBand,
@@ -83,18 +84,18 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 
 /**
  * Ranking axis: the measurement a candidate's quality credit is read from.
- * Plan, review, and gather rank on intelligence. Implementation ranks on the
- * axis that its requirement selects, with coding as a ranking-only fallback.
- * A missing measurement on the required axis keeps the candidate unknown.
+ * The development comparator uses Intelligence at every requirement.
+ * Production implementation uses the requirement-selected axis, with coding
+ * as a ranking-only fallback. Missing required measurements remain unknown.
  */
-function rankingAxis(dim: Dimension, requirement?: number): 'agenticIndex' | 'agenticCoding' | 'intelligence' {
-  if (dim !== 'implement') return 'intelligence';
+function rankingAxis(dim: Dimension, requirement?: number, version: PolicyVersion = 'legacy'): 'agenticIndex' | 'agenticCoding' | 'intelligence' {
+  if (version === 'cheapest-sufficient' || dim !== 'implement') return 'intelligence';
   return requirement != null && requirement < 0.45 ? 'agenticIndex' : 'agenticCoding';
 }
 
-function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension, requirement?: number): number | undefined {
-  const measured = b.quality[rankingAxis(dim, requirement)];
-  return dim === 'implement' ? measured ?? b.quality.coding : measured;
+function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension, requirement?: number, version: PolicyVersion = 'legacy'): number | undefined {
+  const measured = b.quality[rankingAxis(dim, requirement, version)];
+  return version === 'legacy' && dim === 'implement' ? measured ?? b.quality.coding : measured;
 }
 
 /**
@@ -103,8 +104,9 @@ function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension,
  * routing policy can compare an incumbent against a fresh pick without
  * duplicating the per-dimension axis mapping.
  */
-export function capabilityForDimension(c: Candidate, dim: Dimension): number | undefined {
-  return c.bench ? qualityForDimension(c.bench, dim) : undefined;
+export function capabilityForDimension(c: Candidate, dim: Dimension, version: PolicyVersion = 'legacy'): number | undefined {
+  const value = c.bench ? qualityForDimension(c.bench, dim, undefined, version) : undefined;
+  return value != null && Number.isFinite(value) ? value : undefined;
 }
 
 type Minimums = Readonly<Partial<Record<QualityAxis, number>>>;
@@ -152,6 +154,22 @@ export const AXIS_REFERENCE: Readonly<Record<Exclude<QualityAxis, 'knowledge'>, 
 /** The Intelligence Index major.minor version that the minimums above are calibrated for. */
 export const CALIBRATED_INDEX_VERSION = '4.3';
 
+/** Development comparator parameters. Independent outcomes must validate sufficiency before activation. */
+const COMPARATOR_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
+  ...CAPABILITY_MINIMUMS,
+  implement: { intelligence: (34 / 63.6) * 57.6 },
+};
+const COMPARATOR_DIGEST = createHash('sha256').update(JSON.stringify({
+  version: 'intelligence-comparator-v1',
+  metricVersion: CALIBRATED_INDEX_VERSION,
+  fixedMinimums: COMPARATOR_MINIMUMS,
+  references: AXIS_REFERENCE,
+  mapping: 'clamped-requirement-times-reference;knowledge-fixed',
+  comparisonAxis: 'intelligence',
+  componentRules: [],
+  inputMinimums: { contextTokens: 64_000, longContext: 0.30, visionReasoning: 0.30 },
+})).digest('hex');
+
 /**
  * A warning when the synced index version is not the calibrated version.
  * A new version can change evaluations and scales, but the user chose to
@@ -187,12 +205,12 @@ export function defaultRequirement(dimension: Dimension): number {
  * zero is where wrong answers start to outnumber right ones, not a level of
  * strength.
  */
-function minimumsFor(dimension: Dimension, requirement?: number): Minimums {
-  const fixed = CAPABILITY_MINIMUMS[dimension];
+function minimumsFor(dimension: Dimension, requirement?: number, version: PolicyVersion = 'legacy'): Minimums {
+  const fixed = (version === 'cheapest-sufficient' ? COMPARATOR_MINIMUMS : CAPABILITY_MINIMUMS)[dimension];
   if (requirement == null) return fixed;
   // An explicit requirement below 0.45 selects the AA Agentic Index.
   // Default and higher requirements keep Terminal-Bench 4.0.
-  if (rankingAxis(dimension, requirement) === 'agenticIndex') {
+  if (rankingAxis(dimension, requirement, version) === 'agenticIndex') {
     return { agenticIndex: clamp(requirement, 0, 1) * AXIS_REFERENCE.agenticIndex };
   }
   return Object.fromEntries(
@@ -393,6 +411,12 @@ export function logUtilities(
 
 export interface ScoreOpts {
   estimatedContextTokens: number;
+  /** One captured policy for scoring and recovery. Absent selects production semantics. */
+  policyVersion?: PolicyVersion;
+  /** Required vector captured at the decision boundary, including input-shape minimums. */
+  requiredMinimums?: Minimums;
+  benchmarkIndexVersion?: string;
+  benchmarkSnapshotDigest?: string;
   /** Previous turn's chosen candidate key (`provider/id` or `provider/id:effort`). */
   incumbentRegistryId?: string;
   /** True if this is a subagent spawn (no cache to lose). */
@@ -446,7 +470,7 @@ export function scoreCandidate(
   let qualityNorm = 0;
   let qualityAvailable = false;
   if (c.bench) {
-    const q = qualityForDimension(c.bench, dimension, opts.handoffMinimum);
+    const q = qualityForDimension(c.bench, dimension, opts.handoffMinimum, opts.policyVersion);
     if (q != null) {
       qualityNorm = clamp(q / 100, 0, 1);
       qualityAvailable = true;
@@ -534,6 +558,7 @@ export function findSourceCandidate(
 }
 
 export interface StrongerCompareOpts {
+  policyVersion?: PolicyVersion;
   /** Explicit user/session thinking request, when it outranks labelled effort. */
   userReasoning?: ThinkingLevel;
   userReasoningOverride?: boolean;
@@ -619,10 +644,10 @@ export function isStrictlyStrongerCandidate(
   if (destParsed.id === sourceParsed.id) return true;
   const measured = destAtServedEffort(dest, opts);
   if (!measured) return false;
-  const destQuality = capabilityForDimension(measured, dim);
+  const destQuality = capabilityForDimension(measured, dim, opts?.policyVersion);
   if (destQuality == null || measured.bench?.qualityEstimated === true) return false;
   if (!source || source.bench?.qualityEstimated === true) return false;
-  const sourceQuality = capabilityForDimension(source, dim);
+  const sourceQuality = capabilityForDimension(source, dim, opts?.policyVersion);
   if (sourceQuality == null) return false;
   return destQuality > sourceQuality;
 }
@@ -733,16 +758,16 @@ export function escalationChain(
   // the fallback keeps that path unchanged.
   const sourcePool = compareOpts.candidates ?? candidates;
   const source = findSourceCandidate(sourcePool, fromModel);
-  const strongerOpts: StrongerCompareOpts = { ...compareOpts, candidates: sourcePool };
+  const strongerOpts: StrongerCompareOpts = { ...compareOpts, candidates: sourcePool, policyVersion: version };
   const eligible = applyCandidateGuards([...candidates], opts);
   const stronger = eligible.filter((candidate) =>
     isStrictlyStrongerCandidate(candidate, fromModel, dimension, source, strongerOpts),
   );
   if (stronger.length === 0) return undefined;
-  // `cheapest-sufficient` ranks every proven-stronger candidate by price. The cheapest one leads and the
-  // others follow in price order, so no named band limits the head pick.
+  // Required-vector tiers precede price across the full proven-stronger set.
+  // Unknown and insufficient candidates remain available for recovery.
   if (version === 'cheapest-sufficient') {
-    const all = pickEscalation(stronger, dimension, fromModel, { ...opts, unknownPriceLast: true }, ESCALATION_WEIGHTS);
+    const all = pickEscalation(stronger, dimension, fromModel, { ...opts, policyVersion: version, unknownPriceLast: true }, ESCALATION_WEIGHTS);
     return all && all.chosen !== '' ? all : undefined;
   }
   const next = nextBandCandidates(stronger, source, dimension);
@@ -840,7 +865,7 @@ function scoreWithinTiers(
   // economic components — cost, speed, and the cache credit — decide;
   // otherwise a quality-heavy task weighting would pick the strongest model
   // whatever the minimum says. The ceiling uses the selected ranking axis.
-  const axis = rankingAxis(dimension, opts.handoffMinimum);
+  const axis = rankingAxis(dimension, opts.handoffMinimum, opts.policyVersion);
   const qualityCeiling = opts.handoffMinimum != null
     ? clamp(clamp(opts.handoffMinimum, 0, 1) * AXIS_REFERENCE[axis] / 100, 0, 1) * weights.quality
     : undefined;
@@ -969,8 +994,8 @@ export function pickBest(
   opts: ScoreOpts = { estimatedContextTokens: 0 },
 ): RoutingDecision {
   const filtered = applyCandidateGuards(candidates, opts);
-  const minimums: Minimums = {
-    ...minimumsFor(dimension, opts.handoffMinimum),
+  const minimums: Minimums = opts.requiredMinimums ?? {
+    ...minimumsFor(dimension, opts.handoffMinimum, opts.policyVersion),
     // Below these conservative correctness minimums, the model has measured
     // weak ability on the input shape. Missing measurements remain unknown.
     ...(opts.estimatedContextTokens >= 64_000 ? { longContext: 0.30 } : {}),
@@ -1007,7 +1032,19 @@ export function pickBest(
     const penalty = isNonNegativeFinite(raw) ? Math.min(raw, opts.switchMargin ?? DEFAULT_SWITCH_MARGIN) : 0;
     if (penalty > 0) { candidate.protocolPenalty = penalty; candidate.score -= penalty; }
   }
-  return assembleDecision(scored, dimension, eligibility, costBasis, speedBasis, opts.unknownPriceLast === true);
+  const decision = assembleDecision(scored, dimension, eligibility, costBasis, speedBasis, opts.unknownPriceLast === true);
+  if (opts.policyVersion === 'cheapest-sufficient') {
+    decision.policyVersion = opts.policyVersion;
+    decision.capabilityEvidence = {
+      policyDigest: COMPARATOR_DIGEST,
+      comparisonAxis: 'intelligence',
+      metricVersion: CALIBRATED_INDEX_VERSION,
+      minimums: { ...minimums },
+      ...(opts.benchmarkIndexVersion ? { benchmarkIndexVersion: opts.benchmarkIndexVersion } : {}),
+      ...(opts.benchmarkSnapshotDigest ? { benchmarkSnapshotDigest: opts.benchmarkSnapshotDigest } : {}),
+    };
+  }
+  return decision;
 }
 
 const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];

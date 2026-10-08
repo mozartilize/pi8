@@ -29,7 +29,6 @@ import {
 import { renderRouterStatus, notifyRouting, servedKey, type ServedInfo } from '../host/ui.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { appendDecision } from '../host/decisionlog.js';
-import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import {
   isStrictlyStrongerCandidate,
@@ -1159,15 +1158,22 @@ export async function runDelegationLoop(
     && (startIntent == null || session.getCachedIntent()?.key === startIntent);
   // Read live: a semi substitution can replace the turn reasoning mid-walk, and
   // a stronger-hop proof must use the effort the attempt will actually send.
+  const policyVersion = decision.policyVersion ?? 'legacy';
   const compareOpts = (): StrongerCompareOpts => ({
+    policyVersion,
     userReasoning: typeof opts.reasoning === 'string' ? (opts.reasoning as ThinkingLevel) : undefined,
     userReasoningOverride: opts.userReasoningOverride,
     candidates: opts.candidates,
   });
-  // Escalation target selection reuses the scorer's guards + quality pick. The
-  // remaining chain was already context/vision-guarded at routing time, so no
-  // context estimate is needed here.
-  const escOpts: ScoreOpts = { estimatedContextTokens: 0 };
+  // The chain has context/vision guards. Recovery must also retain the full
+  // required vector from the same decision, including input-shape minimums.
+  const escOpts: ScoreOpts = {
+    estimatedContextTokens: 0,
+    policyVersion,
+    requiredMinimums: decision.capabilityEvidence?.minimums,
+    benchmarkIndexVersion: decision.capabilityEvidence?.benchmarkIndexVersion,
+    benchmarkSnapshotDigest: decision.capabilityEvidence?.benchmarkSnapshotDigest,
+  };
   session.flushAndSetUnresolvedTrajectory();
 
   let success = false;
@@ -1245,9 +1251,9 @@ export async function runDelegationLoop(
     }
     return model as Model<Api> | undefined;
   };
-  // Same target selection as the between-turn repick: strongest reachable
-  // stronger model by quality (`escalationChain`), never the highest-score
-  // marginal upgrade. No reachable target (the answerless-promotion path)
+  // The between-turn repick and the pre-output hop use the same policy-owned
+  // stronger proof and tier ordering in `escalationChain`.
+  // No reachable target (the answerless-promotion path)
   // leaves the chain untouched and hops nowhere — the source is already
   // excluded, so the walk falls to ordinary recovery without a strike.
   const planCapabilityHop = (
@@ -1263,7 +1269,7 @@ export async function runDelegationLoop(
       attempt.effectiveSource,
       escOpts,
       compareOpts(),
-      evaluationPolicyVersion(),
+      policyVersion,
     );
     if (esc) {
       capabilityHop = {
@@ -1385,7 +1391,7 @@ export async function runDelegationLoop(
         effectiveSource,
         escOpts,
         compareOpts(),
-        evaluationPolicyVersion(),
+        policyVersion,
       ) !== undefined;
     const prepared: PreparedCandidate = {
       candidateId,

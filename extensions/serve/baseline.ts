@@ -25,7 +25,8 @@ export interface TokenTotals {
 /**
  * Resolve the model this work is priced against: a config pin when it is
  * still in the routable pool, else the highest measured capability on the
- * work's own dimension axis. Price is only a tiebreak for a pool with no
+ * work's production dimension axis, including during evaluation. This reporting
+ * control does not use the development comparator. Price is only a tiebreak for a pool with no
  * benchmark coverage at all — an expensive unmeasured model is not evidence
  * of strength, so it must never outrank a measured one.
  */

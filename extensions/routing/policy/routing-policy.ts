@@ -25,6 +25,7 @@ import {
   levelFrom,
   MODEL_THINKING_LEVELS,
   type ScoreOpts,
+  type StrongerCompareOpts,
 } from '../score/scorer.js';
 import type { PendingTrajectoryEscalation } from '../struggle/types.js';
 import type { EntryResolution } from '../context/types.js';
@@ -34,6 +35,8 @@ import type { PolicyVersion } from './policy-version.js';
 
 export interface RoutingPolicyInput {
   candidates: Candidate[];
+  benchmarkIndexVersion?: string;
+  benchmarkSnapshotDigest?: string;
   baseDimension: Dimension;
   baseCause: DecisionCause;
   /** Same-dimension quality-first repick from objective trajectory friction. */
@@ -129,7 +132,7 @@ function applyTrajectoryRepick(
   dimension: Dimension,
   trajectory: PendingTrajectoryEscalation | undefined,
   baseOpts: ScoreOpts,
-  compareOpts: { userReasoning?: ThinkingLevel; userReasoningOverride?: boolean },
+  compareOpts: StrongerCompareOpts,
   version: PolicyVersion,
 ): { decision: RoutingDecision; cause: DecisionCause; applied: boolean } {
   if (!trajectory) return { decision, cause, applied: false };
@@ -143,8 +146,8 @@ function applyTrajectoryRepick(
     fromModel: trajectory.fromModel,
     preOutput: trajectory.preOutput,
   };
-  // Context/vision guards, strictly-stronger filter, and strongest-by-quality
-  // pick all live in `escalationChain` so this and the pre-output hop can never
+  // Context/vision guards, stronger proof, and target selection all live in
+  // `escalationChain` so this and the pre-output hop can never
   // disagree on the target. No stronger reachable → keep the routed decision
   // and mark the friction unavailable (the provider gate owns what to do next).
   const picked = escalationChain(candidates, dimension, trajectory.fromModel, baseOpts, compareOpts, version);
@@ -183,6 +186,7 @@ function applyIncumbentModelFloor(
   dimension: Dimension,
   incumbentRegistryId: string | undefined,
   skip: boolean,
+  version: PolicyVersion,
 ): void {
   if (incumbentRegistryId == null || incumbentRegistryId === decision.chosen || skip) {
     return;
@@ -191,15 +195,15 @@ function applyIncumbentModelFloor(
   const chosenCandidate = candidates.find((c) => candidateKey(c) === decision.chosen);
   const incumbentInChain = decision.fallbackChain.indexOf(incumbentRegistryId);
   if (incumbentCandidate && chosenCandidate && incumbentInChain >= 0) {
-    const incumbentQuality = capabilityForDimension(incumbentCandidate, dimension);
-    const chosenQuality = capabilityForDimension(chosenCandidate, dimension);
+    const incumbentQuality = capabilityForDimension(incumbentCandidate, dimension, version);
+    const chosenQuality = capabilityForDimension(chosenCandidate, dimension, version);
     if (incumbentQuality != null && chosenQuality != null && incumbentQuality > chosenQuality) {
       const reasons = new Map((decision.candidateDiagnostics ?? []).map(d => [d.candidateKey, d.excludedReason]));
       const tier = (key: string): number => reasons.get(key) === 'unknown-quality' ? 1 : reasons.get(key) ? 2 : 0;
       const allowedTier = Math.max(1, tier(decision.chosen));
       const target = decision.fallbackChain.find((key) => {
         const candidate = candidates.find((c) => candidateKey(c) === key);
-        const quality = candidate && capabilityForDimension(candidate, dimension);
+        const quality = candidate && capabilityForDimension(candidate, dimension, version);
         return tier(key) <= allowedTier && quality != null && quality >= incumbentQuality;
       });
       if (!target) return;
@@ -423,11 +427,13 @@ function resolveWithPolicy(input: RoutingPolicyInput, version: PolicyVersion): R
   const pool = atIncumbentEffort(candidates, minimumEffort);
 
   // Score with the configured active-dimension weights.
-  // The handoff minimum is request-local to the primary pick: a trajectory
-  // repick and the routed-pick counterfactual answer different questions, so
-  // they score with ordinary options.
+  // The development comparator captures one required vector for selection
+  // and recovery. Production recovery uses the task type's fixed minimums.
   const baseOpts: ScoreOpts = {
     estimatedContextTokens,
+    policyVersion: version,
+    benchmarkIndexVersion: input.benchmarkIndexVersion,
+    benchmarkSnapshotDigest: input.benchmarkSnapshotDigest,
     incumbentRegistryId,
     needsVision,
     isSubagentSpawn: false,
@@ -453,8 +459,10 @@ function resolveWithPolicy(input: RoutingPolicyInput, version: PolicyVersion): R
     candidates,
     dimension,
     trajectoryEscalation,
-    baseOpts,
-    { userReasoning, userReasoningOverride },
+    version === 'cheapest-sufficient'
+      ? { ...baseOpts, requiredMinimums: decision.capabilityEvidence?.minimums }
+      : baseOpts,
+    { userReasoning, userReasoningOverride, policyVersion: version },
     version,
   );
   decision = trajectory.decision;
@@ -469,6 +477,7 @@ function resolveWithPolicy(input: RoutingPolicyInput, version: PolicyVersion): R
     dimension,
     incumbentRegistryId,
     skipIncumbentMinimums,
+    version,
   );
 
   // Incumbent minimum thinking level.

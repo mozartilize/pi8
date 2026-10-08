@@ -945,7 +945,7 @@ describe('policy version', () => {
 
   it('chooses the trajectory target by price among all stronger candidates under the candidate policy only', () => {
     const at = (id: string, level: number, price: number) => candidate(id, {
-      bench: benchRow(id, { quality: { intelligence: 50, coding: 70, agenticCoding: level } }),
+      bench: benchRow(id, { quality: { intelligence: level, coding: 70, agenticCoding: level } }),
       cost: { input: price, output: price * 4, cacheRead: 0, cacheWrite: 0 },
     });
     const pool = [at('test/source', 45, 1), at('test/mid', 51, 0.5), at('test/frontier', 57, 3)];

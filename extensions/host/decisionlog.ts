@@ -101,6 +101,7 @@ export interface DecisionLogEntry {
   spendIncomplete?: boolean;
   /** Set only when an evaluation process runs the candidate policy. */
   policyVersion?: string;
+  capabilityEvidence?: RoutingDecision['capabilityEvidence'];
   /** Objective trajectory-friction evidence when it influenced the pick. */
   trajectoryFriction?: RoutingDecision['trajectoryFriction'];
   /** Set on `kind: 'attempt-usage'` records only. */
@@ -424,6 +425,7 @@ export function appendDecision(
         intentKey: decision.intentKey,
         provenance: decision.provenanceCounts,
       ...(decision.policyVersion ? { policyVersion: decision.policyVersion } : {}),
+      ...(decision.capabilityEvidence ? { capabilityEvidence: decision.capabilityEvidence } : {}),
       trajectoryFriction: decision.trajectoryFriction,
       contextPressure: decision.contextPressure,
       candidateDiagnostics: decision.candidateDiagnostics,

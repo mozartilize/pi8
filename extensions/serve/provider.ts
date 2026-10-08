@@ -12,6 +12,7 @@
 import { appendModelEvent, compliancePenalties, sharedPrefixCredits } from '../bench/model-history.js';
 import { modelEventEntry, modelEventSession } from '../host/decisionlog.js';
 import { createHash } from 'node:crypto';
+import { addReasonDetail } from '../routing/score/decision-reason.js';
 import {
   createAssistantMessageEventStream,
   type Api,
@@ -45,6 +46,7 @@ import {
   buildRouterThinkingLevelMap,
   candidateKey,
   capabilityForDimension,
+  isStrictlyStrongerCandidate,
   findSourceCandidate,
   parseCandidateKey,
   isThinkingSupportedByRegistryModel,
@@ -52,6 +54,7 @@ import {
   resolveThinkingLevel,
   MODEL_THINKING_LEVELS,
   type RegistryModelInfo,
+  type StrongerCompareOpts,
 } from '../routing/score/scorer.js';
 import { pickBaseline } from './baseline.js';
 import { resolveManualModel } from './manual-model.js';
@@ -394,13 +397,15 @@ function applyRuntimeExclusions(
 const PROVIDERS_WITHOUT_DELEGATION: ReadonlySet<string> = new Set(['cursor']);
 
 function buildRoutableCandidates(args: {
+  store: ReturnType<typeof loadStore>;
   regModels: unknown[];
   extensionContext: ExtensionContext | undefined;
   config: AutoRouterConfig;
   session: RouterSession;
+  /** Content identity of `store`. The cache key includes it so rows and logged identity cannot differ. */
+  snapshotDigest?: string;
 }): Candidate[] {
-  const { extensionContext, config, session } = args;
-  const store = loadStore();
+  const { extensionContext, config, session, store, snapshotDigest } = args;
   const benchModels = store ? activeModels(store) : [];
   const isModelAllowed = loadModelFilter();
   const isBlacklisted = buildExcludeFilter(session.getSessionBlacklistPatterns());
@@ -416,7 +421,7 @@ function buildRoutableCandidates(args: {
   // providers ARE in the key because the build-time filter drops them.
   const expansionKey = [
     regModelList.map((rm) => `${rm.provider}/${rm.id}`).join(','),
-    `${store?.syncedAt ?? 0}:${benchModels.length}`,
+    `${store?.syncedAt ?? 0}:${benchModels.length}:${snapshotDigest ?? ''}`,
     JSON.stringify(config.models ?? null),
     [...session.getSessionBlacklistPatterns()].slice().sort().join(','),
     [...blacklistedProviders].sort().join(','),
@@ -631,6 +636,11 @@ function noRoutableCandidates(session: RouterSession): RouterTurnOutcome {
 }
 
 interface PreparedTurn {
+  policyVersion: ReturnType<typeof evaluationPolicyVersion>;
+  benchmarkIndexVersion?: string;
+  benchmarkSnapshotDigest?: string;
+  /** The store that `candidates` and `benchmarkSnapshotDigest` describe. Later expansion reads this store, never the file. */
+  store: ReturnType<typeof loadStore>;
   cacheHead: { identity: string; tokens: number };
   registry: ModelRegistry;
   extensionContext: ExtensionContext | undefined;
@@ -704,11 +714,18 @@ async function prepareRouterTurn(args: {
       ? undefined
       : pendingStruggle;
 
+  const policyVersion = evaluationPolicyVersion();
+  const store = loadStore();
+  const benchmarkSnapshotDigest = policyVersion === 'cheapest-sufficient'
+    ? createHash('sha256').update(JSON.stringify(store ?? null)).digest('hex')
+    : undefined;
   const candidates = buildRoutableCandidates({
+    store,
     regModels: regModels as unknown[],
     extensionContext,
     config,
     session,
+    snapshotDigest: benchmarkSnapshotDigest,
   });
   const routableCandidates = applyRuntimeExclusions(candidates, session);
   if (routableCandidates.length === 0 && !session.getManualModel() && !session.getSemiHold(measured.turnInput.key)) return noRoutableCandidates(session);
@@ -716,6 +733,10 @@ async function prepareRouterTurn(args: {
   return {
     kind: 'ready',
     prepared: {
+      policyVersion,
+      benchmarkIndexVersion: store?.indexVersion,
+      benchmarkSnapshotDigest,
+      store,
       cacheHead: { identity: promptHeadIdentity(context), tokens: estimateTokenCount((extractSystemPrompt(context) ?? '') + JSON.stringify(context.tools ?? [])) },
       registry,
       extensionContext,
@@ -846,10 +867,17 @@ function executorPool(
   candidates: Candidate[],
   state: WorkPhaseState | undefined,
   contract: ExecutionContract,
+  compareOpts: StrongerCompareOpts,
 ): { pool: Candidate[]; minimum: number } | undefined {
   const minimum = contract.minimum;
   if (minimum == null) return undefined;
   const excluded = state?.excludedExecutors ?? [];
+  if (compareOpts.policyVersion === 'cheapest-sufficient') {
+    const pool = candidates.filter((c) => !isExcludedExecutor(state, candidateKey(c)) && excluded.every((key) =>
+      isStrictlyStrongerCandidate(c, key, 'implement', findSourceCandidate(candidates, key), { ...compareOpts, candidates }),
+    ));
+    return pool.length > 0 ? { pool, minimum } : undefined;
+  }
   const excludedQualities = excluded.map((key) => {
     const row = findSourceCandidate(candidates, key);
     return row ? capabilityForDimension(row, 'implement') : undefined;
@@ -958,7 +986,11 @@ function scoreRouterTurn(args: {
   const userReasoningOverride =
     requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
   const execution = contractActive && contract.release
-    ? executorPool(routableCandidates, session.getWorkPhaseState(), contract)
+    ? executorPool(routableCandidates, session.getWorkPhaseState(), contract, {
+        policyVersion: prepared.policyVersion,
+        userReasoning: requestedReasoning as ThinkingLevel | undefined,
+        userReasoningOverride,
+      })
     : undefined;
   const warm = session.warmPrefixTokens(Date.now(), estContextTokens, PROMPT_CACHE_TTL_MS);
   const history = config.reputation === false ? undefined : session.getModelHistory(turnInput.key);
@@ -969,6 +1001,8 @@ function scoreRouterTurn(args: {
   }
   const policy = resolveRoutingDecisionForEvaluation({
     candidates: execution?.pool ?? routableCandidates,
+    benchmarkIndexVersion: prepared.benchmarkIndexVersion,
+    benchmarkSnapshotDigest: prepared.benchmarkSnapshotDigest,
     baseDimension: routedDimension,
     baseCause: routedCause,
     trajectoryEscalation,
@@ -992,8 +1026,21 @@ function scoreRouterTurn(args: {
         : resolved.context.resolution.relation,
     } : {}),
     config,
-  }, evaluationPolicyVersion());
+  }, prepared.policyVersion);
   const decision = policy.decision;
+  // An unproved executor replacement retains the submitter. Estimated quality
+  // can exceed its incumbent minimum without proving a stronger replacement.
+  if (prepared.policyVersion === 'cheapest-sufficient' && contractActive && contract?.release && !execution && !policy.trajectoryApplied) {
+    const submitter = submitterKey(policy.candidates, contract.submitter);
+    const index = decision.fallbackChain.indexOf(submitter);
+    if (index >= 0 && index !== 0) {
+      decision.fallbackChain.splice(index, 1);
+      decision.fallbackChain.unshift(submitter);
+      decision.chosen = submitter;
+      decision.switched = incumbentRegistryId != null && incumbentRegistryId !== submitter;
+      addReasonDetail(decision, { kind: 'executor-unavailable' });
+    }
+  }
   // The scored pool can hold an incumbent row at its served effort that the
   // routable pool does not; later lookups by chain key need it.
   const scoredCandidates = [
@@ -1421,8 +1468,7 @@ function manualCandidates(prepared: PreparedTurn, manualModel: string): Candidat
   let candidates = prepared.candidates.filter((candidate) => candidate.registryId === pin.registryId);
   if (candidates.length === 0) {
     const rm = regModels.find((m) => `${m.provider}/${m.id}` === pin.registryId)!;
-    const store = loadStore();
-    const benchModels = store ? activeModels(store) : [];
+    const benchModels = prepared.store ? activeModels(prepared.store) : [];
     candidates = expandModelCandidates(rm, benchModels.filter((b) => b.registryId === pin.registryId), effortDropsPerStep(benchModels));
   }
   if (pin.thinking) {
@@ -1787,6 +1833,16 @@ async function runResumeTurn(args: {
   stream: AssistantMessageEventStream;
 }): Promise<RouterTurnOutcome | { kind: 'recompute' }> {
   const { prepared, resume, context, options, pi, session, turnTimer, stream } = args;
+  // A saved candidate-policy decision names the snapshot it compared. Its fallback chain and
+  // capability evidence are valid only against the same policy and rows.
+  if (
+    (resume.policyVersion ?? 'legacy') !== prepared.policyVersion
+    || (prepared.policyVersion === 'cheapest-sufficient'
+      && resume.capabilityEvidence?.benchmarkSnapshotDigest !== prepared.benchmarkSnapshotDigest)
+  ) {
+    session.clearPendingResume();
+    return { kind: 'recompute' };
+  }
   const routableCandidates = applyRuntimeExclusions(prepared.candidates, session);
   const present = new Set(routableCandidates.map((c) => candidateKey(c)));
   const chain = resume.fallbackChain.filter((key) => present.has(key));

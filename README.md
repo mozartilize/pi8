@@ -79,7 +79,7 @@ When you return to `router/auto` after requests to another model, the router doe
 
 ### Capability and model preferences
 
-Fixed minimums do not change when the request's candidate pool changes:
+Production minimums do not change when the request's candidate pool changes:
 
 | Task type | Minimums for the preferred tier |
 |---|---|
@@ -95,6 +95,16 @@ Accepted handoffs use their rubric and band requirement against fixed reference 
 Every recently served candidate can get prompt-cache credit, priced from its own registry cache rates and capped by `switchMargin`. After the two-week collection period, cross-session credit additionally requires an identical system prompt and tool schema at the same provider, model and effort; it expires after one hour. Selection counts earn no points.
 
 `model-events.jsonl` collects protocol counts across sessions. Penalties are **off until two weeks of data have been collected and `reputationWeights` has been configured**. Fit the weights from those observations. They need at least 30 decayed entries for reminder rate or 10 completed reminder episodes for ignore rate. Counts have a 30-day half-life. Penalties cannot cross capability tiers or remove fallbacks. `/router-status` shows the counts and `/router-why` explains a penalty that changed preference. Set `reputation: false` to disable collection, cross-session credit and penalties. Execution outcome bonuses are not enabled.
+
+### Development comparator
+
+The evaluation-only `cheapest-sufficient` policy uses Intelligence for every implementation requirement. It has no named capability bands or requirement-based benchmark switch. No component rule is enabled without independent outcome validation. Other task minimums and input-shape minimums remain unchanged.
+
+Its fixed implementation minimum is `(34 / 63.6) × 57.6` (about 30.79). Explicit implementation requirements use `requirement × 57.6`. These are unvalidated comparator parameters, not equivalent capability across benchmarks or proven task sufficiency. Missing Intelligence remains unknown; coding and subset indexes cannot replace it.
+
+Selection, incumbent comparisons, escalation, and excluded-executor replacement use the same metric identity. Recovery keeps the complete required vector, including long-context and vision minimums. Capability tiers precede cost; all tiers remain available for provider fallback. Decision records include the capability policy digest, metric version, required vector, and benchmark snapshot digest. The reporting cost baseline retains production capability comparisons.
+
+Production remains `legacy`. Paid evaluation and activation require separate approval.
 
 ### Completing and returning to work
 
