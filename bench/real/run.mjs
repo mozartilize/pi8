@@ -53,15 +53,25 @@ const workingTreeIdentity = () => {
 };
 
 // ── Tasks from the validation files ────────────────────────────────────────
+// A task runs only with a written bug report. The report states the symptom and every behavior that
+// the hidden tests check, and it does not name the code to change. A commit subject is not a bug
+// report: it often names the fix and leaves out the behavior that the hidden tests require.
+const prompts = JSON.parse(readFileSync(join(repoRoot, 'bench', 'real', 'prompts.json'), 'utf8'));
 const validationDir = join(root, 'validation');
-const tasks = readdirSync(validationDir).filter((name) => name.endsWith('.json'))
+const validRecords = readdirSync(validationDir).filter((name) => name.endsWith('.json'))
   .map((name) => JSON.parse(readFileSync(join(validationDir, name), 'utf8')))
-  .filter((record) => record.valid && (includePython || REPOS[record.repo].lang !== 'python') && (!only || only.includes(`${record.repo}-${record.fix.slice(0, 10)}`)))
+  .filter((record) => record.valid && (includePython || REPOS[record.repo].lang !== 'python'))
+  .map((record) => ({ ...record, id: `${record.repo}-${record.fix.slice(0, 10)}` }));
+const unreported = validRecords.filter((record) => !prompts[record.id]).map((record) => record.id);
+if (unreported.length > 0) console.log(`valid tasks without a bug report, not run: ${unreported.join(' ')}`);
+const unknown = (only ?? []).filter((id) => !validRecords.some((record) => record.id === id && prompts[id]));
+if (unknown.length > 0) throw new Error(`--tasks names tasks that are not valid or have no bug report: ${unknown.join(' ')}`);
+const tasks = validRecords
+  .filter((record) => prompts[record.id] && (!only || only.includes(record.id)))
   .sort((a, b) => `${a.repo}${a.fix}`.localeCompare(`${b.repo}${b.fix}`))
   .map((record) => ({
     ...record,
-    id: `${record.repo}-${record.fix.slice(0, 10)}`,
-    prompt: `Bug report: ${record.subject.replace(/\s*\(#\d+\)(\s*\(#\d+\))*\s*$/, '')}\n\nFind the cause in the source code and fix it. Add a regression test that fails before your fix. Run the tests that you changed or added, and make sure they pass. Do not ask for approval; complete the work.`,
+    prompt: `${prompts[record.id]}\n\nFind the cause in the source code and fix it. Add a regression test that fails before your fix. Run the tests that you changed or added, and make sure they pass. Do not ask for approval; complete the work.`,
     wallTimeMs: 1_500_000,
   }));
 console.log(`${tasks.length} tasks: ${Object.entries(Object.groupBy(tasks, (t) => t.repo)).map(([repo, list]) => `${repo}=${list.length}`).join(' ')}`);

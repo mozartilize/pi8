@@ -1,14 +1,18 @@
-// Validates tasks in the VM from the warm cache: the hidden tests must fail on the base tree and pass on the fix tree.
+// Validates tasks in a host task directory with the grader's build cache: the hidden tests must fail on the
+// base tree and pass on the fix tree. The grader of a campaign runs the hidden tests the same way.
 //   node bench/real/validate.mjs <repo> <sha...>      writes <root>/validation/<repo>-<sha>.json
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applyHiddenTests } from '../../eval/cargo-oracle.ts';
-import { vmSandboxFactory } from '../../eval/vm-sandbox.ts';
-import { cargoArgsFor, git, hiddenTestsFor, makeTree, REPOS, root, runTests, sandboxOptions, writeJson } from './lib.mjs';
+import { hostDirSandboxFactory } from '../../eval/host-dir-sandbox.ts';
+import { cargoArgsFor, evalDir, git, hiddenTestsFor, makeTree, REPOS, root, runTests, writeJson } from './lib.mjs';
 
 const [repo, ...shas] = process.argv.slice(2);
-const factory = await vmSandboxFactory(sandboxOptions(repo));
+const factory = hostDirSandboxFactory({
+  workRoot: join(tmpdir(), 'pi8-validate-runs'), hiddenPaths: [],
+  env: { CARGO_TARGET_DIR: join(evalDir, 'cache', 'grade-target', repo), CARGO_TERM_COLOR: 'never' },
+});
 for (const sha of shas) {
   const { dir } = REPOS[repo];
   const fix = git(dir, ['rev-parse', sha]).trim();
