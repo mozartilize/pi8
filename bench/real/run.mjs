@@ -32,6 +32,7 @@ import { digestOf } from '../../eval/recipe.ts';
 import { REGISTRY_SNAPSHOT_ENV } from '../../eval/registry-snapshot-extension.ts';
 import { buildReport } from '../../eval/report.ts';
 import { pytestGraderRuntimeDigest, pytestOracle, pytestOracleDigest } from '../../eval/pytest-oracle.ts';
+import { refreshCopilotToken } from './copilot-token.mjs';
 import { leakHits } from './leaks.mjs';
 import { evalDir, git, hiddenTestsFor, makeTree, REPOS, root } from './lib.mjs';
 
@@ -234,11 +235,16 @@ if (run) {
   priceTable = { digest: digestOf(prices), prices };
   manifest.normalizedPriceDigest = priceTable.digest;
   // The agent cannot reach api.github.com, so Pi cannot get a new GitHub Copilot token during the campaign.
-  // An execution takes about 7 minutes on average. 10 minutes for each execution leaves a margin.
-  const copilot = JSON.parse(readFileSync(join(home, '.pi', 'agent', 'auth.json'), 'utf8'))['github-copilot'];
-  const plannedMs = tasks.length * replicates.length * arms.length * 10 * 60_000;
-  if (copilot && (copilot.expires ?? 0) - Date.now() < plannedMs) {
-    throw new Error(`the GitHub Copilot token expires before the planned end of the campaign: start Pi once with a GitHub Copilot model, then start the campaign again`);
+  // The driver runs outside the run namespace. It gets a token at the start and again whenever the token
+  // in the auth file has less than 15 minutes left (an execution takes about 7 minutes on average).
+  const authPath = join(home, '.pi', 'agent', 'auth.json');
+  if (MODEL_POOL.some((pattern) => pattern.startsWith('github-copilot/')) && JSON.parse(readFileSync(authPath, 'utf8'))['github-copilot']) {
+    const keepCopilotTokenFresh = async (force) => {
+      const expires = JSON.parse(readFileSync(authPath, 'utf8'))['github-copilot']?.expires ?? 0;
+      if (force || expires - Date.now() < 15 * 60_000) await refreshCopilotToken(authPath);
+    };
+    await keepCopilotTokenFresh(true);
+    setInterval(() => keepCopilotTokenFresh(false).catch((error) => console.log(`Copilot token refresh failed: ${error.message}`)), 5 * 60_000).unref();
   }
   const settings = JSON.parse(readFileSync(join(home, '.pi', 'agent', 'settings.json'), 'utf8'));
   runtime = {
