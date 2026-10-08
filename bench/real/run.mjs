@@ -233,6 +233,8 @@ if (run) {
     priceSources[key] = 'benchmark-list-price';
   }
   priceTable = { digest: digestOf(prices), prices };
+  // A fixed-model arm has no router decision log. Its usage comes from the session, so it takes the price here.
+  priceOf = (provider, modelId) => prices[`${provider}/${modelId}`];
   manifest.normalizedPriceDigest = priceTable.digest;
   // The agent cannot reach api.github.com, so Pi cannot get a new GitHub Copilot token during the campaign.
   // The driver runs outside the run namespace. It gets a token at the start and again whenever the token
