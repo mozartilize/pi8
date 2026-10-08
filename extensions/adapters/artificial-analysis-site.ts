@@ -3,7 +3,7 @@
  *
  * The free API publishes only the intelligence, coding, and agentic indexes.
  * The models page carries more per model (Omniscience, AA-Briefcase, time per
- * task, the estimated-index flag), but only inside an encrypted
+ * task, Terminal-Bench 4.0, the estimated-index flag), but only inside an encrypted
  * `/data/<hash>.txt` blob that the page decrypts in client JS. Wrapping
  * `JSON.parse` before the page loads captures the decrypted
  * `{ models: [...] }` payload; no HTML is parsed.
@@ -32,6 +32,8 @@ export interface AASiteModel {
   mmmuPro?: number;
   briefcaseRubricPassRate?: number;
   intelligenceIndexTimePerTask?: number;
+  /** Terminal-Bench 4.0 pass rate in [0, 1]: agentic coding tasks in a real terminal. */
+  terminalBench40?: number;
 }
 
 /** The exact install command for the `playwright-core` this package resolves. */
@@ -91,7 +93,7 @@ export function parseSiteModels(raw: unknown): AASiteModel[] {
     if (!value || typeof value !== 'object') continue;
     const row = value as Record<string, unknown>;
     if (typeof row.slug !== 'string' || !row.slug || typeof row.name !== 'string') continue;
-    for (const field of ['briefcaseRubricPassRate', 'lcr', 'mmmuPro']) {
+    for (const field of ['briefcaseRubricPassRate', 'lcr', 'mmmuPro', 'terminalBench40']) {
       if (row[field] != null && (typeof row[field] !== 'number' || !Number.isFinite(row[field]) || row[field] < 0 || row[field] > 1)) {
         throw new Error(`Artificial Analysis models page changed scale: ${field} must be in [0, 1]`);
       }
@@ -107,9 +109,10 @@ export function parseSiteModels(raw: unknown): AASiteModel[] {
       mmmuPro: finite(row.mmmuPro),
       briefcaseRubricPassRate: finite(row.briefcaseRubricPassRate),
       intelligenceIndexTimePerTask: finite(row.intelligenceIndexTimePerTask),
+      terminalBench40: finite(row.terminalBench40),
     });
   }
-  const fields = ['intelligenceIndexIsEstimated', 'omniscience', 'briefcaseRubricPassRate', 'intelligenceIndexTimePerTask', 'lcr', 'mmmuPro'] as const;
+  const fields = ['intelligenceIndexIsEstimated', 'omniscience', 'briefcaseRubricPassRate', 'intelligenceIndexTimePerTask', 'lcr', 'mmmuPro', 'terminalBench40'] as const;
   const missing = fields.filter((field) => !rows.some((row) => row[field] != null));
   if (rows.length < MIN_SITE_ROWS || missing.length > 0) {
     throw new Error(
@@ -162,6 +165,7 @@ export async function fetchSiteModels(): Promise<AASiteModel[]> {
         mmmuPro: m.mmmuPro,
         briefcaseRubricPassRate: (m.briefcaseBreakdown as { rubricPassRate?: unknown } | null | undefined)?.rubricPassRate,
         intelligenceIndexTimePerTask: m.intelligenceIndexTimePerTask,
+        terminalBench40: m.terminalBench40,
       })),
     );
     return parseSiteModels(raw);

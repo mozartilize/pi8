@@ -28,6 +28,10 @@ export interface BenchModel {
   quality: {
     intelligence?: number;
     coding?: number;
+    /**
+     * Terminal-Bench 4.0 pass rate in percent [0, 100]. A row without a result
+     * carries an estimate from the older AA indexes and `qualityEstimated`.
+     */
     agenticCoding?: number;
     /**
      * AA-Omniscience Index: 100 * (correct - incorrect) / questions, closed

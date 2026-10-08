@@ -948,7 +948,7 @@ describe('policy version', () => {
       bench: benchRow(id, { quality: { intelligence: 50, coding: 70, agenticCoding: level } }),
       cost: { input: price, output: price * 4, cacheRead: 0, cacheWrite: 0 },
     });
-    const pool = [at('test/source', 40, 1), at('test/mid', 45, 0.5), at('test/frontier', 50, 3)];
+    const pool = [at('test/source', 45, 1), at('test/mid', 51, 0.5), at('test/frontier', 57, 3)];
     const input = makePolicyInput({
       baseDimension: 'implement', candidates: pool,
       trajectoryEscalation: {

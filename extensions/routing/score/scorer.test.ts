@@ -1307,7 +1307,7 @@ describe('scorer — fixed capability minimums', () => {
 
   it.each([
     ['gather', { intelligence: 20 }, { intelligence: 19 }, 'below-intelligence-minimum'],
-    ['implement', { agenticCoding: 30 }, { agenticCoding: 29 }, 'below-agenticCoding-minimum'],
+    ['implement', { agenticCoding: 34 }, { agenticCoding: 33 }, 'below-agenticCoding-minimum'],
   ] as const)('pins the inclusive %s minimum independently of the peer set', (dimension, pass, fail, reason) => {
     const good = make('p/good', pass, 20);
     const weak = make('p/weak', fail, 0);
@@ -1324,7 +1324,7 @@ describe('scorer — fixed capability minimums', () => {
   it('keeps coding-only implementations unknown, not weak', () => {
     const codingOnly = make('p/coding', { coding: 78 }, 0);
     const weak = make('p/weak', { agenticCoding: 5 }, 0);
-    const strong = make('p/strong', { agenticCoding: 30 }, 10);
+    const strong = make('p/strong', { agenticCoding: 34 }, 10);
     expect(pickBest([weak, codingOnly, strong], 'implement').fallbackChain).toEqual(['p/strong', 'p/coding', 'p/weak']);
   });
 
@@ -1335,8 +1335,8 @@ describe('scorer — fixed capability minimums', () => {
   });
 
   it('does not let an estimated or measured weak model buy its way past a minimum', () => {
-    const good = make('p/good', { agenticCoding: 30 }, 100);
-    const weak = make('p/weak', { agenticCoding: 29 }, 0);
+    const good = make('p/good', { agenticCoding: 34 }, 100);
+    const weak = make('p/weak', { agenticCoding: 33 }, 0);
     for (const estimated of [true, false]) {
       weak.bench!.qualityEstimated = estimated;
       expect(pickBest([weak, good], 'implement').chosen).toBe('p/good');
@@ -1789,12 +1789,12 @@ describe('cost scale with weaker candidates', () => {
 });
 
 describe('escalation target', () => {
-  // Bands on the implement axis: agenticCoding / 56.5. 30 is standard, 40-47 strong, 50-56 frontier.
+  // Bands on the implement axis: agenticCoding / 63.6. 34 is standard, 45-51 strong, 57-63 frontier.
   const at = (id: string, agenticCoding: number, price: number): Candidate =>
     candidate(id, { bench: benchRow(id, { quality: { intelligence: 50, coding: 70, agenticCoding } }), cost: { input: price, output: price * 4 } });
 
   it('takes the cheapest candidate in the next band above the source, not the strongest', () => {
-    const pool = [at('p/source', 40, 1), at('p/mid', 45, 0.5), at('p/frontier-cheap', 50, 3), at('p/frontier-best', 56, 10)];
+    const pool = [at('p/source', 45, 1), at('p/mid', 51, 0.5), at('p/frontier-cheap', 57, 3), at('p/frontier-best', 63, 10)];
     const decision = escalationChain(pool, 'implement', 'p/source', { estimatedContextTokens: 0 }, {})!;
     expect(decision.chosen).toBe('p/frontier-cheap');
     // The rest of the next band comes first, then the other stronger candidates.
@@ -1802,7 +1802,7 @@ describe('escalation target', () => {
   });
 
   it('stops at the band in between when it has a stronger candidate', () => {
-    const pool = [at('p/standard', 30, 0.2), at('p/strong', 42, 1), at('p/strong-pricy', 44, 2), at('p/frontier', 56, 10)];
+    const pool = [at('p/standard', 34, 0.2), at('p/strong', 47, 1), at('p/strong-pricy', 50, 2), at('p/frontier', 63, 10)];
     const decision = escalationChain(pool, 'implement', 'p/standard', { estimatedContextTokens: 0 }, {})!;
     expect(decision.chosen).toBe('p/strong');
     expect(decision.fallbackChain).toEqual(['p/strong', 'p/strong-pricy', 'p/frontier']);

@@ -84,9 +84,9 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 /**
  * Ranking axis: the measurement a candidate's quality credit is read from.
  * Plan, review, and gather rank on intelligence; implementation ranks on the
- * agentic index and falls back to coding so a model measured on coding only
- * still ranks on evidence (it stays in the unknown-capability tier, because
- * its minimum is set on the agentic index).
+ * agentic coding score and falls back to coding so a model measured on coding
+ * only still ranks on evidence (it stays in the unknown-capability tier,
+ * because its minimum is on the agentic coding score).
  */
 function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension): number | undefined {
   return dim === 'implement'
@@ -116,7 +116,11 @@ type Minimums = Readonly<Partial<Record<QualityAxis, number>>>;
  * - plan, review: intelligence 30; Omniscience 0, so the model states facts
  *   right at least as often as wrong; AA-Briefcase rubric 0.35, so its work
  *   from many source files holds up when checked.
- * - implement: agentic index 30.
+ * - implement: agentic coding 34, the Terminal-Bench 4.0 pass rate in
+ *   percent (calibrated on 2026-10-08). 34 is 0.53 of the reference, so the
+ *   default implement requirement stays in the standard band. The AA agentic
+ *   index does not separate current models: GPT-5.6 Luna high scores 34.6 on
+ *   it but passes 2.5% of Terminal-Bench 4.0.
  * - lightweight: none; trivial work goes to the cheapest model.
  */
 const CAPABILITY_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
@@ -124,7 +128,7 @@ const CAPABILITY_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
   gather: { intelligence: 20 },
   plan: { intelligence: 30, knowledge: 0, research: 0.35 },
   review: { intelligence: 30, knowledge: 0, research: 0.35 },
-  implement: { agenticCoding: 30 },
+  implement: { agenticCoding: 34 },
 };
 
 /**
@@ -135,7 +139,7 @@ const CAPABILITY_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
 export const AXIS_REFERENCE: Readonly<Record<Exclude<QualityAxis, 'knowledge'>, number>> = {
   intelligence: 57.6,
   coding: 78.3,
-  agenticCoding: 56.5,
+  agenticCoding: 63.6,
   research: 0.61,
   longContext: 1,
   visionReasoning: 1,

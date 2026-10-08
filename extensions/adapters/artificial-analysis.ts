@@ -11,11 +11,14 @@
  *
  * and each row nests its metrics under `evaluations` / `pricing` /
  * `performance`. The API carries the indexes, prices, and speed; the page
- * adds Omniscience, AA-Briefcase, time per task, and whether AA estimated the
- * index. Both sides share the slug and the effort label in the display name.
+ * adds Omniscience, AA-Briefcase, time per task, Terminal-Bench 4.0, and
+ * whether AA estimated the index. Both sides share the slug and the effort
+ * label in the display name. The agentic coding score comes from
+ * Terminal-Bench 4.0 (agentic-estimate.ts).
  */
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import type { BenchModel } from '../types.js';
+import { agenticCodingScores } from './agentic-estimate.js';
 import { fetchSiteModels, type AASiteModel } from './artificial-analysis-site.js';
 
 export const SOURCE = 'artificial-analysis' as const;
@@ -197,9 +200,18 @@ export function normalize(
   site: readonly AASiteModel[] = [],
 ): Omit<BenchModel, 'registryId' | 'active'>[] {
   const siteByKey = new Map(site.map((row) => [joinKey(row.slug, row.name), row]));
-  return raw
-    .filter((m) => asSlug(m))
-    .map((m) => {
+  const rows = raw.filter((m) => asSlug(m));
+  const agentic = agenticCodingScores(rows.map((m) => {
+    const ev = m.evaluations ?? {};
+    return {
+      terminalBench: siteByKey.get(joinKey(asSlug(m) as string, m.name))?.terminalBench40,
+      agenticIndex: asNumber(ev.artificial_analysis_agentic_index),
+      codingIndex: asNumber(ev.artificial_analysis_coding_index),
+      intelligenceIndex: asNumber(ev.artificial_analysis_intelligence_index),
+    };
+  }));
+  return rows
+    .map((m, index) => {
       const ev = m.evaluations ?? {};
       const pricing = m.pricing ?? {};
       const perf = m.performance ?? {};
@@ -214,14 +226,13 @@ export function normalize(
         quality: {
           intelligence: asNumber(ev.artificial_analysis_intelligence_index),
           coding: asNumber(ev.artificial_analysis_coding_index),
-          // AA's agentic index is the closest analogue to agentic coding.
-          agenticCoding: asNumber(ev.artificial_analysis_agentic_index),
+          agenticCoding: agentic[index]?.value,
           knowledge: page?.omniscience,
           research: page?.briefcaseRubricPassRate,
           longContext: page?.lcr,
           visionReasoning: page?.mmmuPro,
         },
-        ...(page?.intelligenceIndexIsEstimated !== false ? { qualityEstimated: true } : {}),
+        ...(page?.intelligenceIndexIsEstimated !== false || agentic[index]?.estimated ? { qualityEstimated: true } : {}),
         priceInputPer1M: asNumber(pricing.price_1m_input_tokens),
         priceOutputPer1M: asNumber(pricing.price_1m_output_tokens),
         outputSpeedTps: asNumber(perf.median_output_tokens_per_second),

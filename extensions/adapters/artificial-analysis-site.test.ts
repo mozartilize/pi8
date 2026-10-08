@@ -19,6 +19,7 @@ describe('artificial-analysis models page', () => {
       omniscience: -10.283333333333333,
       briefcaseRubricPassRate: 0.3797979797979798,
       intelligenceIndexTimePerTask: 324.8913272822246,
+      terminalBench40: 0.116161616161616,
     });
     const glm = rows.find((row) => row.slug === 'glm-4-5v');
     expect(glm?.briefcaseRubricPassRate).toBeUndefined();
@@ -33,6 +34,11 @@ describe('artificial-analysis models page', () => {
   it('fails closed and names the field when a read field disappears', () => {
     const renamed = recorded.map((row) => ({ ...(row as object), briefcaseRubricPassRate: undefined }));
     expect(() => parseSiteModels(renamed)).toThrow(/no values for briefcaseRubricPassRate/);
+  });
+
+  it('fails closed when Terminal-Bench 4.0 disappears or leaves the [0, 1] scale', () => {
+    expect(() => parseSiteModels(recorded.map((row) => ({ ...(row as object), terminalBench40: undefined })))).toThrow(/no values for terminalBench40/);
+    expect(() => parseSiteModels(recorded.map((row) => ({ ...(row as object), terminalBench40: 55 })))).toThrow(/terminalBench40 must be in \[0, 1\]/);
   });
 
   it('gives an install command for the browser', () => {

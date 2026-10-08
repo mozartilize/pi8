@@ -73,7 +73,8 @@ describe('artificial-analysis adapter', () => {
       expect(flash).toBeDefined();
       expect(flash?.quality.intelligence).toBe(50.2);
       expect(flash?.quality.coding).toBe(70.1);
-      expect(flash?.quality.agenticCoding).toBe(37.4);
+      // Without the models page there is no Terminal-Bench 4.0 result, and seven rows are too few for an estimate.
+      expect(flash?.quality.agenticCoding).toBeUndefined();
       expect(flash?.priceInputPer1M).toBe(1.5);
       expect(flash?.priceOutputPer1M).toBe(9);
       expect(flash?.outputSpeedTps).toBe(171.52);
@@ -169,6 +170,12 @@ describe('artificial-analysis adapter', () => {
       expect(lunaMax?.quality).toMatchObject({ knowledge: -10.283333333333333, research: 0.3797979797979798 });
       expect(lunaMax?.timePerTaskSeconds).toBeCloseTo(324.89, 2);
       expect(lunaMax?.qualityEstimated).toBeUndefined();
+    });
+
+    it('reads the agentic coding score from Terminal-Bench 4.0 in percent', () => {
+      const lunaHigh = joined.find((r) => r.benchSlug === 'gpt-5-6-luna-high');
+      expect(lunaHigh?.quality.agenticCoding).toBeCloseTo(2.525, 3);
+      expect(lunaHigh?.qualityEstimated).toBeUndefined();
     });
 
     it('marks an index AA estimated as estimated quality', () => {

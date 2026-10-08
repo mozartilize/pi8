@@ -86,9 +86,9 @@ Fixed minimums do not change when the request's candidate pool changes:
 | `lightweight` | none |
 | `gather` | intelligence ≥ 20 |
 | `plan`, `review` | intelligence ≥ 30, Omniscience ≥ 0, Briefcase rubric pass rate ≥ 0.35 |
-| `implement` | agentic coding ≥ 30 |
+| `implement` | agentic coding ≥ 34 |
 
-Omniscience measures closed-book correctness: zero means correct answers balance incorrect answers. Briefcase measures work from source files against deliverable checks. Both are required for plan/review. Hallucination rate is not a separate minimum. Missing measurements rank ahead of measured weak values, behind models that meet all minimums. A measured failure on one axis is not erased by a missing value on another.
+Agentic coding is the Terminal-Bench 4.0 pass rate in percent. A model without a Terminal-Bench 4.0 result gets a conservative estimate from the older Artificial Analysis indexes and counts as estimated quality. Omniscience measures closed-book correctness: zero means correct answers balance incorrect answers. Briefcase measures work from source files against deliverable checks. Both are required for plan/review. Hallucination rate is not a separate minimum. Missing measurements rank ahead of measured weak values, behind models that meet all minimums. A measured failure on one axis is not erased by a missing value on another.
 
 Accepted handoffs use their rubric and band requirement against fixed reference strengths, rather than a request-local maximum. Long requests (≥ 64,000 tokens) also need LCR ≥ 0.30; image requests need MMMU-Pro ≥ 0.30. Missing values remain unknown. Speed uses time per task when the preferred tier has complete coverage; otherwise it uses output tokens per second.
 
