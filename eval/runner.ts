@@ -294,6 +294,10 @@ export async function runWholeTask(params: WholeTaskParams): Promise<WholeTaskOu
     // The sandbox is destroyed below. Keep the session and the decision log in the run directory first.
     if (facts.sessionPath) cpSync(facts.sessionPath, join(params.runDir, 'session.jsonl'));
     if (facts.decisionLogPath) cpSync(facts.decisionLogPath, join(params.runDir, 'decisions.jsonl'));
+    // The router debug log holds the first 120 characters of each attempt error. It is a diagnostic aid
+    // and is not evidence: no digest covers it.
+    const debugLog = existsSync(join(sandbox.outDir, 'sessions')) ? readdirSync(join(sandbox.outDir, 'sessions')).find((name) => name.endsWith('.router-debug.log')) : undefined;
+    if (debugLog) cpSync(join(sandbox.outDir, 'sessions', debugLog), join(params.runDir, 'router-debug.log'));
     const artifact = captureArtifact(sandbox.workDir, params.runDir);
     const endedAt = new Date();
     const result: CompletedExecutionV1 = {
