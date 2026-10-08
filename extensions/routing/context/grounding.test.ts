@@ -87,8 +87,9 @@ describe('grounding', () => {
     rmSync(join(dir, 'req.md'));
     mkdirSync(join(dir, 'req.md'));
     expect(await referencedArtifactsFresh(dir, item, ['req.md'])).toBe(false);
+    // No read can meet a file above the size cap, so it owes none.
     writeFileSync(join(dir, 'big.md'), 'x'.repeat(GROUNDING_MAX_BYTES + 1));
-    expect(await referencedArtifactsFresh(dir, item, ['big.md'])).toBe(false);
+    expect(await referencedArtifactsFresh(dir, item, ['big.md'])).toBe(true);
     // A path that becomes a file owes its exact content even after a directory investigation.
     rmSync(join(dir, 'src'), { recursive: true });
     writeFileSync(join(dir, 'src'), 'file');

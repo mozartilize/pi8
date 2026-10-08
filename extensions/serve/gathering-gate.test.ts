@@ -69,7 +69,7 @@ describe('gathering gate refusal accounting', () => {
   it('counts a handoff rejected for unread files', () => {
     const session = acquiringSession();
     const result = submitContextHandoff(READY, ROUTER_AUTO, session, UNREAD);
-    expect(result.text).toContain('A read with offset or limit is not a full read. Read each file in one call without offset or limit, then call it again: src/queue.ts.');
+    expect(result.text).toContain('Reads in parts count when together they show every line. Then call it again: src/queue.ts.');
     expect(session.getWorkPhaseState()?.contextDenials).toBe(1);
   });
 

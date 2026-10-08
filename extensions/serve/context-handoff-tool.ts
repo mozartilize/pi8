@@ -45,7 +45,7 @@ import type { ContextPlan } from '../routing/context/resolve.js';
 import type { GroundedArtifact, RoutingContextEvent } from '../routing/context/types.js';
 import { getWorkItem } from '../routing/context/ledger.js';
 import { contextCheck } from '../routing/context/resolve.js';
-import { unmetArtifactPaths } from '../routing/context/grounding.js';
+import { oversizedArtifactCount, unmetArtifactPaths } from '../routing/context/grounding.js';
 import { CLARIFICATION_TEXT, countContextRefusal, logContextHandoff as log } from './gathering-gate.js';
 import { decisionEvidence } from '../routing/policy/decision-evidence.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
@@ -118,8 +118,8 @@ const REJECTIONS = {
   'missing-findings': 'Context not handed off: a field is empty. Put what you found in findings. Put what the next step must do in question. Empty:',
   'missing-deliverable': 'Context not handed off: name the task type the user wants (deliverable). Call it again with it.',
   'missing-task-shape': 'Context not handed off: give complexity and scope for the declared task. Call it again with both.',
-  'artifact-not-read': 'Context not handed off: the request rests on files not read in full as they are now. A read with ' +
-    'offset or limit is not a full read. Read each file in one call without offset or limit, then call it again:',
+  'artifact-not-read': 'Context not handed off: the request rests on files not read in full as they are now. Read every ' +
+    'line of each file. Reads in parts count when together they show every line. Then call it again:',
   'no-next-step': 'Context not handed off: a gather entry hands off only to implement, review, or plan. Call it again with one of those, or continue.',
   'missing-work-choice': 'Context not handed off: choose a listed workItemId, NEW_WORK_ITEM, or NONE for a lightweight side question.',
   'invalid-work-choice': 'Context not handed off: the work and topic ids must be from this entry’s offered choices. Choose again.',
@@ -247,6 +247,8 @@ export interface HandoffFacts {
   change?: ChangeMeasurements;
   /** Referenced files not read as they are now. */
   unmet?: string[];
+  /** Referenced files that owe no read because they are above the grounding size limit. */
+  oversized?: number;
   selectionError?: Extract<RejectCode, 'missing-work-choice' | 'invalid-work-choice' | 'missing-work-title' | 'missing-topic-title' | 'stale-entry'>;
   selection?: { plan: ContextPlan; key: string; generation: number; groundings: GroundedArtifact[] };
 }
@@ -401,6 +403,7 @@ export function submitContextHandoff(
       partialReadCount: state.partialReadCount ?? 0,
       trajectorySignals: session.trajectorySignals(),
     }),
+    ...(facts.oversized ? { oversizedArtifacts: facts.oversized } : {}),
   });
   if (next.reasoningHandoff) {
     const role = deliverable === 'plan' ? 'planning' : deliverable === 'review' ? 'review' : 'implementation';
@@ -482,6 +485,7 @@ export async function prepareHandoffFacts(
       (artifact) => !groundings.some((fresh) => fresh.anchorValue === artifact.anchorValue),
     )];
     facts.unmet = await unmetArtifactPaths(ctx.cwd, { grounding, openContext: [] }, required);
+    facts.oversized = await oversizedArtifactCount(ctx.cwd, required);
     if (facts.unmet.length > 0) return facts;
     facts.selection = { plan, key: handoffKey(params), generation: pending.generation, groundings };
   } else if (opened.acquiring && owedContext({ ...opened.state, deliverable }).includes('referenced-artifact')) {
@@ -490,6 +494,7 @@ export async function prepareHandoffFacts(
     if (item && 'freshPaths' in check) {
       // This handoff is the accepted context handoff that closes a directory reference.
       facts.unmet = await unmetArtifactPaths(ctx.cwd, { ...item, openContext: [] }, check.freshPaths);
+      facts.oversized = await oversizedArtifactCount(ctx.cwd, check.freshPaths);
       if (facts.unmet.length > 0) return facts;
     }
   }

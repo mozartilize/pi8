@@ -129,6 +129,8 @@ export interface DecisionLogEntry {
     checks?: CheckVerdicts;
     /** What the router knew before it chose the next model. */
     evidence?: DecisionEvidenceV1;
+    /** Referenced files that owed no read because they are above the grounding size limit. */
+    oversizedArtifacts?: number;
   };
   /** The entry's work-context resolution: tier, ids, categories; never titles. */
   workContext?: WorkContextMeta;
@@ -145,6 +147,8 @@ export interface DecisionLogEntry {
     status?: 'done' | 'superseded';
     deliverable?: Dimension;
     reminder?: SettleReminderKind;
+    /** Referenced files that owed no read because they are above the grounding size limit. */
+    oversizedArtifacts?: number;
   };
   /** Set on `kind: 'execution-contract'` records only. */
   executionContract?: {
@@ -265,6 +269,8 @@ export interface ContextHandoffSignal {
   facts?: FactsLog;
   checks?: CheckVerdicts;
   evidence?: DecisionEvidenceV1;
+  /** Referenced files that owed no read because they are above the grounding size limit. */
+  oversizedArtifacts?: number;
 }
 
 /** Append a context handoff transition. Best-effort; never throws into the tool path. */
@@ -297,6 +303,7 @@ export function appendContextHandoffSignal(
         ...(signal.facts ? { facts: signal.facts } : {}),
         ...(signal.checks ? { checks: signal.checks } : {}),
         ...(signal.evidence ? { evidence: signal.evidence } : {}),
+        ...(signal.oversizedArtifacts ? { oversizedArtifacts: signal.oversizedArtifacts } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');
@@ -329,6 +336,8 @@ export interface WorkLifecycleSignal {
   status?: 'done' | 'superseded';
   deliverable?: Dimension;
   reminder?: SettleReminderKind;
+  /** Referenced files that owed no read because they are above the grounding size limit. */
+  oversizedArtifacts?: number;
 }
 
 /** The boundary a settle reminder asks for: `hand_off_context` or `complete_work`. */
@@ -383,6 +392,7 @@ export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBa
         ...(signal.status ? { status: signal.status } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
         ...(signal.reminder ? { reminder: signal.reminder } : {}),
+        ...(signal.oversizedArtifacts ? { oversizedArtifacts: signal.oversizedArtifacts } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

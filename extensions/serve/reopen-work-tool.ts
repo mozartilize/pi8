@@ -16,7 +16,7 @@ import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type ComplexityBand, type TaskScope 
 import { servedKey } from '../host/ui.js';
 import { debugLog } from '../host/debuglog.js';
 import { appendWorkLifecycleSignal } from '../host/decisionlog.js';
-import { unmetArtifactPaths } from '../routing/context/grounding.js';
+import { oversizedArtifactCount, unmetArtifactPaths } from '../routing/context/grounding.js';
 import { readBranch } from '../routing/context/persistence.js';
 import { contextCheck, promptAnchorsForItem, referencedArtifactPaths, reopenEvents } from '../routing/context/resolve.js';
 import type { EntryResolution, GroundedArtifact, WorkItem } from '../routing/context/types.js';
@@ -73,8 +73,8 @@ const REJECTIONS = {
   'stale-entry': 'Work not reopened: this request is no longer the active entry.',
   'already-handed-off': 'Work not reopened: this request already has a next step. Continue with it.',
   'collecting-context': 'Work not reopened: this request is still collecting context. Call hand_off_context.',
-  'artifact-not-read': 'Work not reopened: the request rests on files not read in full as they are now. A read with offset ' +
-    'or limit is not a full read. Read each file in one call without offset or limit, then call it again:',
+  'artifact-not-read': 'Work not reopened: the request rests on files not read in full as they are now. Read every line ' +
+    'of each file. Reads in parts count when together they show every line. Then call it again:',
   'not-recorded': 'Work not reopened: the router could not record it. Call it again.',
   internal: 'Work not reopened: internal router error. Continue, and reply to the user.',
 } as const;
@@ -100,6 +100,8 @@ export interface ReopenFacts {
   stale?: boolean;
   unmet?: string[];
   groundings?: GroundedArtifact[];
+  /** Referenced files that owe no read because they are above the grounding size limit. */
+  oversized?: number;
 }
 
 const member = <T extends string>(values: readonly T[], value: unknown): T | undefined =>
@@ -173,6 +175,7 @@ export async function prepareReopenFacts(
   return {
     groundings: fresh,
     unmet: await unmetArtifactPaths(ctx.cwd, { grounding, openContext: [] }, required),
+    oversized: await oversizedArtifactCount(ctx.cwd, required),
   };
 }
 
@@ -313,6 +316,7 @@ export function submitReopenWork(
   }
   appendWorkLifecycleSignal({
     intentKey: state.intentKey, served, action: 'reopen-accept', workItemId: item.id, deliverable,
+    ...(facts.oversized ? { oversizedArtifacts: facts.oversized } : {}),
   });
   return { accepted: true, text: acceptedText(deliverable, minimum), workItemId: item.id };
 }

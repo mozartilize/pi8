@@ -18,7 +18,11 @@ import { open, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GroundedArtifact, WorkItem } from './types.js';
 
-/** Larger files are never grounded. */
+/**
+ * Larger files are never grounded, and a referenced file of this size owes no
+ * read: no read can meet it, and reading it in chunks costs more than the
+ * evidence is worth.
+ */
 export const GROUNDING_MAX_BYTES = 1_000_000;
 
 export interface FileFingerprint {
@@ -247,10 +251,24 @@ async function presentPaths(cwd: string | undefined, paths: readonly string[]): 
   return present;
 }
 
+function oversized(info: { isFile(): boolean; size: number } | undefined): boolean {
+  return info != null && info.isFile() && info.size > GROUNDING_MAX_BYTES;
+}
+
+/** How many referenced paths owe no read because the file is above {@link GROUNDING_MAX_BYTES}. */
+export async function oversizedArtifactCount(cwd: string | undefined, paths: readonly string[]): Promise<number> {
+  let count = 0;
+  for (const path of paths) {
+    if (oversized(await stat(cwd ? join(cwd, path) : path).catch(() => undefined))) count += 1;
+  }
+  return count;
+}
+
 /**
  * The referenced paths not yet met: a file not read as it is now, or a
- * directory no accepted handoff closed. A path that does not exist is never
- * unmet, because no read can meet it.
+ * directory no accepted handoff closed. A path that does not exist, or a
+ * regular file above {@link GROUNDING_MAX_BYTES}, is never unmet, because no
+ * read can meet it.
  */
 export async function unmetArtifactPaths(
   cwd: string | undefined,
@@ -259,6 +277,8 @@ export async function unmetArtifactPaths(
 ): Promise<string[]> {
   const unmet: string[] = [];
   for (const path of await presentPaths(cwd, paths)) {
+    const info = await stat(cwd ? join(cwd, path) : path).catch(() => undefined);
+    if (oversized(info)) continue;
     const artifact = item.grounding.find((g) => g.anchorValue === path);
     if (artifact) {
       if (!(await isFresh(cwd, artifact))) unmet.push(path);
@@ -269,13 +289,9 @@ export async function unmetArtifactPaths(
       unmet.push(path);
       continue;
     }
-    // An unreadable, oversized, or special file must not masquerade as a
-    // directory scope merely because fingerprinting failed.
-    try {
-      if (!(await stat(cwd ? join(cwd, path) : path)).isDirectory()) unmet.push(path);
-    } catch {
-      unmet.push(path);
-    }
+    // An unreadable or special file must not masquerade as a directory scope
+    // merely because fingerprinting failed.
+    if (!info?.isDirectory()) unmet.push(path);
   }
   return unmet;
 }
