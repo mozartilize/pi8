@@ -59,6 +59,7 @@ import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 import { factsLog, parseDeclaredFacts, type ChangeMeasurements, type DeclaredFacts } from '../routing/policy/change-facts.js';
 import { changeFactsParameter } from './change-facts-schema.js';
 import { measureChange } from './change-measurements.js';
+import { remainingWorkParameter } from './rubric-schema.js';
 import { decisionEvidence } from '../routing/policy/decision-evidence.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 
@@ -76,36 +77,11 @@ const DESCRIPTION =
 function executionContractParameters() {
   const path = Type.String({ description: 'File path, relative to the working directory. No glob patterns.' });
   const change = Type.String({ description: 'The exact change to make; no open decisions.' });
-  const level = (description: string) => Type.Integer({ minimum: 1, maximum: 5, description });
   return Type.Object({
-    remainingWork: Type.Object({
-      openDecisions: level(
-        'What the executor must still decide. 1: every change is specified down to the code; 2: only naming or ' +
-        'formatting choices; 3: local implementation choices, no behavior choices; 4: some behavior or interface ' +
-        'choices; 5: design choices.',
-      ),
-      spread: level(
-        'Where the changes are. 1: one function; 2: one file; 3: a few files in one module; 4: several modules; ' +
-        '5: across the codebase.',
-      ),
-      verification: level(
-        'How the result can be checked. 1: an existing test or type check proves it; 2: one small new test; ' +
-        '3: new tests for several cases; 4: edge cases that tests cover poorly; 5: hard to check (timing, ' +
-        'concurrency, environment).',
-      ),
-      knowledge: level(
-        'Code the executor must understand beyond the listed files. 1: none; 2: nearby code; 3: one ' +
-        'subsystem\'s conventions; 4: invariants across modules; 5: the whole codebase or external systems.',
-      ),
-      coupling: level(
-        'What else the change can affect. 1: nothing outside the change; 2: a few local callers; 3: a shared ' +
-        'helper with several callers; 4: a public interface or shared state; 5: cross-cutting behavior ' +
-        '(concurrency, persistence, security).',
-      ),
-    }, {
-      description: 'What the executor still has to work out, rated 1 (easiest) to 5 (hardest) per criterion. ' +
-        'Describe the work; the router decides who executes it.',
-    }),
+    remainingWork: remainingWorkParameter(
+      'What the executor still has to work out, rated 1 (easiest) to 5 (hardest) per criterion. ' +
+      'Describe the work; the router decides who executes it.',
+    ),
     steps: Type.Array(
       Type.Union([
         Type.Object({ kind: Type.Literal('edit'), path, change }),

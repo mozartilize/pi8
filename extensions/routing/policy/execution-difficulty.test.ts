@@ -6,6 +6,7 @@ import {
   REASONING_CRITERIA,
   RUBRIC_CRITERIA,
   bandForRequirement,
+  declaredRequirement,
   executionRequirement,
   isTestPath,
   parseReasoningRubric,
@@ -67,11 +68,30 @@ describe('execution requirement', () => {
 });
 
 describe('rubric parsing', () => {
-  it('keeps integer levels 1–5 and counts anything else as the hardest level', () => {
+  it('keeps integer levels 1–5 and counts an unscored criterion as the highest level the requester gave', () => {
     expect(parseRubric({ openDecisions: 2, spread: 1, verification: 3, knowledge: 4, coupling: 5 }))
       .toEqual({ openDecisions: 2, spread: 1, verification: 3, knowledge: 4, coupling: 5 });
-    expect(parseRubric({ openDecisions: 0, spread: 2.5, verification: '1', knowledge: 6 })).toEqual(HARD);
-    expect(parseRubric(undefined)).toEqual(HARD);
+    expect(parseRubric({ openDecisions: 0, spread: 2, verification: '1', knowledge: 3 }))
+      .toEqual({ openDecisions: 3, spread: 2, verification: 3, knowledge: 3, coupling: 3 });
+    // Without a scored criterion there is no rubric: the default minimums of the task type apply.
+    expect(parseRubric({ openDecisions: 0, spread: 2.5, verification: '1', knowledge: 6 })).toBeUndefined();
+    expect(parseRubric(undefined)).toBeUndefined();
+  });
+
+  it('values every declaration of a task type on the rubric of that task type', () => {
+    const evidence: ReasoningEvidence = { applicable: true, files: 1, directories: 1, existingLines: 100, fixCommits: 0 };
+    const implement = declaredRequirement('implement', { remainingWork: EASY, difficulty: { alternatives: 5 } }, evidence);
+    expect(implement).toEqual({ rubric: EASY, requirement: executionRequirement(EASY, QUIET) });
+    const plan = declaredRequirement('plan', { remainingWork: HARD, difficulty: { alternatives: 1 } }, evidence);
+    expect(plan.rubric).toEqual({ alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 });
+    expect(declaredRequirement('implement', { difficulty: { alternatives: 5 } }, evidence)).toEqual({});
+  });
+
+  it('adds nothing for evidence that no file backs, and the hardest value for a failed measurement', () => {
+    const conversation: ReasoningEvidence = { applicable: false, files: 0, directories: 0 };
+    expect(executionRequirement(EASY, conversation)).toBe(BASE_REQUIREMENT);
+    const unmeasured: ReasoningEvidence = { applicable: true, files: 1, directories: 1 };
+    expect(executionRequirement(EASY, unmeasured)).toBeGreaterThan(BASE_REQUIREMENT);
   });
 });
 

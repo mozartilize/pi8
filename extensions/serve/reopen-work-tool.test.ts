@@ -89,6 +89,15 @@ describe('reopen_work', () => {
     expect(session.context.getLedger().incumbent?.dimension).toBe('plan');
   });
 
+  it('values a reopened implementation on the execution rubric', () => {
+    const session = doneSession({ priorCompletion: undefined, completion: { workItemId: 'w_1', status: 'done' }, contextStatus: 'served' });
+    const remainingWork = { openDecisions: 3, spread: 2, verification: 2, knowledge: 2, coupling: 2 };
+    expect(submitReopenWork({ ...SHAPE, deliverable: 'implement', remainingWork }, AUTO, session).accepted).toBe(true);
+    const handoff = session.getWorkPhaseState()?.reasoningHandoff;
+    expect(handoff).toMatchObject({ pending: true, target: 'implement', rubric: remainingWork });
+    expect(handoff?.minimum).toBeCloseTo(handoff!.requirement!);
+  });
+
   it('refuses a stale entry or an unread referenced file without reopening', async () => {
     const stale = doneSession({
       pendingIdentity: { generation: 9, entryKey: 'entry', base: { sourceEntryId: 'u1', anchors: [] } } as unknown as PendingIdentity,

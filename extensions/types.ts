@@ -204,22 +204,30 @@ export interface ReasoningEvidence {
   fixCommits?: number;
 }
 
-/** An accepted context handoff to a plan or review, as routing and logs see it. */
+/** A task type that a handoff values with a rubric. */
+export type HandoffTarget = 'plan' | 'review' | 'implement';
+/** The execution rubric of an implementation, or the reasoning rubric of a plan or review. */
+export type HandoffRubric = ExecutionRubric | ReasoningRubric;
+
+/**
+ * An accepted context handoff to a plan, review, or implementation, as routing
+ * and logs see it. The identifier keeps its name in the decision log.
+ */
 export interface ReasoningHandoffMeta {
   /** Joins the handoff to later records; the intent key of the entry that accepted it. */
   id: string;
   /** Served key of the model that called the tool. */
   requester: string;
-  target: 'plan' | 'review';
+  target: HandoffTarget;
   /**
-   * Requirement the reasoning phase needs, at most the frontier requirement.
+   * Requirement the next phase needs, at most the frontier requirement.
    * Undefined when the requester gave no rubric and no final-step band
    * raises it: then the default minimums of the task type apply.
    */
   minimum?: number;
   /** Requirement before the cap. */
   requirement?: number;
-  rubric?: ReasoningRubric;
+  rubric?: HandoffRubric;
   evidence: ReasoningEvidence;
   /** The boundary still releases the incumbent: no invocation has served the phase yet. */
   pending: boolean;
@@ -271,7 +279,8 @@ export interface ExecutionContractMeta {
   /** Requirement computed from the rubric and measurements, before band minimums. */
   requirement: number;
   keepReason?: ContractKeepReason;
-  rubric: ExecutionRubric;
+  /** Undefined when the submitter scored no criterion. */
+  rubric?: ExecutionRubric;
   measured: MeasuredFeatures;
   /** Declared facts as codes, router measurements, and the shadow requirement. */
   facts?: FactsLog;

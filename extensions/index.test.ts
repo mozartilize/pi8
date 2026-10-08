@@ -1283,6 +1283,31 @@ describe('mutation observation hooks', () => {
     expect(missing).toBeLessThan(hardest);
   });
 
+  it('sets an implement handoff minimum from the execution rubric, raised only by the final step', async () => {
+    const registerTool = vi.fn();
+    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
+    const handoffFor = async (over: Record<string, unknown>, state: Partial<WorkPhaseState> = { terminal: undefined, terminalBand: undefined }) => {
+      investigating({ deliverable: 'implement', ...state });
+      const request = { outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', ...over };
+      const result = await handoffTool(registerTool).execute('p', request, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
+      expect(result.details.accepted).toBe(true);
+      return defaultRouterSession.getWorkPhaseState()!.reasoningHandoff!;
+    };
+    const easy = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
+    const hard = { openDecisions: 4, spread: 4, verification: 4, knowledge: 4, coupling: 4 };
+    // Without a rubric and without a stronger final step, the default minimums apply.
+    expect((await handoffFor({})).minimum).toBeUndefined();
+    const easyMinimum = (await handoffFor({ remainingWork: easy })).minimum!;
+    const hardMinimum = (await handoffFor({ remainingWork: hard })).minimum!;
+    expect(easyMinimum).toBeLessThan(hardMinimum);
+    // A partly scored rubric fills the unscored criteria with the highest level given.
+    expect((await handoffFor({ remainingWork: { openDecisions: 4 } })).minimum).toBe(hardMinimum);
+    // A hard final step raises an easy rubric and never lowers a hard one.
+    const raised = await handoffFor({ remainingWork: easy, complexity: 'hard', scope: 'open-ended' });
+    expect(raised.minimum).toBeGreaterThan(easyMinimum);
+    expect(raised).toMatchObject({ target: 'implement', rubric: easy });
+  });
+
   it.each([
     [{ question: undefined }, 'question'],
     [{ findings: ' ' }, 'findings'],
@@ -1379,7 +1404,7 @@ describe('mutation observation hooks', () => {
     // A ready handoff names the next work phase; gather is not a ready work phase.
     const change = { deliverable: 'implement' as const, contextReasons: ['carried-open-context' as const], contextSatisfied: false };
     expect((await hand(change, { deliverable: 'gather', scope: 'bounded' })).deliverable).toBe('implement');
-    expect((await hand(change, { deliverable: 'implement' })).reasoningHandoff).toBeUndefined();
+    expect((await hand(change, { deliverable: 'implement' })).reasoningHandoff).toMatchObject({ target: 'implement' });
     expect((await hand(change, { deliverable: 'plan' })).reasoningHandoff).toMatchObject({ target: 'plan' });
     expect((await hand({}, { deliverable: 'review', scope: 'bounded' })).deliverable).toBe('review');
     expect((await hand({}, { deliverable: 'review' })).deliverable).toBe('review');
@@ -1799,7 +1824,7 @@ describe('mutation observation hooks', () => {
       return defaultRouterSession.getWorkPhaseState()!;
     };
     expect((await hand('implement')).deliverable).toBe('implement');
-    expect((await hand('implement')).reasoningHandoff).toBeUndefined();
+    expect((await hand('implement')).reasoningHandoff).toMatchObject({ target: 'implement' });
     expect((await hand('review')).reasoningHandoff).toMatchObject({ target: 'review' });
     expect((await hand('plan')).reasoningHandoff).toMatchObject({ target: 'plan' });
     expect((await hand('gather')).contextStatus).toBeUndefined();

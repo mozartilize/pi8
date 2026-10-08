@@ -5,7 +5,7 @@ import type { ContextStatus } from './context-acquisition.js';
 import type { ChangeFactsState, CheckVerdicts } from './change-facts.js';
 import type { GroundedArtifact } from '../context/types.js';
 import type { PendingIdentity } from '../../serve/context-resolution.js';
-import { defaultRequirement, MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
+import { defaultRequirement, FRONTIER_REQUIREMENT, MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
 import type { PolicyVersion } from './policy-version.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
@@ -162,6 +162,25 @@ export function terminalMinimum(state: WorkPhaseState, target: Dimension, versio
  */
 export function aboveDefault(minimum: number | undefined, target: Dimension): number | undefined {
   return minimum != null && minimum > defaultRequirement(target) ? minimum : undefined;
+}
+
+/**
+ * The minimum of a plan, review, or implement declaration. Every declaration of
+ * one task type gets it in the same way: the declared requirement, at most the
+ * frontier requirement, raised by the final step. Without a declared
+ * requirement the default minimums of the task type apply, and only a final
+ * step above the default raises them.
+ */
+export function handoffMinimum(
+  state: WorkPhaseState,
+  target: Dimension,
+  requirement: number | undefined,
+  version: PolicyVersion = 'legacy',
+): number | undefined {
+  const raised = terminalMinimum(state, target, version);
+  return requirement !== undefined
+    ? Math.max(Math.min(requirement, FRONTIER_REQUIREMENT), raised ?? 0)
+    : aboveDefault(raised, target);
 }
 
 /** True when the final step is strong enough to remind a `gather` entry of the handoff at once. */

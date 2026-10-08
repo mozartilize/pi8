@@ -151,8 +151,9 @@ export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): 
 
 /**
  * Record an accepted ready handoff; the boundary stays pending until a model
- * serves it. `reasoning` is present for a plan or review target; any other
- * target is routed at the entry's deliverable with ordinary scoring.
+ * serves it. `reasoning` is present for a plan, review, or implementation
+ * target and carries its minimum. The router scores any other target at the
+ * entry's deliverable with ordinary scoring.
  */
 export function acceptContextHandoff(
   state: WorkPhaseState,

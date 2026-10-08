@@ -19,7 +19,8 @@ import {
   reworkContract,
   validateContract,
 } from './execution-contract.js';
-import { BASE_REQUIREMENT } from './execution-difficulty.js';
+import { BASE_REQUIREMENT, parseRubric } from './execution-difficulty.js';
+import { defaultRequirement } from '../score/scorer.js';
 import { penaltiesOf, withContinuedPenalties, type WorkPhaseState } from './work-phase.js';
 import type { PolicyVersion } from './policy-version.js';
 
@@ -150,6 +151,26 @@ describe('execution contract lifecycle', () => {
     // Three files cannot fall below standard, however easy the rubric.
     expect(accepted([edit('a.ts'), edit('b.ts'), edit('c.ts')]).contract)
       .toMatchObject({ band: 'standard', minimum: 0.45 });
+  });
+
+  it('values a plan without a scored criterion at the default implement requirement, and fills a partly scored one', () => {
+    const validation = validateContract([edit('a.ts'), verify], '/repo');
+    if (!validation.ok) throw new Error(validation.reason);
+    const measured = { ...validation.structural, ...QUIET };
+    const unscored = acceptContract(state(), { submitter: 'codex/sol:max', validation, rubric: undefined, measured }).contract!;
+    expect(unscored.requirement).toBe(defaultRequirement('implement'));
+    expect(unscored.rubric).toBeUndefined();
+    const partly = accepted([edit('a.ts'), verify], state(), { openDecisions: 3, spread: 3, verification: 3, knowledge: 3, coupling: 3 }).contract!;
+    const filled = acceptContract(state(), { submitter: 'codex/sol:max', validation, rubric: parseRubric({ openDecisions: 3 }), measured }).contract!;
+    expect(filled.requirement).toBe(partly.requirement);
+  });
+
+  it('does not let the final step raise a closed plan: the plan settled what made the task hard', () => {
+    const frontier = state({ terminal: { kind: 'implement', complexity: 'frontier', scope: 'open-ended' }, terminalBand: 'frontier', terminalRequirement: 1 });
+    for (const version of ['legacy', 'cheapest-sufficient'] as const) {
+      const plan = accepted([edit('a.ts'), verify], frontier, {}, {}, version).contract!;
+      expect(plan).toMatchObject({ release: true, minimum: BASE_REQUIREMENT });
+    }
   });
 
   it('requires the higher of the computed requirement and the band minimum', () => {

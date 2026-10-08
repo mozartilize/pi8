@@ -209,7 +209,7 @@ function handoffLine(decision: RoutingDecision): string[] {
       ? [`  handoff:    collecting context (deliverable ${decision.deliverable})`]
       : [];
   }
-  const role = handoff.target === 'plan' ? 'planning' : 'reviewing';
+  const role = handoff.target === 'plan' ? 'planning' : handoff.target === 'review' ? 'reviewing' : 'implementing';
   const state = handoff.pending ? 'pending' : `owned by ${handoff.owner ?? 'unknown'}`;
   return [`  handoff:    ${role}, ${handoff.minimum !== undefined ? `minimum ${handoff.minimum.toFixed(2)}` : 'default minimum'}, ${state}`];
 }

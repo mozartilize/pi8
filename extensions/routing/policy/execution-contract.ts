@@ -36,7 +36,7 @@ import type {
   ExecutionRubric,
   MeasuredFeatures,
 } from '../../types.js';
-import { parseCandidateKey } from '../score/scorer.js';
+import { defaultRequirement, parseCandidateKey } from '../score/scorer.js';
 import { bandRequirement, type WorkPhaseState } from './work-phase.js';
 import {
   BASE_REQUIREMENT,
@@ -106,7 +106,8 @@ export interface ExecutionContract {
   releasePending?: boolean;
   requirement: number;
   keepReason?: ContractKeepReason;
-  rubric: ExecutionRubric;
+  /** Undefined when the submitter scored no criterion. */
+  rubric?: ExecutionRubric;
   measured: MeasuredFeatures;
   /** Declared facts as codes, router measurements, and the shadow requirement. */
   facts?: FactsLog;
@@ -254,11 +255,22 @@ export function validateContract(steps: readonly ExecutionStepInput[] | undefine
   };
 }
 
+/**
+ * The requirement of a plan, valued on the same rubric as every other
+ * implementation declaration: the rubric and the measurements, or the default
+ * implement requirement without a scored rubric. The entry's final step does
+ * not raise it: the plan settled the decisions that made the task hard, and a
+ * closed plan exists so that a cheaper executor can run it.
+ */
+function contractRequirement(rubric: ExecutionRubric | undefined, measured: MeasuredFeatures): number {
+  return rubric ? executionRequirement(rubric, measured) : defaultRequirement('implement');
+}
+
 interface AcceptInput {
   submitter: string;
   submitterTemporary?: boolean;
   validation: ValidatedContract;
-  rubric: ExecutionRubric;
+  rubric: ExecutionRubric | undefined;
   measured: MeasuredFeatures;
 }
 
@@ -270,7 +282,7 @@ interface AcceptInput {
  */
 function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput): WorkPhaseState {
   const { validation, rubric, measured } = input;
-  const requirement = executionRequirement(rubric, measured);
+  const requirement = contractRequirement(rubric, measured);
   const shape = contractShapeRequirement(validation.targets.length, validation.steps);
   const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
     ? 'unknown-target'
@@ -290,7 +302,7 @@ function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput):
     ...(minimum != null ? { minimum, releasePending: true } : {}),
     requirement,
     ...(keepReason ? { keepReason } : {}),
-    rubric,
+    ...(rubric ? { rubric } : {}),
     measured,
     targets: validation.targets,
     pending: validation.editTargets,
@@ -303,7 +315,7 @@ function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput):
 export function acceptContract(state: WorkPhaseState, input: AcceptInput, version: PolicyVersion = 'legacy'): WorkPhaseState {
   if (version === 'cheapest-sufficient') return acceptContractByRequirement(state, input);
   const { validation, rubric, measured } = input;
-  const requirement = executionRequirement(rubric, measured);
+  const requirement = contractRequirement(rubric, measured);
   const assessed = bandForRequirement(requirement);
   const excluded = state.excludedExecutors?.length ?? 0;
   const band = raiseBand(maxBand(assessed, validation.shapeBand ?? 'frontier'), excluded);
@@ -329,7 +341,7 @@ export function acceptContract(state: WorkPhaseState, input: AcceptInput, versio
     ...(bandMinimum != null ? { minimum: Math.max(requirement, bandMinimum), releasePending: true } : {}),
     requirement,
     ...(keepReason ? { keepReason } : {}),
-    rubric,
+    ...(rubric ? { rubric } : {}),
     measured,
     targets: validation.targets,
     pending: validation.editTargets,

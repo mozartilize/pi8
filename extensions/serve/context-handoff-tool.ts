@@ -33,12 +33,8 @@ import {
   evidenceShape,
   owedContext,
 } from '../routing/policy/context-acquisition.js';
-import {
-  parseReasoningRubric,
-  reasoningMinimum,
-  reasoningRequirement,
-} from '../routing/policy/execution-difficulty.js';
-import { aboveDefault, terminalMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { declaredRequirement } from '../routing/policy/execution-difficulty.js';
+import { handoffMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import { observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -56,17 +52,18 @@ import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 import { factsLog, parseDeclaredFacts, type ChangeMeasurements } from '../routing/policy/change-facts.js';
 import { defaultRequirement } from '../routing/score/scorer.js';
 import { changeFactsParameter } from './change-facts-schema.js';
+import { difficultyParameter, remainingWorkParameter } from './rubric-schema.js';
 import { measureChange } from './change-measurements.js';
 
 const DESCRIPTION =
   `${ROUTER_TOOLS_CONDITION} ` +
   'Stop collecting context and give the request to the next step. Call it with outcome "ready" once you have ' +
   'what the next step needs: the task type the user wants, your findings, and what the next step must decide or ' +
-  'do. Give the facts that you observed about the remaining work. For a plan or review, also rate the reasoning left. Call it with outcome "needs-user" when the request is ' +
+  'do. Give the facts that you observed about the remaining work. For a plan or review, also rate the reasoning left. ' +
+  'For an implementation, also rate the work left. Call it with outcome "needs-user" when the request is ' +
   'unclear or what it rests on cannot be read, with the question to ask. The router picks the next model. Do not ' +
   'write the plan, review, or change yourself.';
 
-const LEVELS = '1 (easiest) to 5 (hardest)';
 const DIMENSIONS: readonly Dimension[] = ['lightweight', 'gather', 'implement', 'review', 'plan'];
 const COMPLEXITIES: readonly ComplexityBand[] = ['trivial', 'routine', 'moderate', 'hard', 'frontier'];
 const SCOPES: readonly TaskScope[] = ['bounded', 'open-ended'];
@@ -74,7 +71,6 @@ const NEEDS_USER_REASONS = ['ambiguous-request', 'missing-artifact', 'unavailabl
 
 /** Built at registration, not import, so importing the handlers needs no schema runtime. */
 function contextHandoffParameters() {
-  const level = (description: string) => Type.Integer({ minimum: 1, maximum: 5, description });
   const oneOf = (values: readonly string[], description: string) =>
     Type.Union(values.map((value) => Type.Literal(value)), { description });
   return Type.Object({
@@ -94,13 +90,10 @@ function contextHandoffParameters() {
       maxItems: MAX_EVIDENCE_PATHS,
       description: 'ready: files the next step rests on. Leave empty when the evidence is in the conversation.',
     })),
-    difficulty: Type.Optional(Type.Object({
-      alternatives: level(`Viable approaches, ${LEVELS}. 1: one obvious approach or a clear-cut review; 5: several viable designs with real trade-offs, or a judgement-heavy review.`),
-      stakes: level(`Cost of a wrong call, ${LEVELS}. 1: local and easy to undo; 5: a public interface, data format, migration, or security.`),
-      spread: level(`Where the effects land, ${LEVELS}. 1: one file; 5: across the codebase.`),
-      knowledge: level(`Knowledge needed beyond the evidence, ${LEVELS}. 1: none; 5: invariants across modules or external systems.`),
-      uncertainty: level(`Open facts, ${LEVELS}. 1: the findings answer every question; 5: key facts are unknown and need experiments.`),
-    }, { description: 'ready, for a plan or review: the reasoning left, rated per criterion.' })),
+    difficulty: Type.Optional(difficultyParameter('ready, for a plan or review: the reasoning left, rated per criterion.')),
+    remainingWork: Type.Optional(remainingWorkParameter(
+      'ready, for an implementation: what the next model still has to work out, rated 1 (easiest) to 5 (hardest) per criterion.',
+    )),
     facts: changeFactsParameter({
       changesAndCheck: true,
       description: 'ready: facts that you observed about the remaining work. The router checks them and uses them to ' +
@@ -166,6 +159,7 @@ export interface ContextHandoffParams {
   scope?: unknown;
   files?: unknown;
   difficulty?: unknown;
+  remainingWork?: unknown;
   reason?: unknown;
   facts?: unknown;
 }
@@ -207,7 +201,7 @@ function handoffKey(params: ContextHandoffParams | undefined): string {
     params?.workItemId, params?.topicId, params?.topicTitle, params?.workItemTitle,
     typeof params?.findings === 'string' ? params.findings.trim() : '',
     typeof params?.question === 'string' ? params.question.trim() : '',
-    files, params?.difficulty ?? null, params?.facts ?? null,
+    files, params?.difficulty ?? null, params?.remainingWork ?? null, params?.facts ?? null,
   ]);
 }
 
@@ -353,14 +347,11 @@ export function submitContextHandoff(
   const terminal = withStrongerTerminal(state, { kind: deliverable, complexity, scope }, policyVersion);
 
   let reasoning;
-  if (deliverable === 'plan' || deliverable === 'review') {
-    const rubric = parseReasoningRubric(params?.difficulty);
+  if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement') {
     const evidence = facts.evidence ?? CONVERSATION_EVIDENCE;
-    // Without a rubric the default minimums of the task type apply.
-    const requirement = rubric ? reasoningRequirement(rubric, evidence) : undefined;
-    // The final step's band only raises the rubric's minimum; see withStrongerTerminal.
-    const raised = terminalMinimum(terminal, deliverable, policyVersion);
-    const minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : aboveDefault(raised, deliverable);
+    // Without a rubric the default minimums of the task type apply. The final step only raises them.
+    const { rubric, requirement } = declaredRequirement(deliverable, params, evidence);
+    const minimum = handoffMinimum(terminal, deliverable, requirement, policyVersion);
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence };
   }
   const key = handoffKey(params);
@@ -412,7 +403,7 @@ export function submitContextHandoff(
     }),
   });
   if (next.reasoningHandoff) {
-    const role = deliverable === 'plan' ? 'planning' : 'review';
+    const role = deliverable === 'plan' ? 'planning' : deliverable === 'review' ? 'review' : 'implementation';
     return {
       accepted: true,
       text: `Context handed off (${deliverable}, ${next.reasoningHandoff.minimum !== undefined ? `minimum ${next.reasoningHandoff.minimum.toFixed(2)}` : 'default minimum'}). A ${role} model ` +
@@ -427,7 +418,7 @@ export function submitContextHandoff(
 
 /**
  * Measure what a ready handoff rests on, before {@link submitContextHandoff}:
- * the evidence of a planning or review target, and the referenced files not
+ * the evidence of a planning, review, or implementation target, and the referenced files not
  * read as they are now. Nothing is measured for a handoff that will be
  * declined.
  */
@@ -510,7 +501,7 @@ export async function prepareHandoffFacts(
     scoutFiles: opened.state.readPaths?.length ?? 0,
     scoutRequests: opened.state.contextRequests ?? 0,
   }, signal);
-  if (deliverable === 'plan' || deliverable === 'review') {
+  if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement') {
     const paths = evidencePaths(declaredFiles(params, ctx.cwd), opened.state.readPaths);
     facts.evidence = await measureEvidence(exec, ctx.cwd, paths, signal);
   }

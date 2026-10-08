@@ -21,14 +21,15 @@ import { readBranch } from '../routing/context/persistence.js';
 import { contextCheck, promptAnchorsForItem, referencedArtifactPaths, reopenEvents } from '../routing/context/resolve.js';
 import type { EntryResolution, GroundedArtifact, WorkItem } from '../routing/context/types.js';
 import { CONVERSATION_EVIDENCE, acceptContextHandoff } from '../routing/policy/context-acquisition.js';
-import { parseReasoningRubric, reasoningMinimum, reasoningRequirement } from '../routing/policy/execution-difficulty.js';
+import { declaredRequirement } from '../routing/policy/execution-difficulty.js';
 import { REOPEN_WORK_TOOL, completedIncumbent } from '../routing/policy/work-completion.js';
-import { aboveDefault, terminalMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { handoffMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import type { PendingIdentity } from './context-resolution.js';
 import { closeContractEntry } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
+import { difficultyParameter, remainingWorkParameter } from './rubric-schema.js';
 
 const DESCRIPTION = [
   ROUTER_TOOLS_CONDITION,
@@ -36,7 +37,8 @@ const DESCRIPTION = [
   'The router knows that work item. Do not give an id, a title, or a topic.',
   'Call hand_off_context instead when the request is different work.',
   'Give the task type, the complexity, and the scope of this request.',
-  'For a plan or a review, also give difficulty. Each rating is 1 (easiest) to 5 (hardest).',
+  'For a plan or a review, also give difficulty. For an implementation, also give remainingWork.',
+  'Each rating is 1 (easiest) to 5 (hardest).',
   'Read every file this request refers to, as the file is now, before you call this tool.',
   'After this tool accepts, make no changes until the next step starts.',
 ].join('\n');
@@ -46,23 +48,15 @@ type ReopenDeliverable = (typeof DELIVERABLES)[number];
 const COMPLEXITIES: readonly ComplexityBand[] = ['trivial', 'routine', 'moderate', 'hard', 'frontier'];
 const SCOPES: readonly TaskScope[] = ['bounded', 'open-ended'];
 
-const LEVELS = '1 (easiest) to 5 (hardest)';
-
 function reopenWorkParameters() {
-  const level = (description: string) => Type.Integer({ minimum: 1, maximum: 5, description });
   const oneOf = (values: readonly string[], description: string) =>
     Type.Union(values.map((value) => Type.Literal(value)), { description });
   return Type.Object({
     deliverable: oneOf(DELIVERABLES, 'The task type of this request: gather, plan, implement, or review.'),
     complexity: oneOf(COMPLEXITIES, 'How hard this request is.'),
     scope: oneOf(SCOPES, 'bounded: the change is local. open-ended: the size is not known yet.'),
-    difficulty: Type.Optional(Type.Object({
-      alternatives: level(`Viable approaches, ${LEVELS}.`),
-      stakes: level(`Cost of a wrong call, ${LEVELS}.`),
-      spread: level(`Where the effects land, ${LEVELS}.`),
-      knowledge: level(`Knowledge needed beyond the evidence, ${LEVELS}.`),
-      uncertainty: level(`Open facts, ${LEVELS}.`),
-    }, { description: 'For a plan or a review: the reasoning left, rated per criterion.' })),
+    difficulty: Type.Optional(difficultyParameter('For a plan or a review: the reasoning left, rated per criterion.')),
+    remainingWork: Type.Optional(remainingWorkParameter('For an implementation: the work left, rated per criterion.')),
   });
 }
 
@@ -92,6 +86,7 @@ export interface ReopenWorkParams {
   complexity?: unknown;
   scope?: unknown;
   difficulty?: unknown;
+  remainingWork?: unknown;
 }
 
 export interface ReopenWorkSubmission {
@@ -214,7 +209,7 @@ function openForRepick(state: WorkPhaseState): WorkPhaseState {
 }
 
 function handoffKey(params: ReopenWorkParams | undefined): string {
-  return JSON.stringify([params?.deliverable, params?.complexity, params?.scope, params?.difficulty ?? null]);
+  return JSON.stringify([params?.deliverable, params?.complexity, params?.scope, params?.difficulty ?? null, params?.remainingWork ?? null]);
 }
 
 /**
@@ -269,12 +264,10 @@ export function submitReopenWork(
   const closed = closeContractEntry(continued, served);
   let minimum: number | undefined;
   let reasoning;
-  if (deliverable === 'plan' || deliverable === 'review') {
-    const rubric = parseReasoningRubric(params?.difficulty);
-    // Without a rubric the default minimums of the task type apply.
-    const requirement = rubric ? reasoningRequirement(rubric, CONVERSATION_EVIDENCE) : undefined;
-    const raised = terminalMinimum(continued, deliverable, evaluationPolicyVersion());
-    minimum = requirement !== undefined ? Math.max(reasoningMinimum(requirement), raised ?? 0) : aboveDefault(raised, deliverable);
+  if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement') {
+    // Without a rubric the default minimums of the task type apply. The final step only raises them.
+    const { rubric, requirement } = declaredRequirement(deliverable, params, CONVERSATION_EVIDENCE);
+    minimum = handoffMinimum(continued, deliverable, requirement, evaluationPolicyVersion());
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence: CONVERSATION_EVIDENCE };
   }
   const resolution: EntryResolution = {
