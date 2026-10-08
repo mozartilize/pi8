@@ -349,3 +349,5 @@ mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(summary, null, 2));
 console.log(JSON.stringify({ purpose: summary.purpose, diagnosticVerdict: summary.diagnosticVerdict, activationVerdict: summary.activationVerdict, reasons: summary.reasons, checks: summary.checks, evidence: summary.evidence }, null, 1));
 console.log(`summary: ${out}`);
+// The build caches of the agents hold tens of gigabytes for each campaign, and no later campaign reads them.
+rmSync(join(evalDir, 'cache', 'agent-target', CAMPAIGN_ID), { recursive: true, force: true });
