@@ -180,7 +180,7 @@ let runtime = Object.fromEntries(['piRevision', 'pi8Commit', 'configDigest', 'be
 let prepared;
 let snapshotDir;
 /** The providers and models that both router arms can serve. The user's blacklist still applies. */
-const MODEL_POOL = ['openai-codex/*', 'deepseek/*', 'github-copilot/gemini*', 'claude-bridge/*', 'cursor/grok*'];
+const MODEL_POOL = ['openai-codex/*', 'deepseek/*', 'claude-bridge/*', 'cursor/grok*'];
 const inPool = (registryId) => MODEL_POOL.some((pattern) => new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*')}$`, 'i').test(registryId));
 if (run) {
   prepared = join(evalDir, 'prepared', CAMPAIGN_ID);
@@ -193,7 +193,6 @@ if (run) {
   const config = JSON.parse(readFileSync(join(store, 'config.json'), 'utf8'));
   delete config.artificialAnalysisApiKey;
   config.models = MODEL_POOL;
-  config.blacklist = (config.blacklist ?? []).filter((pattern) => pattern !== '*/gemini*');
   writeFileSync(join(prepared, 'pi8-template', 'config.json'), JSON.stringify(config, null, 2));
 
   // The registry of a Pi process with the provider extensions. pi-ai alone does not list Claude Bridge or Cursor.
@@ -237,7 +236,7 @@ if (run) {
   // An execution takes about 7 minutes on average. 10 minutes for each execution leaves a margin.
   const copilot = JSON.parse(readFileSync(join(home, '.pi', 'agent', 'auth.json'), 'utf8'))['github-copilot'];
   const plannedMs = tasks.length * replicates.length * arms.length * 10 * 60_000;
-  if (copilot && (copilot.expires ?? 0) - Date.now() < plannedMs) {
+  if (copilot && MODEL_POOL.some((pattern) => pattern.startsWith('github-copilot/')) && (copilot.expires ?? 0) - Date.now() < plannedMs) {
     throw new Error(`the GitHub Copilot token expires before the planned end of the campaign: start Pi once with a GitHub Copilot model, then start the campaign again`);
   }
   const settings = JSON.parse(readFileSync(join(home, '.pi', 'agent', 'settings.json'), 'utf8'));
