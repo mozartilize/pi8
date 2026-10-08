@@ -52,17 +52,23 @@ describe('policy check of a router run', () => {
   const fixed: EvaluationArm = { id: 'f', policy: { kind: 'fixed-candidate', candidateKey: 'p/m' }, continuation: 'normal-policy' };
 
   it('accepts a run only when every routing decision carries the version of the arm', () => {
-    expect(ranArmPolicy(auto, { policyVersions: [undefined, undefined] })).toBe(true);
-    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient'] })).toBe(true);
-    expect(ranArmPolicy(selector, { policyVersions: [undefined] })).toBe(false);
-    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient', undefined] })).toBe(false);
-    expect(ranArmPolicy(auto, { policyVersions: ['cheapest-sufficient'] })).toBe(false);
+    expect(ranArmPolicy(auto, { policyVersions: [undefined, undefined], benchmarkDigests: [] })).toBe(true);
+    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient'], benchmarkDigests: ['d'] })).toBe(true);
+    expect(ranArmPolicy(selector, { policyVersions: [undefined], benchmarkDigests: ['d'] })).toBe(false);
+    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient', undefined], benchmarkDigests: ['d'] })).toBe(false);
+    expect(ranArmPolicy(auto, { policyVersions: ['cheapest-sufficient'], benchmarkDigests: [] })).toBe(false);
+  });
+
+  it('rejects a selector run that compared on no benchmark snapshot or on more than one', () => {
+    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient', 'cheapest-sufficient'], benchmarkDigests: ['d', 'd'] })).toBe(true);
+    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient'], benchmarkDigests: [] })).toBe(false);
+    expect(ranArmPolicy(selector, { policyVersions: ['cheapest-sufficient', 'cheapest-sufficient'], benchmarkDigests: ['d', 'e'] })).toBe(false);
   });
 
   it('rejects a router run without a routing decision, and does not check a fixed candidate', () => {
-    expect(ranArmPolicy(auto, { policyVersions: [] })).toBe(false);
-    expect(ranArmPolicy(selector, { policyVersions: [] })).toBe(false);
-    expect(ranArmPolicy(fixed, { policyVersions: [] })).toBe(true);
+    expect(ranArmPolicy(auto, { policyVersions: [], benchmarkDigests: [] })).toBe(false);
+    expect(ranArmPolicy(selector, { policyVersions: [], benchmarkDigests: [] })).toBe(false);
+    expect(ranArmPolicy(fixed, { policyVersions: [], benchmarkDigests: [] })).toBe(true);
   });
 });
 

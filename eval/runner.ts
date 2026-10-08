@@ -162,6 +162,8 @@ export interface SessionFacts {
   lastStopReason?: string;
   /** The `policyVersion` of each routing decision record. A legacy record has none. */
   policyVersions: Array<string | undefined>;
+  /** The benchmark snapshot digest of each routing decision record that has one. */
+  benchmarkDigests: string[];
 }
 
 function jsonLines(path: string): unknown[] {
@@ -178,7 +180,7 @@ export function readSessionFacts(sessionsDir: string): SessionFacts {
   const files = existsSync(sessionsDir) ? readdirSync(sessionsDir).sort() : [];
   const session = files.find((name) => name.endsWith('.jsonl') && !name.includes('.router-'));
   const log = files.find((name) => name.endsWith('.router-decisions.jsonl'));
-  const facts: SessionFacts = { deployments: [], providerFailures: 0, fallbackCount: 0, capabilityEscalations: 0, policyVersions: [] };
+  const facts: SessionFacts = { deployments: [], providerFailures: 0, fallbackCount: 0, capabilityEscalations: 0, policyVersions: [], benchmarkDigests: [] };
   if (session) {
     facts.sessionPath = join(sessionsDir, session);
     const seen = new Set<string>();
@@ -199,9 +201,14 @@ export function readSessionFacts(sessionsDir: string): SessionFacts {
   }
   if (log) {
     facts.decisionLogPath = join(sessionsDir, log);
-    for (const record of jsonLines(facts.decisionLogPath) as Array<{ kind?: string; viaFallback?: boolean; cause?: string; policyVersion?: string }>) {
+    for (const record of jsonLines(facts.decisionLogPath) as Array<{
+      kind?: string; viaFallback?: boolean; cause?: string; policyVersion?: string;
+      capabilityEvidence?: { benchmarkSnapshotDigest?: unknown };
+    }>) {
       if (record.kind !== undefined && record.kind !== 'decision') continue;
       facts.policyVersions.push(record.policyVersion);
+      const digest = record.capabilityEvidence?.benchmarkSnapshotDigest;
+      if (typeof digest === 'string') facts.benchmarkDigests.push(digest);
       if (record.viaFallback) facts.fallbackCount += 1;
       if (record.cause === 'capability-escalation' || record.cause === 'trajectory-escalation') facts.capabilityEscalations += 1;
     }
@@ -230,15 +237,18 @@ export function captureArtifact(workDir: string, runDir: string): FinalArtifact 
  * True when a completed run of a router arm ran the policy that the arm names. A router arm must
  * leave at least one routing decision, and every decision must carry the version of the arm: none for
  * `current-auto`, the selector version for a selector arm. Otherwise the variable that selects the
- * policy did not reach the process, and the run measured the wrong policy.
+ * policy did not reach the process, and the run measured the wrong policy. A selector arm must also
+ * record one benchmark snapshot digest, the same in every decision that records one. Otherwise the
+ * run did not compare on one snapshot.
  */
-export function ranArmPolicy(arm: EvaluationArm, facts: Pick<SessionFacts, 'policyVersions'>): boolean {
+export function ranArmPolicy(arm: EvaluationArm, facts: Pick<SessionFacts, 'policyVersions' | 'benchmarkDigests'>): boolean {
   const { policy } = arm;
   const expected = policy.kind === 'current-auto' ? undefined
     : policy.kind === 'shadow-selector' ? policy.selectorVersion
       : null;
   if (expected === null) return true;
-  return facts.policyVersions.length > 0 && facts.policyVersions.every((version) => version === expected);
+  if (facts.policyVersions.length === 0 || !facts.policyVersions.every((version) => version === expected)) return false;
+  return policy.kind !== 'shadow-selector' || new Set(facts.benchmarkDigests).size === 1;
 }
 
 const STATUS_OF_EXIT: Record<AgentExit, ExecutionStatus> = {
