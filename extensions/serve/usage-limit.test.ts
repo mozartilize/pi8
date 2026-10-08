@@ -2,6 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { isUsageLimitErrorMessage } from './usage-limit.js';
 
 describe('isUsageLimitErrorMessage', () => {
+  it('matches the ChatGPT Codex usage limit, which has no status and a longer phrase', () => {
+    expect(isUsageLimitErrorMessage('Codex error: The usage limit has been reached')).toBe(true);
+    expect(isUsageLimitErrorMessage("You've hit your usage limit")).toBe(true);
+  });
+
   it('matches OpenCode Go usage-limit errors exactly as observed in pi logs', () => {
     expect(
       isUsageLimitErrorMessage(

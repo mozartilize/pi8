@@ -15,6 +15,7 @@
  *  - Claude Code CLI: `Claude Code returned an error result: You've hit your
  *    limit · resets …` / `Usage credits are required for this model.`
  *  - Anthropic: plan-limit text (`.…not your plan limits…`)
+ *  - OpenAI Codex: `Codex error: The usage limit has been reached` (no status, no "reached" next to "limit")
  *  - OpenAI: `429 insufficient_quota` / `rate_limit_exceeded`; `billing_not_active`
  *  - Google: `429 quota exceeded` / gRPC `RESOURCE_EXHAUSTED`
  *  - DeepSeek / OpenRouter: `402 Insufficient Balance` / `Insufficient Credits`
@@ -28,7 +29,7 @@
  * out of room, not that its provider is unhealthy.
  */
 const USAGE_LIMIT_ERROR_PATTERN =
-  /GoUsageLimitError|FreeUsageLimitError|CreditsError|usage limit reached|usage cap|available balance|insufficient_quota|quota|out of budget|billing|insufficient balance|insufficient credits|no payment method|hit your limit|usage credits are required|plan limit|RESOURCE_EXHAUSTED|\b402\b|\b429\b|rate.?limit|too many requests/i;
+  /GoUsageLimitError|FreeUsageLimitError|CreditsError|usage limit|usage cap|available balance|insufficient_quota|quota|out of budget|billing|insufficient balance|insufficient credits|no payment method|hit your limit|usage credits are required|plan limit|RESOURCE_EXHAUSTED|\b402\b|\b429\b|rate.?limit|too many requests/i;
 
 /** True when a provider error message indicates a provider-wide usage limit. */
 export const isUsageLimitErrorMessage = (message: string | null | undefined): boolean => {
