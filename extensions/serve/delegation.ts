@@ -46,6 +46,7 @@ import {
 import { POLICY_PASSIVE_CAUSES } from '../routing/policy/routing-policy.js';
 import { ReasoningLoopDetector } from '../routing/struggle/reasoning-loop.js';
 import type { PendingTrajectoryEscalation } from '../routing/struggle/types.js';
+import { classifyProviderFailure, type AttemptFailureInfo } from './failure-category.js';
 import { isUsageLimitErrorMessage } from './usage-limit.js';
 import { priceTokens } from './baseline.js';
 import { randomUUID } from 'node:crypto';
@@ -806,7 +807,7 @@ class AttemptController {
     }
   }
 
-  commitUsage(providerAttempted: boolean, served: boolean): void {
+  commitUsage(providerAttempted: boolean, served: boolean, failure?: AttemptFailureInfo): void {
     if (this.usageCommitted) return;
     this.usageCommitted = true;
     if (this.observedUsage) {
@@ -825,11 +826,11 @@ class AttemptController {
       candidate: this.candidate.candidateId,
       usage: this.observedUsage ? 'observed' : 'missing',
     });
-    if (providerAttempted) this.reportAttemptUsage(served);
+    if (providerAttempted) this.reportAttemptUsage(served, failure);
   }
 
   /** A report failure never changes the turn. */
-  private reportAttemptUsage(served: boolean): void {
+  private reportAttemptUsage(served: boolean, failure?: AttemptFailureInfo): void {
     try {
       const usage = this.observedUsage;
       this.ctx.opts.onAttemptUsage?.({
@@ -839,6 +840,7 @@ class AttemptController {
         candidateKey: this.candidate.candidateId,
         ...(this.candidate.effectiveReasoning ? { servedEffort: this.candidate.effectiveReasoning } : {}),
         served,
+        ...(failure ? { failure } : {}),
         ...(usage ? { usage: { input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 } } : {}),
         usageComplete: usage !== undefined && this.terminalAccounting,
         ...(usage?.cost?.total !== undefined ? { providerReportedUsd: usage.cost.total } : {}),
@@ -873,6 +875,14 @@ function failureMessage(failure: AttemptFailure): string {
   return failure.kind === 'caught'
     ? failure.error instanceof Error ? failure.error.message : String(failure.error)
     : failure.message;
+}
+
+/** The category that the decision log keeps for a failed attempt; it never keeps the message. */
+function attemptFailureInfo(failure: AttemptFailure, userAborted: boolean, attemptAborted: boolean): AttemptFailureInfo {
+  if (userAborted) return { category: 'aborted' };
+  if (attemptAborted) return { category: 'timeout' };
+  if (failure.kind === 'trajectory' || failure.kind === 'output-limit' || failure.kind === 'declined') return { category: failure.kind };
+  return classifyProviderFailure(failureMessage(failure));
 }
 
 /** Classify a completed attempt without changing the ordered event transition. */
@@ -1055,7 +1065,7 @@ async function runCandidateAttempt(
     }, tries);
   } finally {
     clearTimeout(deadline);
-    controller.commitUsage(requestReady, failure === undefined);
+    controller.commitUsage(requestReady, failure === undefined, failure ? attemptFailureInfo(failure, callerSignal?.aborted === true, attemptAbort.signal.aborted) : undefined);
     callerSignal?.removeEventListener('abort', forwardAbort);
     if (!attemptAbort.signal.aborted) attemptAbort.abort();
     if (iterator) closeIterator(iterator);

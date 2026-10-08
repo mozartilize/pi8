@@ -369,6 +369,8 @@ export interface AttemptUsageEvent {
   servedEffort?: string;
   /** True when the attempt ended without a failure. */
   served: boolean;
+  /** Why the attempt failed: a category and an HTTP status, never the provider message. */
+  failure?: { category: string; status?: number };
   /** Absent when the provider reported no usage. */
   usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   /** True when the provider reported a terminal usage. Otherwise the spend is a lower bound. */

@@ -1905,6 +1905,22 @@ describe('failure reporting and spend', () => {
     expect(new Set(events.map((event) => event.usageEventId)).size).toBe(3);
   });
 
+  it('reports the category and status of a failed attempt and never its message', async () => {
+    const events: AttemptUsageEvent[] = [];
+    const h = createDelegationHarness({
+      chain: ['alpha/x', 'beta/y'],
+      scripts: {
+        'alpha/x': [[{ type: 'error', error: { stopReason: 'error', errorMessage: "400: Messages with role 'tool' must be a response to a preceding message with 'tool_calls' /home/u/secret.rs" } }]],
+        'beta/y': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop', usage: { input: 1, output: 1 } } }]],
+      },
+      onAttemptUsage: (event) => events.push(event),
+    });
+    expect((await h.run()).success).toBe(true);
+    expect(events[0]?.failure).toEqual({ category: 'tool-sequence', status: 400 });
+    expect(JSON.stringify(events[0])).not.toContain('secret');
+    expect(events.at(-1)?.failure).toBeUndefined();
+  });
+
   it('marks an attempt without terminal usage as incomplete and survives a failing report', async () => {
     const events: AttemptUsageEvent[] = [];
     const h = createDelegationHarness({
