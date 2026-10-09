@@ -34,7 +34,7 @@ import {
   owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { declaredRequirement } from '../routing/policy/execution-difficulty.js';
-import { handoffMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { handoffMinimum, rubricCeiling, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import { CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -355,7 +355,7 @@ export function submitContextHandoff(
     const evidence = facts.evidence ?? CONVERSATION_EVIDENCE;
     // Without a rubric the default minimums of the task type apply. The final step only raises them.
     const { rubric, requirement } = declaredRequirement(deliverable, params, evidence);
-    const minimum = handoffMinimum(terminal, deliverable, requirement, policyVersion);
+    const minimum = handoffMinimum(terminal, deliverable, requirement, policyVersion, rubricCeiling(deliverable, scope, rubric));
     reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence };
   }
   const key = handoffKey(params);

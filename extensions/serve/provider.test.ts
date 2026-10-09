@@ -2128,6 +2128,35 @@ describe('context acquisition', () => {
       expect(planning?.reasoningHandoff?.minimum).toBeGreaterThanOrEqual(0.7);
     });
 
+    describe('an implementation handoff with a bounded scope and no open behavior or design choice', () => {
+      // The other criteria at level 5 put the rubric requirement above the frontier requirement.
+      const implementation = (openDecisions: number, scope: string, complexity = 'moderate') => ({
+        outcome: 'ready', deliverable: 'implement', complexity, scope,
+        findings: 'three paths read the asset multiplier', question: 'use the activity multiplier in every path',
+        remainingWork: { openDecisions, spread: 5, verification: 5, knowledge: 5, coupling: 5 },
+      });
+      async function accepted(params: Record<string, unknown>) {
+        const session = await newSession();
+        expect((await session.routeTurn('investigate the multiplier bug'))?.dimension).toBe('gather');
+        expect((await submitPrepared(params)).accepted).toBe(true);
+        return harness.session.getWorkPhaseState()?.reasoningHandoff;
+      }
+
+      it('gets at most the strong band requirement from its rubric', async () => {
+        const handoff = await accepted(implementation(3, 'bounded'));
+        expect(handoff?.requirement).toBeGreaterThan(0.85);
+        expect(handoff?.minimum).toBeCloseTo(0.70, 12);
+      });
+
+      it.each([[4, 'bounded'], [3, 'open-ended']])('keeps the frontier requirement with openDecisions %i and a %s scope', async (openDecisions, scope) => {
+        expect((await accepted(implementation(openDecisions, scope)))?.minimum).toBeCloseTo(0.85, 12);
+      });
+
+      it('lets the final step raise the minimum above the strong band requirement', async () => {
+        expect((await accepted(implementation(3, 'bounded', 'frontier')))?.minimum).toBeGreaterThanOrEqual(0.80);
+      });
+    });
+
     it('picks a stronger planner for a harder handoff', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);

@@ -1,4 +1,4 @@
-import type { CapabilityBand, Dimension, ReasoningHandoffMeta, TerminalAssessment } from '../../types.js';
+import type { CapabilityBand, Dimension, HandoffRubric, ReasoningHandoffMeta, TaskScope, TerminalAssessment } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
 import type { ContextReason, EntryResolution } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
@@ -165,21 +165,35 @@ export function aboveDefault(minimum: number | undefined, target: Dimension): nu
 }
 
 /**
+ * Highest rubric requirement of a handoff. An implementation handoff with a bounded scope and
+ * no open behavior, interface, or design choice (`openDecisions` at most 3) gets at most the
+ * `strong` band requirement: repository fixes of that shape are completed by models in the
+ * `strong` band, so spread, verification, knowledge, coupling, and the measurements must not
+ * move such a handoff to the frontier. Every other handoff gets at most the frontier requirement.
+ */
+export function rubricCeiling(target: Dimension, scope: TaskScope, rubric: HandoffRubric | undefined): number {
+  const settled = target === 'implement' && scope === 'bounded'
+    && rubric != null && 'openDecisions' in rubric && rubric.openDecisions <= 3;
+  return settled ? BAND_REQUIREMENT.strong : FRONTIER_REQUIREMENT;
+}
+
+/**
  * The minimum of a plan, review, or implement declaration. Every declaration of
  * one task type gets it in the same way: the declared requirement, at most the
- * frontier requirement, raised by the final step. Without a declared
- * requirement the default minimums of the task type apply, and only a final
- * step above the default raises them.
+ * ceiling ({@link rubricCeiling}, the frontier requirement by default), raised
+ * by the final step. Without a declared requirement the default minimums of
+ * the task type apply, and only a final step above the default raises them.
  */
 export function handoffMinimum(
   state: WorkPhaseState,
   target: Dimension,
   requirement: number | undefined,
   version: PolicyVersion = 'legacy',
+  ceiling: number = FRONTIER_REQUIREMENT,
 ): number | undefined {
   const raised = terminalMinimum(state, target, version);
   return requirement !== undefined
-    ? Math.max(Math.min(requirement, FRONTIER_REQUIREMENT), raised ?? 0)
+    ? Math.max(Math.min(requirement, ceiling), raised ?? 0)
     : aboveDefault(raised, target);
 }
 

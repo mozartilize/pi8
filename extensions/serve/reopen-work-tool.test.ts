@@ -113,6 +113,15 @@ describe('reopen_work', () => {
     expect(handoff?.minimum).toBeCloseTo(handoff!.requirement!);
   });
 
+  it('gives a bounded reopened implementation with no open behavior or design choice at most the strong band requirement', () => {
+    const session = doneSession({ priorCompletion: undefined, completion: { workItemId: 'w_1', status: 'done' }, contextStatus: 'served' });
+    const remainingWork = { openDecisions: 3, spread: 5, verification: 5, knowledge: 5, coupling: 5 };
+    expect(submitReopenWork({ ...SHAPE, deliverable: 'implement', remainingWork }, AUTO, session).accepted).toBe(true);
+    const handoff = session.getWorkPhaseState()?.reasoningHandoff;
+    expect(handoff?.requirement).toBeGreaterThan(0.85);
+    expect(handoff?.minimum).toBeCloseTo(0.70, 12);
+  });
+
   it('refuses a stale entry or an unread referenced file without reopening', async () => {
     const stale = doneSession({
       pendingIdentity: { generation: 9, entryKey: 'entry', base: { sourceEntryId: 'u1', anchors: [] } } as unknown as PendingIdentity,
