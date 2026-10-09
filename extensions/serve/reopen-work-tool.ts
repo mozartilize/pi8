@@ -26,7 +26,7 @@ import { REOPEN_WORK_TOOL, completedIncumbent } from '../routing/policy/work-com
 import { handoffMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import type { PendingIdentity } from './context-resolution.js';
-import { closeContractEntry } from './execution-contract-tool.js';
+import { CONTRACT_REMINDER, closeContractEntry } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 import { difficultyParameter, remainingWorkParameter } from './rubric-schema.js';
@@ -37,7 +37,8 @@ const DESCRIPTION = [
   'The router knows that work item. Do not give an id, a title, or a topic.',
   'Call hand_off_context instead when the request is different work.',
   'Give the task type, the complexity, and the scope of this request.',
-  'For a plan or a review, also give difficulty. For an implementation, also give remainingWork.',
+  'For a plan or a review, also give difficulty.',
+  'For an implementation, rate only the remaining work that your evidence supports.',
   'Each rating is 1 (easiest) to 5 (hardest).',
   'Read every file this request refers to, as the file is now, before you call this tool.',
   'After this tool accepts, make no changes until the next step starts.',
@@ -191,7 +192,8 @@ function acceptedText(deliverable: ReopenDeliverable, minimum: number | undefine
     const role = deliverable === 'plan' ? 'planning' : 'review';
     return `Work item reopened (${deliverable}, minimum ${minimum.toFixed(2)}). A ${role} model continues from the next step. Make no changes now.`;
   }
-  return `Work item reopened (${deliverable}). The next step continues this work. Make no changes now.`;
+  return `Work item reopened (${deliverable}). The next step continues this work. Make no changes now.` +
+    (deliverable === 'implement' ? `\nFor the next implementation step:\n${CONTRACT_REMINDER}` : '');
 }
 
 /**

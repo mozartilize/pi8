@@ -46,7 +46,7 @@ export const ACQUISITION_DENIAL_LIMIT = 2;
  * even when a call says it only inspects a file: its effects are unknowable.
  */
 export const ACQUISITION_READ_TOOLS: readonly string[] = [
-  'read', 'grep', 'find', 'ls',
+  'read', 'grep', 'find', 'ls', 'fffind', 'ffgrep',
   'tilth_read', 'tilth_search', 'tilth_list', 'tilth_grok',
 ];
 /** The host question tool, when one is installed. */

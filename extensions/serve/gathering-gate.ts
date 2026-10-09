@@ -245,12 +245,13 @@ export function gateContextToolCall(
     if (next.contextStatus === 'clarification-only') {
       return { block: true, reason: `Router: this call was not made. ${CLARIFICATION_TEXT}` };
     }
-    // Name the refused tool: a model that is told only the allowed list can conclude the tool is gone for good.
+    // A refused tool does not establish that the context is ready for a handoff.
     const tool = event.toolName.slice(0, 64);
     return {
       block: true,
-      reason: `Router: this call was not made: ${tool} does not run until you call ${CONTEXT_HANDOFF_TOOL}; ` +
-        `the next step can run it. ${gatheringNote(state).slice('Router: '.length)}`,
+      reason: `Router: this call was not made: ${tool} does not run while collecting context. ` +
+        'Use an allowed read or search tool to collect the missing evidence. ' +
+        'Do not hand off only to run a refused tool. ' + gatheringNote(state).slice('Router: '.length),
     };
   } catch {
     return restricted

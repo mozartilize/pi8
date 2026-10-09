@@ -6,6 +6,7 @@ import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { routingDecision } from '../test-support/router-fixtures.js';
 import { RouterSession } from './router-session-state.js';
 import { submitContextHandoff } from './context-handoff-tool.js';
+import { CONTRACT_REMINDER } from './execution-contract-tool.js';
 import { CLARIFICATION_TEXT, closeContextEntry, countContextRefusal, gateContextToolCall } from './gathering-gate.js';
 import { factsLog } from '../routing/policy/change-facts.js';
 
@@ -82,10 +83,24 @@ describe('gathering gate refusal accounting', () => {
     expect(result.text).toBe(`Context not handed off: the request rests on files not read in full as they are now: src/queue.ts. ${CLARIFICATION_TEXT}`);
   });
 
-  it('names a refused tool and says the next step can run it', () => {
+  it.each(['fffind', 'ffgrep'])('allows %s without a refusal or phase transition', (toolName) => {
     const session = acquiringSession();
-    const refusal = gateContextToolCall({ toolName: 'bash', input: { command: 'rg retryDelayMs' } }, session);
-    expect(refusal?.reason).toMatch(/^Router: this call was not made: bash does not run until you call hand_off_context; the next step can run it\. /);
+    const before = session.getWorkPhaseState();
+    expect(gateContextToolCall({ toolName, input: { pattern: 'retryDelayMs', path: 'src/' } }, session)).toBeUndefined();
+    expect(session.getWorkPhaseState()).toBe(before);
+    expect(vi.mocked(appendContextHandoffSignal)).not.toHaveBeenCalled();
+  });
+
+  it.each(['bash', 'read_file', 'ctx_execute_file'])('directs a refused %s call to permitted readers before a handoff', (toolName) => {
+    const session = acquiringSession();
+    const refusal = gateContextToolCall({ toolName, input: { command: 'rg retryDelayMs' } }, session);
+    expect(refusal?.block).toBe(true);
+    expect(refusal?.reason).toContain(`${toolName} does not run while collecting context.`);
+    expect(refusal?.reason).toContain('Use an allowed read or search tool to collect the missing evidence.');
+    expect(refusal?.reason).toContain('Do not hand off only to run a refused tool.');
+    expect(refusal?.reason).toContain('fffind, ffgrep');
+    expect(refusal?.reason).not.toContain('the next step can run it');
+    expect(session.getWorkPhaseState()?.contextDenials).toBe(0);
   });
 
   it('refuses a shell call without spending the mutation refusal budget', () => {
@@ -109,6 +124,24 @@ describe('gathering gate refusal accounting', () => {
       block: true,
       reason: 'Router: this call was not made: the router could not check it while collecting context.',
     });
+  });
+});
+
+describe('implementation boundary guidance', () => {
+  it.each(['implement', 'plan', 'review'])('adds closed-plan guidance only for an %s handoff', (deliverable) => {
+    const session = acquiringSession();
+    const result = submitContextHandoff({ ...READY, deliverable }, ROUTER_AUTO, session);
+    expect(result.accepted).toBe(true);
+    expect(result.text).toContain('Make no changes now.');
+    if (deliverable === 'implement') {
+      expect(result.text).toContain('For the next implementation step:');
+      expect(result.text).toContain(CONTRACT_REMINDER);
+    } else {
+      expect(result.text).not.toContain('commit_execution');
+    }
+    expect(session.getWorkPhaseState()).toMatchObject({ contextStatus: 'ready-pending', observedMutationTools: 0 });
+    expect(session.getWorkPhaseState()?.reasoningHandoff?.rubric).toBeUndefined();
+    expect(session.getWorkPhaseState()?.contract).toBeUndefined();
   });
 });
 

@@ -8,6 +8,7 @@ import { routingDecision } from '../test-support/router-fixtures.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import type { PendingIdentity } from './context-resolution.js';
 import { RouterSession } from './router-session-state.js';
+import { CONTRACT_REMINDER } from './execution-contract-tool.js';
 import { prepareReopenFacts, registerReopenWorkTool, submitReopenWork, type ReopenWorkParams } from './reopen-work-tool.js';
 
 vi.mock('../host/decisionlog.js', () => ({ appendWorkLifecycleSignal: vi.fn() }));
@@ -87,6 +88,20 @@ describe('reopen_work', () => {
     expect(state?.completion).toBeUndefined();
     expect(state?.reasoningHandoff).toMatchObject({ pending: true, target: 'plan', id: 'entry' });
     expect(session.context.getLedger().incumbent?.dimension).toBe('plan');
+  });
+
+  it.each(['implement', 'plan', 'review', 'gather'] as const)('adds closed-plan guidance only when reopening %s as implementation', (deliverable) => {
+    const session = doneSession();
+    const result = submitReopenWork({ ...SHAPE, deliverable }, AUTO, session);
+    expect(result.accepted).toBe(true);
+    expect(result.text).toContain('Make no changes now.');
+    if (deliverable === 'implement') {
+      expect(result.text).toContain('For the next implementation step:');
+      expect(result.text).toContain(CONTRACT_REMINDER);
+    } else {
+      expect(result.text).not.toContain('commit_execution');
+    }
+    expect(session.getWorkPhaseState()?.contract).toBeUndefined();
   });
 
   it('values a reopened implementation on the execution rubric', () => {

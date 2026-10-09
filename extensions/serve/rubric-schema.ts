@@ -23,9 +23,9 @@ export function difficultyParameter(description: string) {
 export function remainingWorkParameter(description: string) {
   return Type.Object({
     openDecisions: level(
-      'What the executor must still decide. 1: every change is specified down to the code; 2: only naming or ' +
-      'formatting choices; 3: local implementation choices, no behavior choices; 4: some behavior or interface ' +
-      'choices; 5: design choices.',
+      'What the executor must still decide. 1: every change is specified down to the code. 2: only naming or ' +
+      'formatting choices. 3: local implementation choices, no behavior choices. 4: some behavior or interface ' +
+      'choices. 5: design choices. An unknown source location is missing evidence, not a behavior or design choice.',
     ),
     spread: level(
       'Where the changes are. 1: one function; 2: one file; 3: a few files in one module; 4: several modules; ' +
@@ -45,5 +45,8 @@ export function remainingWorkParameter(description: string) {
       'helper with several callers; 4: a public interface or shared state; 5: cross-cutting behavior ' +
       '(concurrency, persistence, security).',
     ),
-  }, { description });
+  }, { description: `${description} Base ratings on inspected source or explicit requirements. ` +
+    'Read relevant source before rating a source-dependent change. Do not use level 1 for missing evidence. ' +
+    'Collect missing evidence before rating. If the rubric is optional and still unsupported, omit it. ' +
+    'Missing criteria inherit the highest supplied level. No ratings retain task defaults.' });
 }

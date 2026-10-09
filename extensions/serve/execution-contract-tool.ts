@@ -65,13 +65,14 @@ import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 
 const DESCRIPTION =
   `${ROUTER_TOOLS_CONDITION} ` +
-  'Hand off the remaining implementation as a closed execution plan. Call it only when the user asked for the ' +
-  'change to be made, never when the user asked only for a plan or a review, and only once every design decision ' +
-  'is settled and all remaining work is concrete file edits, file creations, file deletions, and verification runs. The router validates the plan and chooses which model executes it. Do not call it to ask ' +
-  'for help or to change models. Rate the remaining work honestly: the router combines the ratings with its own ' +
-  'measurements to choose the executor, and a finished plan returns to you for review. After acceptance, editing a ' +
-  'file that the plan does not list, or writing files from a shell command, returns the work to the model that ' +
-  'submitted the plan.';
+  'Hand off the remaining implementation as a closed execution plan. Use it only for changes the user asked you to make. ' +
+  'Do not use it for a plan-only or review-only request. Inspect the relevant source first. ' +
+  'Settle all behavior, interface, and design choices. Specify every remaining file edit, creation, deletion, and verification command. ' +
+  'Call this tool before making those changes. Rate only the remaining implementation, not the completed investigation. ' +
+  'The router combines your ratings with its measurements to choose the executor. A finished plan returns to you for review. ' +
+  'Do not call this tool to ask for help or to change models. ' +
+  'After acceptance, an edit to an unlisted file returns the work to the submitter. ' +
+  'Writing files from a shell command also returns the work to the submitter.';
 
 /** Built at registration, not import, so importing the handlers needs no schema runtime. */
 function executionContractParameters() {
@@ -108,14 +109,17 @@ function executionContractParameters() {
 }
 
 /**
- * Appended once per entry to the first edit result without a plan: in a
- * plan/review entry, or in an implement entry whose model the incumbent
- * minimums raised above what the work needs. A plan/review entry's first
- * change is stopped instead (`CONTRACT_GATE`), which uses up this reminder.
+ * Implementation handoffs carry this guidance for the next step. An extra
+ * reminder applies to the first edit without a plan in a plan/review entry,
+ * or an implement entry raised by the incumbent minimums. A plan/review
+ * entry's first change is stopped instead (`CONTRACT_GATE`), which uses up
+ * that reminder.
  */
 export const CONTRACT_REMINDER =
-  `Router note: if the user asked for this change and the remaining work is fully decided, call ` +
-  `${EXECUTION_CONTRACT_TOOL} with the remaining steps so the router can choose the executor. Otherwise continue.`;
+  'Router note: submit a plan only if the user asked for this change. ' +
+  'Check that every remaining edit and verification command is specified. ' +
+  `Then call ${EXECUTION_CONTRACT_TOOL} before making those edits. Continue inspecting while decisions remain. ` +
+  'Rate only the remaining implementation, not the completed investigation.';
 
 /** The error of the stopped first change of a plan/review entry without a plan. */
 export const CONTRACT_GATE =
@@ -127,9 +131,8 @@ export const CONTRACT_GATE =
 const INCUMBENT_RAISES = new Set(['incumbent-model', 'incumbent-capability', 'incumbent-effort']);
 
 /**
- * An implement entry is worth reminding only when the incumbent minimums
- * raised its pick: otherwise the router already chose the model for the
- * work, and a handoff could not route it cheaper.
+ * Limit extra edit reminders to implement picks raised by the incumbent.
+ * Accepted implementation handoffs already carry closed-plan guidance.
  */
 function implementRaisedByIncumbent(last: RoutingDecision): boolean {
   return last.scoredReason?.details.some((detail) => INCUMBENT_RAISES.has(detail.kind)) ?? false;

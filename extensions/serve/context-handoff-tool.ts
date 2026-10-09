@@ -36,7 +36,7 @@ import {
 import { declaredRequirement } from '../routing/policy/execution-difficulty.js';
 import { handoffMinimum, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
-import { observeFiles, type Exec } from './execution-contract-tool.js';
+import { CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
 import { readBranch } from '../routing/context/persistence.js';
@@ -60,7 +60,9 @@ const DESCRIPTION =
   'Stop collecting context and give the request to the next step. Call it with outcome "ready" once you have ' +
   'what the next step needs: the task type the user wants, your findings, and what the next step must decide or ' +
   'do. Give the facts that you observed about the remaining work. For a plan or review, also rate the reasoning left. ' +
-  'For an implementation, also rate the work left. Call it with outcome "needs-user" when the request is ' +
+  'For an implementation, rate only the remaining work that your evidence supports. ' +
+  'Use facts.decisions to name unresolved choices. Use facts.unknowns to identify missing evidence. ' +
+  'Call it with outcome "needs-user" when the request is ' +
   'unclear or what it rests on cannot be read, with the question to ask. The router picks the next model. Do not ' +
   'write the plan, review, or change yourself.';
 
@@ -410,7 +412,8 @@ export function submitContextHandoff(
     return {
       accepted: true,
       text: `Context handed off (${deliverable}, ${next.reasoningHandoff.minimum !== undefined ? `minimum ${next.reasoningHandoff.minimum.toFixed(2)}` : 'default minimum'}). A ${role} model ` +
-        'chosen for this difficulty continues from the next step with your findings and question. Make no changes now.',
+        'chosen for this difficulty continues from the next step with your findings and question. Make no changes now.' +
+        (deliverable === 'implement' ? `\nFor the next implementation step:\n${CONTRACT_REMINDER}` : ''),
     };
   }
   return {
