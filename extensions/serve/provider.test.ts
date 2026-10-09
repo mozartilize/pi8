@@ -1388,6 +1388,46 @@ describe('a thinking-level change the router did not write pins the served model
     expect(harness.session.getManualModel()).toBe('alpha/first:high');
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
+
+  // Another extension (for example a background memory agent) can call the
+  // session model with its own abort signal and its own reasoning level. That
+  // level applies to its request only: it is not a thinking-level change, and
+  // the router must not write it into Pi's session level.
+  it('serves a request with its own signal at its level, without a pin or a session change', async () => {
+    level = 'high';
+    await harness.serve(implement, piReasoning());
+    const sessionLevel = level;
+    const other = sessionLevel === 'low' ? 'high' : 'low';
+
+    nextTurn();
+    await harness.serve(implement, { reasoning: other, signal: new AbortController().signal } as Parameters<ProviderTestHarness['serve']>[1]);
+
+    expect(harness.delegatedCall().options?.reasoning).toBe(other);
+    expect(harness.session.getManualModel()).toBeUndefined();
+    expect(level).toBe(sessionLevel);
+
+    nextTurn();
+    await harness.serve(implement, piReasoning());
+
+    expect(harness.session.getManualModel()).toBeUndefined();
+    expect(harness.getProviderState().lastDecision?.cause).not.toBe('manual-override');
+    // Delegation omits `reasoning` for `off`.
+    expect(harness.delegatedCall().options?.reasoning).toBe(sessionLevel === 'off' ? undefined : sessionLevel);
+  });
+
+  it('serves a request at a level other than the session level without a pin or a session change', async () => {
+    level = 'high';
+    await harness.serve(implement, piReasoning());
+    const sessionLevel = level;
+    const other = sessionLevel === 'low' ? 'high' : 'low';
+
+    nextTurn();
+    await harness.serve(implement, { reasoning: other } as Parameters<ProviderTestHarness['serve']>[1]);
+
+    expect(harness.delegatedCall().options?.reasoning).toBe(other);
+    expect(harness.session.getManualModel()).toBeUndefined();
+    expect(level).toBe(sessionLevel);
+  });
 });
 
 describe('incumbent keeps serving across unresolved entries', () => {

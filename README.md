@@ -145,6 +145,7 @@ Before a run ends, the router can add one hidden reminder and continue once. It 
 - A pinned turn serves only the pinned model. If that model fails, the router shows the failure and does not substitute another model.
 - `/router-manual resume` leaves the pin. The next user entry reuses the auto decision from just before the pin. Later turns route normally.
 - A change to Pi's thinking level, for example with Shift+Tab, also sets a pin. The pin uses the model that served the last turn, at the new level. Before the first served turn, the change affects only the next turn.
+- Another extension can call the session model with its own thinking level, for example a background memory agent. That request gets its level, but it does not set a pin and does not change Pi's thinking level.
 - A new session clears the pin.
 
 ## Configuration

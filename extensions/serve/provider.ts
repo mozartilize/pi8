@@ -549,11 +549,14 @@ function resolveTurnEffort(args: {
   options: SimpleStreamOptions | undefined;
   decision: { dimension: Dimension; chosen: string };
   explicitThinking?: ModelThinkingLevel;
+  agentLoopRequest: boolean;
   pi: ExtensionAPI;
   session: RouterSession;
 }) {
   const requestedReasoning = args.explicitThinking ?? (typeof args.options?.reasoning === 'string' ? args.options.reasoning : undefined);
-  const inheritedReasoning = args.explicitThinking == null && requestedReasoning === args.session.getLastResolvedThinkingLevel();
+  // A request from outside Pi's agent loop serves the level it asks for.
+  const inheritedReasoning = args.agentLoopRequest && args.explicitThinking == null &&
+    requestedReasoning === args.session.getLastResolvedThinkingLevel();
   // A candidate with an effort label serves its scored effort unless the user
   // chose a level. One without a label gets Pi's session thinking level, as
   // Pi sends it when a user selects that model.
@@ -562,22 +565,28 @@ function resolveTurnEffort(args: {
     args.chosenCandidate,
     routerEffort ? undefined : requestedReasoning as ThinkingLevel | undefined,
   );
-  args.session.setLastResolvedThinkingLevel(reasoning);
   debugLog('decision.thinking', {
     dimension: args.decision.dimension,
     chosen: args.decision.chosen,
     requested: requestedReasoning ?? null,
     inherited: inheritedReasoning,
     resolved: reasoning ?? 'off',
+    agentLoop: args.agentLoopRequest,
   });
-  try {
-    args.pi.setThinkingLevel((reasoning ?? 'off') as never);
-  } catch {
-    // Footer sync is cosmetic; never let it break a turn.
+  // Only Pi's agent loop sends the session level. Another caller's level is
+  // for its own request: writing it to Pi would change the level that the
+  // agent loop sends next.
+  if (args.agentLoopRequest) {
+    args.session.setLastResolvedThinkingLevel(reasoning);
+    try {
+      args.pi.setThinkingLevel((reasoning ?? 'off') as never);
+    } catch {
+      // Footer sync is cosmetic; never let it break a turn.
+    }
+    // Read back what Pi actually holds: Pi clamps the level, and a failed sync
+    // leaves the old one in place. Either way, this is what Pi sends next.
+    args.session.setSyncedThinkingLevel(readPiThinkingLevel(args.pi));
   }
-  // Read back what Pi actually holds: Pi clamps the level, and a failed sync
-  // leaves the old one in place. Either way, this is what Pi sends next.
-  args.session.setSyncedThinkingLevel(readPiThinkingLevel(args.pi));
   const resolvedReasoning = reasoning && reasoning !== 'off' ? reasoning : undefined;
   const delegatedOptions: SimpleStreamOptions = resolvedReasoning
     ? { ...(args.options ?? {}), reasoning: resolvedReasoning }
@@ -644,6 +653,8 @@ interface PreparedTurn {
   cacheHead: { identity: string; tokens: number };
   registry: ModelRegistry;
   extensionContext: ExtensionContext | undefined;
+  /** Pi's agent loop sent this request (see `isAgentLoopRequest`). */
+  agentLoopRequest: boolean;
   config: AutoRouterConfig;
   measured: ReturnType<typeof measureTurnInput>;
   intent: ReturnType<typeof resolveBaseIntent>;
@@ -683,8 +694,9 @@ async function prepareRouterTurn(args: {
   context: Context;
   session: RouterSession;
   runtime: RuntimeBindings;
+  agentLoopRequest: boolean;
 }): Promise<{ kind: 'ready'; prepared: PreparedTurn } | RouterTurnOutcome> {
-  const { context, session, runtime } = args;
+  const { context, session, runtime, agentLoopRequest } = args;
   const waitTimer = startTimer();
   const registry = await waitForRegistry(() => runtime.getCurrentModelRegistry());
   const extensionContext = runtime.getLastExtensionContext();
@@ -740,6 +752,7 @@ async function prepareRouterTurn(args: {
       cacheHead: { identity: promptHeadIdentity(context), tokens: estimateTokenCount((extractSystemPrompt(context) ?? '') + JSON.stringify(context.tools ?? [])) },
       registry,
       extensionContext,
+      agentLoopRequest,
       config,
       measured,
       intent,
@@ -1204,6 +1217,7 @@ async function delegateRouterTurn(args: {
     options,
     decision,
     explicitThinking,
+    agentLoopRequest: prepared.agentLoopRequest,
     pi,
     session,
   });
@@ -1410,24 +1424,52 @@ function readPiThinkingLevel(pi: ExtensionAPI): string | undefined {
 }
 
 /**
+ * Whether Pi's agent loop sent this request. The agent loop sends each
+ * request with the run's abort signal (`ctx.signal`) and with the session
+ * thinking level, which Pi reads before every request. Another extension that
+ * calls the session model sends its own signal or its own level. Without a
+ * context or a readable level, the request counts as an agent-loop request.
+ */
+function isAgentLoopRequest(
+  options: SimpleStreamOptions | undefined,
+  pi: ExtensionAPI,
+  extensionContext: ExtensionContext | undefined,
+): boolean {
+  if (extensionContext) {
+    let runSignal: AbortSignal | undefined;
+    try {
+      runSignal = extensionContext.signal;
+    } catch {
+      // A stale context cannot report the run.
+      return true;
+    }
+    if (options?.signal !== runSignal) return false;
+  }
+  const sessionLevel = readPiThinkingLevel(pi);
+  if (sessionLevel === undefined) return true;
+  const requested = typeof options?.reasoning === 'string' ? options.reasoning : 'off';
+  return requested === sessionLevel;
+}
+
+/**
  * A thinking-level change the router did not write (Shift+Tab, settings, or
- * another extension) is an explicit user choice: pin the model that served the
- * previous turn at that level. Pi reports no source for the change, so the
- * router compares the requested level with the level Pi held after the
- * router's own last sync. Before any model has served, the change stays a
- * one-turn effort override.
+ * another extension's `pi.setThinkingLevel`) is an explicit user choice: pin
+ * the model that served the previous turn at that level. Pi reports no source
+ * for the change, so the router compares Pi's session level with the level Pi
+ * held after the router's own last sync. The caller checks only agent-loop
+ * requests: another caller's request level does not change the session level.
+ * Before any model has served, the change stays a one-turn effort override.
  */
 function pinOnThinkingChange(
   prepared: PreparedTurn,
-  options: SimpleStreamOptions | undefined,
+  pi: ExtensionAPI,
   session: RouterSession,
 ): void {
   try {
     const synced = session.getSyncedThinkingLevel();
     if (synced === undefined) return;
-    // Pi omits `reasoning` for `off`.
-    const requested = typeof options?.reasoning === 'string' ? options.reasoning : 'off';
-    if (requested === synced) return;
+    const requested = readPiThinkingLevel(pi);
+    if (requested === undefined || requested === synced) return;
     session.setSyncedThinkingLevel(requested);
     const models = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
     const manual = session.getManualModel();
@@ -1938,11 +1980,12 @@ async function runRouterTurn(args: {
     if (!benchmarks.ready) return { kind: 'terminal', reason: 'error', message: benchmarks.message };
   }
 
-  const preparation = await prepareRouterTurn({ context, session, runtime });
+  const agentLoopRequest = isAgentLoopRequest(options, pi, runtime.getLastExtensionContext());
+  const preparation = await prepareRouterTurn({ context, session, runtime, agentLoopRequest });
   if (preparation.kind !== 'ready') return preparation;
   const { prepared } = preparation;
 
-  pinOnThinkingChange(prepared, options, session);
+  if (agentLoopRequest) pinOnThinkingChange(prepared, pi, session);
   const manualModel = session.getManualModel();
   if (manualModel) {
     return runManualTurn({
