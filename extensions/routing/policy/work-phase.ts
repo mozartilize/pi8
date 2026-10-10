@@ -12,6 +12,8 @@ const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.
 const COMPLEXITY = { trivial: 0, routine: 0.25, moderate: 0.5, hard: 0.75, frontier: 1 } as const;
 /** Handoff requirement each band asks for; economy asks for none. */
 const BAND_REQUIREMENT = { economy: undefined, standard: 0.45, strong: 0.70, frontier: 0.85 } as const;
+/** Highest rubric requirement of a settled bounded implementation handoff ({@link rubricCeiling}). */
+const SETTLED_IMPLEMENT_CEILING = 0.65;
 
 /** Execution penalties of one work item, carried until an entry continues it. */
 export interface PriorWork {
@@ -152,7 +154,7 @@ export function withStrongerTerminal(
 export function terminalMinimum(state: WorkPhaseState, target: Dimension, version: PolicyVersion = 'legacy'): number | undefined {
   if (version !== 'cheapest-sufficient') return bandRequirement(state.terminalBand);
   const requirement = state.terminalRequirement;
-  return requirement != null && requirement > defaultRequirement(target) ? requirement : undefined;
+  return requirement != null && requirement > defaultRequirement(target, version) ? requirement : undefined;
 }
 
 /**
@@ -160,21 +162,21 @@ export function terminalMinimum(state: WorkPhaseState, target: Dimension, versio
  * without a difficulty rubric keeps the default minimums, so only a final step that asks for more
  * than the default may set a handoff minimum.
  */
-export function aboveDefault(minimum: number | undefined, target: Dimension): number | undefined {
-  return minimum != null && minimum > defaultRequirement(target) ? minimum : undefined;
+export function aboveDefault(minimum: number | undefined, target: Dimension, version: PolicyVersion = 'legacy'): number | undefined {
+  return minimum != null && minimum > defaultRequirement(target, version) ? minimum : undefined;
 }
 
 /**
  * Highest rubric requirement of a handoff. An implementation handoff with a bounded scope and
- * no open behavior, interface, or design choice (`openDecisions` at most 3) gets at most the
- * `strong` band requirement: repository fixes of that shape are completed by models in the
- * `strong` band, so spread, verification, knowledge, coupling, and the measurements must not
- * move such a handoff to the frontier. Every other handoff gets at most the frontier requirement.
+ * no open behavior, interface, or design choice (`openDecisions` at most 3) gets at most 65%:
+ * a fixed model at 66% of the Intelligence reference completed 9 of 10 repository fixes of that
+ * shape, so spread, verification, knowledge, coupling, and the measurements must not move such
+ * a handoff to the frontier. Every other handoff gets at most the frontier requirement.
  */
 export function rubricCeiling(target: Dimension, scope: TaskScope, rubric: HandoffRubric | undefined): number {
   const settled = target === 'implement' && scope === 'bounded'
     && rubric != null && 'openDecisions' in rubric && rubric.openDecisions <= 3;
-  return settled ? BAND_REQUIREMENT.strong : FRONTIER_REQUIREMENT;
+  return settled ? SETTLED_IMPLEMENT_CEILING : FRONTIER_REQUIREMENT;
 }
 
 /**
@@ -194,7 +196,7 @@ export function handoffMinimum(
   const raised = terminalMinimum(state, target, version);
   return requirement !== undefined
     ? Math.max(Math.min(requirement, ceiling), raised ?? 0)
-    : aboveDefault(raised, target);
+    : aboveDefault(raised, target, version);
 }
 
 /** True when the final step is strong enough to remind a `gather` entry of the handoff at once. */

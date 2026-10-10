@@ -25,6 +25,14 @@ describe('Intelligence implementation comparator', () => {
     expect(decision.fallbackChain).toContain('p/subset');
   });
 
+  it('keeps a model below 65% of the Intelligence reference out of a default implementation pick', () => {
+    const below = priced('p/below', { intelligence: 37 }, 1);
+    const above = priced('p/above', { intelligence: 38 }, 10);
+    const decision = pick([below, above]);
+    expect(decision.chosen).toBe('p/above');
+    expect(decision.candidateDiagnostics).toContainEqual({ candidateKey: 'p/below', excludedReason: 'below-intelligence-minimum' });
+  });
+
   it('does not substitute component or coding scores for missing Intelligence', () => {
     const unknown = priced('p/unknown', { coding: 100, agenticCoding: 100, agenticIndex: 100 }, 1);
     const weak = priced('p/weak', { intelligence: 10 }, 0);
@@ -39,7 +47,7 @@ describe('Intelligence implementation comparator', () => {
 
   it('keeps the incumbent Intelligence minimum, not its component score', () => {
     const incumbent = priced('p/incumbent', { intelligence: 40, agenticCoding: 5 }, 10);
-    const cheap = priced('p/cheap', { intelligence: 35, agenticCoding: 80 }, 1);
+    const cheap = priced('p/cheap', { intelligence: 38, agenticCoding: 80 }, 1);
     expect(pick([incumbent, cheap], { incumbentRegistryId: 'p/incumbent', sameIntentAsLast: true }).chosen).toBe('p/incumbent');
     expect(pick([incumbent, cheap], { incumbentRegistryId: 'p/incumbent', handoffPending: true }).chosen).toBe('p/cheap');
   });

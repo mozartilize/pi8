@@ -90,12 +90,12 @@ describe('factsRequirement', () => {
     expect(mechanical.shadow.used).toBeCloseTo(defaultRequirement('implement'), 6);
   });
 
-  it('logs the same requirement under the candidate policy and names no band', () => {
+  it('logs the same requirement under the candidate policy, names no band, and uses that policy\'s default', () => {
     const facts: DeclaredFacts = { decisions: ['a'], answers: { rewrites: 'Y' } };
     const legacy = factsLog('implement', facts, { files: 2 });
     const next = factsLog('implement', facts, { files: 2 }, undefined, 'cheapest-sufficient');
     expect(next.shadow.band).toBeUndefined();
-    expect(next.shadow).toEqual({ requirement: legacy.shadow.requirement, used: legacy.shadow.used });
+    expect(next.shadow).toEqual({ requirement: legacy.shadow.requirement, used: defaultRequirement('implement', 'cheapest-sufficient') });
   });
 
   it('never lowers the requirement when a fact gets harder', () => {

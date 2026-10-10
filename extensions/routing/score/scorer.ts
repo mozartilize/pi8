@@ -154,10 +154,15 @@ export const AXIS_REFERENCE: Readonly<Record<Exclude<QualityAxis, 'knowledge'>, 
 /** The Intelligence Index major.minor version that the minimums above are calibrated for. */
 export const CALIBRATED_INDEX_VERSION = '4.3';
 
-/** Development comparator parameters. Independent outcomes must validate sufficiency before activation. */
+/**
+ * Development comparator parameters. Independent outcomes must validate sufficiency before activation.
+ * The implement minimum is 65% of the Intelligence reference (37.4). A fixed model at
+ * Intelligence 38 completed 9 of 10 repository bug fixes from a full bug report. No model below
+ * that level has a measured result on the same tasks.
+ */
 const COMPARATOR_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
   ...CAPABILITY_MINIMUMS,
-  implement: { intelligence: (34 / 63.6) * 57.6 },
+  implement: { intelligence: 0.65 * AXIS_REFERENCE.intelligence },
 };
 const COMPARATOR_DIGEST = createHash('sha256').update(JSON.stringify({
   version: 'intelligence-comparator-v1',
@@ -186,12 +191,12 @@ export function indexVersionWarning(version: string | undefined): string | undef
 export const FRONTIER_REQUIREMENT = 0.85;
 
 /**
- * The task type's fixed minimums as one requirement: the largest share of an
- * axis reference among them. The Omniscience minimum is not a share of a
- * reference, so it does not count.
+ * The task type's fixed minimums of the policy as one requirement: the largest
+ * share of an axis reference among them. The Omniscience minimum is not a
+ * share of a reference, so it does not count.
  */
-export function defaultRequirement(dimension: Dimension): number {
-  const fixed = CAPABILITY_MINIMUMS[dimension];
+export function defaultRequirement(dimension: Dimension, version: PolicyVersion = 'legacy'): number {
+  const fixed = (version === 'cheapest-sufficient' ? COMPARATOR_MINIMUMS : CAPABILITY_MINIMUMS)[dimension];
   const shares = (Object.keys(fixed) as QualityAxis[])
     .filter((axis): axis is Exclude<QualityAxis, 'knowledge'> => axis !== 'knowledge')
     .map((axis) => fixed[axis]! / AXIS_REFERENCE[axis]);

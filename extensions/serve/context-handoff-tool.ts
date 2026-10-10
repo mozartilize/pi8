@@ -393,7 +393,7 @@ export function submitContextHandoff(
   // The shadow requirement is logged next to the one routing uses; it does not route.
   const changeFacts = {
     ...(declared ? { declared } : {}),
-    log: factsLog(deliverable, declared, facts.change ?? {}, reasoning?.minimum ?? defaultRequirement(deliverable), policyVersion),
+    log: factsLog(deliverable, declared, facts.change ?? {}, reasoning?.minimum ?? defaultRequirement(deliverable, policyVersion), policyVersion),
   };
   const next = acceptContextHandoff(materialized, { deliverable, key, ...(reasoning ? { reasoning } : {}) });
   session.commitWorkPhaseState({ ...next, changeFacts, priorCompletion: undefined, completion: undefined });

@@ -160,6 +160,8 @@ describe('execution contract lifecycle', () => {
     const unscored = acceptContract(state(), { submitter: 'codex/sol:max', validation, rubric: undefined, measured }).contract!;
     expect(unscored.requirement).toBe(defaultRequirement('implement'));
     expect(unscored.rubric).toBeUndefined();
+    const candidate = acceptContract(state(), { submitter: 'codex/sol:max', validation, rubric: undefined, measured }, 'cheapest-sufficient').contract!;
+    expect(candidate.requirement).toBeCloseTo(0.65, 12);
     const partly = accepted([edit('a.ts'), verify], state(), { openDecisions: 3, spread: 3, verification: 3, knowledge: 3, coupling: 3 }).contract!;
     const filled = acceptContract(state(), { submitter: 'codex/sol:max', validation, rubric: parseRubric({ openDecisions: 3 }), measured }).contract!;
     expect(filled.requirement).toBe(partly.requirement);

@@ -262,8 +262,8 @@ export function validateContract(steps: readonly ExecutionStepInput[] | undefine
  * not raise it: the plan settled the decisions that made the task hard, and a
  * closed plan exists so that a cheaper executor can run it.
  */
-function contractRequirement(rubric: ExecutionRubric | undefined, measured: MeasuredFeatures): number {
-  return rubric ? executionRequirement(rubric, measured) : defaultRequirement('implement');
+function contractRequirement(rubric: ExecutionRubric | undefined, measured: MeasuredFeatures, version: PolicyVersion): number {
+  return rubric ? executionRequirement(rubric, measured) : defaultRequirement('implement', version);
 }
 
 interface AcceptInput {
@@ -282,7 +282,7 @@ interface AcceptInput {
  */
 function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput): WorkPhaseState {
   const { validation, rubric, measured } = input;
-  const requirement = contractRequirement(rubric, measured);
+  const requirement = contractRequirement(rubric, measured, 'cheapest-sufficient');
   const shape = contractShapeRequirement(validation.targets.length, validation.steps);
   const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
     ? 'unknown-target'
@@ -315,7 +315,7 @@ function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput):
 export function acceptContract(state: WorkPhaseState, input: AcceptInput, version: PolicyVersion = 'legacy'): WorkPhaseState {
   if (version === 'cheapest-sufficient') return acceptContractByRequirement(state, input);
   const { validation, rubric, measured } = input;
-  const requirement = contractRequirement(rubric, measured);
+  const requirement = contractRequirement(rubric, measured, version);
   const assessed = bandForRequirement(requirement);
   const excluded = state.excludedExecutors?.length ?? 0;
   const band = raiseBand(maxBand(assessed, validation.shapeBand ?? 'frontier'), excluded);

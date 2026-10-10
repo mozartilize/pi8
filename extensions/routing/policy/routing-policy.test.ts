@@ -975,13 +975,13 @@ describe('selection under the candidate policy', () => {
     }), version).decision;
 
   it('gives no credit for quality above the minimums, whatever the configured weights say', () => {
-    const pool = [priced('p/strong', 56, 10), priced('p/adequate', 35, 1)];
+    const pool = [priced('p/strong', 56, 10), priced('p/adequate', 40, 1)];
     expect(pick(pool, 'legacy').chosen).toBe('p/strong');
     expect(pick(pool, 'cheapest-sufficient').chosen).toBe('p/adequate');
   });
 
   it('never lets a lower price offset a missed minimum', () => {
-    const pool = [priced('p/weak-free', 10, 0), priced('p/adequate', 35, 5)];
+    const pool = [priced('p/weak-free', 10, 0), priced('p/adequate', 40, 5)];
     const decision = pick(pool, 'cheapest-sufficient');
     expect(decision.chosen).toBe('p/adequate');
     expect(decision.fallbackChain).toEqual(['p/adequate', 'p/weak-free']);
@@ -990,12 +990,12 @@ describe('selection under the candidate policy', () => {
   it('never counts an unknown price as free', () => {
     const unpriced = makeCandidate({
       registryId: 'p/unpriced', provider: 'p', id: 'unpriced',
-      bench: benchRow('p/unpriced', { quality: { intelligence: 35, coding: 35, agenticCoding: 35 } }),
+      bench: benchRow('p/unpriced', { quality: { intelligence: 40, coding: 40, agenticCoding: 40 } }),
     });
     expect(unpriced.cost).toBeUndefined();
-    expect(pick([unpriced, priced('p/priced', 35, 5)], 'cheapest-sufficient').chosen).toBe('p/priced');
+    expect(pick([unpriced, priced('p/priced', 40, 5)], 'cheapest-sufficient').chosen).toBe('p/priced');
     // The unknown price also goes behind the dearest known price of its tier, but stays ahead of a weaker tier.
-    const chain = pick([priced('p/a-cheap', 35, 1), unpriced, priced('p/z-dear', 35, 10), priced('p/weak', 10, 0)], 'cheapest-sufficient').fallbackChain;
+    const chain = pick([priced('p/a-cheap', 40, 1), unpriced, priced('p/z-dear', 40, 10), priced('p/weak', 10, 0)], 'cheapest-sufficient').fallbackChain;
     expect(chain).toEqual(['p/a-cheap', 'p/z-dear', 'p/unpriced', 'p/weak']);
   });
 

@@ -370,7 +370,7 @@ export function factsLog(
     shadow: {
       requirement,
       ...(version === 'legacy' ? { band: bandForRequirement(requirement) } : {}),
-      used: used ?? defaultRequirement(dimension),
+      used: used ?? defaultRequirement(dimension, version),
     },
   };
 }

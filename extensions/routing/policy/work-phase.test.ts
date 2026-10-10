@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   capabilityBandFor,
   carryAcrossBranch,
+  handoffMinimum,
   bandRequirement,
   penaltiesOf,
   withContinuedPenalties,
@@ -164,6 +165,13 @@ describe('final step under the candidate policy', () => {
       const minimum = terminalMinimum(withStrongerTerminal(none(), step, 'cheapest-sufficient'), step.kind, 'cheapest-sufficient');
       if (minimum != null) expect(minimum).toBeGreaterThan(defaultRequirement(step.kind));
     }
+  });
+
+  it('gives an implement step below the candidate policy default implement requirement no minimum', () => {
+    const routine = withStrongerTerminal(none(), terminal({ kind: 'implement', complexity: 'moderate', scope: 'bounded' }), 'cheapest-sufficient');
+    expect(routine.terminalRequirement).toBeCloseTo(0.55, 12);
+    expect(terminalMinimum(routine, 'implement', 'cheapest-sufficient')).toBeUndefined();
+    expect(handoffMinimum(routine, 'implement', undefined, 'cheapest-sufficient')).toBeUndefined();
   });
 
   it('keeps the band mapping of the legacy policy', () => {
