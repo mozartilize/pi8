@@ -346,7 +346,9 @@ describe('runDelegationLoop contracts', () => {
     // and locks replay. A later pre-answer error must finalize this turn,
     // not fall over to the next model (that would leak the reasoning into
     // another answer).
+    const events: AttemptUsageEvent[] = [];
     const h = createDelegationHarness({
+      onAttemptUsage: (event) => events.push(event),
       chain: ['alpha/x', 'beta/fallback'],
       scripts: {
         'alpha/x': [[
@@ -368,6 +370,10 @@ describe('runDelegationLoop contracts', () => {
     expect(h.attempts).toEqual(['alpha/x']);
     expect(h.output.some((e) => (e as { type: string }).type === 'thinking_delta')).toBe(true);
     expect(h.output.some((e) => (e as { type: string }).type === 'text_delta')).toBe(false);
+    expect(events[0]?.outputState).toEqual({ visibleTextReceived: false, toolCallReceived: false, committedToStream: true });
+    expect(events[0]?.timing?.firstEventMs).toBeGreaterThanOrEqual(0);
+    expect(events[0]?.timing).not.toHaveProperty('firstOutputMs');
+    expect(JSON.stringify(events[0])).not.toContain('trace');
   });
 
   it('serves when the first meaningful output arrives exactly at the cap boundary', async () => {
@@ -632,26 +638,27 @@ describe('runDelegationLoop contracts', () => {
     expect(h.blacklist).not.toContain('alpha/limited');
   });
 
-  it('skips a candidate when its request auth metadata cannot resolve', async () => {
-    setDelegationTimeouts({ authMs: 10 });
-    const h = createDelegationHarness({
-      chain: ['alpha/model', 'beta/answer'],
-      getProviderAuth: (provider) => provider === 'alpha' ? new Promise(() => {}) : Promise.resolve(undefined),
-      scripts: {
-        'beta/answer': [
-          [
-            { type: 'text_delta', delta: 'ok' },
-            { type: 'done', message: { stopReason: 'stop' } },
-          ],
-        ],
-      },
-    });
-
-    const result = await h.run();
-
-    expect(result.success).toBe(true);
-    expect(h.attempts).toEqual(['beta/answer']);
-    expect(h.blacklist).toContain('alpha/model');
+  it('waits for slow request auth metadata without a deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createDelegationHarness({
+        chain: ['alpha/model', 'beta/answer'],
+        getProviderAuth: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 6000));
+          return undefined;
+        },
+        scripts: {
+          'alpha/model': [[{ type: 'text_delta', delta: 'ok' }, { type: 'done', message: { stopReason: 'stop' } }]],
+        },
+      });
+      const pending = h.run();
+      await vi.advanceTimersByTimeAsync(6000);
+      expect((await pending).lastServed?.registryId).toBe('alpha/model');
+      expect(h.attempts).toEqual(['alpha/model']);
+      expect(h.blacklist).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not blacklist or attempt a fallback when aborted during retry entry', async () => {
@@ -940,33 +947,36 @@ describe('runDelegationLoop fallback policy', () => {
     ).toBe(false);
   });
 
-  it('a single thinking token does not disable the answer deadline', async () => {
-    // R5 liveness: thinking keeps a reasoning-stall deadline alive but must not
-    // cancel it outright — a provider that emits one thinking token then hangs
-    // still times out and falls over instead of blocking the turn forever.
-    setDelegationTimeouts({ firstEventMs: 40, authMs: 500 });
-    const thinkThenHang: AsyncIterable<unknown> = {
-      async *[Symbol.asyncIterator]() {
-        yield { type: 'thinking_delta', delta: 'reasoning...' };
-        await new Promise(() => {});
-      },
-    };
-    const h = createDelegationHarness({
-      chain: ['alpha/staller', 'beta/answer'],
-      scripts: {
-        'alpha/staller': [thinkThenHang],
-        'beta/answer': [
-          [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }],
-        ],
-      },
-    });
-
-    const result = await h.run();
-
-    expect(result.success).toBe(true);
-    expect(h.attempts).toEqual(['alpha/staller', 'beta/answer']);
-    expect(result.lastServed?.registryId).toBe('beta/answer');
-    expect(h.output.some((e) => (e as { type: string }).type === 'thinking_delta')).toBe(false);
+  it('waits through a long silence after thinking without replay', async () => {
+    vi.useFakeTimers();
+    try {
+      const events: AttemptUsageEvent[] = [];
+      const h = createDelegationHarness({
+        chain: ['alpha/thinker', 'beta/answer'],
+        scripts: {
+          'alpha/thinker': [{
+            async *[Symbol.asyncIterator]() {
+              yield { type: 'thinking_delta', delta: 'reasoning...' };
+              await new Promise((resolve) => setTimeout(resolve, 31000));
+              yield { type: 'text_delta', delta: 'served' };
+              yield { type: 'done', message: { stopReason: 'stop' } };
+            },
+          }],
+        },
+        onAttemptUsage: (event) => events.push(event),
+      });
+      const pending = h.run();
+      await vi.advanceTimersByTimeAsync(31000);
+      expect((await pending).lastServed?.registryId).toBe('alpha/thinker');
+      expect(h.attempts).toEqual(['alpha/thinker']);
+      expect(h.blacklist).toEqual([]);
+      expect(events[0]).toMatchObject({
+        timing: { authMs: 0, firstEventMs: 0, firstOutputMs: 31000, durationMs: 31000, maxEventGapMs: 31000 },
+        outputState: { visibleTextReceived: true, toolCallReceived: false, committedToStream: false },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never replays after visible text followed by length', async () => {
@@ -1050,32 +1060,34 @@ describe('runDelegationLoop fallback policy', () => {
     expect(h.output.some((e) => (e as { type: string }).type === 'toolcall_start')).toBe(true);
   });
 
-  it('uses one absolute meaningful-output deadline despite lifecycle heartbeats', async () => {
-    setDelegationTimeouts({ firstEventMs: 40, authMs: 500 });
-    const heartbeatStream: AsyncIterable<unknown> = {
-      async *[Symbol.asyncIterator]() {
-        for (let i = 0; i < 20; i++) {
-          yield { type: 'start' };
-          await new Promise((r) => setTimeout(r, 5));
-        }
-        await new Promise(() => {});
-      },
-    };
-    const h = createDelegationHarness({
-      chain: ['alpha/heartbeat', 'beta/answer'],
-      scripts: {
-        'alpha/heartbeat': [heartbeatStream],
-        'beta/answer': [
-          [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }],
-        ],
-      },
-    });
-
-    const result = await h.run();
-
-    expect(result.success).toBe(true);
-    expect(h.attempts).toEqual(['alpha/heartbeat', 'beta/answer']);
-    expect(result.lastServed?.registryId).toBe('beta/answer');
+  it('waits for an answer after lifecycle events without a deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const events: AttemptUsageEvent[] = [];
+      const h = createDelegationHarness({
+        onAttemptUsage: (event) => events.push(event),
+        chain: ['alpha/heartbeat', 'beta/answer'],
+        scripts: {
+          'alpha/heartbeat': [{
+            async *[Symbol.asyncIterator]() {
+              yield { type: 'start' };
+              await new Promise((resolve) => setTimeout(resolve, 16000));
+              yield { type: 'start' };
+              await new Promise((resolve) => setTimeout(resolve, 16000));
+              yield { type: 'text_delta', delta: 'served' };
+              yield { type: 'done', message: { stopReason: 'stop' } };
+            },
+          }],
+        },
+      });
+      const pending = h.run();
+      await vi.advanceTimersByTimeAsync(32000);
+      expect((await pending).lastServed?.registryId).toBe('alpha/heartbeat');
+      expect(h.attempts).toEqual(['alpha/heartbeat']);
+      expect(events[0]?.timing).toEqual({ authMs: 0, firstEventMs: 0, firstOutputMs: 32000, durationMs: 32000, maxEventGapMs: 16000 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not kill provider siblings after one failed model', async () => {
@@ -1134,29 +1146,27 @@ describe('runDelegationLoop fallback policy', () => {
     expect(h.streamedModels[0]?.baseUrl).toBe('https://api.alpha.override');
   });
 
-  it('falls back after a hanging credential lookup times out', async () => {
-    setDelegationTimeouts({ authMs: 20 });
+  it('allows caller cancellation of a hanging credential lookup', async () => {
+    const controller = new AbortController();
+    const authStarted = Promise.withResolvers<void>();
     const h = createDelegationHarness({
       chain: ['alpha/hang', 'beta/answer'],
+      signal: controller.signal,
       registry: {
-        getApiKeyAndHeaders: async (model: Model<Api>) => {
-          // Only hang for the first candidate; the fallback must still resolve.
-          if (`${model.provider}/${model.id}` === 'alpha/hang') return new Promise(() => {});
-          return { ok: true, apiKey: 'test-key', headers: {} };
+        getApiKeyAndHeaders: async () => {
+          authStarted.resolve();
+          return new Promise(() => {});
         },
       },
-      scripts: {
-        'beta/answer': [
-          [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }],
-        ],
-      },
+      scripts: {},
     });
-
-    const result = await h.run();
-
-    expect(result.success).toBe(true);
-    expect(result.lastServed?.registryId).toBe('beta/answer');
-    expect(h.blacklist).toContain('alpha/hang');
+    const pending = h.run();
+    await authStarted.promise;
+    controller.abort();
+    const result = await pending;
+    expect(result).toMatchObject({ success: false, streamFinalized: true, lastError: 'aborted' });
+    expect(h.attempts).toEqual([]);
+    expect(h.blacklist).toEqual([]);
   });
 
   it('falls back after a hanging iterator cleanup without blocking', async () => {
@@ -1903,6 +1913,81 @@ describe('failure reporting and spend', () => {
     expect(events[1]).toMatchObject({ usageComplete: false });
     expect(events[2]).toMatchObject({ usage: { input: 10, output: 5 }, providerReportedUsd: 0.5, usageComplete: true });
     expect(new Set(events.map((event) => event.usageEventId)).size).toBe(3);
+  });
+
+  it('records delayed first events and tool output separately from auth', async () => {
+    vi.useFakeTimers();
+    try {
+      const events: AttemptUsageEvent[] = [];
+      const h = createDelegationHarness({
+        chain: ['alpha/tool'],
+        getProviderAuth: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          return undefined;
+        },
+        scripts: {
+          'alpha/tool': [{
+            async *[Symbol.asyncIterator]() {
+              await new Promise((resolve) => setTimeout(resolve, 40000));
+              yield { type: 'toolcall_start' };
+              await new Promise((resolve) => setTimeout(resolve, 4000));
+              yield { type: 'toolcall_end' };
+              yield { type: 'done', message: { stopReason: 'toolUse' } };
+            },
+          }],
+        },
+        onAttemptUsage: (event) => events.push(event),
+      });
+      const pending = h.run();
+      await vi.advanceTimersByTimeAsync(45000);
+      expect((await pending).success).toBe(true);
+      expect(h.attempts).toEqual(['alpha/tool']);
+      expect(events[0]).toMatchObject({
+        served: true,
+        timing: { authMs: 1000, firstEventMs: 41000, firstOutputMs: 41000, durationMs: 45000, maxEventGapMs: 40000 },
+        outputState: { visibleTextReceived: false, toolCallReceived: true, committedToStream: false },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records an unfinished silent attempt when the caller cancels it', async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const events: AttemptUsageEvent[] = [];
+      const h = createDelegationHarness({
+        chain: ['alpha/silent', 'beta/answer'],
+        signal: controller.signal,
+        scripts: {
+          'alpha/silent': [{
+            async *[Symbol.asyncIterator]() {
+              await new Promise((resolve) => setTimeout(resolve, 45000));
+              controller.abort();
+              await new Promise(() => {});
+            },
+          }],
+        },
+        onAttemptUsage: (event) => events.push(event),
+      });
+      const pending = h.run();
+      await vi.advanceTimersByTimeAsync(45000);
+      expect(await pending).toMatchObject({ success: false, streamFinalized: true, lastError: 'aborted' });
+      expect(h.attempts).toEqual(['alpha/silent']);
+      expect(h.blacklist).toEqual([]);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        served: false,
+        failure: { category: 'aborted' },
+        timing: { authMs: 0, durationMs: 45000, maxEventGapMs: 45000 },
+        outputState: { visibleTextReceived: false, toolCallReceived: false, committedToStream: false },
+      });
+      expect(events[0]?.timing).not.toHaveProperty('firstEventMs');
+      expect(events[0]?.timing).not.toHaveProperty('firstOutputMs');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('reports the category and status of a failed attempt and never its message', async () => {

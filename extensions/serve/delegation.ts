@@ -4,8 +4,8 @@
  * Walks the ranked fallback chain produced by the scorer, attempts each model
  * in turn, and pumps stream events back to the caller until one candidate
  * succeeds or the chain is exhausted. Pi's registry owns request auth and
- * provider dispatch; the router owns bounded setup/output waits, same-model
- * retries, blacklisting, and provider circuit-breaking.
+ * provider dispatch; the router owns same-model retries, blacklisting, and
+ * provider circuit-breaking. Only caller cancellation limits an attempt's wait.
  */
 import {
   isRetryableAssistantError,
@@ -51,8 +51,6 @@ import { isUsageLimitErrorMessage } from './usage-limit.js';
 import { priceTokens } from './baseline.js';
 import { randomUUID } from 'node:crypto';
 
-const AUTH_RESOLVE_TIMEOUT_MS = 5000;
-const FIRST_EVENT_TIMEOUT_MS = 30000;
 const MAX_FAILURES_PER_PROVIDER = 3;
 /** Same-model retries for a transient provider error (overload/5xx/network). */
 const MAX_TRANSIENT_RETRIES = 2;
@@ -92,14 +90,10 @@ function bufferedEventSize(event: unknown, remaining: number): number {
   return size;
 }
 
-let authResolveTimeoutMs = AUTH_RESOLVE_TIMEOUT_MS;
-let firstEventTimeoutMs = FIRST_EVENT_TIMEOUT_MS;
 let retryBackoffMs = 400;
 
-/** Test seam: override delegation timeouts. Call with no args to reset. */
-export function setDelegationTimeouts(opts?: { authMs?: number; firstEventMs?: number; retryBackoffMs?: number }): void {
-  authResolveTimeoutMs = opts?.authMs ?? AUTH_RESOLVE_TIMEOUT_MS;
-  firstEventTimeoutMs = opts?.firstEventMs ?? FIRST_EVENT_TIMEOUT_MS;
+/** Test seam: override the retry delay. Call with no args to reset. */
+export function setDelegationTimeouts(opts?: { retryBackoffMs?: number }): void {
   retryBackoffMs = opts?.retryBackoffMs ?? 400;
 }
 
@@ -702,7 +696,6 @@ class AttemptController {
   toolCallReceived = false;
   thinkingReceived = false;
   meaningfulOutputReceived = false;
-  sawFirstEvent = false;
   /**
    * Latched once a severe pre-output reasoning loop is observed, independent of
    * whether a stronger target exists. The share-based severe verdict can decay
@@ -807,7 +800,7 @@ class AttemptController {
     }
   }
 
-  commitUsage(providerAttempted: boolean, served: boolean, failure?: AttemptFailureInfo): void {
+  commitUsage(providerAttempted: boolean, served: boolean, timing: NonNullable<AttemptUsageEvent['timing']>, failure?: AttemptFailureInfo): void {
     if (this.usageCommitted) return;
     this.usageCommitted = true;
     if (this.observedUsage) {
@@ -826,11 +819,11 @@ class AttemptController {
       candidate: this.candidate.candidateId,
       usage: this.observedUsage ? 'observed' : 'missing',
     });
-    if (providerAttempted) this.reportAttemptUsage(served, failure);
+    if (providerAttempted) this.reportAttemptUsage(served, timing, failure);
   }
 
   /** A report failure never changes the turn. */
-  private reportAttemptUsage(served: boolean, failure?: AttemptFailureInfo): void {
+  private reportAttemptUsage(served: boolean, timing: NonNullable<AttemptUsageEvent['timing']>, failure?: AttemptFailureInfo): void {
     try {
       const usage = this.observedUsage;
       this.ctx.opts.onAttemptUsage?.({
@@ -840,6 +833,12 @@ class AttemptController {
         candidateKey: this.candidate.candidateId,
         ...(this.candidate.effectiveReasoning ? { servedEffort: this.candidate.effectiveReasoning } : {}),
         served,
+        timing,
+        outputState: {
+          visibleTextReceived: this.visibleTextReceived,
+          toolCallReceived: this.toolCallReceived,
+          committedToStream: this.committedToStream,
+        },
         ...(failure ? { failure } : {}),
         ...(usage ? { usage: { input: usage.input ?? 0, output: usage.output ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 } } : {}),
         usageComplete: usage !== undefined && this.terminalAccounting,
@@ -878,9 +877,8 @@ function failureMessage(failure: AttemptFailure): string {
 }
 
 /** The category that the decision log keeps for a failed attempt; it never keeps the message. */
-function attemptFailureInfo(failure: AttemptFailure, userAborted: boolean, attemptAborted: boolean): AttemptFailureInfo {
+function attemptFailureInfo(failure: AttemptFailure, userAborted: boolean): AttemptFailureInfo {
   if (userAborted) return { category: 'aborted' };
-  if (attemptAborted) return { category: 'timeout' };
   if (failure.kind === 'trajectory' || failure.kind === 'output-limit' || failure.kind === 'declined') return { category: failure.kind };
   return classifyProviderFailure(failureMessage(failure));
 }
@@ -952,15 +950,8 @@ async function runCandidateAttempt(
   const streamTimer = startTimer();
   const controller = new AttemptController(ctx, candidate);
   let requestReady = false;
-  let deadline: ReturnType<typeof setTimeout> | undefined;
-  const startDeadline = (ms: number, message: string): void => {
-    clearTimeout(deadline);
-    deadline = setTimeout(() => attemptAbort.abort(new Error(message)), ms);
-  };
-  const startOutputDeadline = (): void => startDeadline(
-    firstEventTimeoutMs,
-    `no response within ${Math.round(firstEventTimeoutMs / 1000)}s: ${candidate.candidateId}`,
-  );
+  const timing: NonNullable<AttemptUsageEvent['timing']> = { durationMs: 0, maxEventGapMs: 0 };
+  let lastEventMs: number | undefined;
   // These values belong to router/auto's resolved request, not the destination.
   // Even the synthetic router API key overrides stored destination credentials.
   const { apiKey: _apiKey, headers: _headers, env: _env, ...options } = ctx.opts.options ?? {};
@@ -969,7 +960,6 @@ async function runCandidateAttempt(
     try {
       attemptAbort.signal.throwIfAborted();
       ctx.opts.onRequest?.();
-      startDeadline(authResolveTimeoutMs, `credential lookup timed out: ${candidate.candidateId}`);
       const delegatedStream = ctx.opts.registry.streamSimple(
         candidate.chosen,
         context,
@@ -984,8 +974,9 @@ async function runCandidateAttempt(
           transformHeaders: (headers) => {
             attemptAbort.signal.throwIfAborted();
             requestReady = true;
-            debugLog('attempt.auth', { candidate: candidate.candidateId, ms: streamTimer(), outcome: 'ok' });
-            startOutputDeadline();
+            timing.authMs = streamTimer();
+            lastEventMs = timing.authMs;
+            debugLog('attempt.auth', { candidate: candidate.candidateId, ms: timing.authMs, outcome: 'ok' });
             return headers;
           },
         },
@@ -995,20 +986,24 @@ async function runCandidateAttempt(
       for (;;) {
         const step = await nextWithAbort(iterator, attemptAbort.signal);
         attemptAbort.signal.throwIfAborted();
-        if (!controller.sawFirstEvent) {
+        if (step.done) break;
+        const eventMs = streamTimer();
+        if (lastEventMs !== undefined) timing.maxEventGapMs = Math.max(timing.maxEventGapMs, eventMs - lastEventMs);
+        lastEventMs = eventMs;
+        if (timing.firstEventMs === undefined) {
+          timing.firstEventMs = eventMs;
           debugLog('attempt.stream', {
             candidate: candidate.candidateId,
-            firstEventMs: streamTimer(),
+            firstEventMs: eventMs,
             outcome: 'first-event',
-            event: step.done ? 'done' : step.value.type,
+            event: step.value.type,
           });
         }
-        controller.sawFirstEvent = true;
-        if (step.done) break;
-
+        if (timing.firstOutputMs === undefined && isServedOutputEvent(step.value.type)) {
+          timing.firstOutputMs = eventMs;
+          debugLog('attempt.stream', { candidate: candidate.candidateId, firstOutputMs: eventMs, outcome: 'first-output' });
+        }
         const disposition = controller.accept(step.value);
-        if (controller.meaningfulOutputReceived) clearTimeout(deadline);
-        else if (step.value.type === 'thinking_delta') startOutputDeadline();
         if (disposition.kind === 'continue') continue;
         failure = disposition.kind === 'trajectory'
           ? { kind: 'trajectory', message: `trajectory reasoning-loop: ${candidate.candidateId}` }
@@ -1048,7 +1043,7 @@ async function runCandidateAttempt(
       debugLog(requestReady ? 'attempt.stream' : 'attempt.auth', {
         candidate: candidate.candidateId,
         streamMs: streamTimer(),
-        outcome: userAborted ? 'aborted' : attemptAbort.signal.aborted ? 'timeout' : 'error',
+        outcome: userAborted ? 'aborted' : 'error',
         error: message.slice(0, 120),
       });
     }
@@ -1064,8 +1059,16 @@ async function runCandidateAttempt(
       effectiveSource: candidate.effectiveSource,
     }, tries);
   } finally {
-    clearTimeout(deadline);
-    controller.commitUsage(requestReady, failure === undefined, failure ? attemptFailureInfo(failure, callerSignal?.aborted === true, attemptAbort.signal.aborted) : undefined);
+    timing.durationMs = streamTimer();
+    if (lastEventMs !== undefined) timing.maxEventGapMs = Math.max(timing.maxEventGapMs, timing.durationMs - lastEventMs);
+    debugLog('attempt.timing', {
+      candidate: candidate.candidateId,
+      ...timing,
+      visibleTextReceived: controller.visibleTextReceived,
+      toolCallReceived: controller.toolCallReceived,
+      committedToStream: controller.committedToStream,
+    });
+    controller.commitUsage(requestReady, failure === undefined, timing, failure ? attemptFailureInfo(failure, callerSignal?.aborted === true) : undefined);
     callerSignal?.removeEventListener('abort', forwardAbort);
     if (!attemptAbort.signal.aborted) attemptAbort.abort();
     if (iterator) closeIterator(iterator);
@@ -1484,8 +1487,8 @@ export async function runDelegationLoop(
 /**
  * Events that prove the candidate actually produced this turn's answer, as
  * opposed to lifecycle-only `start`/`done` or pre-answer `thinking_delta`.
- * Reaching one stops the meaningful-output timeout. Released output locks
- * out replay; gathering text can remain held until message end. Tool calls count: an "implement" turn can be pure tool-call
+ * Released output locks out replay; gathering text can remain held until
+ * message end. Tool calls count: an "implement" turn can be pure tool-call
  * output with no text deltas at all. Thinking is deliberately excluded: it is
  * the model's own reasoning, and streaming a failed candidate's reasoning
  * before its answer arrives would leak it into the fallback model's response.

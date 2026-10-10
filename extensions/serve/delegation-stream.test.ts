@@ -12,7 +12,7 @@
  * the request-boundary tests instantiate Pi's real ModelRuntime and
  * ModelRegistry, including request-time auth and lazy stream setup.
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -32,7 +32,7 @@ import { scriptedRegistryStream } from '../test-support/registry-stream.js';
 import { assistantMessage, runtimeProvider, runtimeRegistry } from '../test-support/runtime-registry.js';
 import { setDecisionLogBase } from '../host/decisionlog.js';
 import { RouterSession } from './router-session-state.js';
-import { runDelegationLoop, setDelegationTimeouts } from './delegation.js';
+import { runDelegationLoop } from './delegation.js';
 
 const decisionLogTestDir = mkdtempSync(join(tmpdir(), 'ar-delegation-stream-log-'));
 
@@ -41,7 +41,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setDelegationTimeouts();
+  vi.useRealTimers();
 });
 
 afterAll(() => {
@@ -246,8 +246,8 @@ describe('runDelegationLoop through Pi ModelRuntime', () => {
     });
   });
 
-  it('bounds request auth and prevents a timed-out setup from dispatching late', async () => {
-    setDelegationTimeouts({ authMs: 20, firstEventMs: 200 });
+  it('waits for request auth without dispatching a fallback', async () => {
+    vi.useFakeTimers();
     const authStarted = Promise.withResolvers<void>();
     const releaseAuth = Promise.withResolvers<void>();
     let alphaDispatches = 0;
@@ -261,7 +261,11 @@ describe('runDelegationLoop through Pi ModelRuntime', () => {
       },
       () => {
         alphaDispatches++;
-        return createAssistantMessageEventStream();
+        const stream = createAssistantMessageEventStream();
+        stream.push(textDelta('alpha/model', 'served') as never);
+        stream.push(doneEvent('alpha/model') as never);
+        stream.end();
+        return stream;
       },
     );
     const beta = runtimeProvider(
@@ -280,20 +284,21 @@ describe('runDelegationLoop through Pi ModelRuntime', () => {
     const runPromise = runWithRegistry(['alpha/model', 'beta/model'], registry);
     await authStarted.promise;
 
-    const run = await runPromise;
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(alphaDispatches).toBe(0);
+    expect(betaDispatches).toBe(0);
     releaseAuth.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const run = await runPromise;
 
     expect(run.result.success).toBe(true);
-    expect(run.finalMessage.model).toBe('model');
-    expect(alphaDispatches).toBe(0);
-    expect(betaDispatches).toBe(1);
-    expect(run.session.getBlacklistedModels()).toContain('alpha/model');
+    expect(run.finalMessage.provider).toBe('alpha');
+    expect(alphaDispatches).toBe(1);
+    expect(betaDispatches).toBe(0);
+    expect(run.session.getBlacklistedModels()).toEqual(new Set());
     expect(run.session.getLastDecision()?.spend?.incomplete).not.toBe(true);
   });
 
   it('surfaces caller cancellation canonically while request auth is pending', async () => {
-    setDelegationTimeouts({ authMs: 500, firstEventMs: 200 });
     const authStarted = Promise.withResolvers<void>();
     const releaseAuth = Promise.withResolvers<void>();
     let dispatches = 0;

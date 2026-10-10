@@ -371,6 +371,17 @@ export interface AttemptUsageEvent {
   served: boolean;
   /** Why the attempt failed: a category and an HTTP status, never the provider message. */
   failure?: { category: string; status?: number };
+  /** Elapsed ms since attempt start, including auth. Missing milestones were not reached. */
+  timing?: {
+    authMs?: number;
+    firstEventMs?: number;
+    firstOutputMs?: number;
+    durationMs: number;
+    /** Longest silence after auth, including the initial and final waits. */
+    maxEventGapMs: number;
+  };
+  /** These flags explain why released output prevents replay after a failure. */
+  outputState?: { visibleTextReceived: boolean; toolCallReceived: boolean; committedToStream: boolean };
   /** Absent when the provider reported no usage. */
   usage?: { input: number; output: number; cacheRead: number; cacheWrite: number };
   /** True when the provider reported a terminal usage. Otherwise the spend is a lower bound. */

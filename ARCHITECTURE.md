@@ -133,7 +133,7 @@ A candidate with no effort label gets Pi's session thinking level, as Pi sends i
 
 The loop walks the ranked fallback chain (each entry is a `provider/id:effort` key) and streams the first candidate that produces meaningful output.
 
-Provider availability is only resolved at stream time. Registry auth-filtering is per-provider, not per-model, and the per-attempt credential check is the real gate — an authenticated provider can still 421/hang/error on a specific model. The fallback chain absorbs the failure, but the first attempt's latency is already spent.
+Provider availability is only resolved at stream time. Registry auth-filtering is per-provider, not per-model, and the per-attempt credential check is the real gate. An authenticated provider can still return an error or wait indefinitely on a specific model. Delegation sets no auth or output deadline. Caller cancellation ends a pending attempt; an explicit failure can advance the fallback chain.
 
 ### Session-scoped manual pin
 
@@ -152,13 +152,15 @@ When `semi: true`, a scored pick that differs from the previously-served model w
 | Failure | Handling |
 |---|---|
 | Not in registry | Blacklisted, next candidate |
-| No credentials / auth timeout (5s) | Blacklisted, provider strike |
-| First event timeout (30s) with no text/thinking/tool | Next candidate |
+| No credentials / auth error | Blacklisted, provider strike |
+| Pending auth or silent stream | Wait until completion, explicit failure, or caller cancellation |
 | Provider `stopReason: error` | Retried same-candidate (up to 2 transient / 1 generic retry), then next candidate |
 | Clean `done` with no text/thinking/tool output | Next candidate |
 | Same, answering a tool result | Handed off: the same candidate is asked once more with a router-authored user turn appended ("Continue the task from the tool results above."), then next candidate. Providers that run their own agent loop (e.g. a Claude Code bridge) only accept tool results for calls they made, but start a fresh query from a user turn with the whole history, so they can pick up another model's tool loop. The turn exists only in the delegated request, never in Pi's transcript, and the decline itself is neither blacklisted nor a provider strike. |
 | Reasoning-only exhausted (`stopReason: length`, no visible text/tool) | Next candidate |
 | User abort | Terminal, no blacklist |
+
+Each provider attempt records `timing` in its `attempt-usage` decision-log entry: `authMs`, `firstEventMs`, and `firstOutputMs` are elapsed milliseconds from attempt start, including auth; `durationMs` is the total elapsed time. A milestone is absent if it was not reached. The first event can be a lifecycle or thinking event; the first output is text or a tool call. `maxEventGapMs` is the longest silence after auth, including the initial wait for an event and the final wait before completion or failure. `outputState` records `visibleTextReceived`, `toolCallReceived`, and `committedToStream`. These flags show why replay is blocked after a failure, including thinking-buffer commits without text or tool calls. The debug log records the same timing and flags, including attempts that fail during auth. The fields contain only numbers and flags, never message content.
 
 ### Provider circuit breaker
 
@@ -329,7 +331,7 @@ timeout 120 npx vitest run
 
 Core modules:
 - `scorer.ts` — pure scoring, `pickBest`, capability tiers, effort resolution (no I/O)
-- `delegation.ts` — fallback loop: auth, retries, circuit breaker, timeouts
+- `delegation.ts` — fallback loop: auth, retries, circuit breaker, caller cancellation, attempt timing
 - `provider.ts` — orchestrator: registry wait, entry phase and escalation, score, delegate; also owns `buildSubagentProviderAuthFilter`, the 3s per-provider credential probe
 - `index.ts` — hook wiring; runs the credential probe before role assignment
 - `adapters/` — benchmark data sources (`artificial-analysis.ts` joins API rows with `artificial-analysis-site.ts`)
