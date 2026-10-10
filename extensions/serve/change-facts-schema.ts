@@ -42,7 +42,9 @@ export function changeFactsParameter(options: { changesAndCheck: boolean; descri
     } : {}),
     precedent: Type.Optional(Type.String({ description: 'An existing file that does the same kind of thing. Omit it when there is none.' })),
     decisions: items('Name each unresolved behavior, interface, or design choice. ' +
-      'For implementation, support openDecisions levels 4 and 5 with these choices. An empty list means these choices are settled.'),
+      'For implementation, support openDecisions levels 4 and 5 with these choices. ' +
+      'Do not list a local implementation choice, such as helper placement or test selection. ' +
+      'An empty list means these choices are settled.'),
     unknowns: items('Facts that are not known yet and that change the result. ' +
       'Include missing source evidence here, not in decisions.'),
     external: items('Libraries, APIs, or services outside the repository that the result depends on.'),

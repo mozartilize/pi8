@@ -19,6 +19,8 @@ describe('implementation evidence guidance', () => {
     const facts = changeFactsParameter({ changesAndCheck: true, description: 'Observed facts.' });
     expect(facts.properties.decisions).toHaveProperty('description', expect.stringContaining('Name each unresolved behavior, interface, or design choice.'));
     expect(facts.properties.decisions).toHaveProperty('description', expect.stringContaining('For implementation, support openDecisions levels 4 and 5 with these choices.'));
+    // A local choice listed here contradicts an openDecisions rating of 3, and the settled ceiling reads only that rating.
+    expect(facts.properties.decisions).toHaveProperty('description', expect.stringContaining('Do not list a local implementation choice, such as helper placement or test selection.'));
     expect(facts.properties.unknowns).toHaveProperty('description', expect.stringContaining('Include missing source evidence here, not in decisions.'));
   });
 
