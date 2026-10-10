@@ -267,7 +267,7 @@ export interface MeasuredFeatures {
 }
 
 /** Why an accepted plan stays with its submitter. */
-export type ContractKeepReason = 'size' | 'difficulty' | 'excluded' | 'unknown-target' | 'delete';
+export type ContractKeepReason = 'size' | 'difficulty' | 'excluded' | 'unknown-target' | 'delete' | 'open-decisions' | 'above-submitter';
 
 /** How a contract ended; the label its logged features are fitted against. */
 export type ContractOutcome = 'clean' | 'fixed' | 'rework' | 'broken' | 'unfinished';

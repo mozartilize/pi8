@@ -29,6 +29,7 @@ import { homedir } from 'node:os';
 import type { FactsLog } from './change-facts.js';
 import { dirname, resolve } from 'node:path';
 import type {
+  Candidate,
   CapabilityBand,
   ContractKeepReason,
   ContractOutcome,
@@ -36,7 +37,7 @@ import type {
   ExecutionRubric,
   MeasuredFeatures,
 } from '../../types.js';
-import { defaultRequirement, parseCandidateKey } from '../score/scorer.js';
+import { defaultRequirement, measuredBelowRequirement, parseCandidateKey } from '../score/scorer.js';
 import { bandRequirement, type WorkPhaseState } from './work-phase.js';
 import {
   BASE_REQUIREMENT,
@@ -269,9 +270,33 @@ function contractRequirement(rubric: ExecutionRubric | undefined, measured: Meas
 interface AcceptInput {
   submitter: string;
   submitterTemporary?: boolean;
+  /** The submitter's candidate row at its served effort; undefined when the pool has none. */
+  submitterCandidate?: Candidate;
   validation: ValidatedContract;
   rubric: ExecutionRubric | undefined;
   measured: MeasuredFeatures;
+}
+
+/**
+ * Lowest `openDecisions` level that names a behavior, interface, or design
+ * choice that is still open. A plan with an open choice is not closed, so its
+ * submitter keeps it.
+ */
+const OPEN_DECISION_LEVEL = 4;
+
+/**
+ * Why the submitter keeps a plan that is otherwise released with `minimum`.
+ * A plan with an open choice stays. A plan whose minimum is above the
+ * submitter's measured quality stays too: releasing it would move the work
+ * to a stronger model in one step, past the escalation rule that goes one
+ * band at a time after a struggle. A submitter with no measurement does not
+ * keep the plan, because unknown quality is not weak quality.
+ */
+function submitterKeepReason(input: AcceptInput, minimum: number, version: PolicyVersion): ContractKeepReason | undefined {
+  if ((input.rubric?.openDecisions ?? 0) >= OPEN_DECISION_LEVEL) return 'open-decisions';
+  return input.submitterCandidate && measuredBelowRequirement(input.submitterCandidate, 'implement', minimum, version)
+    ? 'above-submitter'
+    : undefined;
 }
 
 /**
@@ -293,7 +318,9 @@ function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput):
         : requirement >= MAX_DELEGATABLE_REQUIREMENT
           ? 'difficulty'
           : undefined;
-  const minimum = keepReason == null && shape != null ? Math.max(requirement, shape) : undefined;
+  const released = keepReason == null && shape != null ? Math.max(requirement, shape) : undefined;
+  const kept = keepReason ?? (released != null ? submitterKeepReason(input, released, 'cheapest-sufficient') : undefined);
+  const minimum = kept == null ? released : undefined;
   const contract: ExecutionContract = {
     status: 'active',
     submitter: input.submitter,
@@ -301,7 +328,7 @@ function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput):
     release: minimum != null,
     ...(minimum != null ? { minimum, releasePending: true } : {}),
     requirement,
-    ...(keepReason ? { keepReason } : {}),
+    ...(kept ? { keepReason: kept } : {}),
     ...(rubric ? { rubric } : {}),
     measured,
     targets: validation.targets,
@@ -331,16 +358,18 @@ export function acceptContract(state: WorkPhaseState, input: AcceptInput, versio
         : assessed === 'frontier'
           ? 'difficulty'
           : band === 'frontier' ? 'excluded' : undefined;
-  const bandMinimum = keepReason == null ? executionMinimum(band) : undefined;
+  const released = keepReason == null ? Math.max(requirement, executionMinimum(band)!) : undefined;
+  const kept = keepReason ?? (released != null ? submitterKeepReason(input, released, version) : undefined);
+  const minimum = kept == null ? released : undefined;
   const contract: ExecutionContract = {
     status: 'active',
     submitter: input.submitter,
     ...(input.submitterTemporary ? { submitterTemporary: true } : {}),
-    band: bandMinimum != null ? band : 'frontier',
-    release: bandMinimum != null,
-    ...(bandMinimum != null ? { minimum: Math.max(requirement, bandMinimum), releasePending: true } : {}),
+    band: minimum != null ? band : 'frontier',
+    release: minimum != null,
+    ...(minimum != null ? { minimum, releasePending: true } : {}),
     requirement,
-    ...(keepReason ? { keepReason } : {}),
+    ...(kept ? { keepReason: kept } : {}),
     ...(rubric ? { rubric } : {}),
     measured,
     targets: validation.targets,

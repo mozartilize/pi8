@@ -2696,6 +2696,30 @@ describe('context acquisition', () => {
       });
     });
 
+    describe.each(['legacy', 'cheapest-sufficient'] as const)('a settled plan under the %s policy', (version) => {
+      beforeEach(() => { vi.stubEnv('PI8_POLICY_VERSION', version); });
+      afterEach(() => { vi.unstubAllEnvs(); });
+      // Every criterion at level 3: alpha/cheap measures below the minimum, beta/strong above it.
+      const settledPlan = { ...smallPlan, remainingWork: { openDecisions: 3, spread: 3, verification: 3, knowledge: 3, coupling: 3 } };
+
+      it('stays with a submitter measured below its minimum', async () => {
+        await planned();
+        harness.session.updateLastServed({ registryId: 'alpha/cheap', thinkingLevel: undefined });
+        const result = submitExecutionContract(settledPlan, routerCtx, harness.session, EXISTING_TARGETS);
+        expect(result.accepted).toBe(true);
+        expect(result.text).toContain('The current model keeps executing it');
+        expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: false, keepReason: 'above-submitter' });
+      });
+
+      it('is released by a submitter that meets its minimum', async () => {
+        await planned();
+        expect(submitExecutionContract(settledPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+        const contract = harness.session.getWorkPhaseState()?.contract;
+        expect(contract?.release).toBe(true);
+        expect(contract?.keepReason).toBeUndefined();
+      });
+    });
+
     it('keeps plan/review after a mutation call without an accepted plan', async () => {
       const session = await planned();
       const state = harness.session.getWorkPhaseState()!;

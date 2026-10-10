@@ -182,6 +182,8 @@ const CONTRACT_KEEP_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['k
   excluded: 'earlier executors were excluded',
   'unknown-target': 'it edits a file that does not exist or could not be checked',
   delete: 'it deletes a file',
+  'open-decisions': 'it leaves a choice open',
+  'above-submitter': 'its minimum is above the submitting model',
 };
 
 function contractPlanLine(contract: ExecutionContractMeta): string {

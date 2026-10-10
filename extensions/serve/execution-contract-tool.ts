@@ -23,6 +23,7 @@ import { open } from 'node:fs/promises';
 import {
   ROUTER_PROVIDER_ID,
   AUTO_MODEL_ID,
+  type Candidate,
   type ContractOutcome,
   type MeasuredFeatures,
   type RoutingDecision,
@@ -51,7 +52,7 @@ import {
 import { parseRubric } from '../routing/policy/execution-difficulty.js';
 import { boundaryQualifiers, servesBoundary, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { actionFromTool, cycleFromToolResult, isVerifier } from '../routing/struggle/fingerprints.js';
-import { parseCandidateKey } from '../routing/score/scorer.js';
+import { findSourceCandidate, parseCandidateKey } from '../routing/score/scorer.js';
 import { classifyMutationCall, isMutationCall } from '../routing/policy/mutation-detector.js';
 import type { RouterSession } from './router-session-state.js';
 import { recordBoundary } from './context-resolution.js';
@@ -415,7 +416,17 @@ const KEEP_REASONS = {
   excluded: 'earlier executors broke plans in this task',
   'unknown-target': 'a file the plan edits or deletes does not exist, or could not be checked',
   delete: 'the plan deletes a file, which only the submitting model can finish',
+  'open-decisions': 'the plan leaves a behavior, interface, or design choice open',
+  'above-submitter': 'the plan needs more than the current model\'s measured level. If the current model struggles, '
+    + 'the router moves the work to a stronger model',
 } as const;
+
+/** The served model's candidate row from the routed pool, so the plan can compare its minimum with the submitter. */
+function submitterCandidateOf(session: RouterSession, served: string): { submitterCandidate?: Candidate } {
+  const pool = session.getCandidateExpansion()?.candidates;
+  const submitterCandidate = pool ? findSourceCandidate(pool, served) : undefined;
+  return submitterCandidate ? { submitterCandidate } : {};
+}
 
 function reject(intentKey: string, served: string, rejection: ContractRejection): ContractSubmission {
   appendExecutionContractSignal({ intentKey, served, action: 'reject', rejectReason: rejection.code });
@@ -490,6 +501,7 @@ export function submitExecutionContract(
     // A model that serves only because of an escalation or a fallback does
     // not own the review of the plan it submits.
     submitterTemporary: lastServed?.viaFallback === true || last.trajectoryFriction !== undefined,
+    ...submitterCandidateOf(session, served),
     validation,
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },

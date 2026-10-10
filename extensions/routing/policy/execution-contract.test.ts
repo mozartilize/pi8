@@ -23,6 +23,8 @@ import { BASE_REQUIREMENT, parseRubric } from './execution-difficulty.js';
 import { defaultRequirement } from '../score/scorer.js';
 import { penaltiesOf, withContinuedPenalties, type WorkPhaseState } from './work-phase.js';
 import type { PolicyVersion } from './policy-version.js';
+import { benchRow, candidate } from '../../test-support/router-fixtures.js';
+import type { Candidate } from '../../types.js';
 
 const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
   intentKey: 'intent-a',
@@ -50,11 +52,13 @@ function accepted(
   rubric: Partial<ExecutionRubric> = {},
   observed: Partial<MeasuredFeatures> = {},
   version: PolicyVersion = 'legacy',
+  submitterCandidate?: Candidate,
 ): WorkPhaseState {
   const validation = validateContract(steps, '/repo');
   if (!validation.ok) throw new Error(validation.reason);
   return acceptContract(base, {
     submitter: 'codex/sol:max',
+    ...(submitterCandidate ? { submitterCandidate } : {}),
     validation,
     rubric: { ...EASY, ...rubric },
     measured: { ...validation.structural, ...QUIET, ...observed },
@@ -411,5 +415,46 @@ describe('execution contract under the candidate policy', () => {
           .toEqual({ release: legacy.release, minimum: legacy.minimum, keepReason: legacy.keepReason });
       }
     }
+  });
+});
+
+describe('a plan that its submitter keeps', () => {
+  const VERSIONS = ['legacy', 'cheapest-sufficient'] as const;
+  const steps = [edit('a.ts'), verify];
+  const submitter = (quality: Partial<Candidate['bench'] & object>['quality'], over: Partial<Candidate['bench'] & object> = {}) =>
+    candidate('codex/sol', { effort: 'max', bench: benchRow('codex/sol', { quality: { intelligence: undefined, coding: undefined, agenticCoding: undefined, ...quality }, ...over }) });
+  const STRONG = { intelligence: 57, agenticCoding: 63, agenticIndex: 57 };
+  const WEAK = { intelligence: 10, agenticCoding: 5, agenticIndex: 5 };
+  // Open decisions at level 3 and the other criteria at level 4 ask for more than a quiet one-file fix.
+  const SETTLED_HARD: Partial<ExecutionRubric> = { openDecisions: 3, spread: 4, verification: 4, knowledge: 4, coupling: 4 };
+
+  it.each(VERSIONS)('keeps a plan with an open behavior, interface, or design choice (%s)', (version) => {
+    const contract = accepted(steps, state(), { openDecisions: 4 }, {}, version, submitter(STRONG)).contract!;
+    expect(contract).toMatchObject({ release: false, keepReason: 'open-decisions' });
+    expect(contract.minimum).toBeUndefined();
+  });
+
+  it.each(VERSIONS)('releases a settled plan whose minimum the submitter meets (%s)', (version) => {
+    const contract = accepted(steps, state(), SETTLED_HARD, {}, version, submitter(STRONG)).contract!;
+    expect(contract.release).toBe(true);
+    expect(contract.keepReason).toBeUndefined();
+  });
+
+  it.each(VERSIONS)('keeps a settled plan whose minimum is above the submitter\'s measured quality (%s)', (version) => {
+    const contract = accepted(steps, state(), SETTLED_HARD, {}, version, submitter(WEAK)).contract!;
+    expect(contract.requirement).toBeLessThan(0.85);
+    expect(contract).toMatchObject({ release: false, keepReason: 'above-submitter' });
+    expect(contract.minimum).toBeUndefined();
+  });
+
+  it.each(VERSIONS)('releases the plan when the submitter has no measurement or only an estimate (%s)', (version) => {
+    expect(accepted(steps, state(), SETTLED_HARD, {}, version, submitter({})).contract!.release).toBe(true);
+    expect(accepted(steps, state(), SETTLED_HARD, {}, version, submitter(WEAK, { qualityEstimated: true })).contract!.release).toBe(true);
+    expect(accepted(steps, state(), SETTLED_HARD, {}, version).contract!.release).toBe(true);
+  });
+
+  it.each(VERSIONS)('keeps the difficulty reason for a plan that only the frontier can run (%s)', (version) => {
+    expect(accepted(steps, state(), { openDecisions: 5 }, {}, version, submitter(WEAK)).contract)
+      .toMatchObject({ release: false, keepReason: 'difficulty' });
   });
 });

@@ -278,6 +278,21 @@ function eligibilityOf(quality: BenchModel['quality'] | undefined, minimums: Min
   return unmeasured ? { tier: 1, excludedReason: 'unknown-quality' } : { tier: 0 };
 }
 
+/**
+ * True when the candidate's measured quality is below a minimum of the task
+ * type at `requirement`. A missing or estimated measurement is not below:
+ * unknown quality never counts as weak.
+ */
+export function measuredBelowRequirement(
+  c: Candidate,
+  dimension: Dimension,
+  requirement: number,
+  version: PolicyVersion = 'legacy',
+): boolean {
+  if (c.bench == null || c.bench.qualityEstimated === true) return false;
+  return eligibilityOf(c.bench.quality, minimumsFor(dimension, requirement, version)).tier === 2;
+}
+
 // ─── Cost estimation helpers ─────────────────────────────────────────
 
 /** Output-weighted blend (agents emit more than they read). */
