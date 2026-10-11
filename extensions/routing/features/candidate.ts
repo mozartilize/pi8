@@ -6,7 +6,7 @@
 import type { BenchModel, ProvenanceAxis } from '../../types.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import type { EffectiveAction } from './actions.js';
-import { costFeature, predictSpend, timeFeature, type PredictedSpendV1 } from './economics.js';
+import { costFeature, effortDemandScale, predictSpend, timeFeature, type PredictedSpendV1 } from './economics.js';
 import { clamp01 } from './mapping-v1.js';
 import { capabilityFeatures, evidenceGaps, rowAtServedEffort, type Interval } from './model.js';
 import { FEATURE_INDEX, FEATURE_MAPPING_VERSION, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName } from './schema.js';
@@ -39,11 +39,12 @@ export function candidateFeatures(
     intervals.set(capability.name, capability.interval);
     evidence.push(capability.evidence);
   }
-  const spend = predictSpend(state, action, model.cost, effortSharesCache(model));
-  const cost = costFeature(spend);
+  const demand = effortDemandScale(rows, action);
+  const spend = predictSpend(state, action, model.cost, effortSharesCache(model), demand);
+  const cost = costFeature(spend, demand);
   intervals.set('costDesirability', cost.interval);
   evidence.push(cost.evidence);
-  const time = timeFeature(row);
+  const time = timeFeature(row, demand);
   intervals.set('timeDesirability', time.interval);
   evidence.push(time.evidence);
   const session = sessionFeatures(state, action);

@@ -6,15 +6,24 @@
  * token is priced once. Cache savings enter the cost once and nowhere else;
  * nonfinancial continuity is a separate feature. A missing price gives the
  * common feature interval, never invented dollars.
+ *
+ * Output demand depends on the model and its effort. AA measures the cost of
+ * one task at each effort of a model; at the row's output price this gives
+ * output-equivalent tokens per task, on one scale for all models. Without
+ * this scale a higher effort, or a model that writes more, would gain
+ * quality at no cost or time.
  */
 import type { BenchModel, Candidate } from '../../types.js';
 import { parseCandidateKey } from '../score/scorer.js';
-import type { EffectiveAction } from './actions.js';
+import { effortRank, type EffectiveAction } from './actions.js';
 import {
   OUTPUT_TOKENS_CENTRAL,
   OUTPUT_TOKENS_MAX,
   OUTPUT_TOKENS_MIN,
+  DEMAND_SCALE_UNKNOWN_MAX,
+  DEMAND_SCALE_UNKNOWN_MIN,
   PRICE_UNKNOWN_VALUE,
+  REFERENCE_TOKENS_PER_TASK,
   SPEED_UNKNOWN_VALUE,
   costDesirability,
   latencyProxySeconds,
@@ -31,6 +40,70 @@ export interface SpendBuckets {
   cacheRead: number;
   cacheWrite: number;
   output: number;
+}
+
+/**
+ * How the demand scale was obtained: `measured` from the action's own
+ * effort, `nearest` from another measured effort of the same model, and
+ * `unknown` when the model has no measured cost per task.
+ */
+export type DemandScaleCode = 'measured' | 'nearest' | 'unknown';
+
+/** Output-demand multiplier: a central value and the bounds of its envelope. */
+export interface DemandScale {
+  scale: number;
+  low: number;
+  high: number;
+  code: DemandScaleCode;
+}
+
+export const UNKNOWN_DEMAND: DemandScale = {
+  scale: 1,
+  low: DEMAND_SCALE_UNKNOWN_MIN,
+  high: DEMAND_SCALE_UNKNOWN_MAX,
+  code: 'unknown',
+};
+
+/**
+ * Output-equivalent tokens of one AA task: the AA cost per task at the AA
+ * output price of the same row. The cost includes input tokens, so this
+ * overstates output for input-heavy models; it is one common proxy for all
+ * candidates.
+ */
+function tokensPerTask(row: BenchModel): number | undefined {
+  if (!usable(row.costPerTask) || row.costPerTask === 0) return undefined;
+  if (!usable(row.priceOutputPer1M) || row.priceOutputPer1M === 0) return undefined;
+  return row.costPerTask / perToken(row.priceOutputPer1M);
+}
+
+/**
+ * Output-demand multiplier of one action on one scale for all models:
+ * output-equivalent tokens per AA task divided by `REFERENCE_TOKENS_PER_TASK`.
+ * A model that spends more tokens at every effort gets a larger scale at
+ * every effort. An unmeasured effort takes the scale of the nearest measured
+ * effort above it, so it never looks cheaper than a measured higher effort.
+ * With no measured effort above, it takes the largest measured scale. A model
+ * with no measured cost per task gets the wide unknown envelope.
+ */
+export function effortDemandScale(rows: readonly BenchModel[], action: EffectiveAction): DemandScale {
+  const measured = rows
+    .filter((row) => row.active && row.registryId === action.registryId && tokensPerTask(row) !== undefined)
+    .sort((a, b) => effortRank(a.effort) - effortRank(b.effort));
+  const exact = (row: BenchModel, code: DemandScaleCode): DemandScale => {
+    const scale = tokensPerTask(row)! / REFERENCE_TOKENS_PER_TASK;
+    return { scale, low: scale, high: scale, code };
+  };
+  if (action.effort === undefined) {
+    const own = measured.find((row) => row.effort === undefined || row.effort === 'off');
+    return own ? exact(own, 'measured') : UNKNOWN_DEMAND;
+  }
+  if (measured.length === 0) return UNKNOWN_DEMAND;
+  const own = measured.find((row) => row.effort === action.effort);
+  if (own) return exact(own, 'measured');
+  const above = measured.find((row) => effortRank(row.effort) > effortRank(action.effort));
+  if (above) return exact(above, 'nearest');
+  const largest = measured.reduce((a, b) => (tokensPerTask(b)! > tokensPerTask(a)! ? b : a));
+  return exact(largest, 'nearest');
 }
 
 export interface PredictedSpendV1 {
@@ -73,7 +146,9 @@ export function predictSpend(
   action: EffectiveAction,
   pricing: Pricing | undefined,
   effortSharesCache: boolean,
+  demand: DemandScale = UNKNOWN_DEMAND,
 ): PredictedSpendV1 {
+  const outputCentral = OUTPUT_TOKENS_CENTRAL * demand.scale;
   const input = Math.max(0, state.estimatedContextTokens);
   const warm = usableWarmPrefix(state, action, effortSharesCache);
   const writeBilled = usable(pricing?.cacheWrite) && pricing!.cacheWrite! > 0;
@@ -81,7 +156,7 @@ export function predictSpend(
     cacheRead: warm,
     cacheWrite: writeBilled ? input - warm : 0,
     uncachedInput: writeBilled ? 0 : input - warm,
-    output: OUTPUT_TOKENS_CENTRAL,
+    output: outputCentral,
   };
   const cacheHitEstimate = warm > 0 ? 'uncertain' as const : 'none' as const;
   if (!pricing || !usable(pricing.input) || !usable(pricing.output)) {
@@ -94,13 +169,13 @@ export function predictSpend(
   // Unknown cache-read price: no credit in the center, a widened lower bound.
   const readCentral = readKnown ? perToken(pricing.cacheRead!) : missPrice;
   const readLow = readKnown ? perToken(pricing.cacheRead!) : 0;
-  const centralUSD = warm * readCentral + (input - warm) * missPrice + OUTPUT_TOKENS_CENTRAL * outputPrice;
-  const minUSD = warm * readLow + (input - warm) * missPrice + OUTPUT_TOKENS_MIN * outputPrice;
-  const maxUSD = input * missPrice + OUTPUT_TOKENS_MAX * outputPrice;
+  const centralUSD = warm * readCentral + (input - warm) * missPrice + outputCentral * outputPrice;
+  const minUSD = warm * readLow + (input - warm) * missPrice + OUTPUT_TOKENS_MIN * demand.low * outputPrice;
+  const maxUSD = input * missPrice + OUTPUT_TOKENS_MAX * demand.high * outputPrice;
   return { priceKnown: true, centralUSD, minUSD, maxUSD, cacheHitEstimate, tokens };
 }
 
-export function costFeature(spend: PredictedSpendV1): { interval: Interval; evidence: FeatureEvidence } {
+export function costFeature(spend: PredictedSpendV1, demand: DemandScale = UNKNOWN_DEMAND): { interval: Interval; evidence: FeatureEvidence } {
   if (!spend.priceKnown) {
     return {
       interval: { center: PRICE_UNKNOWN_VALUE, lower: 0, upper: 1 },
@@ -110,11 +185,14 @@ export function costFeature(spend: PredictedSpendV1): { interval: Interval; evid
   return {
     // Desirability falls with cost, so the bounds swap.
     interval: { center: costDesirability(spend.centralUSD!), lower: costDesirability(spend.maxUSD!), upper: costDesirability(spend.minUSD!) },
-    evidence: { feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION, details: [`cache:${spend.cacheHitEstimate}`] },
+    evidence: { feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION, details: [`cache:${spend.cacheHitEstimate}`, `demand:${demand.code}`] },
   };
 }
 
-export function timeFeature(row: BenchModel | undefined): { interval: Interval; evidence: FeatureEvidence } {
+export function timeFeature(
+  row: BenchModel | undefined,
+  demand: DemandScale = UNKNOWN_DEMAND,
+): { interval: Interval; evidence: FeatureEvidence } {
   const tps = row?.outputSpeedTps;
   if (!usable(tps) || tps === 0) {
     return {
@@ -124,10 +202,10 @@ export function timeFeature(row: BenchModel | undefined): { interval: Interval; 
   }
   return {
     interval: {
-      center: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_CENTRAL, tps)),
-      lower: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_MAX, tps)),
-      upper: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_MIN, tps)),
+      center: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_CENTRAL * demand.scale, tps)),
+      lower: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_MAX * demand.high, tps)),
+      upper: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_MIN * demand.low, tps)),
     },
-    evidence: { feature: 'timeDesirability', code: 'speed-known', mapping: FEATURE_MAPPING_VERSION },
+    evidence: { feature: 'timeDesirability', code: 'speed-known', mapping: FEATURE_MAPPING_VERSION, details: [`demand:${demand.code}`] },
   };
 }

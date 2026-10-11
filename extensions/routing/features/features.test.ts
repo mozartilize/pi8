@@ -383,8 +383,88 @@ describe('cache-aware cost', () => {
     const noRead = registryModel('o', 'gpt', { cost: { input: 2, output: 8 } });
     const spend = usd(cacheState(), noRead, oHigh);
     // Central: no cache credit. Minimum: free cached tokens. Maximum: all input missed.
+    // No benchmark row: output uses the unknown demand envelope [0.05, 12].
     expect(spend.centralUSD).toBeCloseTo(100_000 * 2 / 1e6 + 1024 * 8 / 1e6, 12);
-    expect(spend.minUSD).toBeCloseTo(60_000 * 2 / 1e6 + 512 * 8 / 1e6, 12);
-    expect(spend.maxUSD).toBeCloseTo(100_000 * 2 / 1e6 + 4096 * 8 / 1e6, 12);
+    expect(spend.minUSD).toBeCloseTo(60_000 * 2 / 1e6 + 512 * 0.05 * 8 / 1e6, 12);
+    expect(spend.maxUSD).toBeCloseTo(100_000 * 2 / 1e6 + 4096 * 12 * 8 / 1e6, 12);
+  });
+});
+
+describe('output demand scales with AA output-equivalent tokens per task', () => {
+  const model = registryModel('p', 'xmodel');
+  const actionAt = (effort: ModelThinkingLevel) => enumerateEffectiveActions(model).find((a) => a.effort === effort)!;
+  // At $4/M output, $0.40 per task is 100,000 tokens: demand scale 1.
+  const benchRow = (effort: ModelThinkingLevel, costPerTask: number | undefined, registryId = 'p/xmodel'): BenchModel => ({
+    registryId, benchSlug: `${registryId}-${effort}`, active: true, effort, source: 'aa',
+    quality: { intelligence: 50 }, axisProvenance: { intelligence: 'measured' }, outputSpeedTps: 100,
+    priceOutputPer1M: 4, costPerTask,
+  });
+  const rows = [benchRow('low', 0.4), benchRow('high', 1.6), benchRow('max', 4.8)];
+  const at = (effort: ModelThinkingLevel, rowsIn: BenchModel[] = rows, m: RegistryModelInfo = model) =>
+    candidateFeatures(state(), m, enumerateEffectiveActions(m).find((a) => a.effort === effort) ?? actionAt(effort), rowsIn);
+  const demandCode = (result: ReturnType<typeof at>, name: FeatureName) =>
+    result.features.evidence.find((e) => e.feature === name)!.details!.find((d) => d.startsWith('demand:'));
+
+  it('multiplies output tokens by tokens per task over the reference', () => {
+    // 10,000 input at $1/M; output 1,024 x scale at $4/M. low: 1, high: 4, max: 12.
+    expect(at('low').spend.tokens.output).toBeCloseTo(1024, 9);
+    expect(at('high').spend.tokens.output).toBeCloseTo(4096, 9);
+    expect(at('max').spend.centralUSD).toBeCloseTo(10_000 / 1e6 + 1024 * 12 * 4 / 1e6, 12);
+    expect(at('max').spend.minUSD).toBeCloseTo(10_000 / 1e6 + 512 * 12 * 4 / 1e6, 12);
+    expect(at('max').spend.maxUSD).toBeCloseTo(10_000 / 1e6 + 4096 * 12 * 4 / 1e6, 12);
+    expect(demandCode(at('max'), 'costDesirability')).toBe('demand:measured');
+  });
+
+  it('a higher measured effort of the same model is never cheaper or faster', () => {
+    const cost = (e: ModelThinkingLevel) => feature(at(e).features, 'costDesirability')[0];
+    const time = (e: ModelThinkingLevel) => feature(at(e).features, 'timeDesirability')[0];
+    expect(cost('low')).toBeGreaterThan(cost('high'));
+    expect(cost('high')).toBeGreaterThan(cost('max'));
+    expect(time('low')).toBeGreaterThan(time('high'));
+    expect(time('high')).toBeGreaterThan(time('max'));
+  });
+
+  it('compares models on one scale: a model that writes more is costlier at its lowest effort too', () => {
+    const terse = registryModel('t', 'terse');
+    const verbose = registryModel('v', 'verbose');
+    const terseRows = [benchRow('low', 0.2, 't/terse'), benchRow('high', 0.8, 't/terse')];
+    const verboseRows = [benchRow('low', 2, 'v/verbose')];
+    const terseHigh = at('high', terseRows, terse);
+    const verboseLow = at('low', verboseRows, verbose);
+    expect(verboseLow.spend.tokens.output).toBeGreaterThan(terseHigh.spend.tokens.output);
+    expect(feature(verboseLow.features, 'costDesirability')[0]).toBeLessThan(feature(terseHigh.features, 'costDesirability')[0]);
+  });
+
+  it('an unmeasured effort takes the scale of the nearest measured effort above it', () => {
+    expect(at('medium').spend.tokens.output).toBeCloseTo(4096, 9);
+    expect(demandCode(at('medium'), 'costDesirability')).toBe('demand:nearest');
+  });
+
+  it('an unmeasured effort above every measured effort takes the largest measured scale', () => {
+    const partial = [benchRow('low', 0.4), benchRow('medium', 2.4), benchRow('high', 1.6)];
+    expect(at('max', partial).spend.tokens.output).toBeCloseTo(1024 * 6, 9);
+  });
+
+  it('a model with no measured cost per task gets the wide unknown envelope, not an advantage', () => {
+    const unmeasured = [benchRow('low', undefined), { ...benchRow('max', 4.8), priceOutputPer1M: undefined }];
+    const spend = at('max', unmeasured).spend;
+    expect(spend.tokens.output).toBe(1024);
+    expect(spend.minUSD).toBeCloseTo(10_000 / 1e6 + 512 * 0.05 * 4 / 1e6, 12);
+    expect(spend.maxUSD).toBeCloseTo(10_000 / 1e6 + 4096 * 12 * 4 / 1e6, 12);
+    expect(demandCode(at('max', unmeasured), 'costDesirability')).toBe('demand:unknown');
+    const time = feature(at('max', unmeasured).features, 'timeDesirability');
+    const measuredTime = feature(at('low').features, 'timeDesirability');
+    expect(time[0]).toBeCloseTo(measuredTime[0], 12);
+    expect(time[1]).toBeLessThan(measuredTime[1]);
+    expect(time[2]).toBeGreaterThan(measuredTime[2]);
+  });
+
+  it('cost rows of another model or an inactive row do not set the scale', () => {
+    const noise = [
+      { ...benchRow('max', 0.04), registryId: 'q/other' },
+      { ...benchRow('max', 0.04), active: false },
+      benchRow('high', 1.6), benchRow('max', 4.8),
+    ];
+    expect(at('max', noise).spend.tokens.output).toBeCloseTo(1024 * 12, 9);
   });
 });
