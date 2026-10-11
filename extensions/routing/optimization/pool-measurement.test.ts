@@ -113,7 +113,7 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
                     const exactQuality = [0, 1, 2].filter((j) => action.lower[j] === action.upper[j]).length;
                     return `${key} MR=${result.maxRegret?.get(key)?.toFixed(4) ?? '-'} exactQualityAxes=${exactQuality}/3`;
                   };
-                  log(`  ${label} ${phase}: ${result.solver}; top ${result.ranking.slice(0, 3).map(describe).join(' | ')}`);
+                  log(`  ${label} ${phase}: compared ${result.actions.length - result.insufficientEvidence.length}/${result.actions.length} (${result.insufficientEvidence.length} without required evidence, last in ranking); ${result.solver}; top ${result.ranking.slice(0, 3).map(describe).join(' | ')}`);
                 }
               }
             }

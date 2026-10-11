@@ -3,12 +3,12 @@
  * the unified selector. Every value is in [0, 1] and every interval contains
  * its central representative.
  */
-import type { BenchModel } from '../../types.js';
+import type { BenchModel, ProvenanceAxis } from '../../types.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import type { EffectiveAction } from './actions.js';
 import { costFeature, predictSpend, timeFeature, type PredictedSpendV1 } from './economics.js';
 import { clamp01 } from './mapping-v1.js';
-import { capabilityFeatures, rowAtServedEffort, type Interval } from './model.js';
+import { capabilityFeatures, evidenceGaps, rowAtServedEffort, type Interval } from './model.js';
 import { FEATURE_INDEX, FEATURE_MAPPING_VERSION, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName } from './schema.js';
 import { sessionFeatures } from './session.js';
 import type { DecisionStateV1 } from './state.js';
@@ -17,6 +17,8 @@ export interface ActionFeatures {
   action: EffectiveAction;
   features: ActionFeatureVector;
   spend: PredictedSpendV1;
+  /** Required quality axes without evidence; empty when the action can be compared. */
+  evidenceGaps: ProvenanceAxis[];
 }
 
 /** pi-ai keeps the cached prefix across efforts only for per-message effort. */
@@ -65,5 +67,5 @@ export function candidateFeatures(
     upper[j] = clamp01(interval.upper);
     values[j] = Math.min(upper[j]!, Math.max(lower[j]!, clamp01(interval.center)));
   }
-  return { action, features: { key: action.key, values, lower, upper, evidence }, spend };
+  return { action, features: { key: action.key, values, lower, upper, evidence }, spend, evidenceGaps: evidenceGaps(row, state) };
 }

@@ -15,6 +15,7 @@ import { estimateRow } from '../score/effort-estimate.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import { enumerateEffectiveActions, overrideAction, type EffectiveAction } from './actions.js';
 import { candidateFeatures } from './candidate.js';
+import { evidenceGaps } from './model.js';
 import { FEATURE_INDEX, type FeatureName } from './schema.js';
 import { sessionFeatures } from './session.js';
 import type { DecisionStateV1 } from './state.js';
@@ -190,6 +191,57 @@ describe('N2 merge: whole-row precedence', () => {
     const three: BenchModel = { ...base, benchSlug: 'a', quality: { intelligence: 61, knowledge: 2 }, axisProvenance: { intelligence: 'measured', knowledge: 'source-estimated' } };
     expect(mergeBenchRows([one, three])).toEqual([three]);
     expect(mergeBenchRows([three, one])).toEqual([three]);
+  });
+});
+
+describe('required evidence per phase', () => {
+  const model = registryModel('p', 'xmodel');
+  const action = enumerateEffectiveActions(model).find((a) => a.effort === 'high')!;
+  const full: BenchModel['axisProvenance'] = { intelligence: 'measured', agenticCoding: 'measured', research: 'measured', knowledge: 'measured', longContext: 'measured', visionReasoning: 'measured' };
+  const row = (quality: BenchModel['quality'], axisProvenance: BenchModel['axisProvenance']): BenchModel[] =>
+    [{ registryId: 'p/xmodel', benchSlug: 'xmodel', active: true, effort: 'high', source: 'aa', quality, axisProvenance }];
+  const gaps = (rows: BenchModel[], patch: Partial<DecisionStateV1> = {}) =>
+    candidateFeatures(state(patch), model, action, rows).evidenceGaps;
+
+  it('a model with no benchmark row has a gap on every axis its phase relies on', () => {
+    expect(gaps([], { phase: 'lightweight' })).toEqual([]);
+    expect(gaps([], { phase: 'gather' })).toEqual(['research']);
+    expect(gaps([], { phase: 'plan' })).toEqual(['intelligence']);
+    expect(gaps([], { phase: 'review' })).toEqual(['intelligence']);
+    expect(gaps([], { phase: 'implement' }).sort()).toEqual(['agenticCoding', 'intelligence']);
+  });
+
+  it('needs only the axes of the phase: missing vision or research does not matter for implement', () => {
+    const rows = row({ intelligence: 50, agenticCoding: 30 }, { intelligence: 'measured', agenticCoding: 'measured' });
+    expect(gaps(rows, { phase: 'implement' })).toEqual([]);
+    expect(gaps(rows, { phase: 'gather' })).toEqual(['research']);
+  });
+
+  it('needs vision only with an image and long-context quality only from 64,000 tokens', () => {
+    const rows = row({ intelligence: 50 }, { intelligence: 'measured' });
+    expect(gaps(rows, { phase: 'plan' })).toEqual([]);
+    expect(gaps(rows, { phase: 'plan', needsVision: true })).toEqual(['visionReasoning']);
+    expect(gaps(rows, { phase: 'plan', estimatedContextTokens: 63_999 })).toEqual([]);
+    expect(gaps(rows, { phase: 'plan', estimatedContextTokens: 64_000 })).toEqual(['longContext']);
+  });
+
+  it('counts measured and source-estimated values as evidence, and nothing else', () => {
+    const at = (provenance: NonNullable<BenchModel['axisProvenance']>[keyof NonNullable<BenchModel['axisProvenance']>]) =>
+      gaps(row({ intelligence: 50 }, { intelligence: provenance }), { phase: 'plan' });
+    expect(at('measured')).toEqual([]);
+    expect(at('source-estimated')).toEqual([]);
+    for (const none of ['regression-bridge', 'effort-stepdown', 'missing'] as const) expect(at(none)).toEqual(['intelligence']);
+    // A value without provenance (a row written before provenance existed) is not evidence.
+    expect(gaps(row({ intelligence: 50 }, undefined), { phase: 'plan' })).toEqual(['intelligence']);
+    // An incompatible index version voids Intelligence.
+    expect(gaps(row({ intelligence: 50 }, full), { phase: 'plan', benchmarkIndexVersion: '5.0' })).toEqual(['intelligence']);
+  });
+
+  it('an unmeasured effort of a measured model has a gap: evidence is exact-effort only', () => {
+    const rows = row({ intelligence: 62 }, { intelligence: 'measured' });
+    const max = enumerateEffectiveActions(model).find((a) => a.effort === 'max')!;
+    expect(candidateFeatures(state({ phase: 'plan' }), model, max, rows).evidenceGaps).toEqual(['intelligence']);
+    expect(evidenceGaps(rows[0], state({ phase: 'plan' }))).toEqual([]);
   });
 });
 

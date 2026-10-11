@@ -22,7 +22,7 @@ const REVISIONS: AssignmentRevisions = {
 
 const decision = (chosen: string, ranking = [chosen]): UnifiedDecision => ({
   kind: 'decision', solver: 'exact', domainStatus: 'ready', constraintsEnforced: true, chosen, ranking,
-  profileDigest: 'd1', featureSchemaDigest: 'f', actions: [],
+  profileDigest: 'd1', featureSchemaDigest: 'f', actions: [], insufficientEvidence: [], allInsufficient: false,
 });
 
 interface Deferred { promise: Promise<void>; resolve: () => void }

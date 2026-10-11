@@ -46,7 +46,7 @@ class FakeAttempt implements LiveAttempt {
 
 const decision = (chosen: string, patch: Partial<UnifiedDecision> = {}): SelectionResult => ({
   kind: 'decision', solver: 'exact', domainStatus: 'ready', constraintsEnforced: true,
-  chosen, ranking: [chosen, 'a/A:high', 'c/C:high'], profileDigest: 'd1', featureSchemaDigest: 'f', actions: [], ...patch,
+  chosen, ranking: [chosen, 'a/A:high', 'c/C:high'], profileDigest: 'd1', featureSchemaDigest: 'f', actions: [], insufficientEvidence: [], allInsufficient: false, ...patch,
 });
 
 const reachable = ['a/A:high', 'b/B:high', 'c/C:high'];

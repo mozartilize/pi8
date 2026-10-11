@@ -4,7 +4,7 @@
  * identity validation against an adversarial domain lookup, and a correct
  * label on every result path.
  */
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { BenchModel } from '../../types.js';
 import { greedyBoxSimplexMax } from '../../test-support/lp-oracle.js';
@@ -16,7 +16,7 @@ import type { RegistryModelInfo } from '../score/scorer.js';
 import { compileDomainArtifact, thetaBaseDomain, type DomainArtifact } from './domain.js';
 import { WorkerLpAdapter, type LPAdapter, type LpRequest, type LpResult } from './lp.js';
 import { centralChoice, solveMinimaxRegret, sortByKey } from './regret.js';
-import { DomainCache, selectByRegret, type SelectionCandidate, type SelectorPorts } from './select.js';
+import { DomainCache, selectByRegret, type SelectionCandidate, type SelectorPorts, type UnifiedDecision } from './select.js';
 import { THETA0, THETA_BOUNDS } from './weights.js';
 
 const lp = new WorkerLpAdapter();
@@ -100,6 +100,11 @@ const OTHER: UserRoutingPreferencesV1 = { version: 1, settledImplementation: 'hi
 const portsWith = (lookup: (identity: string) => DomainArtifact | undefined, adapter: LPAdapter = lp): SelectorPorts =>
   ({ lp: adapter, domains: { lookup } });
 
+/** Ports whose domain lookup serves the compiled OPERATOR artifact; the solver is `adapter`. */
+let operatorArtifact: DomainArtifact;
+beforeAll(async () => { operatorArtifact = await compileDomainArtifact(OPERATOR, lp); });
+const readyPorts = (adapter: LPAdapter = lp): SelectorPorts => portsWith((identity) => (identity === operatorArtifact.identity ? operatorArtifact : undefined), adapter);
+
 /** Holds every LP request until released. */
 class GatedLp implements LPAdapter {
   private release!: () => void;
@@ -122,6 +127,16 @@ describe('selectByRegret result paths', () => {
     expect(result).toMatchObject({ kind: 'decision', solver: 'exact', domainStatus: 'ready', constraintsEnforced: true });
     if (result.kind !== 'decision') throw new Error('unreachable');
     expect(new Set(result.ranking)).toEqual(new Set(['c/cheap:high', 's/strong:high']));
+  });
+
+  it('uses no LP for a profile without constraints: the closed form is exact', async () => {
+    const profile = { version: 1 } as UserRoutingPreferencesV1;
+    const noLp: LPAdapter = { solve: async () => { throw new Error('LP must not run'); }, close: async () => {} };
+    const result = await selectByRegret(decisionState, candidates, rows, snapshot(profile), portsWith(() => undefined, noLp),
+      { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 0 });
+    expect(result).toMatchObject({ kind: 'decision', solver: 'exact', constraintsEnforced: true });
+    const viaLp = await solveMinimaxRegret(candidates.map((c) => ({ features: (result as UnifiedDecision).actions.find((a) => a.action.key === c.action.key)!.features })), { ...thetaBaseDomain(), mode: 'hard' }, lp);
+    expect(viaLp.chosen).toBe((result as UnifiedDecision).chosen);
   });
 
   it('N6: rejects an artifact of another profile from the lookup and labels the fallback unenforced', async () => {
@@ -169,10 +184,10 @@ describe('selectByRegret result paths', () => {
   });
 
   it('becomes stale when the snapshot changes during a delayed solve; cancellation wins over staleness', async () => {
-    const profile = { version: 1 } as UserRoutingPreferencesV1;
+    const profile = OPERATOR;
     let current = true;
     const gated = new GatedLp();
-    const pending = selectByRegret(decisionState, candidates, rows, snapshot(profile), portsWith(() => undefined, gated),
+    const pending = selectByRegret(decisionState, candidates, rows, snapshot(profile), readyPorts(gated),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000, isSnapshotCurrent: () => current });
     await new Promise((resolve) => setTimeout(resolve, 10));
     current = false;
@@ -182,7 +197,7 @@ describe('selectByRegret result paths', () => {
     const controller = new AbortController();
     const gated2 = new GatedLp();
     let current2 = true;
-    const both = selectByRegret(decisionState, candidates, rows, snapshot(profile), portsWith(() => undefined, gated2),
+    const both = selectByRegret(decisionState, candidates, rows, snapshot(profile), readyPorts(gated2),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000, isSnapshotCurrent: () => current2, signal: controller.signal });
     await new Promise((resolve) => setTimeout(resolve, 10));
     current2 = false;
@@ -192,11 +207,11 @@ describe('selectByRegret result paths', () => {
   });
 
   it('labels each solver failure as a fallback with the current representative, and cancellation as cancelled', async () => {
-    const profile = { version: 1 } as UserRoutingPreferencesV1;
+    const profile = OPERATOR;
     const run = (adapter: LPAdapter, extra: { decisionDeadlineMs?: number; pairCap?: number } = {}) =>
-      selectByRegret(decisionState, candidates, rows, snapshot(profile), portsWith(() => undefined, adapter),
+      selectByRegret(decisionState, candidates, rows, snapshot(profile), readyPorts(adapter),
         { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: extra.decisionDeadlineMs ?? 5_000, pairCap: extra.pairCap });
-    expect(await run(lp, { decisionDeadlineMs: 0 })).toMatchObject({ solver: 'fallback-central', solverFallbackReason: 'timeout', constraintsEnforced: true, theta: THETA0 });
+    expect(await run(lp, { decisionDeadlineMs: 0 })).toMatchObject({ solver: 'fallback-central', solverFallbackReason: 'timeout', constraintsEnforced: true, theta: operatorArtifact.thetaRepresentative });
     expect(await run(lp, { pairCap: 1 })).toMatchObject({ solver: 'fallback-central', solverFallbackReason: 'spike-pair-cap' });
     const broken: LPAdapter = { solve: async () => { throw new Error('wasm missing'); }, close: async () => {} };
     expect(await run(broken)).toMatchObject({ solver: 'fallback-central', solverFallbackReason: 'no-solver' });
@@ -204,7 +219,7 @@ describe('selectByRegret result paths', () => {
     expect(await run(wrong)).toMatchObject({ solver: 'fallback-central', solverFallbackReason: 'numerical' });
     const controller = new AbortController();
     controller.abort();
-    expect(await selectByRegret(decisionState, candidates, rows, snapshot(profile), portsWith(() => undefined),
+    expect(await selectByRegret(decisionState, candidates, rows, snapshot(profile), readyPorts(),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000, signal: controller.signal })).toEqual({ kind: 'cancelled' });
   });
 
@@ -226,14 +241,85 @@ describe('selectByRegret result paths', () => {
     const pq = [P, Q].map((m) => ({ model: m, action: enumerateEffectiveActions(m)[0]! }));
     const profile = { version: 1 } as UserRoutingPreferencesV1;
     const broken: LPAdapter = { solve: async () => { throw new Error('no solver'); }, close: async () => {} };
-    const result = await selectByRegret(decisionState, pq, pqRows, snapshot(profile), portsWith(() => undefined, broken),
+    const run = (phase: DecisionStateV1['phase']) => selectByRegret({ ...decisionState, phase }, pq, pqRows, snapshot(profile), portsWith(() => undefined, broken),
+      { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000 });
+    // Plan relies on Intelligence only, so both models are compared; agentic relevance is 0.25.
+    const result = await run('plan');
+    if (result.kind !== 'decision') throw new Error('expected a decision');
+    // The empty profile needs no LP, so the closed form answers exactly.
+    expect(result.solver).toBe('exact');
+    const pAgentic = result.actions.find((a) => a.action.registryId === 'p/pmodel')!.features.values[1];
+    expect(pAgentic).toBeCloseTo(0.5 * 0.25, 12);
+    expect(result.chosen).toBe('p/pmodel:high');
+    // Implement relies on Terminal-Bench: a regression value is no evidence, so P is not compared.
+    const implement = await run('implement');
+    if (implement.kind !== 'decision') throw new Error('expected a decision');
+    expect(implement.insufficientEvidence).toEqual(['p/pmodel:high']);
+    expect(implement.chosen).toBe('q/qmodel:high');
+    expect(implement.ranking).toEqual(['q/qmodel:high', 'p/pmodel:high']);
+  });
+});
+
+describe('evidence guard: a model without required evidence is not compared', () => {
+  // A strong and expensive, B moderate and cheaper, U has no benchmark row and is cheap.
+  const A = model('a', 'strong', { input: 8, output: 40, cacheRead: 0.8 });
+  const B = model('b', 'middle', { input: 2, output: 10, cacheRead: 0.2 });
+  const U = model('u', 'unmeasured', { input: 0.1, output: 0.4, cacheRead: 0.01 });
+  const guardRows = [benchRow('a/strong', 70, 55), benchRow('b/middle', 45, 30)];
+  const pick = (models: RegistryModelInfo[]): SelectionCandidate[] => models.map((m) => ({ model: m, action: enumerateEffectiveActions(m)[0]! }));
+  const empty = { version: 1 } as UserRoutingPreferencesV1;
+  const run = (models: RegistryModelInfo[], patch: Partial<DecisionStateV1> = {}, adapter: LPAdapter = lp) =>
+    selectByRegret({ ...decisionState, ...patch }, pick(models), guardRows, snapshot(empty), portsWith(() => undefined, adapter),
+      { expectedProfileDigest: preferenceProfileDigest(empty), decisionDeadlineMs: 5_000 });
+
+  it('does not change the winner among measured models, and ranks the unmeasured model last', async () => {
+    const without = await run([A, B]);
+    const withU = await run([A, B, U]);
+    if (without.kind !== 'decision' || withU.kind !== 'decision') throw new Error('expected decisions');
+    expect(withU.chosen).toBe(without.chosen);
+    expect(withU.ranking.slice(0, 2)).toEqual(without.ranking);
+    expect(withU.ranking.at(-1)).toBe('u/unmeasured:high');
+    expect(withU.insufficientEvidence).toEqual(['u/unmeasured:high']);
+    expect(withU.allInsufficient).toBe(false);
+    // Regret values of the compared actions match the pool without U.
+    expect(withU.maxRegret?.has('u/unmeasured:high')).toBe(false);
+    for (const [key, value] of without.maxRegret!) expect(withU.maxRegret!.get(key)!).toBeCloseTo(value, 9);
+    // The unmeasured model stays a legal action with its features.
+    expect(withU.actions.map((a) => a.features.key)).toContain('u/unmeasured:high');
+  });
+
+  it('keeps the unmeasured model last on the fallback paths too', async () => {
+    const broken: LPAdapter = { solve: async () => { throw new Error('no solver'); }, close: async () => {} };
+    const profile = OPERATOR;
+    const result = await selectByRegret(decisionState, pick([A, B, U]), guardRows, snapshot(profile), readyPorts(broken),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000 });
     if (result.kind !== 'decision') throw new Error('expected a decision');
     expect(result.solver).toBe('fallback-central');
-    const pAgentic = result.actions.find((a) => a.action.registryId === 'p/pmodel')!.features.values[1];
-    expect(pAgentic).toBe(0.5);
-    // Representative weights: agentic 0.20 * (0.50 - 0.45) > 0, all else equal.
-    expect(result.chosen).toBe('p/pmodel:high');
+    expect(result.ranking.at(-1)).toBe('u/unmeasured:high');
+    expect(result.chosen).not.toBe('u/unmeasured:high');
+  });
+
+  it('compares the unmeasured model when no model has the evidence, and says so', async () => {
+    const result = await run([U, model('v', 'also-unmeasured', { input: 1, output: 2 })]);
+    if (result.kind !== 'decision') throw new Error('expected a decision');
+    expect(result.allInsufficient).toBe(true);
+    expect(result.insufficientEvidence).toEqual([]);
+    expect(result.ranking).toHaveLength(2);
+    expect(result.chosen).toBeDefined();
+  });
+
+  it('the requirement follows the phase: lightweight needs no axis, so U competes there', async () => {
+    const result = await run([A, B, U], { phase: 'lightweight' });
+    if (result.kind !== 'decision') throw new Error('expected a decision');
+    expect(result.insufficientEvidence).toEqual([]);
+    expect(result.maxRegret?.has('u/unmeasured:high')).toBe(true);
+  });
+
+  it('counts only compared actions against the spike pair cap', async () => {
+    const result = await selectByRegret(decisionState, pick([A, B, U]), guardRows, snapshot(empty), portsWith(() => undefined),
+      { expectedProfileDigest: preferenceProfileDigest(empty), decisionDeadlineMs: 5_000, pairCap: 2 });
+    // Two compared actions make 2 ordered pairs: within the cap, so no capped fallback.
+    expect(result).toMatchObject({ kind: 'decision', solver: 'exact' });
   });
 });
 

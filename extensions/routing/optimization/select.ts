@@ -49,8 +49,15 @@ export interface UnifiedDecision {
   constraintsEnforced: boolean;
   /** Absent only for `no-feasible-action`. */
   chosen?: string;
-  /** Every legal action, best first. Operational fallback keeps all of them. */
+  /**
+   * Every legal action, best first. Operational fallback keeps all of them.
+   * Actions without evidence for the phase's required axes come last.
+   */
   ranking: string[];
+  /** Actions in the ranking tail for lack of evidence. They were not compared by regret. */
+  insufficientEvidence: string[];
+  /** True when no action had the required evidence, so all were compared. */
+  allInsufficient: boolean;
   maxRegret?: ReadonlyMap<string, number>;
   /** Weight vector of a central fallback. */
   theta?: readonly number[];
@@ -164,12 +171,23 @@ export async function selectByRegret(
   if (controls.isSnapshotCurrent && !controls.isSnapshotCurrent()) return finish({ kind: 'stale' });
 
   const actions = candidates.map((candidate) => candidateFeatures(state, candidate.model, candidate.action, rows));
-  const selectable = actions.map(toSelectable);
+  // A model without evidence for the required axes stays callable but is not compared.
+  const withEvidence = actions.filter((features) => features.evidenceGaps.length === 0);
+  const allInsufficient = actions.length > 0 && withEvidence.length === 0;
+  const compared = allInsufficient ? actions : withEvidence;
+  const tail = allInsufficient ? [] : actions.filter((features) => features.evidenceGaps.length > 0);
+  const selectable = compared.map(toSelectable);
+  const tailSelectable = tail.map(toSelectable);
+  const insufficientEvidence = tail.map((features) => features.features.key).sort();
+  const withTail = (ranking: readonly string[], theta: readonly number[]): string[] =>
+    [...ranking, ...(tail.length > 0 ? centralChoice(tailSelectable, theta).ranking : [])];
   const base = {
     kind: 'decision' as const,
     profileDigest: preferences.digest,
     featureSchemaDigest: FEATURE_SCHEMA_DIGEST,
     actions,
+    insufficientEvidence,
+    allInsufficient,
   };
 
   const central = (
@@ -182,7 +200,7 @@ export async function selectByRegret(
     const { chosen, ranking } = centralChoice(selectable, theta);
     return {
       ...base, solver: 'fallback-central', solverFallbackReason: reason, domainStatus, constraintsEnforced,
-      chosen, ranking, theta, ...(compiledDomainIdentity ? { compiledDomainIdentity } : {}),
+      chosen, ranking: withTail(ranking, theta), theta, ...(compiledDomainIdentity ? { compiledDomainIdentity } : {}),
     };
   };
 
@@ -220,7 +238,7 @@ export async function selectByRegret(
     return finish(central(notReady!.reason, notReady!.status, THETA0, false));
   }
   const enforced = true;
-  if (controls.pairCap !== undefined && actions.length * (actions.length - 1) > controls.pairCap) {
+  if (controls.pairCap !== undefined && compared.length * (compared.length - 1) > controls.pairCap) {
     return finish(central('spike-pair-cap', 'ready', artifact.thetaRepresentative, enforced, artifact.identity));
   }
   try {
@@ -228,7 +246,7 @@ export async function selectByRegret(
     if (controls.signal?.aborted) return { kind: 'cancelled' };
     return finish({
       ...base, solver: 'exact', domainStatus: 'ready', constraintsEnforced: enforced,
-      chosen: exact.chosen, ranking: [...exact.ranking], maxRegret: exact.maxRegret, compiledDomainIdentity: artifact.identity,
+      chosen: exact.chosen, ranking: withTail(exact.ranking, artifact.thetaRepresentative), maxRegret: exact.maxRegret, compiledDomainIdentity: artifact.identity,
     });
   } catch (error) {
     if (error instanceof LpCancelledError || controls.signal?.aborted) return { kind: 'cancelled' };

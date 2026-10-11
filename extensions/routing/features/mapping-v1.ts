@@ -8,7 +8,7 @@
  * benchmark refresh changes candidate observations, never these mappings.
  * No caller may define its own normalization, default or relevance.
  */
-import type { Dimension } from '../../types.js';
+import type { Dimension, ProvenanceAxis } from '../../types.js';
 
 export const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -102,6 +102,24 @@ export const PHASE_RELEVANCE: Readonly<Record<Dimension, TaskRelevance>> = {
 
 /** Reasoning relevance when open decisions are explicitly observed (> 0). */
 export const OPEN_DECISIONS_REASONING = 0.9;
+
+// ─── Evidence required to compete ────────────────────────────────────
+
+/**
+ * Quality axes a model must have evidence for to be compared in a phase: the
+ * axes this phase relies on most. Evidence means a measured value or a
+ * same-metric, same-model, same-effort source estimate. A model without it
+ * stays callable and stays in the fallback chain after every model with
+ * evidence, but it is not compared by regret.
+ * `lightweight` relies on no single axis.
+ */
+export const REQUIRED_EVIDENCE_AXES: Readonly<Record<Dimension, readonly ProvenanceAxis[]>> = {
+  lightweight: [],
+  gather: ['research'],
+  plan: ['intelligence'],
+  implement: ['intelligence', 'agenticCoding'],
+  review: ['intelligence'],
+};
 
 // ─── Continuity, friction and recovery ───────────────────────────────
 

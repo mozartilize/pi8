@@ -15,6 +15,7 @@ import {
   MISSING_REPRESENTATIVE,
   OPEN_DECISIONS_REASONING,
   PHASE_RELEVANCE,
+  REQUIRED_EVIDENCE_AXES,
   RESEARCH_SHARE,
   normalizeFraction,
   normalizeIntelligence,
@@ -108,6 +109,18 @@ export function taskRelevance(state: Pick<DecisionStateV1, 'phase' | 'openDecisi
   const base = PHASE_RELEVANCE[state.phase];
   const openDecisions = state.openDecisions !== undefined && state.openDecisions > 0;
   return { ...base, reasoning: openDecisions ? Math.max(base.reasoning, OPEN_DECISIONS_REASONING) : base.reasoning };
+}
+
+/**
+ * Axes this decision requires evidence for that the row lacks: the phase's
+ * axes, vision when the input has an image, and long-context quality when the
+ * estimated context reaches the long-context relevance size.
+ */
+export function evidenceGaps(row: BenchModel | undefined, state: DecisionStateV1): ProvenanceAxis[] {
+  const required = new Set<ProvenanceAxis>(REQUIRED_EVIDENCE_AXES[state.phase]);
+  if (state.needsVision) required.add('visionReasoning');
+  if (state.estimatedContextTokens >= LONG_CONTEXT_RELEVANCE_TOKENS) required.add('longContext');
+  return [...required].filter((axis) => observeAxis(row, axis, state).normalized === undefined);
 }
 
 export interface CapabilityFeature {
