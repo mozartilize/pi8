@@ -17,7 +17,8 @@
  * Terminal-Bench 4.0 (agentic-estimate.ts).
  */
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
-import type { BenchModel } from '../types.js';
+import type { BenchModel, ProvenanceAxis } from '../types.js';
+import type { AxisProvenance } from '../routing/features/schema.js';
 import { agenticCodingScores } from './agentic-estimate.js';
 import { fetchSiteModels, type AASiteModel } from './artificial-analysis-site.js';
 
@@ -180,6 +181,12 @@ export function parseEffort(name: string | undefined): ModelThinkingLevel | unde
   return undefined;
 }
 
+function withoutUndefinedProvenance(
+  value: Record<ProvenanceAxis, AxisProvenance | undefined>,
+): Partial<Record<ProvenanceAxis, AxisProvenance>> {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));
+}
+
 function asNumber(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
   return undefined;
@@ -219,21 +226,37 @@ export function normalize(
       const ttfaSeconds = asNumber(perf.median_time_to_first_answer_token_seconds);
       const slug = asSlug(m) as string;
       const page = siteByKey.get(joinKey(slug, m.name));
+      const intelligence = asNumber(ev.artificial_analysis_intelligence_index);
+      const agenticCoding = agentic[index];
+      const axisProvenance = withoutUndefinedProvenance({
+        // The models page states whether AA estimated the index. Without a
+        // page row the provenance is unknown, so the axis gives no evidence.
+        intelligence: intelligence === undefined ? undefined
+          : page?.intelligenceIndexIsEstimated === false ? 'measured'
+          : page?.intelligenceIndexIsEstimated === true ? 'source-estimated'
+          : 'missing',
+        agenticCoding: agenticCoding === undefined ? undefined : agenticCoding.estimated ? 'regression-bridge' : 'measured',
+        research: page?.briefcaseRubricPassRate === undefined ? undefined : 'measured',
+        knowledge: page?.omniscience === undefined ? undefined : 'measured',
+        longContext: page?.lcr === undefined ? undefined : 'measured',
+        visionReasoning: page?.mmmuPro === undefined ? undefined : 'measured',
+      });
       return {
         // AA reports a display name; the fuzzy matcher normalizes it against
         // the registry, so prefer the stable slug.
         benchSlug: slug,
         quality: {
-          intelligence: asNumber(ev.artificial_analysis_intelligence_index),
+          intelligence,
           coding: asNumber(ev.artificial_analysis_coding_index),
-          agenticCoding: agentic[index]?.value,
+          agenticCoding: agenticCoding?.value,
           agenticIndex: asNumber(ev.artificial_analysis_agentic_index),
           knowledge: page?.omniscience,
           research: page?.briefcaseRubricPassRate,
           longContext: page?.lcr,
           visionReasoning: page?.mmmuPro,
         },
-        ...(page?.intelligenceIndexIsEstimated !== false || agentic[index]?.estimated ? { qualityEstimated: true } : {}),
+        ...(page?.intelligenceIndexIsEstimated !== false || agenticCoding?.estimated ? { qualityEstimated: true } : {}),
+        axisProvenance,
         priceInputPer1M: asNumber(pricing.price_1m_input_tokens),
         priceOutputPer1M: asNumber(pricing.price_1m_output_tokens),
         outputSpeedTps: asNumber(perf.median_output_tokens_per_second),

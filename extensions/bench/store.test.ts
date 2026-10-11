@@ -149,12 +149,14 @@ describe('store', () => {
     const rows = [
       { ...base, benchSlug: 'x-low', effort: 'low', quality: { intelligence: 30 } },
       { ...base, benchSlug: 'x-max', effort: 'max', quality: { intelligence: 50 } },
-      // Same (registryId, effort) pair as the first row: one of the two is kept.
+      // Same (registryId, effort) pair as the first row: one of the two is
+      // kept, the one with more measured axes.
       {
         ...base,
         benchSlug: 'x-low-2',
         effort: 'low',
         quality: { coding: 90, agenticCoding: 85 },
+        axisProvenance: { agenticCoding: 'measured' },
       },
     ] as any;
     const merged = mergeBenchRows(rows);

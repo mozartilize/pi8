@@ -1,0 +1,338 @@
+/**
+ * feature-v1 contracts (testing plan N1, N2, N3, N5 and the cache matrix).
+ * Expected values are hand calculations from the frozen mapping table; the
+ * benchmark rows pass through the real adapter, matcher and store merge.
+ */
+import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
+import { describe, expect, it } from 'vitest';
+
+import { normalize, type AARawModel } from '../../adapters/artificial-analysis.js';
+import type { AASiteModel } from '../../adapters/artificial-analysis-site.js';
+import { resolveRows } from '../../bench/matcher.js';
+import { mergeBenchRows } from '../../bench/store.js';
+import type { BenchModel } from '../../types.js';
+import { estimateRow } from '../score/effort-estimate.js';
+import type { RegistryModelInfo } from '../score/scorer.js';
+import { enumerateEffectiveActions, overrideAction, type EffectiveAction } from './actions.js';
+import { candidateFeatures } from './candidate.js';
+import { FEATURE_INDEX, type FeatureName } from './schema.js';
+import { sessionFeatures } from './session.js';
+import type { DecisionStateV1 } from './state.js';
+
+const EPS = 1e-6;
+
+const registryModel = (provider: string, id: string, extra: Partial<RegistryModelInfo> = {}): RegistryModelInfo => ({
+  provider,
+  id,
+  reasoning: true,
+  thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: 'max' },
+  cost: { input: 1, output: 4, cacheRead: 0.1 },
+  ...extra,
+});
+
+const state = (patch: Partial<DecisionStateV1> = {}): DecisionStateV1 => ({
+  phase: 'implement',
+  estimatedContextTokens: 10_000,
+  needsVision: false,
+  boundary: 'ordinary',
+  friction: [],
+  nowMs: 1_000_000,
+  isSubagentSpawn: false,
+  benchmarkIndexVersion: '4.3',
+  ...patch,
+});
+
+const feature = (vector: { values: number[]; lower: number[]; upper: number[] }, name: FeatureName) => {
+  const j = FEATURE_INDEX[name];
+  return [vector.values[j]!, vector.lower[j]!, vector.upper[j]!];
+};
+
+const expectTriple = (actual: number[], expected: [number, number, number]) => {
+  actual.forEach((value, i) => expect(Math.abs(value - expected[i]!)).toBeLessThanOrEqual(EPS));
+};
+
+const raw = (slug: string, name: string, evaluations: AARawModel['evaluations'], extra: Partial<AARawModel> = {}): AARawModel =>
+  ({ slug, name, evaluations, ...extra });
+
+const pipeline = (rows: AARawModel[], site: AASiteModel[], registry: RegistryModelInfo[]): BenchModel[] =>
+  mergeBenchRows(resolveRows(normalize(rows, site), registry, {}));
+
+const featuresOf = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction, rows: BenchModel[]) =>
+  candidateFeatures(s, model, action, rows).features;
+
+describe('N1: supported effort coverage, scored effort = sent effort', () => {
+  const model = registryModel('p', 'xmodel');
+  const rows = pipeline(
+    [raw('xmodel', 'X Model (high)', { artificial_analysis_intelligence_index: 62 })],
+    [{ slug: 'xmodel', name: 'X Model (high)', intelligenceIndexIsEstimated: false, terminalBench40: 0.4 }],
+    [model],
+  );
+
+  it('keeps every supported effort as an action, measured or not', () => {
+    expect(enumerateEffectiveActions(model).map((action) => action.effort)).toEqual(['low', 'medium', 'high', 'max']);
+  });
+
+  it('scores the measured effort exactly and unmeasured efforts with the missing interval', () => {
+    const actions = enumerateEffectiveActions(model);
+    const at = (effort: ModelThinkingLevel) => featuresOf(state(), model, actions.find((a) => a.effort === effort)!, rows);
+    expectTriple(feature(at('high'), 'reasoningFit'), [0.372, 0.372, 0.372]);
+    expectTriple(feature(at('high'), 'agenticFit'), [0.4, 0.4, 0.4]);
+    expectTriple(feature(at('medium'), 'reasoningFit'), [0.3, 0, 0.6]);
+    expectTriple(feature(at('max'), 'reasoningFit'), [0.3, 0, 0.6]);
+    expectTriple(feature(at('max'), 'agenticFit'), [0.5, 0, 1]);
+  });
+
+  it('does not let an effort step-down estimate replace the missing representative', () => {
+    const stepped = estimateRow('medium', rows, { intelligence: 6 })!;
+    expect(stepped.quality.intelligence).toBeCloseTo(56, 9); // would give 0.336
+    expect(stepped.axisProvenance?.intelligence).toBe('effort-stepdown');
+    const medium = enumerateEffectiveActions(model).find((a) => a.effort === 'medium')!;
+    expectTriple(feature(featuresOf(state(), model, medium, [...rows, stepped]), 'reasoningFit'), [0.3, 0, 0.6]);
+  });
+
+  it('resolves an explicit high override to the single high action', () => {
+    expect(overrideAction(model, 'high')).toMatchObject({ key: 'p/xmodel:high', effort: 'high' });
+    // `xhigh` is unsupported; Pi clamps it to the nearest supported level above.
+    expect(overrideAction(model, 'xhigh')?.effort).toBe('max');
+  });
+
+  it('collapses levels that Pi sends as the same provider value into one action', () => {
+    const aliased = registryModel('p', 'alias', { thinkingLevelMap: { off: null, minimal: 'low', low: 'low', medium: 'high', high: 'high', xhigh: null, max: null } });
+    const actions = enumerateEffectiveActions(aliased);
+    expect(actions.map((a) => [a.effort, a.levels])).toEqual([['low', ['minimal', 'low']], ['high', ['medium', 'high']]]);
+    expect(overrideAction(aliased, 'minimal')?.key).toBe('p/alias:low');
+  });
+});
+
+describe('N2: axis provenance through the real pipeline', () => {
+  // 25 rows with Terminal-Bench give the adapter a regression fit; row P has
+  // no Terminal-Bench result, so its agentic coding value is a regression bridge.
+  const fillers: AARawModel[] = Array.from({ length: 25 }, (_, i) =>
+    raw(`filler-${i}`, `Filler ${i} (high)`, {
+      artificial_analysis_intelligence_index: 30 + i,
+      artificial_analysis_coding_index: 20 + i * 1.5,
+      artificial_analysis_agentic_index: 25 + i * 0.8,
+    }));
+  const fillerSite: AASiteModel[] = fillers.map((row, i) => ({
+    slug: row.slug!, name: row.name!, intelligenceIndexIsEstimated: false, terminalBench40: 0.1 + i * 0.012 + (i % 3) * 0.01,
+  }));
+  const P = registryModel('p', 'pmodel');
+  const Q = registryModel('q', 'qmodel');
+  const rows = pipeline(
+    [
+      ...fillers,
+      raw('pmodel', 'P Model (high)', { artificial_analysis_intelligence_index: 62, artificial_analysis_coding_index: 50, artificial_analysis_agentic_index: 41 }),
+      raw('qmodel', 'Q Model (high)', { artificial_analysis_intelligence_index: 62 }),
+    ],
+    [
+      ...fillerSite,
+      { slug: 'pmodel', name: 'P Model (high)', intelligenceIndexIsEstimated: false },
+      { slug: 'qmodel', name: 'Q Model (high)', intelligenceIndexIsEstimated: false, terminalBench40: 0.45 },
+    ],
+    [P, Q],
+  );
+  const pRow = rows.find((row) => row.registryId === 'p/pmodel')!;
+  const pHigh = enumerateEffectiveActions(P).find((a) => a.effort === 'high')!;
+  const qHigh = enumerateEffectiveActions(Q).find((a) => a.effort === 'high')!;
+
+  it('records measured Intelligence and a regression-bridge agentic value independently', () => {
+    expect(pRow.quality.agenticCoding).toBeDefined();
+    expect(pRow.axisProvenance).toMatchObject({ intelligence: 'measured', agenticCoding: 'regression-bridge' });
+    expect(pRow.qualityEstimated).toBe(true);
+  });
+
+  it('keeps the exact Intelligence feature and ignores the regression in center and interval', () => {
+    const p = featuresOf(state(), P, pHigh, rows);
+    expectTriple(feature(p, 'reasoningFit'), [0.372, 0.372, 0.372]);
+    expectTriple(feature(p, 'agenticFit'), [0.5, 0, 1]);
+    expect(p.evidence.find((e) => e.feature === 'agenticFit')).toMatchObject({ code: 'missing', details: ['agenticCoding:regression-bridge'] });
+    expectTriple(feature(featuresOf(state(), Q, qHigh, rows), 'agenticFit'), [0.45, 0.45, 0.45]);
+  });
+
+  it('treats a source-estimated value as a center with the full missing interval', () => {
+    const estimated = pipeline(
+      [raw('qmodel', 'Q Model (high)', { artificial_analysis_intelligence_index: 62 })],
+      [{ slug: 'qmodel', name: 'Q Model (high)', intelligenceIndexIsEstimated: true }],
+      [Q],
+    );
+    expectTriple(feature(featuresOf(state(), Q, qHigh, estimated), 'reasoningFit'), [0.372, 0, 0.6]);
+  });
+
+  it('gives no evidence for an ambiguous legacy row or an incompatible index version', () => {
+    const legacy: BenchModel = { ...pRow, axisProvenance: undefined };
+    expectTriple(feature(featuresOf(state(), P, pHigh, [legacy]), 'reasoningFit'), [0.3, 0, 0.6]);
+    expectTriple(feature(featuresOf(state({ benchmarkIndexVersion: '5.0' }), P, pHigh, rows), 'reasoningFit'), [0.3, 0, 0.6]);
+  });
+});
+
+describe('N2 merge: whole-row precedence', () => {
+  const base = { registryId: 'm/x', active: true, effort: 'high' as const, source: 'artificial-analysis' };
+  const X: BenchModel = {
+    ...base, benchSlug: 'x-b', qualityEstimated: true,
+    quality: { intelligence: 60, research: 0.5, agenticCoding: 30 },
+    axisProvenance: { intelligence: 'measured', research: 'measured', agenticCoding: 'regression-bridge' },
+  };
+  const Y: BenchModel = {
+    ...base, benchSlug: 'x-a',
+    quality: { intelligence: 70, knowledge: 10, longContext: 0.5, visionReasoning: 0.4 },
+    axisProvenance: { intelligence: 'measured', knowledge: 'source-estimated', longContext: 'effort-stepdown', visionReasoning: 'missing' },
+  };
+
+  it('keeps the row with more measured axes in either input order, regardless of the estimate flag', () => {
+    expect(mergeBenchRows([X, Y])).toEqual([X]);
+    expect(mergeBenchRows([Y, X])).toEqual([X]);
+  });
+
+  it('with equal measured counts, prefers more eligible axes, then the smaller source key', () => {
+    const one: BenchModel = { ...base, benchSlug: 'z', quality: { intelligence: 60, knowledge: 1 }, axisProvenance: { intelligence: 'measured', knowledge: 'source-estimated' } };
+    const two: BenchModel = { ...base, benchSlug: 'a', quality: { intelligence: 60, agenticCoding: 9 }, axisProvenance: { intelligence: 'measured', agenticCoding: 'regression-bridge' } };
+    expect(mergeBenchRows([two, one])).toEqual([one]);
+    const three: BenchModel = { ...base, benchSlug: 'a', quality: { intelligence: 61, knowledge: 2 }, axisProvenance: { intelligence: 'measured', knowledge: 'source-estimated' } };
+    expect(mergeBenchRows([one, three])).toEqual([three]);
+    expect(mergeBenchRows([three, one])).toEqual([three]);
+  });
+});
+
+describe('N3: feature boundaries and fixed missing shares', () => {
+  const model = registryModel('p', 'xmodel');
+  const action = enumerateEffectiveActions(model).find((a) => a.effort === 'high')!;
+  const row = (quality: BenchModel['quality'], axisProvenance: BenchModel['axisProvenance']): BenchModel[] =>
+    [{ registryId: 'p/xmodel', benchSlug: 'xmodel', active: true, effort: 'high', source: 'aa', quality, axisProvenance }];
+
+  it('keeps the missing Knowledge share instead of rescaling Research (review)', () => {
+    const rows = row({ research: 0.8 }, { research: 'measured' });
+    expectTriple(feature(featuresOf(state({ phase: 'review' }), model, action, rows), 'researchFit'), [0.58, 0.48, 0.68]);
+  });
+
+  it('makes long-context quality relevant at exactly 64,000 tokens', () => {
+    const rows = row({ longContext: 0.9 }, { longContext: 'measured' });
+    expectTriple(feature(featuresOf(state({ estimatedContextTokens: 63_999 }), model, action, rows), 'inputFit'), [0.5, 0.5, 0.5]);
+    expectTriple(feature(featuresOf(state({ estimatedContextTokens: 64_000 }), model, action, rows), 'inputFit'), [0.9, 0.9, 0.9]);
+    expectTriple(feature(featuresOf(state({ estimatedContextTokens: 64_000, needsVision: true }), model, action, rows), 'inputFit'), [0.7, 0.45, 0.95]);
+  });
+
+  it('distinguishes unknown, zero and positive open decisions', () => {
+    const rows = row({ intelligence: 62 }, { intelligence: 'measured' });
+    const at = (openDecisions: number | undefined) => featuresOf(state({ openDecisions }), model, action, rows);
+    expectTriple(feature(at(undefined), 'reasoningFit'), [0.372, 0.372, 0.372]);
+    expectTriple(feature(at(0), 'reasoningFit'), [0.372, 0.372, 0.372]);
+    expectTriple(feature(at(2), 'reasoningFit'), [0.558, 0.558, 0.558]);
+    const details = (vector: ReturnType<typeof at>) => vector.evidence.find((e) => e.feature === 'reasoningFit')!.details;
+    expect(details(at(undefined))).toContain('openDecisions:unknown');
+    expect(details(at(0))).toContain('openDecisions:0');
+  });
+
+  it('gives an unknown price the common interval, not zero dollars', () => {
+    const unpriced = registryModel('p', 'xmodel', { cost: undefined });
+    const result = candidateFeatures(state(), unpriced, action, []);
+    expect(result.spend.priceKnown).toBe(false);
+    expect(result.spend.centralUSD).toBeUndefined();
+    expectTriple(feature(result.features, 'costDesirability'), [0.5, 0, 1]);
+  });
+
+  it('derives the known-price feature from the frozen log transform', () => {
+    // 10,000 input at $1/M + 1,024 output at $4/M = 0.014096 USD, no cache evidence.
+    const usd = 10_000 / 1e6 + 1024 * 4 / 1e6;
+    const expected = 1 - Math.log(1 + usd / 0.05) / Math.log(41);
+    const result = candidateFeatures(state(), model, action, []);
+    expect(result.spend.centralUSD).toBeCloseTo(usd, 12);
+    expect(feature(result.features, 'costDesirability')[0]).toBeCloseTo(expected, 9);
+  });
+});
+
+describe('N5: total continuity and exact recovery attribution', () => {
+  const act = (registryId: string, effort: ModelThinkingLevel): EffectiveAction => ({ registryId, effort, key: `${registryId}:${effort}`, levels: [effort] });
+  const actions = [act('p/X', 'low'), act('p/X', 'medium'), act('p/X', 'high'), act('p/Y', 'medium'), act('q/X', 'medium')];
+  const rework = state({
+    workItemId: 'W',
+    boundary: 'rework',
+    rework: { failed: { registryId: 'p/X', effort: 'medium' }, workItemId: 'W' },
+    friction: [
+      { registryId: 'p/X', effort: 'medium', workItemId: 'W', kind: 'attributed-rework' },
+      { registryId: 'p/Y', effort: 'medium', workItemId: 'W2', kind: 'attributed-rework' },
+    ],
+  });
+
+  it('matches the hand table at the W rework boundary', () => {
+    const table = actions.map((a) => {
+      const f = sessionFeatures(rework, a);
+      return [a.key, f.continuity, f.frictionAvoidance, f.effortRecoveryFit, f.modelSwitchRecoveryFit];
+    });
+    expect(table).toEqual([
+      ['p/X:low', 0.65, 1, 0, 0],
+      ['p/X:medium', 0.65, 0, 0, 0],
+      ['p/X:high', 0.78, 1, 1, 0],
+      ['p/Y:medium', 0.48, 1, 0, 1],
+      ['q/X:medium', 0.48, 1, 0, 1],
+    ]);
+  });
+
+  it('uses 0.65/0.45 at an ordinary boundary with no recovery features, and 0.50 without an incumbent', () => {
+    const ordinary = state({ incumbent: { registryId: 'p/X', effort: 'medium' } });
+    expect(actions.map((a) => sessionFeatures(ordinary, a).continuity)).toEqual([0.65, 0.65, 0.65, 0.45, 0.45]);
+    for (const a of actions) {
+      expect(sessionFeatures(ordinary, a)).toMatchObject({ effortRecoveryFit: 0, modelSwitchRecoveryFit: 0 });
+      expect(sessionFeatures(state(), a).continuity).toBe(0.5);
+    }
+  });
+
+  it('counts friction only for the exact model, effort and work item', () => {
+    const loop = state({ workItemId: 'W', friction: [{ registryId: 'p/X', effort: 'high', workItemId: 'W', kind: 'severe-reasoning-loop' }] });
+    expect(actions.map((a) => sessionFeatures(loop, a).frictionAvoidance)).toEqual([1, 1, 0.25, 1, 1]);
+    const unattributed = state({ workItemId: 'W', friction: [{ registryId: 'p/X', effort: 'high', workItemId: 'W', kind: 'unattributed' }] });
+    expect(sessionFeatures(unattributed, actions[2]!).frictionAvoidance).toBe(1);
+  });
+});
+
+describe('cache-aware cost', () => {
+  const anthropic = registryModel('a', 'claude', {
+    api: 'anthropic-messages', compat: { supportsMidConvoEffort: true },
+    cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+  });
+  const openai = registryModel('o', 'gpt', { cost: { input: 2, output: 8, cacheRead: 0.2, cacheWrite: 0 } });
+  const [aLow, aHigh] = [enumerateEffectiveActions(anthropic).find((a) => a.effort === 'low')!, enumerateEffectiveActions(anthropic).find((a) => a.effort === 'high')!];
+  const oHigh = enumerateEffectiveActions(openai).find((a) => a.effort === 'high')!;
+  const cacheState = (patch: Partial<DecisionStateV1> = {}) => state({
+    estimatedContextTokens: 100_000,
+    promptIdentity: 'head-1',
+    cache: { observedAtMs: 1_000_000, promptIdentity: 'head-1', incumbentKey: aHigh.key, warmPrefixTokens: new Map([[oHigh.key, 40_000]]), ttlMs: 300_000, source: 'session' },
+    ...patch,
+  });
+  const usd = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction) => candidateFeatures(s, model, action, []).spend;
+
+  it('prices the warm incumbent once at the cache-read rate and a cold write at the write rate', () => {
+    const warm = usd(cacheState(), anthropic, aHigh);
+    expect(warm.tokens).toEqual({ cacheRead: 100_000, cacheWrite: 0, uncachedInput: 0, output: 1024 });
+    expect(warm.centralUSD).toBeCloseTo(100_000 * 0.3 / 1e6 + 1024 * 15 / 1e6, 12);
+    const cold = usd(cacheState({ cache: undefined }), anthropic, aHigh);
+    expect(cold.tokens).toEqual({ cacheRead: 0, cacheWrite: 100_000, uncachedInput: 0, output: 1024 });
+    expect(cold.centralUSD).toBeCloseTo(100_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
+  });
+
+  it('bills uncached input at the input price when the registry has no write charge', () => {
+    const challenger = usd(cacheState(), openai, oHigh);
+    expect(challenger.tokens).toEqual({ cacheRead: 40_000, cacheWrite: 0, uncachedInput: 60_000, output: 1024 });
+    expect(challenger.centralUSD).toBeCloseTo(40_000 * 0.2 / 1e6 + 60_000 * 2 / 1e6 + 1024 * 8 / 1e6, 12);
+  });
+
+  it('shares the prefix across efforts only when the model keeps it', () => {
+    expect(usd(cacheState(), anthropic, aLow).tokens.cacheRead).toBe(100_000);
+    const noSharing = registryModel('a', 'claude', { cost: anthropic.cost });
+    expect(usd(cacheState(), noSharing, aLow).tokens.cacheRead).toBe(0);
+  });
+
+  it('gives no cache credit after TTL expiry, on a prompt-identity mismatch, or to a spawned subagent', () => {
+    expect(usd(cacheState({ nowMs: 1_000_000 + 300_001 }), anthropic, aHigh).tokens.cacheRead).toBe(0);
+    expect(usd(cacheState({ promptIdentity: 'head-2' }), anthropic, aHigh).tokens.cacheRead).toBe(0);
+    expect(usd(cacheState({ isSubagentSpawn: true }), anthropic, aHigh).tokens.cacheRead).toBe(0);
+  });
+
+  it('widens only the lower cost bound when the cache-read price is missing', () => {
+    const noRead = registryModel('o', 'gpt', { cost: { input: 2, output: 8 } });
+    const spend = usd(cacheState(), noRead, oHigh);
+    // Central: no cache credit. Minimum: free cached tokens. Maximum: all input missed.
+    expect(spend.centralUSD).toBeCloseTo(100_000 * 2 / 1e6 + 1024 * 8 / 1e6, 12);
+    expect(spend.minUSD).toBeCloseTo(60_000 * 2 / 1e6 + 512 * 8 / 1e6, 12);
+    expect(spend.maxUSD).toBeCloseTo(100_000 * 2 / 1e6 + 4096 * 8 / 1e6, 12);
+  });
+});

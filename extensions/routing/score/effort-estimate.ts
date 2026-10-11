@@ -54,6 +54,8 @@ interface EstimatedQuality {
   quality: BenchModel['quality'];
   estimated: boolean;
   anchor?: BenchModel;
+  /** Axes filled by stepping down. */
+  steppedAxes: LadderAxis[];
 }
 
 function percentile(sorted: readonly number[], p: number): number {
@@ -118,7 +120,7 @@ function estimateQuality(
 ): EstimatedQuality {
   const target = LEVELS.indexOf(level);
   const quality: BenchModel['quality'] = { ...existing };
-  if (target < 0) return { quality, estimated: false };
+  if (target < 0) return { quality, estimated: false, steppedAxes: [] };
 
   const above = measured
     .filter((r) => r.effort != null && LEVELS.indexOf(r.effort) > target)
@@ -126,6 +128,7 @@ function estimateQuality(
 
   let estimated = false;
   let nearestUsedAnchor: BenchModel | undefined;
+  const steppedAxes: LadderAxis[] = [];
   for (const axis of AXES) {
     if (quality[axis] != null || drops[axis] == null) continue;
     // Axis coverage can differ between effort rows. Find the nearest row above
@@ -136,6 +139,7 @@ function estimateQuality(
     const steps = LEVELS.indexOf(anchor.effort!) - target;
     quality[axis] = Math.max(0, anchor.quality[axis]! - drops[axis]! * steps);
     estimated = true;
+    steppedAxes.push(axis);
     if (
       nearestUsedAnchor == null ||
       LEVELS.indexOf(anchor.effort!) < LEVELS.indexOf(nearestUsedAnchor.effort!)
@@ -144,7 +148,19 @@ function estimateQuality(
     }
   }
 
-  return { quality, estimated, anchor: nearestUsedAnchor };
+  return { quality, estimated, anchor: nearestUsedAnchor, steppedAxes };
+}
+
+/** Provenance after a step-down: the stepped axes are never evidence at the target effort. */
+function steppedProvenance(
+  stepped: readonly LadderAxis[],
+  base: BenchModel['axisProvenance'] = {},
+): NonNullable<BenchModel['axisProvenance']> {
+  const result = { ...base };
+  for (const axis of stepped) {
+    if (axis === 'intelligence' || axis === 'agenticCoding') result[axis] = 'effort-stepdown';
+  }
+  return result;
 }
 
 /**
@@ -169,7 +185,7 @@ export function completeMeasuredRow(
     return undefined;
   }
   if (!result.estimated) return row;
-  return { ...row, quality: result.quality, qualityEstimated: true };
+  return { ...row, quality: result.quality, qualityEstimated: true, axisProvenance: steppedProvenance(result.steppedAxes, row.axisProvenance) };
 }
 
 /**
@@ -193,6 +209,7 @@ export function estimateRow(
     quality: result.quality,
     effort: level,
     qualityEstimated: true,
+    axisProvenance: steppedProvenance(result.steppedAxes),
     // Price is a registry fact and carries across effort levels untouched.
     ...(anchor.priceInputPer1M == null ? {} : { priceInputPer1M: anchor.priceInputPer1M }),
     ...(anchor.priceOutputPer1M == null ? {} : { priceOutputPer1M: anchor.priceOutputPer1M }),

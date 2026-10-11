@@ -3,6 +3,7 @@ import type { ScoredReason } from './routing/score/decision-reason.js';
 import type { ModelThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 import type { ContextReason, ContextRelation, ResolverTier } from './routing/context/types.js';
 import type { FactsLog } from './routing/policy/change-facts.js';
+import type { AxisProvenance } from './routing/features/schema.js';
 
 export type { ExtensionContext };
 
@@ -72,6 +73,13 @@ export interface BenchModel {
    * strictly stronger than another requires measured evidence.
    */
   qualityEstimated?: boolean;
+  /**
+   * Provenance of each quality axis, set independently. A populated value in
+   * `quality` does not establish `measured`. A row without this map (written
+   * before provenance existed) gives no axis evidence to the unified
+   * selector until a sync rewrites it.
+   */
+  axisProvenance?: Partial<Record<ProvenanceAxis, AxisProvenance>>;
   /** Measured cost per task (AA intelligence-index cost block); absent when unpublished. */
   costPerTask?: number;
   /** Measured wall time per Intelligence Index task in seconds; absent when unpublished. */
@@ -81,6 +89,10 @@ export interface BenchModel {
   /** Which source produced this row. */
   source: string;
 }
+
+/** Quality axes that carry independent provenance. */
+export type ProvenanceAxis = 'intelligence' | 'agenticCoding' | 'research' | 'knowledge' | 'longContext' | 'visionReasoning';
+export const PROVENANCE_AXES: readonly ProvenanceAxis[] = ['intelligence', 'agenticCoding', 'research', 'knowledge', 'longContext', 'visionReasoning'];
 
 export interface BenchmarkStore {
   /** AA index scale the synchronized measurements use. */

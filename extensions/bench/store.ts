@@ -8,7 +8,9 @@ import { homedir } from 'node:os';
 
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 
-import type { BenchModel, BenchmarkStore, ExtensionContext } from '../types.js';
+import { PROVENANCE_AXES, type BenchModel, type BenchmarkStore, type ExtensionContext, type ProvenanceAxis } from '../types.js';
+import type { AxisProvenance } from '../routing/features/schema.js';
+import { canonicalJson } from '../routing/digest.js';
 import { CONFIG_FILE, STORE_FILE, STALE_MS, STORAGE_DIR } from '../constants.js';
 import { readJsonCached, writeJsonAtomic } from '../json-file.js';
 
@@ -97,6 +99,22 @@ function withoutUndefined<T extends Record<string, unknown>>(value: T): Partial<
   ) as Partial<T>;
 }
 
+const AXIS_PROVENANCE_VALUES: readonly AxisProvenance[] = ['measured', 'source-estimated', 'regression-bridge', 'effort-stepdown', 'missing'];
+
+/** Keep only known axes with known provenance values; anything else gives no evidence. */
+function sanitizeAxisProvenance(value: unknown): Partial<Record<ProvenanceAxis, AxisProvenance>> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const result: Partial<Record<ProvenanceAxis, AxisProvenance>> = {};
+  for (const axis of PROVENANCE_AXES) {
+    const provenance = record[axis];
+    if (typeof provenance === 'string' && (AXIS_PROVENANCE_VALUES as readonly string[]).includes(provenance)) {
+      result[axis] = provenance as AxisProvenance;
+    }
+  }
+  return result;
+}
+
 function sanitizeBenchModel(value: unknown): BenchModel | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
@@ -135,6 +153,7 @@ function sanitizeBenchModel(value: unknown): BenchModel | undefined {
       latencyMsTtfa: optionalFinite(row.latencyMsTtfa),
       effort: isModelThinkingLevel(row.effort) ? row.effort : undefined,
       qualityEstimated: row.qualityEstimated === true ? true : undefined,
+      axisProvenance: sanitizeAxisProvenance(row.axisProvenance),
       costPerTask: optionalFinite(row.costPerTask),
       timePerTaskSeconds: optionalFinite(row.timePerTaskSeconds),
       contextWindow: optionalFinite(row.contextWindow),
@@ -218,12 +237,39 @@ export function checkBenchmarkStore(store: BenchmarkStore | undefined = loadStor
   return { ready: true };
 }
 
+/** Value present and its axis provenance in the given set. */
+const countAxes = (row: BenchModel, accepted: readonly AxisProvenance[]): number =>
+  PROVENANCE_AXES.filter((axis) => {
+    const provenance = row.axisProvenance?.[axis];
+    return row.quality[axis] !== undefined && provenance !== undefined && accepted.includes(provenance);
+  }).length;
+
+/**
+ * Whole-row merge precedence: more measured axes, then more eligible axes
+ * (measured or source-estimated), then the smaller source key, then the
+ * smaller canonical row text. Regression, step-down, missing and unknown
+ * provenance do not count. The row-level `qualityEstimated` flag does not
+ * rank rows. The result does not depend on input order.
+ */
+export function compareMergeRows(a: BenchModel, b: BenchModel): number {
+  const measured = countAxes(b, ['measured']) - countAxes(a, ['measured']);
+  if (measured !== 0) return measured;
+  const eligible = countAxes(b, ['measured', 'source-estimated']) - countAxes(a, ['measured', 'source-estimated']);
+  if (eligible !== 0) return eligible;
+  const sourceA = `${a.source}\u0000${a.benchSlug}`;
+  const sourceB = `${b.source}\u0000${b.benchSlug}`;
+  if (sourceA !== sourceB) return sourceA < sourceB ? -1 : 1;
+  const rowA = canonicalJson(a);
+  const rowB = canonicalJson(b);
+  return rowA < rowB ? -1 : rowA > rowB ? 1 : 0;
+}
+
 /**
  * Group active models by registryId *and* effort and keep one whole row per
  * group. Two rows in one group are different AA models (for example a preview
  * and its release) that resolve to one registry model. Taking each axis from
- * a different row would describe a model nobody measured. The kept row is
- * measured rather than estimated, then has the most quality axes.
+ * a different row would describe a model nobody measured. The kept row is the
+ * first under `compareMergeRows`.
  * Effort variants of one model are separate rows — each is a distinct
  * (model, effort) measurement pair.
  * Only active rows are merged; inactive (unresolved) rows must be passed in
@@ -239,12 +285,8 @@ export const mergeActiveBenchRows = (models: BenchModel[]): BenchModel[] => {
     byKey.set(key, list);
   }
   const result: BenchModel[] = [];
-  const axes = (row: BenchModel): number => Object.values(row.quality).filter((v) => v !== undefined).length;
   for (const [, rows] of byKey) {
-    result.push(rows.reduce((best, row) => {
-      if (!!row.qualityEstimated !== !!best.qualityEstimated) return row.qualityEstimated ? best : row;
-      return axes(row) > axes(best) ? row : best;
-    }));
+    result.push(rows.reduce((best, row) => (compareMergeRows(row, best) < 0 ? row : best)));
   }
   return result;
 };

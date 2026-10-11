@@ -36,6 +36,7 @@
     "prepublishOnly": "npm run tsc",
     "test": "vitest run",
     "test:candidate-policy": "PI8_POLICY_VERSION=cheapest-sufficient vitest run extensions",
+    "measure:pool": "PI8_POOL_MEASURE=1 timeout 1800 vitest run extensions/routing/optimization/pool-measurement.test.ts",
     "replay:local": "PI8_LOCAL_REPLAY=1 timeout 900 vitest run extensions/serve/context-replay.test.ts",
     "check": "npm run tsc && npm test"
   },
@@ -54,6 +55,7 @@
   },
   "dependencies": {
     "diff": "^8.0.4",
+    "highs": "1.15.3",
     "minisearch": "^7.2.0",
     "playwright-core": "^1.63.0",
     "unbash": "4.0.11"
