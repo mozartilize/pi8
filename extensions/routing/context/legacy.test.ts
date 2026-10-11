@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { COMPACTION_SUMMARY_PREFIX } from '@earendil-works/pi-agent-core';
+import { COMPACTION_SUMMARY_PREFIX } from './summary-markers.js';
 
 import { buildLegacyIndex, findLegacyCandidates, LEGACY_LIMITS, tokenize, type LegacyIndex } from './legacy.js';
 import { extractPromptAnchors } from './anchors.js';

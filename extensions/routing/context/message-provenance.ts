@@ -8,15 +8,13 @@
  * `custom` loses `customType` in conversion and is indistinguishable from a
  * human turn with the same text.
  *
- * The markers are imported rather than copied so that a Pi upgrade which
- * removes them fails the build instead of leaving the router matching text
- * that is no longer emitted. A round-trip test guards the case where the
- * export survives but its value drifts from what the flattener produces.
+ * The markers come from Pi's public converter, not copied formatting text.
+ * Tests verify both summary kinds against independently converted messages.
  */
 import {
   COMPACTION_SUMMARY_PREFIX,
   BRANCH_SUMMARY_PREFIX,
-} from '@earendil-works/pi-agent-core';
+} from './summary-markers.js';
 import type { Message } from '@earendil-works/pi-ai';
 import type { MessageProvenance } from '../../types.js';
 
@@ -55,8 +53,8 @@ export function classifyProvenance(
     const text = firstText(message);
     if (!text) return 'user';
 
-    if (text.startsWith(COMPACTION_SUMMARY_PREFIX)) return 'compaction-summary';
-    if (text.startsWith(BRANCH_SUMMARY_PREFIX)) return 'branch-summary';
+    if (COMPACTION_SUMMARY_PREFIX && text.startsWith(COMPACTION_SUMMARY_PREFIX)) return 'compaction-summary';
+    if (BRANCH_SUMMARY_PREFIX && text.startsWith(BRANCH_SUMMARY_PREFIX)) return 'branch-summary';
     for (const prefix of syntheticPrefixes) {
       if (prefix && text.startsWith(prefix)) return 'synthetic-known';
     }

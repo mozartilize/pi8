@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
-  convertToLlm,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
-} from '@earendil-works/pi-agent-core';
+} from './summary-markers.js';
+import { convertToLlm } from '@earendil-works/pi-coding-agent';
 import type { Message } from '@earendil-works/pi-ai';
 import { classifyProvenance } from './message-provenance.js';
 
@@ -20,20 +20,22 @@ const textOf = (message: unknown): string => {
 };
 
 describe('message-provenance — marker CI guard', () => {
-  // The constants are imported, so a removed export fails tsc. This guards the
-  // remaining risk: the export survives but stops matching what the flattener
-  // emits, which would make the router silently misread summaries as requests.
+  // Distinct summary content verifies extraction without copying Pi formatting.
   it('the imported markers still match what convertToLlm actually emits', () => {
     const now = Date.now();
     const [compaction] = convertToLlm([
-      { role: 'compactionSummary', summary: 'S', tokensBefore: 0, timestamp: now },
+      { role: 'compactionSummary', summary: 'Compaction evidence', tokensBefore: 0, timestamp: now },
     ] as never);
     const [branch] = convertToLlm([
-      { role: 'branchSummary', summary: 'S', fromId: 'x', timestamp: now },
+      { role: 'branchSummary', summary: 'Branch evidence', fromId: 'x', timestamp: now },
     ] as never);
 
-    expect(textOf(compaction)).toBe(`${COMPACTION_SUMMARY_PREFIX}S${COMPACTION_SUMMARY_SUFFIX}`);
-    expect(textOf(branch)).toBe(`${BRANCH_SUMMARY_PREFIX}S${BRANCH_SUMMARY_SUFFIX}`);
+    expect(COMPACTION_SUMMARY_PREFIX.length).toBeGreaterThan(0);
+    expect(BRANCH_SUMMARY_PREFIX.length).toBeGreaterThan(0);
+    expect(classifyProvenance(compaction!)).toBe('compaction-summary');
+    expect(classifyProvenance(branch!)).toBe('branch-summary');
+    expect(textOf(compaction)).toBe(`${COMPACTION_SUMMARY_PREFIX}Compaction evidence${COMPACTION_SUMMARY_SUFFIX}`);
+    expect(textOf(branch)).toBe(`${BRANCH_SUMMARY_PREFIX}Branch evidence${BRANCH_SUMMARY_SUFFIX}`);
   });
 });
 

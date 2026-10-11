@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '@earendil-works/pi-ai';
-import { COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX } from '@earendil-works/pi-agent-core';
+import { COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX } from '../context/summary-markers.js';
 
 import { ROUTER_SETTLE_PREFIX, getTurnClassificationInput } from './continuation.js';
 
