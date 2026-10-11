@@ -40,7 +40,8 @@ const percentile = (sorted: number[], p: number) => sorted[Math.min(sorted.lengt
 
 async function loadLiveSource(): Promise<PoolSource | undefined> {
   const agentDir = join(homedir(), '.pi', 'agent');
-  const storePath = join(agentDir, 'pi8', 'benchmarks.json');
+  // PI8_POOL_STORE measures a store synced elsewhere, e.g. into a scratch PI8_DIR.
+  const storePath = process.env.PI8_POOL_STORE ?? join(agentDir, 'pi8', 'benchmarks.json');
   if (!existsSync(storePath)) return undefined;
   const { ModelRuntime } = await import('@earendil-works/pi-coding-agent');
   const scratch = mkdtempSync(join(tmpdir(), 'pi8-pool-'));
@@ -106,8 +107,13 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
                 if (run > 0) times.push(elapsed);
                 if (result.kind === 'decision' && result.solver === 'exact') exact++;
                 else fallback++;
-                if (result.kind === 'decision' && run === 0 && label === 'operator' && !needsVision) {
-                  log(`  ${phase}: chosen ${result.chosen} (${result.solver})`);
+                if (result.kind === 'decision' && run === 0 && !needsVision) {
+                  const describe = (key: string) => {
+                    const action = result.actions.find((a) => a.features.key === key)!.features;
+                    const exactQuality = [0, 1, 2].filter((j) => action.lower[j] === action.upper[j]).length;
+                    return `${key} MR=${result.maxRegret?.get(key)?.toFixed(4) ?? '-'} exactQualityAxes=${exactQuality}/3`;
+                  };
+                  log(`  ${label} ${phase}: ${result.solver}; top ${result.ranking.slice(0, 3).map(describe).join(' | ')}`);
                 }
               }
             }
