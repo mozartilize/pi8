@@ -279,7 +279,7 @@ export interface MeasuredFeatures {
 }
 
 /** Why an accepted plan stays with its submitter. */
-export type ContractKeepReason = 'size' | 'difficulty' | 'excluded' | 'unknown-target' | 'delete' | 'open-decisions' | 'above-submitter';
+export type ContractKeepReason = 'size' | 'unknown-target' | 'delete' | 'open-decisions';
 
 /** How a contract ended; the label its logged features are fitted against. */
 export type ContractOutcome = 'clean' | 'fixed' | 'rework' | 'broken' | 'unfinished';
@@ -287,14 +287,8 @@ export type ContractOutcome = 'clean' | 'fixed' | 'rework' | 'broken' | 'unfinis
 export interface ExecutionContractMeta {
   /** `executed`: every declared edit/create target was edited, or the step budget ran out. */
   status: 'active' | 'executed' | 'broken';
-  /** Absent under the candidate policy, which names no band. */
-  band?: CapabilityBand;
   /** False when the submitting model keeps executing the plan. */
   release: boolean;
-  /** Implementation requirement the executor must meet; absent when the submitter keeps the plan. */
-  minimum?: number;
-  /** Requirement from a legacy contract; unified selection uses feature evidence. */
-  requirement?: number;
   keepReason?: ContractKeepReason;
   /** Undefined when the submitter scored no criterion. */
   rubric?: ExecutionRubric;

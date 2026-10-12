@@ -178,12 +178,9 @@ const CONTRACT_BREAK_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['
 
 const CONTRACT_KEEP_LABELS: Readonly<Record<NonNullable<ExecutionContractMeta['keepReason']>, string>> = {
   size: 'too large to hand off',
-  difficulty: 'too hard to hand off',
-  excluded: 'earlier executors were excluded',
   'unknown-target': 'it edits a file that does not exist or could not be checked',
   delete: 'it deletes a file',
   'open-decisions': 'it leaves a choice open',
-  'above-submitter': 'its minimum is above the submitting model',
 };
 
 function contractPlanLine(contract: ExecutionContractMeta): string {
@@ -191,8 +188,8 @@ function contractPlanLine(contract: ExecutionContractMeta): string {
   switch (contract.status) {
     case 'active':
       return contract.release
-        ? `accepted${contract.band ? `, ${contract.band}` : ''} (${size}; executor minimum ${contract.minimum?.toFixed(2)}); an executor model runs it`
-        : `accepted (${size}); ${contract.submitter} keeps running it: ${CONTRACT_KEEP_LABELS[contract.keepReason ?? 'difficulty']}`;
+        ? `accepted (${size}); an executor model runs it`
+        : `accepted (${size}); ${contract.submitter} keeps running it${contract.keepReason ? `: ${CONTRACT_KEEP_LABELS[contract.keepReason]}` : ''}`;
     case 'executed': {
       const how = contract.executedReason === 'budget' ? ' (step budget used up)' : '';
       return contract.release

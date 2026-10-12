@@ -2530,17 +2530,13 @@ describe('context acquisition', () => {
       it('logs plan facts without adding a capability minimum', async () => {
         await planned();
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
-        const plain = harness.session.getWorkPhaseState()!.contract!;
         await planned();
         const facts = { decisions: ['secret open decision'], precedent: 'src/secret.ts', answers: { mapping: 'Y' } };
         expect(submitExecutionContract({ ...smallPlan, facts }, routerCtx, harness.session, EXISTING_TARGETS, { files: 1 }).accepted).toBe(true);
         const contract = harness.session.getWorkPhaseState()!.contract!;
         expect(contract.facts?.declared).toMatchObject({ modify: 1, create: 0, checkCommands: 1, decisions: 1, precedent: true });
         expect(contract.facts?.shadow.used).toBeGreaterThan(0);
-        expect(contract.minimum).toBeUndefined();
-        expect(contract.band).toBeUndefined();
-        expect({ minimum: contract.minimum, requirement: contract.requirement, band: contract.band })
-          .toEqual({ minimum: plain.minimum, requirement: plain.requirement, band: plain.band });
+        expect(contract).toMatchObject({ release: true });
         expect(JSON.stringify(contractMeta(harness.session.getWorkPhaseState()!))).not.toContain('secret');
       });
     });
@@ -2609,7 +2605,6 @@ describe('context acquisition', () => {
       expect(executing?.cause).toBe('execution-contract');
       expect(executing?.chosen).toBe('alpha/cheap');
       expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'active', release: true });
-      expect(harness.getProviderState().lastDecision?.executionContract?.band).toBeUndefined();
       // The executor keeps serving the rest of the entry.
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
     });
@@ -2685,14 +2680,13 @@ describe('context acquisition', () => {
         const digest = createHash('sha256').update(JSON.stringify(loadStore() ?? null)).digest('hex');
         expect(decision.unified?.benchmarkSnapshotDigest).toBe(digest);
         expect(decision.capabilityEvidence).toBeUndefined();
-        expect(decision.executionContract?.minimum).toBeUndefined();
         const records = await session.readDecisionRecords();
         const record = records.filter((row) => row.kind == null && row.dimension === 'implement').at(-1)!;
         expect(record.unified).toEqual(decision.unified);
         expect(JSON.stringify(record.unified)).not.toContain('src/a.ts');
       });
 
-      it('hands a small accepted plan to a cheaper executor, and the plan has no band', async () => {
+      it('hands a small accepted plan to a cheaper executor', async () => {
         const session = await planned();
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const executing = await session.routeTurnAgainWithSameUserEntry();
@@ -2700,13 +2694,11 @@ describe('context acquisition', () => {
         expect(executing).not.toHaveProperty('policyVersion');
         const meta = harness.getProviderState().lastDecision?.executionContract;
         expect(meta).toMatchObject({ status: 'active', release: true });
-        expect(meta?.band).toBeUndefined();
       });
 
-      it('replaces an executor that two broken plans excluded with a strictly stronger model, without raising the minimum', async () => {
+      it('replaces an executor that two broken plans excluded with another model', async () => {
         const session = await planned();
         submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-        const firstMinimum = harness.session.getWorkPhaseState()!.contract!.minimum;
         expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
         breakWithUndeclaredEdit();
         await session.routeTurnAgainWithSameUserEntry();
@@ -2720,9 +2712,6 @@ describe('context acquisition', () => {
         const escalated = await session.routeTurnAgainWithSameUserEntry();
         expect(escalated).toMatchObject({ dimension: 'implement', chosen: 'beta/strong' });
         expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
-        const meta = harness.getProviderState().lastDecision?.executionContract;
-        expect(meta?.band).toBeUndefined();
-        expect(meta?.minimum).toBe(firstMinimum);
       });
 
       it('releases a plan when an unrelated excluded executor left the pool', async () => {
@@ -2732,7 +2721,6 @@ describe('context acquisition', () => {
         submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
         const contract = harness.session.getWorkPhaseState()?.contract;
         expect(contract).toMatchObject({ release: true });
-        expect(contract?.band).toBeUndefined();
         expect(contract?.keepReason).toBeUndefined();
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next).toMatchObject({ dimension: 'implement', chosen: 'alpha/cheap' });
@@ -2859,16 +2847,14 @@ describe('context acquisition', () => {
       expect(escalated?.dimension).toBe('implement');
       expect(escalated?.chosen).toBe('beta/strong');
       expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
-      expect(harness.getProviderState().lastDecision?.executionContract?.band).toBeUndefined();
     });
 
-    it.skipIf(candidatePolicyRun)('keeps the submitter when an excluded executor is no longer in the pool', async () => {
+    it.skipIf(candidatePolicyRun)('releases a plan when an excluded executor is no longer in the pool', async () => {
       const session = await planned();
       const state = harness.session.getWorkPhaseState()!;
       harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true });
-      expect(harness.session.getWorkPhaseState()?.contract?.band).toBeUndefined();
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
       expect(next?.chosen).toBe('alpha/cheap');

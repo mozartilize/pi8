@@ -23,7 +23,6 @@ import { open } from 'node:fs/promises';
 import {
   ROUTER_PROVIDER_ID,
   AUTO_MODEL_ID,
-  type Candidate,
   type ContractOutcome,
   type MeasuredFeatures,
   type RoutingDecision,
@@ -35,7 +34,6 @@ import {
   EXECUTION_CONTRACT_TOOL,
   MAX_CONTRACT_STEPS,
   acceptContract,
-  acceptContractV2,
   attributeExecutor,
   breakContract,
   contractMeta,
@@ -53,7 +51,7 @@ import {
 import { parseRubric } from '../routing/policy/execution-difficulty.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { actionFromTool, cycleFromToolResult, isVerifier } from '../routing/struggle/fingerprints.js';
-import { findSourceCandidate, parseCandidateKey } from '../routing/score/scorer.js';
+import { parseCandidateKey } from '../routing/score/scorer.js';
 import { classifyMutationCall, isMutationCall } from '../routing/policy/mutation-detector.js';
 import type { RouterSession } from './router-session-state.js';
 import { recordBoundary } from './context-resolution.js';
@@ -421,21 +419,10 @@ export function closeContractOnSettle(session: RouterSession): void {
 
 const KEEP_REASONS = {
   size: 'the plan is too large to hand off',
-  difficulty: 'the remaining work needs a model at the current level',
-  excluded: 'earlier executors broke plans in this task',
   'unknown-target': 'a file the plan edits or deletes does not exist, or could not be checked',
   delete: 'the plan deletes a file, which only the submitting model can finish',
   'open-decisions': 'the plan leaves a behavior, interface, or design choice open',
-  'above-submitter': 'the plan needs more than the current model\'s measured level. If the current model struggles, '
-    + 'the router moves the work to a stronger model',
 } as const;
-
-/** The served model's candidate row from the routed pool, so the plan can compare its minimum with the submitter. */
-function submitterCandidateOf(session: RouterSession, served: string): { submitterCandidate?: Candidate } {
-  const pool = session.getCandidateExpansion()?.candidates;
-  const submitterCandidate = pool ? findSourceCandidate(pool, served) : undefined;
-  return submitterCandidate ? { submitterCandidate } : {};
-}
 
 function reject(intentKey: string, served: string, rejection: ContractRejection): ContractSubmission {
   appendExecutionContractSignal({ intentKey, served, action: 'reject', rejectReason: rejection.code });
@@ -510,17 +497,16 @@ export function submitExecutionContract(
     // A model that serves only because of an escalation or a fallback does
     // not own the review of the plan it submits.
     submitterTemporary: lastServed?.viaFallback === true || last.trajectoryFriction !== undefined,
-    ...submitterCandidateOf(session, served),
     validation,
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },
   };
-  const accepted = last.unified ? acceptContractV2(base, input) : acceptContract(base, input, evaluationPolicyVersion());
+  const accepted = acceptContract(base, input);
   // The shadow requirement is diagnostic evidence only.
   const declared = { ...parseDeclaredFacts(params?.facts), ...stepFacts(steps ?? []) };
   const valued = accepted.contract
     ? { ...accepted, contract: { ...accepted.contract,
-      facts: factsLog('implement', declared, change, accepted.contract.minimum ?? accepted.contract.requirement, evaluationPolicyVersion()) } }
+      facts: factsLog('implement', declared, change, undefined, evaluationPolicyVersion()) } }
     : accepted;
   // The context handoff this plan came from records that it led to one.
   const next = valued.reasoningHandoff && !valued.reasoningHandoff.contractAccepted
@@ -545,11 +531,9 @@ export function submitExecutionContract(
   recordBoundary(session, next, 'execution-contract', state.intentKey);
   const contract = next.contract!;
   const header = contract.release
-    ? (last.unified ? 'Execution plan accepted. A model '
-      : `Execution plan accepted (${contract.band ? `${contract.band}, ` : ''}executor minimum ${contract.minimum!.toFixed(2)}). A model `) +
-      'chosen for this plan executes it from the next step. When every listed file is edited, the work returns ' +
-      'to the submitting model for review.'
-    : `Execution plan accepted. The current model keeps executing it: ${KEEP_REASONS[contract.keepReason ?? 'difficulty']}.`;
+    ? 'Execution plan accepted. A model chosen for this plan executes it from the next step. When every listed ' +
+      'file is edited, the work returns to the submitting model for review.'
+    : `Execution plan accepted. The current model keeps executing it${contract.keepReason ? `: ${KEEP_REASONS[contract.keepReason]}` : ''}.`;
   return {
     accepted: true,
     text: [

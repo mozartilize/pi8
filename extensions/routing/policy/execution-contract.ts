@@ -3,11 +3,9 @@
  *
  * A planning or reviewing model submits the remaining work as a closed list
  * of file changes and verification runs, plus a rubric describing what the
- * executor still has to work out. The router, not the model, decides what the
- * contract is worth: the rubric and the router's own measurements set the
- * implement-axis minimum an executor must clear, the plan's shape sets the
- * lowest band that minimum may fall in, and a requirement at the frontier
- * requirement keeps the submitting model.
+ * executor still has to work out. The router, not the model, decides whether
+ * the plan is released: a closed plan of a delegatable shape is released, and
+ * the selector values its executor with the rubric.
  *
  * A contract ends in one of three ways:
  * - broken: its executor edits an undeclared file, re-plans, or struggles; the
@@ -19,9 +17,7 @@
  *
  * An executor model that breaks contracts, or whose executed work the
  * submitter replaces with a new plan, `CONTRACT_STRIKE_LIMIT` times in one task
- * is excluded, and every later contract in that task must be served by a
- * strictly stronger model one band higher, so repeated handoffs terminate at
- * the submitter.
+ * is excluded from executing that task's later plans.
  *
  * Pure state transitions only: no I/O, no registry or session access.
  */
@@ -29,24 +25,15 @@ import { homedir } from 'node:os';
 import type { FactsLog } from './change-facts.js';
 import { dirname, resolve } from 'node:path';
 import type {
-  Candidate,
-  CapabilityBand,
   ContractKeepReason,
   ContractOutcome,
   ExecutionContractMeta,
   ExecutionRubric,
   MeasuredFeatures,
 } from '../../types.js';
-import { defaultRequirement, measuredBelowRequirement, parseCandidateKey } from '../score/scorer.js';
-import { bandRequirement, type WorkPhaseState } from './work-phase.js';
-import {
-  BASE_REQUIREMENT,
-  bandForRequirement,
-  executionRequirement,
-  isTestPath,
-} from './execution-difficulty.js';
-import { FRONTIER_REQUIREMENT } from '../score/scorer.js';
-import type { PolicyVersion } from './policy-version.js';
+import { parseCandidateKey } from '../score/scorer.js';
+import type { WorkPhaseState } from './work-phase.js';
+import { isTestPath } from './execution-difficulty.js';
 
 export const EXECUTION_CONTRACT_TOOL = 'commit_execution';
 
@@ -56,7 +43,6 @@ export const CONTRACT_STRIKE_LIMIT = 2;
 /** Upper bound on steps; anything longer is still a plan, not a program. */
 export const MAX_CONTRACT_STEPS = 12;
 
-const BAND_ORDER: CapabilityBand[] = ['economy', 'standard', 'strong', 'frontier'];
 const FILE_STEPS = new Set(['edit', 'create', 'delete']);
 const PATTERN = /[*?[\]{}]/;
 
@@ -94,18 +80,13 @@ export interface ExecutionContract {
    * own decision.
    */
   submitterTemporary?: boolean;
-  /** The named band of the legacy policy. The candidate policy names none. */
-  band?: CapabilityBand;
   /** False when only the submitter executes the plan. */
   release: boolean;
-  /** Implementation requirement the executor must meet; undefined when not released. */
-  minimum?: number;
   /**
    * A released plan still releases the incumbent minimums: no invocation has
    * served it yet. The first invocation that serves the plan owns it.
    */
   releasePending?: boolean;
-  requirement?: number;
   keepReason?: ContractKeepReason;
   /** Undefined when the submitter scored no criterion. */
   rubric?: ExecutionRubric;
@@ -133,8 +114,8 @@ export interface ValidatedContract {
   /** Targets of edit/create steps: the ones whose edits complete the plan. */
   editTargets: string[];
   steps: number;
-  /** Lowest band the plan's shape allows; undefined keeps the submitter. */
-  shapeBand: CapabilityBand | undefined;
+  /** The plan is small enough for another model to execute: up to five files and eight steps. */
+  delegatable: boolean;
   /** The plan deletes a file. */
   deletes: boolean;
   structural: Pick<MeasuredFeatures, 'files' | 'directories' | 'steps' | 'testTargets'>;
@@ -162,50 +143,9 @@ export interface ContractRejection {
 
 export type ContractValidation = ValidatedContract | ContractRejection;
 
-/**
- * Lowest band the contract's shape allows. Undefined means the plan is too
- * large to hand off; the submitter keeps executing it.
- */
-export function contractShapeBand(targets: number, steps: number): CapabilityBand | undefined {
-  if (targets <= 2 && steps <= 4) return 'economy';
-  if (targets <= 5 && steps <= 8) return 'standard';
-  return undefined;
-}
-
-/** Executor minimum of a plan with up to five files and eight steps. */
-const MEDIUM_PLAN_REQUIREMENT = 0.45;
-
-/**
- * An executor must meet at least a requirement of this size when the plan is
- * larger than one of two files and four steps. Undefined means that the plan is
- * too large to hand off: the submitter keeps it.
- */
-export function contractShapeRequirement(targets: number, steps: number): number | undefined {
-  if (targets <= 2 && steps <= 4) return BASE_REQUIREMENT;
-  if (targets <= 5 && steps <= 8) return MEDIUM_PLAN_REQUIREMENT;
-  return undefined;
-}
-
-/** A plan whose requirement reaches this value stays with the submitter. */
-export const MAX_DELEGATABLE_REQUIREMENT = FRONTIER_REQUIREMENT;
-
-export function raiseBand(band: CapabilityBand, steps: number): CapabilityBand {
-  const index = Math.min(BAND_ORDER.length - 1, BAND_ORDER.indexOf(band) + Math.max(0, steps));
-  return BAND_ORDER[index]!;
-}
-
-function maxBand(a: CapabilityBand, b: CapabilityBand): CapabilityBand {
-  return BAND_ORDER[Math.max(BAND_ORDER.indexOf(a), BAND_ORDER.indexOf(b))]!;
-}
-
-/**
- * Lowest implementation requirement a band admits; undefined keeps the
- * submitter. The band table has no economy minimum; a contract still needs
- * one, or the scorer would apply the full capability minimums.
- */
-export function executionMinimum(band: CapabilityBand): number | undefined {
-  if (band === 'frontier') return undefined;
-  return band === 'economy' ? BASE_REQUIREMENT : bandRequirement(band);
+/** A plan with more files or steps stays with its submitter. */
+export function delegatableShape(targets: number, steps: number): boolean {
+  return targets <= 5 && steps <= 8;
 }
 
 /** Provider invocations an executor gets before the plan counts as executed. */
@@ -245,7 +185,7 @@ export function validateContract(steps: readonly ExecutionStepInput[] | undefine
     targets: all,
     editTargets: [...editTargets],
     steps: steps.length,
-    shapeBand: contractShapeBand(targets.size, steps.length),
+    delegatable: delegatableShape(targets.size, steps.length),
     deletes,
     structural: {
       files: targets.size,
@@ -256,22 +196,9 @@ export function validateContract(steps: readonly ExecutionStepInput[] | undefine
   };
 }
 
-/**
- * The requirement of a plan, valued on the same rubric as every other
- * implementation declaration: the rubric and the measurements, or the default
- * implement requirement without a scored rubric. The entry's final step does
- * not raise it: the plan settled the decisions that made the task hard, and a
- * closed plan exists so that a cheaper executor can run it.
- */
-function contractRequirement(rubric: ExecutionRubric | undefined, measured: MeasuredFeatures, version: PolicyVersion): number {
-  return rubric ? executionRequirement(rubric, measured) : defaultRequirement('implement', version);
-}
-
 interface AcceptInput {
   submitter: string;
   submitterTemporary?: boolean;
-  /** The submitter's candidate row at its served effort; undefined when the pool has none. */
-  submitterCandidate?: Candidate;
   validation: ValidatedContract;
   rubric: ExecutionRubric | undefined;
   measured: MeasuredFeatures;
@@ -285,66 +212,18 @@ interface AcceptInput {
 const OPEN_DECISION_LEVEL = 4;
 
 /**
- * Why the submitter keeps a plan that is otherwise released with `minimum`.
- * A plan with an open choice stays. A plan whose minimum is above the
- * submitter's measured quality stays too: releasing it would move the work
- * to a stronger model in one step, past the escalation rule that goes one
- * band at a time after a struggle. A submitter with no measurement does not
- * keep the plan, because unknown quality is not weak quality.
+ * Accept a closed plan. A plan is released to the model the selector chooses
+ * unless it is unsafe or unfinished for another model: an unmeasured or
+ * missing target, a deleted file, too many files or steps, or an open
+ * behavior, interface, or design choice. Benchmark quality and task
+ * difficulty do not keep a plan: the selector values the executor with the
+ * plan's rubric.
  */
-function submitterKeepReason(input: AcceptInput, minimum: number, version: PolicyVersion): ContractKeepReason | undefined {
-  if ((input.rubric?.openDecisions ?? 0) >= OPEN_DECISION_LEVEL) return 'open-decisions';
-  return input.submitterCandidate && measuredBelowRequirement(input.submitterCandidate, 'implement', minimum, version)
-    ? 'above-submitter'
-    : undefined;
-}
-
-/**
- * The candidate policy. The executor minimum is the larger of the assessed requirement and the
- * shape requirement. An excluded executor does not raise it: the executor pool of an excluded
- * model holds only candidates that measure stronger than that model, and the submitter keeps a
- * plan when none qualifies.
- */
-function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput): WorkPhaseState {
-  const { validation, rubric, measured } = input;
-  const requirement = contractRequirement(rubric, measured, 'cheapest-sufficient');
-  const shape = contractShapeRequirement(validation.targets.length, validation.steps);
-  const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
-    ? 'unknown-target'
-    : validation.deletes
-      ? 'delete'
-      : shape == null
-        ? 'size'
-        : requirement >= MAX_DELEGATABLE_REQUIREMENT
-          ? 'difficulty'
-          : undefined;
-  const released = keepReason == null && shape != null ? Math.max(requirement, shape) : undefined;
-  const kept = keepReason ?? (released != null ? submitterKeepReason(input, released, 'cheapest-sufficient') : undefined);
-  const minimum = kept == null ? released : undefined;
-  const contract: ExecutionContract = {
-    status: 'active',
-    submitter: input.submitter,
-    ...(input.submitterTemporary ? { submitterTemporary: true } : {}),
-    release: minimum != null,
-    ...(minimum != null ? { minimum, releasePending: true } : {}),
-    requirement,
-    ...(kept ? { keepReason: kept } : {}),
-    ...(rubric ? { rubric } : {}),
-    measured,
-    targets: validation.targets,
-    pending: validation.editTargets,
-    steps: validation.steps,
-    acceptedAt: state.providerInvocation,
-  };
-  return { ...state, contract };
-}
-
-/** A closed, safe plan can be released regardless of benchmark quality or task difficulty. */
-export function acceptContractV2(state: WorkPhaseState, input: AcceptInput): WorkPhaseState {
+export function acceptContract(state: WorkPhaseState, input: AcceptInput): WorkPhaseState {
   const { validation, rubric, measured } = input;
   const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
     ? 'unknown-target'
-    : validation.deletes ? 'delete' : validation.shapeBand == null ? 'size'
+    : validation.deletes ? 'delete' : !validation.delegatable ? 'size'
         : (rubric?.openDecisions ?? 0) >= OPEN_DECISION_LEVEL ? 'open-decisions' : undefined;
   return {
     ...state,
@@ -358,47 +237,6 @@ export function acceptContractV2(state: WorkPhaseState, input: AcceptInput): Wor
       steps: validation.steps, acceptedAt: state.providerInvocation,
     },
   };
-}
-
-export function acceptContract(state: WorkPhaseState, input: AcceptInput, version: PolicyVersion = 'legacy'): WorkPhaseState {
-  if (version === 'cheapest-sufficient') return acceptContractByRequirement(state, input);
-  const { validation, rubric, measured } = input;
-  const requirement = contractRequirement(rubric, measured, version);
-  const assessed = bandForRequirement(requirement);
-  const excluded = state.excludedExecutors?.length ?? 0;
-  const band = raiseBand(maxBand(assessed, validation.shapeBand ?? 'frontier'), excluded);
-  // A target whose existence was not measured is as unknown as a missing one.
-  // A deleted file never completes a plan through an edit, and deleting it
-  // from a shell breaks the plan, so only the submitter can finish it.
-  const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
-    ? 'unknown-target'
-    : validation.deletes
-      ? 'delete'
-      : validation.shapeBand == null
-        ? 'size'
-        : assessed === 'frontier'
-          ? 'difficulty'
-          : band === 'frontier' ? 'excluded' : undefined;
-  const released = keepReason == null ? Math.max(requirement, executionMinimum(band)!) : undefined;
-  const kept = keepReason ?? (released != null ? submitterKeepReason(input, released, version) : undefined);
-  const minimum = kept == null ? released : undefined;
-  const contract: ExecutionContract = {
-    status: 'active',
-    submitter: input.submitter,
-    ...(input.submitterTemporary ? { submitterTemporary: true } : {}),
-    band: minimum != null ? band : 'frontier',
-    release: minimum != null,
-    ...(minimum != null ? { minimum, releasePending: true } : {}),
-    requirement,
-    ...(kept ? { keepReason: kept } : {}),
-    ...(rubric ? { rubric } : {}),
-    measured,
-    targets: validation.targets,
-    pending: validation.editTargets,
-    steps: validation.steps,
-    acceptedAt: state.providerInvocation,
-  };
-  return { ...state, contract };
 }
 
 function sameModel(a: string, b: string): boolean {
@@ -564,10 +402,7 @@ export function contractMeta(state: WorkPhaseState): ExecutionContractMeta | und
   const handoffId = state.reasoningHandoff?.id ?? state.previousHandoffId;
   return {
     status: contract.status,
-    ...(contract.band ? { band: contract.band } : {}),
     release: contract.release,
-    ...(contract.minimum != null ? { minimum: contract.minimum } : {}),
-    ...(contract.requirement !== undefined ? { requirement: contract.requirement } : {}),
     ...(contract.keepReason ? { keepReason: contract.keepReason } : {}),
     rubric: contract.rubric,
     measured: contract.measured,

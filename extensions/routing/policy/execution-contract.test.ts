@@ -5,10 +5,8 @@ import {
   attributeExecutor,
   breakContract,
   contractBudget,
-  contractShapeBand,
-  contractShapeRequirement,
+  delegatableShape,
   entryEndOutcome,
-  executionMinimum,
   expireContract,
   isDeclaredTarget,
   isExcludedExecutor,
@@ -19,19 +17,10 @@ import {
   reworkContract,
   validateContract,
 } from './execution-contract.js';
-import { BASE_REQUIREMENT, parseRubric } from './execution-difficulty.js';
-import { defaultRequirement } from '../score/scorer.js';
 import { penaltiesOf, withContinuedPenalties, type WorkPhaseState } from './work-phase.js';
-import type { PolicyVersion } from './policy-version.js';
-import { benchRow, candidate } from '../../test-support/router-fixtures.js';
-import type { Candidate } from '../../types.js';
 
 const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
   intentKey: 'intent-a',
-  terminal: {
-    kind: 'plan', complexity: 'moderate', scope: 'bounded',
-  },
-  terminalBand: 'strong',
   providerInvocation: 3,
   observedMutationTools: 0,
   ...over,
@@ -41,7 +30,7 @@ const edit = (path: string) => ({ kind: 'edit', path, change: 'make the claim at
 const verify = { kind: 'verify', verifier: 'test' };
 
 const EASY: ExecutionRubric = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
-/** Small, existing, quiet targets: no measurement adds to the requirement. */
+/** Small, existing, quiet targets. */
 const QUIET: Omit<MeasuredFeatures, 'files' | 'directories' | 'steps' | 'testTargets'> = {
   existingLines: 100, missingTargets: 0, commits: 0, fixCommits: 0,
 };
@@ -51,18 +40,15 @@ function accepted(
   base = state(),
   rubric: Partial<ExecutionRubric> = {},
   observed: Partial<MeasuredFeatures> = {},
-  version: PolicyVersion = 'legacy',
-  submitterCandidate?: Candidate,
 ): WorkPhaseState {
   const validation = validateContract(steps, '/repo');
   if (!validation.ok) throw new Error(validation.reason);
   return acceptContract(base, {
     submitter: 'codex/sol:max',
-    ...(submitterCandidate ? { submitterCandidate } : {}),
     validation,
     rubric: { ...EASY, ...rubric },
     measured: { ...validation.structural, ...QUIET, ...observed },
-  }, version);
+  });
 }
 
 describe('execution contract validation', () => {
@@ -73,7 +59,7 @@ describe('execution contract validation', () => {
       targets: ['/repo/src/a.ts'],
       editTargets: ['/repo/src/a.ts'],
       steps: 3,
-      shapeBand: 'economy',
+      delegatable: true,
       deletes: false,
       structural: { files: 1, directories: 1, steps: 3, testTargets: 0 },
     });
@@ -121,69 +107,35 @@ describe('execution contract validation', () => {
     expect(validateContract([{ kind: 'delete', path: 'old.ts' }], '/repo').ok).toBe(true);
   });
 
-  it('maps plan shape to a band, keeping the submitter above standard', () => {
-    expect(contractShapeBand(2, 4)).toBe('economy');
-    expect(contractShapeBand(3, 4)).toBe('standard');
-    expect(contractShapeBand(5, 8)).toBe('standard');
-    expect(contractShapeBand(6, 8)).toBeUndefined();
-    expect(contractShapeBand(2, 9)).toBeUndefined();
-  });
-
-  it('gives every releasing band an implement minimum', () => {
-    expect(executionMinimum('economy')).toBe(BASE_REQUIREMENT);
-    expect(executionMinimum('standard')).toBe(0.45);
-    expect(executionMinimum('strong')).toBe(0.70);
-    expect(executionMinimum('frontier')).toBeUndefined();
+  it('lets another model execute a plan of up to five files and eight steps', () => {
+    expect(delegatableShape(5, 8)).toBe(true);
+    expect(delegatableShape(6, 8)).toBe(false);
+    expect(delegatableShape(5, 9)).toBe(false);
   });
 });
 
 describe('execution contract lifecycle', () => {
-  it('releases a small plan and keeps the submitter for a large one', () => {
+  it('releases a closed plan and keeps the submitter for a plan too large to hand off', () => {
     const small = accepted([edit('a.ts'), verify]).contract!;
-    expect(small).toMatchObject({
-      status: 'active', band: 'economy', release: true, minimum: BASE_REQUIREMENT,    });
-    const large = accepted(['a', 'b', 'c', 'd', 'e', 'f'].map((f) => edit(`${f}.ts`))).contract!;
-    expect(large).toMatchObject({ band: 'frontier', release: false, keepReason: 'size' });
-    expect(large.minimum).toBeUndefined();
+    expect(small).toMatchObject({ status: 'active', release: true, releasePending: true });
+    expect(small.keepReason).toBeUndefined();
+    const files = (count: number) => Array.from({ length: count }, (_, index) => edit(`f${index}.ts`));
+    expect(accepted(files(5)).contract).toMatchObject({ release: true });
+    expect(accepted(files(6)).contract).toMatchObject({ release: false, keepReason: 'size' });
   });
 
-  it('lets the rubric raise a small plan above its shape band, never below it', () => {
-    expect(accepted([edit('a.ts')], state(), { openDecisions: 3 }).contract)
-      .toMatchObject({ band: 'standard', release: true });
-    expect(accepted([edit('a.ts')], state(), { openDecisions: 5 }).contract)
-      .toMatchObject({ band: 'frontier', release: false, keepReason: 'difficulty' });
-    // Three files cannot fall below standard, however easy the rubric.
-    expect(accepted([edit('a.ts'), edit('b.ts'), edit('c.ts')]).contract)
-      .toMatchObject({ band: 'standard', minimum: 0.45 });
-  });
-
-  it('values a plan without a scored criterion at the default implement requirement, and fills a partly scored one', () => {
-    const validation = validateContract([edit('a.ts'), verify], '/repo');
+  it('releases a settled plan however hard its rubric, and keeps a plan with an open choice', () => {
+    const hard = { openDecisions: 3, spread: 5, verification: 5, knowledge: 5, coupling: 5 };
+    expect(accepted([edit('a.ts')], state(), hard).contract).toMatchObject({ release: true });
+    expect(accepted([edit('a.ts')], state(), { openDecisions: 4 }).contract)
+      .toMatchObject({ release: false, keepReason: 'open-decisions' });
+    const validation = validateContract([edit('a.ts')], '/repo');
     if (!validation.ok) throw new Error(validation.reason);
-    const measured = { ...validation.structural, ...QUIET };
-    const unscored = acceptContract(state(), { submitter: 'codex/sol:max', validation, rubric: undefined, measured }).contract!;
-    expect(unscored.requirement).toBe(defaultRequirement('implement'));
+    const unscored = acceptContract(state(), {
+      submitter: 'codex/sol:max', validation, rubric: undefined, measured: { ...validation.structural, ...QUIET },
+    }).contract!;
+    expect(unscored.release).toBe(true);
     expect(unscored.rubric).toBeUndefined();
-    const candidate = acceptContract(state(), { submitter: 'codex/sol:max', validation, rubric: undefined, measured }, 'cheapest-sufficient').contract!;
-    expect(candidate.requirement).toBeCloseTo(0.65, 12);
-    const partly = accepted([edit('a.ts'), verify], state(), { openDecisions: 3, spread: 3, verification: 3, knowledge: 3, coupling: 3 }).contract!;
-    const filled = acceptContract(state(), { submitter: 'codex/sol:max', validation, rubric: parseRubric({ openDecisions: 3 }), measured }).contract!;
-    expect(filled.requirement).toBe(partly.requirement);
-  });
-
-  it('does not let the final step raise a closed plan: the plan settled what made the task hard', () => {
-    const frontier = state({ terminal: { kind: 'implement', complexity: 'frontier', scope: 'open-ended' }, terminalBand: 'frontier', terminalRequirement: 1 });
-    for (const version of ['legacy', 'cheapest-sufficient'] as const) {
-      const plan = accepted([edit('a.ts'), verify], frontier, {}, {}, version).contract!;
-      expect(plan).toMatchObject({ release: true, minimum: BASE_REQUIREMENT });
-    }
-  });
-
-  it('requires the higher of the computed requirement and the band minimum', () => {
-    const contract = accepted([edit('a.ts')], state(), { openDecisions: 2 }).contract!;
-    expect(contract.band).toBe('economy');
-    expect(contract.minimum).toBeCloseTo(contract.requirement!);
-    expect(contract.minimum).toBeGreaterThan(BASE_REQUIREMENT);
   });
 
   it('keeps the submitter when a target to edit or delete does not exist', () => {
@@ -226,12 +178,11 @@ describe('execution contract lifecycle', () => {
     expect(broken.contractStrikes).toBeUndefined();
   });
 
-  it('raises the band one step per excluded executor until the submitter keeps the work', () => {
-    const excluded = (models: string[]) => state({ excludedExecutors: models });
-    expect(accepted([edit('a.ts')], excluded(['x/luna:high'])).contract).toMatchObject({ band: 'standard', release: true });
-    expect(accepted([edit('a.ts')], excluded(['x/luna:high', 'x/flash'])).contract).toMatchObject({ band: 'strong', release: true });
-    expect(accepted([edit('a.ts')], excluded(['x/luna:high', 'x/flash', 'x/terra'])).contract)
-      .toMatchObject({ band: 'frontier', release: false, keepReason: 'excluded' });
+  it('releases a plan after executors are excluded: the exclusion keeps only them out', () => {
+    const excluded = state({ excludedExecutors: ['x/luna:high', 'x/flash', 'x/terra'] });
+    const contract = accepted([edit('a.ts')], excluded).contract!;
+    expect(contract.release).toBe(true);
+    expect(contract.keepReason).toBeUndefined();
   });
 
   it('ignores a break when no contract is active', () => {
@@ -349,112 +300,5 @@ describe('execution contract completion and outcome', () => {
     expect(executed.contract).toMatchObject({ status: 'executed', release: false });
     expect(noteContractEdit(executed, '/repo', 'src/b.ts', 'codex/sol:max')).toBe(executed);
     expect(entryEndOutcome(executed.contract!)).toBe('clean');
-  });
-});
-
-describe('execution contract under the candidate policy', () => {
-  const candidate = (
-    steps: Parameters<typeof validateContract>[0],
-    base = state(),
-    rubric: Partial<ExecutionRubric> = {},
-    observed: Partial<MeasuredFeatures> = {},
-  ) => accepted(steps, base, rubric, observed, 'cheapest-sufficient').contract!;
-  const files = (count: number) => Array.from({ length: count }, (_, index) => edit(`f${index}.ts`));
-
-  it('gives a plan shape a minimum requirement, and no minimum when the plan is too large', () => {
-    expect(contractShapeRequirement(2, 4)).toBe(BASE_REQUIREMENT);
-    expect(contractShapeRequirement(3, 4)).toBe(0.45);
-    expect(contractShapeRequirement(5, 8)).toBe(0.45);
-    expect(contractShapeRequirement(6, 8)).toBeUndefined();
-    expect(contractShapeRequirement(2, 9)).toBeUndefined();
-  });
-
-  it('names no band, releases a small plan, and keeps a large plan with its submitter', () => {
-    const small = candidate([edit('a.ts'), verify]);
-    expect(small).toMatchObject({ status: 'active', release: true, minimum: BASE_REQUIREMENT, releasePending: true });
-    expect(small.band).toBeUndefined();
-    const large = candidate(files(6));
-    expect(large).toMatchObject({ release: false, keepReason: 'size' });
-    expect(large.minimum).toBeUndefined();
-    expect(large.band).toBeUndefined();
-  });
-
-  it('requires the larger of the assessed requirement and the shape requirement, and keeps a plan at the delegation limit', () => {
-    const raised = candidate([edit('a.ts')], state(), { openDecisions: 2 });
-    expect(raised.minimum).toBeCloseTo(raised.requirement!);
-    expect(raised.minimum).toBeGreaterThan(BASE_REQUIREMENT);
-    expect(candidate(files(3)).minimum).toBe(0.45);
-    expect(candidate([edit('a.ts')], state(), { openDecisions: 5 })).toMatchObject({ release: false, keepReason: 'difficulty' });
-  });
-
-  it.each([
-    ['a missing target', { missingTargets: 1 }],
-    ['an unmeasured target', { missingTargets: undefined }],
-  ])('keeps the submitter for %s', (_name, observed) => {
-    expect(candidate([edit('a.ts')], state(), {}, observed)).toMatchObject({ release: false, keepReason: 'unknown-target' });
-  });
-
-  it('keeps the submitter for a plan that deletes a file', () => {
-    expect(candidate([edit('a.ts'), { kind: 'delete', path: 'b.ts' }])).toMatchObject({ release: false, keepReason: 'delete' });
-  });
-
-  it('does not raise the minimum for an excluded executor, which the executor pool handles', () => {
-    const none = candidate([edit('a.ts')]);
-    const excluded = candidate([edit('a.ts')], state({ excludedExecutors: ['x/luna:high', 'x/flash', 'x/terra'] }));
-    expect(excluded).toMatchObject({ release: true, minimum: none.minimum });
-    expect(excluded.keepReason).toBeUndefined();
-  });
-
-  it('releases, keeps, and sets the minimum like the legacy policy when no executor is excluded', () => {
-    const plans = [[edit('a.ts')], files(2), files(3), files(5), files(6), [edit('a.ts'), { kind: 'delete', path: 'b.ts' }]];
-    for (const steps of plans) {
-      for (const openDecisions of [1, 2, 3, 4, 5]) {
-        const legacy = accepted(steps, state(), { openDecisions }).contract!;
-        const next = candidate(steps, state(), { openDecisions });
-        expect({ release: next.release, minimum: next.minimum, keepReason: next.keepReason })
-          .toEqual({ release: legacy.release, minimum: legacy.minimum, keepReason: legacy.keepReason });
-      }
-    }
-  });
-});
-
-describe('a plan that its submitter keeps', () => {
-  const VERSIONS = ['legacy', 'cheapest-sufficient'] as const;
-  const steps = [edit('a.ts'), verify];
-  const submitter = (quality: Partial<Candidate['bench'] & object>['quality'], over: Partial<Candidate['bench'] & object> = {}) =>
-    candidate('codex/sol', { effort: 'max', bench: benchRow('codex/sol', { quality: { intelligence: undefined, coding: undefined, agenticCoding: undefined, ...quality }, ...over }) });
-  const STRONG = { intelligence: 57, agenticCoding: 63, agenticIndex: 57 };
-  const WEAK = { intelligence: 10, agenticCoding: 5, agenticIndex: 5 };
-  // Open decisions at level 3 and the other criteria at level 4 ask for more than a quiet one-file fix.
-  const SETTLED_HARD: Partial<ExecutionRubric> = { openDecisions: 3, spread: 4, verification: 4, knowledge: 4, coupling: 4 };
-
-  it.each(VERSIONS)('keeps a plan with an open behavior, interface, or design choice (%s)', (version) => {
-    const contract = accepted(steps, state(), { openDecisions: 4 }, {}, version, submitter(STRONG)).contract!;
-    expect(contract).toMatchObject({ release: false, keepReason: 'open-decisions' });
-    expect(contract.minimum).toBeUndefined();
-  });
-
-  it.each(VERSIONS)('releases a settled plan whose minimum the submitter meets (%s)', (version) => {
-    const contract = accepted(steps, state(), SETTLED_HARD, {}, version, submitter(STRONG)).contract!;
-    expect(contract.release).toBe(true);
-    expect(contract.keepReason).toBeUndefined();
-  });
-
-  it.each(VERSIONS)('keeps a settled plan whose minimum is above the submitter\'s measured quality (%s)', (version) => {
-    const contract = accepted(steps, state(), SETTLED_HARD, {}, version, submitter(WEAK)).contract!;
-    expect(contract.requirement).toBeLessThan(0.85);
-    expect(contract).toMatchObject({ release: false, keepReason: 'above-submitter' });
-    expect(contract.minimum).toBeUndefined();
-  });
-
-  it.each(VERSIONS)('releases the plan when the submitter has no measurement or only an estimate (%s)', (version) => {
-    expect(accepted(steps, state(), SETTLED_HARD, {}, version, submitter({})).contract!.release).toBe(true);
-    expect(accepted(steps, state(), SETTLED_HARD, {}, version, submitter(WEAK, { qualityEstimated: true })).contract!.release).toBe(true);
-    expect(accepted(steps, state(), SETTLED_HARD, {}, version).contract!.release).toBe(true);
-  });
-
-  it.each(VERSIONS)('keeps the difficulty reason for a plan that only the frontier can run (%s)', (version) => {
-    expect(accepted(steps, state(), { openDecisions: 5 }, {}, version, submitter(WEAK)).contract)
-      .toMatchObject({ release: false, keepReason: 'difficulty' });
   });
 });
