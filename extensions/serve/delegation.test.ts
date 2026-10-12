@@ -7,7 +7,7 @@
  * integration layer.
  */
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Model, Api, Context } from '@earendil-works/pi-ai';
@@ -16,6 +16,7 @@ import { routingDecision, registryModel, candidate } from '../test-support/route
 import { createDelegationHarness, rejectingReturnStream, hangingReturnStream } from '../test-support/delegation-harness.js';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { setDecisionLogBase } from '../host/decisionlog.js';
+import { setDebugPath } from '../host/debuglog.js';
 import { defaultRouterSession } from './router-session-state.js';
 import { defaultBlacklistState } from './blacklist.js';
 import { setDelegationTimeouts } from './delegation.js';
@@ -1418,6 +1419,33 @@ describe('attempt lifecycle', () => {
     expect(h.abortSignals[0]?.aborted).toBe(false);
     controller.abort();
     expect(h.abortSignals[0]?.aborted).toBe(true);
+  });
+
+  it('logs which events kept an attempt open after its tool call ended', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pi8-attempt-events-'));
+    setDebugPath(join(dir, 'debug.log'));
+    try {
+      const h = createDelegationHarness({
+        chain: ['alpha/model'],
+        scripts: {
+          'alpha/model': [[
+            { type: 'start' },
+            { type: 'toolcall_start' }, { type: 'toolcall_end' },
+            { type: 'thinking_delta', delta: '' }, { type: 'thinking_delta', delta: '' },
+            { type: 'done', message: { stopReason: 'toolUse' } },
+          ]],
+        },
+      });
+      await h.run();
+      const line = readFileSync(join(dir, 'debug.log'), 'utf8').split('\n').find((l) => l.includes(' attempt.timing '))!;
+      const timing = JSON.parse(line.slice(line.indexOf('{')));
+      expect(timing.eventCounts).toEqual({ start: 1, toolcall_start: 1, toolcall_end: 1, thinking_delta: 2, done: 1 });
+      expect(timing.lastEventType).toBe('done');
+      expect(timing.toolCallEndMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      setDebugPath(undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('aborts the signal of an attempt that failed before the next candidate starts', async () => {

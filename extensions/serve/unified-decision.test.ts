@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { setDebugPath } from '../host/debuglog.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { savePreferences } from '../config.js';
@@ -94,11 +95,13 @@ describe('production selection adapter', () => {
       if (result.kind !== 'decision') throw new Error('Expected a decision');
       return { top: result.decision.unified!.top!, ranked: result.decision.unified!.ranked };
     };
+    setDebugPath(null);
     const quiet = await traced();
     expect(quiet.ranked).toBeGreaterThan(12);
     expect(quiet.top).toHaveLength(12);
-    writeFileSync(join(dir, 'config.json'), JSON.stringify({ debug: true }));
+    setDebugPath(join(dir, 'debug.log'));
     const verbose = await traced();
+    setDebugPath(undefined);
     expect(verbose.top).toHaveLength(verbose.ranked);
     expect(verbose.top.map((trace) => trace.rank)).toEqual(Array.from({ length: verbose.ranked }, (_, index) => index + 1));
   });

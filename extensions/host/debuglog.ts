@@ -89,6 +89,11 @@ export function startTimer(): () => number {
   return () => Date.now() - t0;
 }
 
+/** True when debug output is on, by the same rules as the debug log path. */
+export function isDebugEnabled(): boolean {
+  return debugPath() !== null;
+}
+
 /**
  * Test/runtime seam. Pass a path/null to force, or `undefined` to fall back to
  * env + session resolution on next use.

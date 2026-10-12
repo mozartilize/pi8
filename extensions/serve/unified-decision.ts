@@ -30,7 +30,8 @@ import {
 } from '../routing/optimization/select.js';
 import { hasSubstantiveAnswers, validatePreferences, type ValidatedPreferences } from '../routing/preferences/schema.js';
 import { buildCandidate, candidateKey, holdsPrompt, type RegistryModelInfo } from '../routing/score/scorer.js';
-import { loadConfig, loadPreferenceSnapshot } from '../config.js';
+import { loadPreferenceSnapshot } from '../config.js';
+import { isDebugEnabled } from '../host/debuglog.js';
 import { fileDomainStore } from './domain-artifact-store.js';
 import { FEATURE_NAMES } from '../routing/features/schema.js';
 import type { BenchModel, Candidate, DecisionCause, RoutingDecision, UnifiedActionTrace, UnifiedDecisionMeta } from '../types.js';
@@ -151,13 +152,6 @@ function legalActions(input: UnifiedTurnInput): { selection: SelectionCandidate[
 /** Ranked actions that a decision record lists; debug lists every ranked action. */
 const TRACE_TOP = 12;
 
-const debugEnabled = (): boolean => {
-  try {
-    return Boolean(loadConfig().debug);
-  } catch {
-    return false;
-  }
-};
 const round = (value: number): number => Math.round(value * 1e5) / 1e5;
 
 /** The first `limit` ranked actions, the chosen action and the incumbent, with the numbers that ordered them. */
@@ -239,7 +233,7 @@ export async function resolveUnifiedDecision(
     ...(preparationTarget ? { preparationTarget } : {}),
     ...(input.state.difficulty ? { difficulty: input.state.difficulty.value } : {}),
     ...(result.theta ? { theta: result.theta.map(round) } : {}),
-    top: traceActions(result, chosen, input.incumbentKey, debugEnabled() ? result.ranking.length : TRACE_TOP),
+    top: traceActions(result, chosen, input.incumbentKey, isDebugEnabled() ? result.ranking.length : TRACE_TOP),
   };
   const decision: RoutingDecision = {
     dimension: input.state.phase,

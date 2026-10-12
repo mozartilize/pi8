@@ -919,6 +919,10 @@ async function runCandidateAttempt(
   const actionKey = overrideAction(candidate.chosen, candidate.effectiveReasoning ?? 'off')?.key ?? candidate.candidateId;
   const timing: NonNullable<AttemptUsageEvent['timing']> = { durationMs: 0, maxEventGapMs: 0 };
   let lastEventMs: number | undefined;
+  // Debug evidence for a long stream: which events kept it open after its tool call ended.
+  const eventCounts: Record<string, number> = {};
+  let lastEventType: string | undefined;
+  let toolCallEndMs: number | undefined;
   // These values belong to router/auto's resolved request, not the destination.
   // Even the synthetic router API key overrides stored destination credentials.
   const { apiKey: _apiKey, headers: _headers, env: _env, ...options } = ctx.opts.options ?? {};
@@ -969,6 +973,9 @@ async function runCandidateAttempt(
         const eventMs = streamTimer();
         if (lastEventMs !== undefined) timing.maxEventGapMs = Math.max(timing.maxEventGapMs, eventMs - lastEventMs);
         lastEventMs = eventMs;
+        lastEventType = step.value.type;
+        eventCounts[lastEventType] = (eventCounts[lastEventType] ?? 0) + 1;
+        if (toolCallEndMs === undefined && lastEventType === 'toolcall_end') toolCallEndMs = eventMs;
         if (timing.firstEventMs === undefined) {
           timing.firstEventMs = eventMs;
           debugLog('attempt.stream', {
@@ -1081,6 +1088,9 @@ async function runCandidateAttempt(
       visibleTextReceived: controller.visibleTextReceived,
       toolCallReceived: controller.toolCallReceived,
       committedToStream: controller.committedToStream,
+      eventCounts,
+      ...(lastEventType ? { lastEventType } : {}),
+      ...(toolCallEndMs !== undefined ? { toolCallEndMs } : {}),
     });
     controller.commitUsage(requestReady, failure === undefined, timing, failure ? attemptFailureInfo(failure, callerSignal?.aborted === true) : undefined);
     ctx.opts.dispatch?.release(actionKey);
