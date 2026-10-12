@@ -45,7 +45,7 @@ function selectorPorts(): SelectorPorts {
 }
 
 /** A config that cannot be read applies no preferences; it never blocks a turn. */
-function readPreferences(): ValidatedPreferences {
+export function readPreferences(): ValidatedPreferences {
   try {
     return loadPreferenceSnapshot();
   } catch {
@@ -78,7 +78,7 @@ export interface UnifiedTurnInput {
 }
 
 export type UnifiedTurnOutcome =
-  | { kind: 'decision'; decision: RoutingDecision; candidates: Candidate[]; authorization: BoundaryAuthorizationV1 }
+  | { kind: 'decision'; decision: RoutingDecision; candidates: Candidate[]; authorization: BoundaryAuthorizationV1; selection: UnifiedDecision }
   | { kind: 'cancelled' }
   | { kind: 'stale' };
 
@@ -180,5 +180,5 @@ export async function resolveUnifiedDecision(
     unified,
     ...(input.incumbentKey ? { switched: input.incumbentKey !== chosen } : {}),
   };
-  return { kind: 'decision', decision, candidates: [...candidates.values()], authorization };
+  return { kind: 'decision', decision, candidates: [...candidates.values()], authorization, selection: result };
 }

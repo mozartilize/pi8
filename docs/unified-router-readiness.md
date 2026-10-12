@@ -7,8 +7,9 @@ It creates work-item and phase permissions before comparison, checks them before
 dispatch, and settles pending handoffs and contract releases after actual serve.
 Empty preferences use the default coefficient domain.
 
-In-provider pre-output recovery still uses the existing selection path.
-Automatic subagent integration is disabled and excluded from the cutover;
+In-provider pre-output recovery awaits the shared selector while the attempt is held.
+The final output check, abort and reservation run in one synchronous step, and the
+provider request starts only after the reservation is revalidated. Automatic subagent integration is disabled and excluded from the cutover;
 its inactive implementation files remain. Tests cover the disconnected hooks,
 not child selection. The preference command, full transactional reservation,
 legacy state migration and production Pi host exit checks remain incomplete. This is
@@ -154,7 +155,7 @@ Fixture-only measurements do not satisfy that condition.
 ## Verification of the provider integration
 
 - `npm run tsc`: passed, including eval compilation.
-- `timeout 300 npx vitest run`: 112 files passed and 2 skipped. 1872 tests passed
+- `timeout 300 npx vitest run`: 113 files passed and 2 skipped. 1871 tests passed
   and 3 skipped.
 - Six production selection adapter tests cover effort enumeration, thinking
   minimums, smaller-window retention, scoped exclusions, stale profiles and
@@ -172,5 +173,5 @@ Fixture-only measurements do not satisfy that condition.
 
 Provider tests use scripted streams. They make no model-provider calls. No
 subagent was started. The new production adapters still need the Pi host exit
-checks above. Pre-output recovery and preference UI remain incomplete.
+checks above. Preference UI and the Pi host exit checks remain incomplete.
 Subagent selection is excluded from this cutover.

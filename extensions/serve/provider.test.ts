@@ -42,6 +42,7 @@ import {
 } from '../test-support/provider-harness.js';
 import type { BenchModel } from '../types.js';
 import { defaultBlacklistState } from './blacklist.js';
+import { savePreferences } from '../config.js';
 
 /**
  * A struggle of `fromModel` after its recovery attempt on the same model, so
@@ -3046,6 +3047,86 @@ describe('deep context', () => {
 
 });
 
+describe('unified pre-output recovery integration', () => {
+  async function recoveryHarness(credentials?: Record<string, ResolvedRequestAuth | Error>, third = false) {
+    const ids = third ? ['alpha/first', 'beta/second', 'gamma/third'] : ['alpha/first', 'beta/second'];
+    const h = await setupProviderTest({ dir: temp.path, credentials,
+      models: ids.map((id) => registryModel(id, {
+        reasoning: true, thinkingLevelMap: { off: 'off', low: null, medium: null, high: 'high', xhigh: null, max: null },
+        cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+      })),
+      benchmarks: ids.map((registryId) => ({ registryId, benchSlug: registryId, active: true, effort: 'high' as const, source: 'aa',
+        quality: { intelligence: 50, coding: 50, agenticCoding: 50, research: 0.8 },
+      })),
+    });
+    const block = 'abcdefghij'.repeat(13).slice(0, 128);
+    h.scriptReply((model) => asStream(model.provider === 'alpha' ? [
+      { type: 'thinking_delta', delta: Array.from({ length: 800 }, () => 'alpha').join(' ') },
+      ...Array.from({ length: 3 }, () => ({ type: 'thinking_delta', delta: block })),
+      { type: 'text_delta', delta: 'source answer' }, { type: 'done' },
+    ] : [{ type: 'text_delta', delta: 'recovery answer' }, { type: 'done' }]));
+    return h;
+  }
+
+  it('uses loop friction to select an equal-quality actor without the legacy stronger test', async () => {
+    const h = await recoveryHarness();
+    await h.serve({ messages: [{ role: 'user', content: 'examine this request' }] } as Context);
+    expect(h.streamedModels()).toEqual(['alpha/first', 'beta/second']);
+    expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([{ type: 'text_delta', delta: 'recovery answer' }]);
+    expect(h.outStream.events.filter((event) => event.type === 'done')).toHaveLength(1);
+    expect(h.outStream.events.some((event) => event.type === 'thinking_delta')).toBe(false);
+    expect(h.getProviderState().blacklistedModels).toEqual([]);
+    expect(h.getProviderState().blacklistedProviders).toEqual([]);
+    expect(h.delegatedCall(0).options?.signal?.aborted).toBe(true);
+    expect(h.session.getLastDecision()).toMatchObject({ dimension: 'gather', cause: 'investigation', unified: { constraintsEnforced: true },
+      trajectoryFriction: { preOutput: true } });
+    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('served');
+  });
+
+  it.each(['text', 'tool-call', 'thinking-overflow'] as const)('does not select recovery after committed %s', async (committed) => {
+    const h = await recoveryHarness();
+    const prefix = committed === 'text' ? [{ type: 'text_delta', delta: 'visible' }]
+      : committed === 'tool-call' ? [{ type: 'toolcall_start' }]
+      : [{ type: 'thinking_delta', delta: 'buffered' }, { type: 'thinking_delta', delta: 'x'.repeat(70_000) }];
+    const block = 'abcdefghij'.repeat(13).slice(0, 128);
+    h.scriptReply([...prefix,
+      { type: 'thinking_delta', delta: Array.from({ length: 800 }, () => 'alpha').join(' ') },
+      ...Array.from({ length: 3 }, () => ({ type: 'thinking_delta', delta: block })),
+      { type: 'text_delta', delta: 'source answer' }, { type: 'done' },
+    ]);
+    await h.serve({ messages: [{ role: 'user', content: 'examine this request' }] } as Context);
+    expect(h.streamedModels()).toEqual(['alpha/first']);
+    expect(h.session.getLastDecision()?.trajectoryFriction).toBeUndefined();
+    expect(h.outStream.events.some((event) => event.type === 'error')).toBe(false);
+  });
+
+  it('continues through the retained authorized ranking when the selected recovery target fails auth', async () => {
+    const h = await recoveryHarness({ 'beta/second': { ok: false, error: 'credentials unavailable' } }, true);
+    await h.serve({ messages: [{ role: 'user', content: 'examine this request' }] } as Context);
+    expect(h.streamedModels()).toEqual(['alpha/first', 'gamma/third']);
+    expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([{ type: 'text_delta', delta: 'recovery answer' }]);
+    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('served');
+    expect(h.outStream.events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  it.each(['profile-change', 'user-cancel'] as const)('does not dispatch a recovery after %s during target auth', async (change) => {
+    const caller = new AbortController();
+    const credentials: Record<string, ResolvedRequestAuth | Error> = {};
+    Object.defineProperty(credentials, 'beta/second', { get() {
+      if (change === 'profile-change') savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+      else caller.abort();
+      return { ok: true, apiKey: 'k', headers: {} };
+    } });
+    const h = await recoveryHarness(credentials);
+    await h.serve({ messages: [{ role: 'user', content: 'examine this request' }] } as Context, { signal: caller.signal });
+    expect(h.streamedModels()).toEqual(['alpha/first']);
+    expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([]);
+    expect(h.outStream.events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(h.getProviderState().blacklistedModels).toEqual([]);
+    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('pending');
+  });
+});
+
 describe('trajectory capability escalation', () => {
   it('permits higher effort on the requesting model after recovery', async () => {
     const harness = await setupProviderTest({
@@ -3188,13 +3269,7 @@ describe('trajectory capability escalation', () => {
     expect(escalation?.trajectoryFriction?.fromModel).toBe(fromModel);
   });
 
-  // The candidate policy serves the cheapest candidate that meets the minimums, so the weaker
-  // recovery candidate must cost more than the source for the source to serve first.
-  it.each([
-    ['legacy', { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0 }],
-    ['cheapest-sufficient', { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 }],
-  ] as const)('does not consume pending evidence when a weaker recovery candidate serves: %s', async (version, weakerCost) => {
-    vi.stubEnv('PI8_POLICY_VERSION', version);
+  it('keeps pending evidence when the selected rework actor fails auth and another actor serves', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
       config: { switchMargin: 0.15 },
@@ -3231,12 +3306,12 @@ describe('trajectory capability escalation', () => {
         registryModel('gamma/strong', {
           contextWindow: 200000,
           maxTokens: 8192,
-          cost: { input: 100, output: 400, cacheRead: 0, cacheWrite: 0 },
+          cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
         }),
         registryModel('delta/cheap', {
           contextWindow: 200000,
           maxTokens: 8192,
-          cost: weakerCost,
+          cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
         }),
       ],
     });
@@ -3270,7 +3345,6 @@ describe('trajectory capability escalation', () => {
     await harness.serve(context);
     expect(harness.getProviderState().lastDecision?.chosen).toBe('delta/cheap');
     expect(harness.session.peekPendingTrajectoryEscalation()).toBe(stored);
-    vi.unstubAllEnvs();
   });
 });
 

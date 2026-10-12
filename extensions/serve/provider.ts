@@ -69,7 +69,8 @@ import {
 } from './router-session-state.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop, type DelegationOptions } from './delegation.js';
-import { resolveUnifiedDecision } from './unified-decision.js';
+import { readPreferences, resolveUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
+import { createUnifiedRecovery } from './unified-recovery.js';
 import type { DecisionStateV1, ServedIdentity } from '../routing/features/state.js';
 import { phaseDifficulty } from '../routing/features/difficulty.js';
 import { enumerateEffectiveActions, effortRank, overrideAction } from '../routing/features/actions.js';
@@ -688,6 +689,8 @@ interface ScoredTurn {
   /** This invocation releases an accepted plan's incumbent minimums; consumed only once it serves. */
   releasesContract?: boolean;
   authorization?: BoundaryAuthorizationV1;
+  unifiedInput: UnifiedTurnInput;
+  recoveryCandidates: readonly Candidate[];
 }
 
 /** Resolve the registry, this turn's input identity, and the candidate pool. */
@@ -1029,7 +1032,7 @@ async function scoreRouterTurn(args: {
     && enumerateEffectiveActions(model).some((action) => !sameOrLowerRecovery(action.key)
       && !liveExclusions.has(action.key)
       && !(routedDimension === 'implement' && isExcludedExecutor(entry, action.key))));
-  const outcome = await resolveUnifiedDecision({
+  const unifiedInput: UnifiedTurnInput = {
     state,
     cause: routedCause,
     authorizationScope: {
@@ -1056,7 +1059,9 @@ async function scoreRouterTurn(args: {
       && (session.getWorkPhaseState()?.workItemId ?? turnInput.key) === workItemId
       && session.getWorkPhaseState()?.providerInvocation === entry?.providerInvocation,
 
-  }, (ranking, chosen, candidates) => session.preparation.plan(ranking, chosen, candidates, estContextTokens)?.key);
+  };
+  const outcome = await resolveUnifiedDecision(unifiedInput,
+    (ranking, chosen, candidates) => session.preparation.plan(ranking, chosen, candidates, estContextTokens)?.key);
   if (outcome.kind === 'cancelled') return { kind: 'terminal', reason: 'aborted', message: 'Routing was cancelled.' };
   if (outcome.kind === 'stale') return SESSION_CHANGED;
   // Every legal action is excluded: name the exclusions, as for an empty pool.
@@ -1126,6 +1131,8 @@ async function scoreRouterTurn(args: {
     routableCandidates: scoredCandidates,
     requestedReasoning,
     authorization: outcome.authorization,
+    unifiedInput,
+    recoveryCandidates: handBack || (contractActive && !contract.release) ? ownershipPool : routableCandidates,
     ...(restore ? { restoredContract: restore } : {}),
     ...(pendingBoundary ? { pendingBoundary: true } : {}),
     ...(execution && contract?.releasePending ? { releasesContract: true } : {}),
@@ -1283,6 +1290,50 @@ async function delegateRouterTurn(args: {
     turnTimer,
     session,
   };
+  if (!pin && !clarifying) {
+    delegationOptions.preOutput = createUnifiedRecovery({
+      input: scored.unifiedInput,
+      candidates: () => {
+        const allowed = loadModelFilter();
+        const excluded = buildExcludeFilter(session.getSessionBlacklistPatterns());
+        const configuredExclusions = loadConfigBlacklistFilter();
+        const scoped = buildScopedModelFilter(extensionContext?.scopedModels);
+        return applyRuntimeExclusions(scored.recoveryCandidates, session).filter((candidate) =>
+          allowed(candidate.registryId) && !excluded(candidate.registryId) && !configuredExclusions(candidate.registryId)
+          && scoped(candidate.registryId));
+      },
+      models: () => (registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[],
+      assignmentId: () => session.getWorkPhaseState()?.boundaryAuthorization?.assignmentId ?? '',
+      revisions: () => {
+        const state = session.getWorkPhaseState();
+        return {
+          workItemId: state?.workItemId ?? intentKey,
+          branchId: JSON.stringify([session.context.getEntrySource(), state?.intentKey]),
+          session: session.getSessionGeneration(), profile: 0, profileDigest: readPreferences().digest,
+          authorization: state?.boundaryAuthorization?.revision ?? -1,
+          context: state?.providerInvocation ?? 0,
+        };
+      },
+      commit: (outcome, source) => {
+        const state = session.getWorkPhaseState();
+        if (!resolved.stillCurrent() || !state || state.intentKey !== intentKey
+          || state.boundaryAuthorization?.assignmentId !== scored.authorization?.assignmentId) return false;
+        const chain = decision.fallbackChain;
+        const selected = outcome.decision;
+        Object.assign(decision, selected, { fallbackChain: chain, intentKey,
+          trajectoryFriction: { fromModel: source, tfi: 1, preOutput: true,
+            signals: [{ kind: 'reasoning-loop', severity: 'severe', evidenceCount: 1 }] },
+        });
+        if (decision.unified) decision.unified.benchmarkSnapshotDigest = prepared.benchmarkSnapshotDigest;
+        if (POLICY_PASSIVE_CAUSES.has(decision.cause)) decision.cause = 'trajectory-escalation';
+        scored.authorization = outcome.authorization;
+        routableCandidates.splice(0, routableCandidates.length, ...outcome.candidates.filter((candidate) =>
+          actorAllowedForBoundary(outcome.authorization, candidateKey(candidate))));
+        session.commitWorkPhaseState({ ...state, boundaryAuthorization: outcome.authorization });
+        return true;
+      },
+    });
+  }
   if (config.semi && extensionContext?.hasUI && !pin) {
     delegationOptions.beforeFallback = async (candidateId, previousId) => {
       const previous = parseCandidateKey(previousId);
@@ -1296,6 +1347,9 @@ async function delegateRouterTurn(args: {
       });
       if (semi.kind === 'terminal') return { kind: 'cancel' };
       if (semi.kind === 'proceed') return { kind: 'proceed' };
+      delegationOptions.preOutput?.release();
+      delete delegationOptions.preOutput;
+      scored.authorization = semi.scored.authorization;
       const manual = session.getManualModel() ?? session.getSemiHold(prepared.measured.turnInput.key);
       const thinking = manual ? resolveManualModel(manual, registryModels)?.thinking : undefined;
       return {
@@ -1384,7 +1438,7 @@ async function delegateRouterTurn(args: {
   };
   if (!resolved.stillCurrent() || (scored.authorization
     && session.getWorkPhaseState()?.boundaryAuthorization?.assignmentId !== scored.authorization.assignmentId)) return SESSION_CHANGED;
-  const result = await runDelegationLoop(delegationOptions, stream);
+  const result = await runDelegationLoop(delegationOptions, stream).finally(() => delegationOptions.preOutput?.release());
   if (result.success && session.getSessionGeneration() === delegationSessionGeneration) {
     recordServedWork(session, session.getWorkPhaseState()?.workItemId);
     const actual = session.getLastServed();

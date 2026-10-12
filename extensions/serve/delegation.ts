@@ -21,7 +21,7 @@ import {
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
 import { ROUTER_PROVIDER_ID } from '../types.js';
-import type { AttemptUsageEvent, Candidate, DecisionCause, Dimension, RoutingDecision } from '../types.js';
+import type { AttemptUsageEvent, Candidate, DecisionCause, RoutingDecision } from '../types.js';
 import {
   RouterSession,
   defaultRouterSession,
@@ -31,25 +31,20 @@ import { debugLog, startTimer } from '../host/debuglog.js';
 import { appendDecision } from '../host/decisionlog.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import {
-  isStrictlyStrongerCandidate,
-  isValidEscalationCandidate,
-  findSourceCandidate,
-  escalationChain,
-  candidateKey,
   parseCandidateKey,
   servedEffort,
   levelFrom,
   MODEL_THINKING_LEVELS,
-  type StrongerCompareOpts,
-  type ScoreOpts,
 } from '../routing/score/scorer.js';
 import { POLICY_PASSIVE_CAUSES } from '../routing/policy/routing-policy.js';
 import { ReasoningLoopDetector } from '../routing/struggle/reasoning-loop.js';
-import type { PendingTrajectoryEscalation } from '../routing/struggle/types.js';
 import { classifyProviderFailure, type AttemptFailureInfo } from './failure-category.js';
 import { isUsageLimitErrorMessage } from './usage-limit.js';
 import { priceTokens } from './baseline.js';
 import { randomUUID } from 'node:crypto';
+import { overrideAction } from '../routing/features/actions.js';
+import { decidePreOutputIntervention } from '../routing/policy/pre-output-intervention.js';
+import type { PreOutputAdapter } from './unified-recovery.js';
 
 const MAX_FAILURES_PER_PROVIDER = 3;
 /** Same-model retries for a transient provider error (overload/5xx/network). */
@@ -180,8 +175,10 @@ export interface DelegationOptions {
   userReasoningOverride?: boolean;
   /** Per-session Pi extension context, for status widget updates. */
   extensionContext: ExtensionContext | undefined;
-  /** Live routable set, used to require a strictly stronger pre-output hop. */
+  /** Live routable actions for dispatch and accounting. */
   candidates?: Candidate[];
+  /** On-demand selection and single-use reservation of a pre-output recovery. */
+  preOutput?: PreOutputAdapter;
   /** When true, show a TUI notification on a model pick/switch (config.prompt). */
   notifyOnRoute?: boolean;
   /** Confirm a fallback before any provider request. */
@@ -212,7 +209,7 @@ export interface DelegationResult {
   streamFinalized: boolean;
   lastError?: string;
   lastServed?: ServedInfo;
-  /** Set when a strictly stronger trajectory hop actually served the turn. */
+  /** Set when the selected recovery action actually served the turn. */
   capabilityHandoff?: { fromModel: string; served: string };
 }
 
@@ -489,10 +486,9 @@ function recordServedAttempt(
   const { decision, session } = ctx;
   const { candidateId, candidateIndex } = candidate;
   const viaFallback = candidateIndex > 0;
-  // A capability hop and a failure fallback reach the same later candidate by
-  // different mechanisms, and `/router-why` distinguishes them by cause.
-  const hop = candidate.servingHop;
-  const hopCause: DecisionCause = hop
+  // Selection and availability fallback have different causes.
+  const selectedRecovery = decision.unified && decision.trajectoryFriction?.preOutput && candidateId === decision.chosen;
+  const hopCause: DecisionCause = selectedRecovery
     ? (POLICY_PASSIVE_CAUSES.has(decision.cause) ? 'trajectory-escalation' : decision.cause)
     : decision.cause === 'manual-override' ? 'manual-override' : 'error-fallback';
   const finalDecision = viaFallback
@@ -500,22 +496,7 @@ function recordServedAttempt(
         ...decision,
         chosen: candidateId,
         cause: hopCause,
-        ...(hop
-          ? {
-              trajectoryFriction: {
-                tfi: hop.tfi,
-                signals: hop.signals.map((signal) => ({
-                  kind: signal.kind,
-                  severity: signal.severity as 'warning' | 'severe',
-                  evidenceCount: signal.evidenceCount,
-                })),
-                fromModel: hop.fromModel,
-                preOutput: true,
-              },
-            }
-          : {}),
-        reason: hop
-          ? `${decision.reason}; capability hop after pre-output reasoning loop on ${hop.fromModel}`
+        reason: selectedRecovery ? `${decision.reason}; selected recovery served before output`
           : `${decision.reason}; fallback served after an earlier candidate failed`,
         fallbackChain: [
           ...new Set([
@@ -575,30 +556,6 @@ function stampTurnSpend(decision: RoutingDecision, spend: TurnSpend): RoutingDec
   };
 }
 
-/** Only a proven strictly stronger serving pick consumes the handoff. */
-function resolveCapabilityHandoff(
-  served: ServedInfo | undefined,
-  fromModel: string | undefined,
-  dimension: Dimension,
-  candidates: Candidate[] | undefined,
-  compareOpts: StrongerCompareOpts,
-): DelegationResult['capabilityHandoff'] {
-  if (!served || !fromModel || !candidates) return undefined;
-  const key = servedKey(served);
-  const dest = candidates.find((candidate) => candidateKey(candidate) === key)
-    ?? findSourceCandidate(candidates, key);
-  const source = findSourceCandidate(candidates, fromModel);
-  return dest && isStrictlyStrongerCandidate(dest, fromModel, dimension, source, compareOpts)
-    ? { fromModel, served: key }
-    : undefined;
-}
-
-/** Keep weaker recovery entries behind the quality-selected hop, in order. */
-function planTrajectoryHop(remaining: string[], strongerKeys: string[]): string[] {
-  const strongerSet = new Set(strongerKeys);
-  return [...strongerKeys, ...remaining.filter((key) => !strongerSet.has(key))];
-}
-
 type DelegatedEvent = { type: string };
 
 type AttemptEventDisposition =
@@ -618,7 +575,7 @@ type CandidateAttemptResult =
       finalDecision: RoutingDecision;
       effectiveSource: string;
     }
-  | { kind: 'trajectory'; message: string; effectiveSource: string; usageObserved: boolean }
+  | { kind: 'trajectory'; message: string; effectiveSource: string; usageObserved: boolean; revisedChain?: string[] }
   | { kind: 'aborted'; message: string }
   | { kind: 'finalize'; message: string }
   | { kind: 'provider-dead'; message: string }
@@ -664,13 +621,14 @@ interface DelegationContext {
   turnSpend: TurnSpend;
   session: RouterSession;
   stillCurrent: () => boolean;
+  tried: Set<string>;
+  reachable: (source: string) => string[];
 }
 
 /**
  * One candidate resolved against the registry and ready to stream. Every
  * field is constant across that candidate's retries — including the resolved
- * effort and the stronger-target probe, which depend on the candidate and the
- * chain rather than on the attempt number.
+ * effort, which depends on the candidate and the request, not the attempt number.
  */
 interface PreparedCandidate {
   candidateId: string;
@@ -681,8 +639,6 @@ interface PreparedCandidate {
   chosen: Model<Api>;
   effectiveReasoning: ModelThinkingLevel | undefined;
   effectiveSource: string;
-  remainingHasStronger: boolean;
-  servingHop: PendingTrajectoryEscalation | undefined;
 }
 
 /**
@@ -698,7 +654,7 @@ class AttemptController {
   meaningfulOutputReceived = false;
   /**
    * Latched once a severe pre-output reasoning loop is observed, independent of
-   * whether a stronger target exists. The share-based severe verdict can decay
+   * whether a permitted alternative exists. The share-based severe verdict can decay
    * as windows age out, so it must be remembered: the answerless gate reads it
    * to distinguish capability struggle (no blacklist or provider strike)
    * from an anonymous empty completion.
@@ -713,6 +669,7 @@ class AttemptController {
   private servedTracked = false;
   private usageCommitted = false;
   private readonly reasoningLoop = new ReasoningLoopDetector();
+  private interventionChecked = false;
   private readonly attemptBuffer: ReturnType<typeof createAttemptBuffer>;
 
   constructor(
@@ -725,6 +682,13 @@ class AttemptController {
 
   get committedToStream(): boolean {
     return this.attemptBuffer.committedToStream;
+  }
+
+  discard(): void { this.attemptBuffer.discard(); }
+
+  resumeHeldEvent(event: DelegatedEvent): void {
+    this.attemptBuffer.forward(event);
+    this.recordReleasedOutput();
   }
 
   accept(event: DelegatedEvent): AttemptEventDisposition {
@@ -752,11 +716,10 @@ class AttemptController {
         && !this.attemptBuffer.committedToStream
         && this.reasoningLoop.severity() === 'severe';
       if (severePreOutput) this.severePreOutputSeen = true;
-      // Abort now only when a reachable stronger target exists. With none, the
-      // attempt runs to its natural finish; the answerless gate then promotes
-      // the latched observation rather than routing down on a probabilistic
-      // signal.
-      if (this.candidate.remainingHasStronger && severePreOutput) {
+      // A held thinking event permits one comparison before consumer output.
+      if (severePreOutput && !this.interventionChecked
+        && this.ctx.opts.preOutput) {
+        this.interventionChecked = true;
         return { kind: 'trajectory' };
       }
     }
@@ -950,6 +913,9 @@ async function runCandidateAttempt(
   const streamTimer = startTimer();
   const controller = new AttemptController(ctx, candidate);
   let requestReady = false;
+  let dispatchCancelled = false;
+  let revisedChain: string[] | undefined;
+  const actionKey = overrideAction(candidate.chosen, candidate.effectiveReasoning ?? 'off')?.key ?? candidate.candidateId;
   const timing: NonNullable<AttemptUsageEvent['timing']> = { durationMs: 0, maxEventGapMs: 0 };
   let lastEventMs: number | undefined;
   // These values belong to router/auto's resolved request, not the destination.
@@ -959,6 +925,7 @@ async function runCandidateAttempt(
   try {
     try {
       attemptAbort.signal.throwIfAborted();
+      ctx.tried.add(actionKey);
       ctx.opts.onRequest?.();
       const delegatedStream = ctx.opts.registry.streamSimple(
         candidate.chosen,
@@ -973,6 +940,17 @@ async function runCandidateAttempt(
           // A late auth resolution must not dispatch an abandoned attempt.
           transformHeaders: (headers) => {
             attemptAbort.signal.throwIfAborted();
+            let authorized = false;
+            try {
+              authorized = ctx.stillCurrent() && (!ctx.opts.preOutput || ctx.opts.preOutput.dispatch(actionKey, attemptAbort.signal));
+            } catch {
+              // An authorization error cannot start an unverified request.
+            }
+            if (requestReady || !authorized) {
+              dispatchCancelled = true;
+              attemptAbort.abort();
+              attemptAbort.signal.throwIfAborted();
+            }
             requestReady = true;
             timing.authMs = streamTimer();
             lastEventMs = timing.authMs;
@@ -1005,6 +983,38 @@ async function runCandidateAttempt(
         }
         const disposition = controller.accept(step.value);
         if (disposition.kind === 'continue') continue;
+        if (disposition.kind === 'trajectory' && ctx.opts.preOutput) {
+          try {
+            const adapter = ctx.opts.preOutput;
+            const attemptId = randomUUID();
+            const epoch = () => ({ ...adapter.epoch(), attemptId, outputRevision: controller.meaningfulOutputReceived || controller.committedToStream ? 1 : 0 });
+            const result = await decidePreOutputIntervention({
+              source: actionKey, epoch,
+              outputCommitted: () => controller.meaningfulOutputReceived || controller.committedToStream,
+              alreadyTried: (key) => ctx.tried.has(key),
+              targetReachable: (key) => ctx.stillCurrent() && ctx.reachable(actionKey).includes(key),
+              tryAbortAndReserveTargetIfEpochMatches: (expected, target, signal) => {
+                if (signal.aborted || !ctx.stillCurrent() || controller.meaningfulOutputReceived || controller.committedToStream
+                  || JSON.stringify(epoch()) !== JSON.stringify(expected)) return undefined;
+                const reservation = adapter.reserve(target);
+                if (!reservation) return undefined;
+                attemptAbort.abort();
+                controller.discard();
+                return reservation;
+              },
+            }, ctx.reachable(actionKey), (pool, current, signal) => adapter.select(actionKey, pool, current, signal), callerSignal ?? new AbortController().signal);
+            if (result.kind === 'cancelled') return { kind: 'aborted', message: 'aborted' };
+            if (result.kind === 'continue-current') {
+              controller.resumeHeldEvent(step.value);
+              continue;
+            }
+            revisedChain = result.revisedChain;
+          } catch {
+            if (callerSignal?.aborted) return { kind: 'aborted', message: 'aborted' };
+            controller.resumeHeldEvent(step.value);
+            continue;
+          }
+        }
         failure = disposition.kind === 'trajectory'
           ? { kind: 'trajectory', message: `trajectory reasoning-loop: ${candidate.candidateId}` }
           : disposition;
@@ -1047,7 +1057,8 @@ async function runCandidateAttempt(
         error: message.slice(0, 120),
       });
     }
-    return settleAttempt(failure, {
+    if (dispatchCancelled) return { kind: 'aborted', message: 'Dispatch authorization expired.' };
+    const settled = settleAttempt(failure, {
       requestReady,
       userAborted: callerSignal?.aborted === true,
       visibleTextReceived: controller.visibleTextReceived,
@@ -1058,6 +1069,7 @@ async function runCandidateAttempt(
       finalDecision: controller.finalDecision,
       effectiveSource: candidate.effectiveSource,
     }, tries);
+    return settled.kind === 'trajectory' && revisedChain ? { ...settled, revisedChain } : settled;
   } finally {
     timing.durationMs = streamTimer();
     if (lastEventMs !== undefined) timing.maxEventGapMs = Math.max(timing.maxEventGapMs, timing.durationMs - lastEventMs);
@@ -1069,6 +1081,7 @@ async function runCandidateAttempt(
       committedToStream: controller.committedToStream,
     });
     controller.commitUsage(requestReady, failure === undefined, timing, failure ? attemptFailureInfo(failure, callerSignal?.aborted === true) : undefined);
+    ctx.opts.preOutput?.release(actionKey);
     callerSignal?.removeEventListener('abort', forwardAbort);
     if (!attemptAbort.signal.aborted) attemptAbort.abort();
     if (iterator) closeIterator(iterator);
@@ -1169,24 +1182,6 @@ export async function runDelegationLoop(
   const stillCurrent = (): boolean =>
     session.getSessionGeneration() === startGeneration
     && (startIntent == null || session.getCachedIntent()?.key === startIntent);
-  // Read live: a semi substitution can replace the turn reasoning mid-walk, and
-  // a stronger-hop proof must use the effort the attempt will actually send.
-  const policyVersion = decision.policyVersion ?? 'legacy';
-  const compareOpts = (): StrongerCompareOpts => ({
-    policyVersion,
-    userReasoning: typeof opts.reasoning === 'string' ? (opts.reasoning as ThinkingLevel) : undefined,
-    userReasoningOverride: opts.userReasoningOverride,
-    candidates: opts.candidates,
-  });
-  // The chain has context/vision guards. Recovery must also retain the full
-  // required vector from the same decision, including input-shape minimums.
-  const escOpts: ScoreOpts = {
-    estimatedContextTokens: 0,
-    policyVersion,
-    requiredMinimums: decision.capabilityEvidence?.minimums,
-    benchmarkIndexVersion: decision.capabilityEvidence?.benchmarkIndexVersion,
-    benchmarkSnapshotDigest: decision.capabilityEvidence?.benchmarkSnapshotDigest,
-  };
   session.flushAndSetUnresolvedTrajectory();
 
   let success = false;
@@ -1213,24 +1208,14 @@ export async function runDelegationLoop(
 
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
-  const ctx: DelegationContext = { opts, stream, decision, turnSpend, session, stillCurrent };
-  // Not-yet-attempted, still-reachable candidates after `index` in the live
-  // chain. Anything at or before `index` was already tried, and a dead
-  // provider cannot serve a hop, so both the early-abort probe and the hop
-  // itself score against exactly this set.
-  const reachableRemaining = (index: number): Candidate[] =>
-    decision.fallbackChain.slice(index + 1)
-      .map((key) => opts.candidates?.find((c) => candidateKey(c) === key))
-      .filter((c): c is Candidate =>
-        c != null && !deadProviders.has(parseCandidateKey(candidateKey(c)).provider));
-  /**
-   * Set only for the single hop that immediately follows a pre-output
-   * reasoning loop. It gates the *destination* of that hop and is cleared as
-   * soon as one candidate is chosen for it, because everything after that is
-   * ordinary objective-failure recovery: a stronger model that 421s must not
-   * strand the turn behind a stronger-only chain.
-   */
-  let capabilityHop: PendingTrajectoryEscalation | undefined;
+  const tried = new Set<string>();
+  const reachable = (source: string): string[] => (opts.preOutput?.reachable(source) ?? []).filter((key) => {
+    const parsed = parseCandidateKey(key);
+    return parsed.provider !== ROUTER_PROVIDER_ID && !deadProviders.has(parsed.provider)
+      && !session.getBlacklistedModels().has(key) && !session.getBlacklistedProviders().has(parsed.provider)
+      && registry.find(parsed.provider, parsed.id) !== undefined;
+  });
+  const ctx: DelegationContext = { opts, stream, decision, turnSpend, session, stillCurrent, tried, reachable };
   /** Exact (model, effort) that a pre-output hop abandoned; never retried. */
   let excludeSource: string | undefined;
   /**
@@ -1264,56 +1249,6 @@ export async function runDelegationLoop(
     }
     return model as Model<Api> | undefined;
   };
-  // The between-turn repick and the pre-output hop use the same policy-owned
-  // stronger proof and tier ordering in `escalationChain`.
-  // No reachable target (the answerless-promotion path)
-  // leaves the chain untouched and hops nowhere — the source is already
-  // excluded, so the walk falls to ordinary recovery without a strike.
-  const planCapabilityHop = (
-    candidateIndex: number,
-    candidateId: string,
-    attempt: Extract<CandidateAttemptResult, { kind: 'trajectory' }>,
-  ): void => {
-    excludeSource = attempt.effectiveSource;
-    const remaining = decision.fallbackChain.slice(candidateIndex + 1);
-    const esc = escalationChain(
-      reachableRemaining(candidateIndex),
-      decision.dimension,
-      attempt.effectiveSource,
-      escOpts,
-      compareOpts(),
-      policyVersion,
-    );
-    if (esc) {
-      capabilityHop = {
-        fromModel: attempt.effectiveSource,
-        dimension: decision.dimension,
-        signals: [{
-          kind: 'reasoning-loop',
-          severity: 'severe',
-          evidenceIds: [`rl:${candidateId}`],
-          evidenceCount: 1,
-        }],
-        tfi: 1,
-        preOutput: true,
-      };
-      // Mutate the live chain in place. The outer walk iterates
-      // `fallbackChain.entries()`; replacing the array would leave that
-      // iterator on the pre-hop order and skip recovery sitting before the
-      // stronger head.
-      decision.fallbackChain.splice(
-        candidateIndex + 1,
-        remaining.length,
-        ...planTrajectoryHop(remaining, esc.fallbackChain),
-      );
-    }
-    debugLog('attempt.trajectory', {
-      candidate: candidateId,
-      reason: 'reasoning-loop',
-      target: esc?.chosen ?? 'none',
-      usage: attempt.usageObserved ? 'partial' : 'missing',
-    });
-  };
   // Last candidate that actually entered an attempt. Semi-mode asks only when
   // the next attempt would change model — skipped/missing entries are not a
   // switch, and same-model retries stay inside the inner loop.
@@ -1321,18 +1256,10 @@ export async function runDelegationLoop(
   for (const [candidateIndex, proposedId] of decision.fallbackChain.entries()) {
     let candidateId = proposedId;
     let { provider, id: modelId, effort: entryEffort } = parseCandidateKey(candidateId);
-    if (excludeSource && !isValidEscalationCandidate(candidateId, excludeSource)) continue;
-    // Known-unusable candidates are skipped before the hop is consumed: a dead
-    // or router-synthetic head must not swallow the one-shot hop provenance and
-    // strand a healthy stronger sibling behind it un-marked.
+    if (excludeSource && tried.has(candidateId)) continue;
+    // Only a callable model can start an attempt.
     if (provider === ROUTER_PROVIDER_ID) continue;
     if (deadProviders.has(provider)) continue;
-    // A `beforeFallback` substitution replaces the proposed candidate and the
-    // live candidate pool. Preserve the source row now, but bind and consume the hop
-    // only after the actual candidate has passed registry validation.
-    const hopSource = capabilityHop && opts.candidates
-      ? findSourceCandidate(opts.candidates, capabilityHop.fromModel)
-      : undefined;
     attemptIndex++;
     let chosen = findModel(candidateId, provider, modelId);
     if (!chosen) continue;
@@ -1356,26 +1283,6 @@ export async function runDelegationLoop(
         if (!chosen) continue;
       }
     }
-    let servingHop: PendingTrajectoryEscalation | undefined;
-    if (capabilityHop) {
-      // Remaining chain is stronger-then-recovery, but semi mode can substitute
-      // another model. The one-shot provenance belongs only to the actual model
-      // that will be attempted, and only when it is still a proven upgrade.
-      const dest = opts.candidates?.find((candidate) => candidateKey(candidate) === candidateId);
-      if (
-        dest
-        && isStrictlyStrongerCandidate(
-          dest,
-          capabilityHop.fromModel,
-          decision.dimension,
-          hopSource,
-          compareOpts(),
-        )
-      ) {
-        servingHop = capabilityHop;
-      }
-      capabilityHop = undefined;
-    }
     lastAttemptedId = candidateId;
 
     // An entry of the incumbent model serves at the effort the incumbent
@@ -1391,21 +1298,6 @@ export async function runDelegationLoop(
       opts.reasoning,
     );
     const effectiveSource = `${provider}/${modelId}:${effectiveReasoning ?? 'off'}`;
-    // Resolved once per candidate, not per retry: a retry changes only the
-    // attempt number. A trajectory hop rewrites the remaining chain, but it
-    // leaves this candidate immediately, so the next candidate recomputes this
-    // against the rewritten chain. The early-abort gate and the hop itself both
-    // ask `escalationChain` over the same reachable-remaining set, so they can
-    // never disagree on whether a reachable stronger target exists.
-    const remainingHasStronger =
-      escalationChain(
-        reachableRemaining(candidateIndex),
-        decision.dimension,
-        effectiveSource,
-        escOpts,
-        compareOpts(),
-        policyVersion,
-      ) !== undefined;
     const prepared: PreparedCandidate = {
       candidateId,
       candidateIndex,
@@ -1415,8 +1307,6 @@ export async function runDelegationLoop(
       chosen,
       effectiveReasoning,
       effectiveSource,
-      remainingHasStronger,
-      servingHop,
     };
 
     const { attempt, lastRetry } = await runWithRetries(ctx, prepared);
@@ -1438,7 +1328,21 @@ export async function runDelegationLoop(
     if (attempt.kind === 'aborted' || attempt.kind === 'finalize') {
       return finalize(attempt.kind === 'aborted' ? 'aborted' : 'error', attempt.message);
     }
-    if (attempt.kind === 'trajectory') planCapabilityHop(candidateIndex, candidateId, attempt);
+    if (attempt.kind === 'trajectory') {
+      {
+        excludeSource = attempt.effectiveSource;
+        if (attempt.revisedChain) {
+          const models = new Set<string>();
+          const chain = attempt.revisedChain.filter((key) => {
+            const model = registryIdOf(key);
+            if (models.has(model) || tried.has(key)) return false;
+            models.add(model);
+            return true;
+          });
+          decision.fallbackChain.splice(candidateIndex + 1, decision.fallbackChain.length, ...chain);
+        }
+      }
+    }
 
     const consequence = failureConsequence(attempt, lastRetry);
     if (consequence.killProvider) {
@@ -1478,9 +1382,12 @@ export async function runDelegationLoop(
     }
   }
   const fromModel = finalDecision.trajectoryFriction?.fromModel ?? excludeSource;
-  const capabilityHandoff = resolveCapabilityHandoff(
-    lastServed, fromModel, decision.dimension, opts.candidates, compareOpts(),
-  );
+  const actualIdentity = lastServed && parseCandidateKey(lastServed.registryId);
+  const actualModel = actualIdentity && registry.find(actualIdentity.provider, actualIdentity.id);
+  const actualAction = actualModel && overrideAction(actualModel, (lastServed?.thinkingLevel ?? 'off') as ModelThinkingLevel)?.key;
+  const capabilityHandoff = decision.unified && lastServed && fromModel && !finalDecision.trajectoryFriction?.unavailable
+    && actualAction === decision.chosen && servedKey(lastServed) !== fromModel
+    ? { fromModel, served: servedKey(lastServed) } : undefined;
   return { success: true, streamFinalized: false, lastServed, capabilityHandoff };
 }
 
