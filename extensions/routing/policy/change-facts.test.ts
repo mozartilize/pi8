@@ -82,20 +82,12 @@ describe('factsRequirement', () => {
     expect(factsRequirement('implement', easiest, { files: 1, precedentExists: true })).toBeGreaterThanOrEqual(0.30);
   });
 
-  it('puts a mechanical change below the default band and a design-heavy one above it', () => {
+  it('puts a mechanical change below the default implement requirement and a design-heavy one above it', () => {
     const mechanical = factsLog('implement', { decisions: [], precedent: 'p', answers: { rewrites: 'N', mapping: 'Y' } }, { files: 1, precedentExists: true });
     const design = factsLog('implement', { decisions: ['a', 'b', 'c'], answers: { rewrites: 'Y', ordering: 'Y' } }, { files: 7, directories: 4 });
-    expect(mechanical.shadow.band).toBe('economy');
-    expect(['strong', 'frontier']).toContain(design.shadow.band);
-    expect(mechanical.shadow.used).toBeCloseTo(defaultRequirement('implement'), 6);
-  });
-
-  it('logs the same requirement under the candidate policy, names no band, and uses that policy\'s default', () => {
-    const facts: DeclaredFacts = { decisions: ['a'], answers: { rewrites: 'Y' } };
-    const legacy = factsLog('implement', facts, { files: 2 });
-    const next = factsLog('implement', facts, { files: 2 }, undefined, 'cheapest-sufficient');
-    expect(next.shadow.band).toBeUndefined();
-    expect(next.shadow).toEqual({ requirement: legacy.shadow.requirement, used: defaultRequirement('implement', 'cheapest-sufficient') });
+    expect(mechanical.shadow.requirement).toBeLessThan(defaultRequirement('implement'));
+    expect(design.shadow.requirement).toBeGreaterThan(defaultRequirement('implement'));
+    expect(Object.keys(design.shadow)).toEqual(['requirement']);
   });
 
   it('never lowers the requirement when a fact gets harder', () => {

@@ -12,7 +12,7 @@ import autoModelRouterExtension from './index.js';
 import { registerCommands } from './host/commands.js';
 import { buildSubagentProviderAuthFilter } from './serve/provider.js';
 import { computeRoleModels } from './agents/subagents.js';
-import { candidatePolicyRun, routingDecision, terminalAssessment } from './test-support/router-fixtures.js';
+import { routingDecision } from './test-support/router-fixtures.js';
 import { DECISION_LOG_FILE, setDecisionLogBase } from './host/decisionlog.js';
 import { defaultRouterSession } from './serve/router-session-state.js';
 import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
@@ -864,8 +864,6 @@ describe('work ledger lifecycle', () => {
     const state: WorkPhaseState = {
       intentKey: '2:200:abcd',
       deliverable: 'gather',
-      terminal: terminalAssessment({ kind: 'gather' }),
-      terminalBand: 'standard',
       providerInvocation: 3,
       observedMutationTools: 1,
       boundaryAuthorization: createBoundaryAuthorization(
@@ -885,8 +883,6 @@ describe('work ledger lifecycle', () => {
     expect(defaultRouterSession.getWorkPhaseState()).toEqual({
       intentKey: '2:200:abcd',
       deliverable: 'plan',
-      terminal: state.terminal,
-      terminalBand: 'standard',
       providerInvocation: 3,
       observedMutationTools: 0,
     });
@@ -1063,8 +1059,6 @@ describe('mutation observation hooks', () => {
   function entryState(overrides: Partial<WorkPhaseState> = {}): WorkPhaseState {
     return {
       intentKey: 'intent-a',
-      terminal: terminalAssessment(),
-      terminalBand: 'frontier',
       providerInvocation: 1,
       observedMutationTools: 0,
       ...overrides,
@@ -1271,47 +1265,27 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
   }
 
-  it('gives a review handoff without a rubric no higher minimum than the easiest rubric', async () => {
+  it('records the declared rubric of a handoff, and no rubric when no criterion is scored', async () => {
     const registerTool = vi.fn();
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
-    const minimumFor = async (difficulty?: Record<string, number>) => {
-      investigating({ terminal: undefined, terminalBand: undefined });
-      const request = { outcome: 'ready', deliverable: 'review', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', ...(difficulty ? { difficulty } : {}) };
-      const result = await handoffTool(registerTool).execute('p', request, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
-      expect(result.details.accepted).toBe(true);
-      return defaultRouterSession.getWorkPhaseState()?.reasoningHandoff?.minimum ?? 0;
-    };
-    const missing = await minimumFor();
-    const easiest = await minimumFor({ alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 });
-    const hardest = await minimumFor({ alternatives: 5, stakes: 5, spread: 5, knowledge: 5, uncertainty: 5 });
-    // Missing information selects the default band; the frontier needs evidence.
-    expect(missing).toBeLessThanOrEqual(easiest);
-    expect(missing).toBeLessThan(hardest);
-  });
-
-  it('sets an implement handoff minimum from the execution rubric, raised only by the final step', async () => {
-    const registerTool = vi.fn();
-    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
-    const handoffFor = async (over: Record<string, unknown>, state: Partial<WorkPhaseState> = { terminal: undefined, terminalBand: undefined }) => {
-      investigating({ deliverable: 'implement', ...state });
-      const request = { outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', ...over };
+    const handoffFor = async (deliverable: 'review' | 'implement', over: Record<string, unknown>) => {
+      investigating({ deliverable });
+      const request = { outcome: 'ready', deliverable, complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', ...over };
       const result = await handoffTool(registerTool).execute('p', request, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
       expect(result.details.accepted).toBe(true);
       return defaultRouterSession.getWorkPhaseState()!.reasoningHandoff!;
     };
+    const easiest = { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 };
+    expect(await handoffFor('review', {})).not.toHaveProperty('rubric');
+    expect((await handoffFor('review', { difficulty: easiest })).rubric).toEqual(easiest);
     const easy = { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 };
     const hard = { openDecisions: 4, spread: 4, verification: 4, knowledge: 4, coupling: 4 };
-    // Without a rubric and without a stronger final step, the default minimums apply.
-    expect((await handoffFor({})).minimum).toBeUndefined();
-    const easyMinimum = (await handoffFor({ remainingWork: easy })).minimum!;
-    const hardMinimum = (await handoffFor({ remainingWork: hard })).minimum!;
-    expect(easyMinimum).toBeLessThan(hardMinimum);
+    expect(await handoffFor('implement', {})).not.toHaveProperty('rubric');
     // A partly scored rubric fills the unscored criteria with the highest level given.
-    expect((await handoffFor({ remainingWork: { openDecisions: 4 } })).minimum).toBe(hardMinimum);
-    // A hard final step raises an easy rubric and never lowers a hard one.
-    const raised = await handoffFor({ remainingWork: easy, complexity: 'hard', scope: 'open-ended' });
-    expect(raised.minimum).toBeGreaterThan(easyMinimum);
-    expect(raised).toMatchObject({ target: 'implement', rubric: easy });
+    expect((await handoffFor('implement', { remainingWork: { openDecisions: 4 } })).rubric).toEqual(hard);
+    // The task shape does not change the declared rubric.
+    expect(await handoffFor('implement', { remainingWork: easy, complexity: 'hard', scope: 'open-ended' }))
+      .toMatchObject({ target: 'implement', rubric: easy });
   });
 
   it.each([
@@ -1418,79 +1392,17 @@ describe('mutation observation hooks', () => {
     expect((await hand({}, { deliverable: 'review' })).deliverable).toBe('review');
   });
 
-  it.skipIf(candidatePolicyRun)('raises a planning minimum to the band of the final step, never lowers it', async () => {
-    const registerTool = vi.fn();
-    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
-    const tool = handoffTool(registerTool);
-    const easy = { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 };
-    const minimum = async (over: Partial<WorkPhaseState>, request: Record<string, unknown>) => {
-      investigating(over);
-      await tool.execute('p', { ...READY, difficulty: easy, ...request }, undefined, undefined, routerAutoCtx);
-      return defaultRouterSession.getWorkPhaseState()!.reasoningHandoff!.minimum;
-    };
-    const economy = { terminal: terminalAssessment({ kind: 'lightweight', complexity: 'trivial', scope: 'bounded' }), terminalBand: 'economy' as const };
-    const strong = { terminal: terminalAssessment({ kind: 'plan', complexity: 'moderate', scope: 'open-ended' }), terminalBand: 'strong' as const };
-    expect(await minimum(economy, {})).toBeCloseTo(0.45);
-    expect(await minimum(strong, {})).toBeCloseTo(0.7);
-    // The handoff's own reading of the final step can only raise it.
-    expect(await minimum(economy, { complexity: 'hard', scope: 'open-ended' })).toBeCloseTo(0.85);
-    expect(await minimum(strong, { complexity: 'trivial', scope: 'bounded' })).toBeCloseTo(0.7);
-  });
-
-  it.skipIf(candidatePolicyRun)('keeps the default minimums for a handoff without a rubric unless the final step asks for more than the default', async () => {
-    const registerTool = vi.fn();
-    await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
-    const tool = handoffTool(registerTool);
-    const minimum = async (over: Partial<WorkPhaseState>) => {
-      investigating(over);
-      const request = { outcome: 'ready', deliverable: 'plan', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q' };
-      await tool.execute('p', request, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
-      return defaultRouterSession.getWorkPhaseState()!.reasoningHandoff!.minimum;
-    };
-    const standard = { terminal: terminalAssessment({ kind: 'plan', complexity: 'trivial', scope: 'bounded' }), terminalBand: 'standard' as const };
-    const strong = { terminal: terminalAssessment({ kind: 'plan', complexity: 'moderate', scope: 'open-ended' }), terminalBand: 'strong' as const };
-    expect(await minimum(standard)).toBeUndefined();
-    expect(await minimum(strong)).toBeCloseTo(0.7);
-  });
-
-  it('under the candidate policy, raises a planning minimum by the requirement of the final step and keeps the default minimums without a rubric', async () => {
-    vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient');
-    try {
-      const registerTool = vi.fn();
-      await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
-      const easy = { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 };
-      const minimumFor = async (request: Record<string, unknown>) => {
-        investigating({ terminal: undefined, terminalBand: undefined });
-        const body = { outcome: 'ready', deliverable: 'plan', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', ...request };
-        const result = await handoffTool(registerTool).execute('p', body, undefined, undefined, routerAutoCtx as unknown as ExtensionContext);
-        expect(result.details.accepted).toBe(true);
-        return defaultRouterSession.getWorkPhaseState()!;
-      };
-      // A trivial plan without a rubric asks for nothing beyond the default minimums.
-      expect((await minimumFor({ difficulty: undefined })).reasoningHandoff?.minimum).toBeUndefined();
-      // A hard open-ended plan raises the minimum by its own requirement, with no band.
-      const hard = await minimumFor({ difficulty: undefined, complexity: 'hard', scope: 'open-ended' });
-      expect(hard.reasoningHandoff?.minimum).toBeCloseTo(0.825);
-      expect(hard.terminalBand).toBeUndefined();
-      expect(hard.terminalRequirement).toBeCloseTo(0.825);
-      // The rubric sets the minimum for an easy plan. No band raises it to 0.45.
-      expect((await minimumFor({ difficulty: easy })).reasoningHandoff?.minimum).toBeCloseTo(0.40);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
   it.each(['complexity', 'scope'])(
     'rejects a ready handoff without %s', async (missing) => {
       const registerTool = vi.fn();
       await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
       const tool = handoffTool(registerTool);
-      investigating({ terminal: undefined, terminalBand: undefined });
+      investigating();
       const request: Record<string, unknown> = { ...READY };
       delete request[missing];
       expect((await tool.execute('shape', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
       expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('acquiring');
-      expect(defaultRouterSession.getWorkPhaseState()?.terminal).toBeUndefined();
+      expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
     },
   );
 
@@ -1620,11 +1532,11 @@ describe('mutation observation hooks', () => {
     expect(await toolResult({ toolName: 'read', toolCallId: 'r2', content }, routerAutoCtx)).toBeUndefined();
   });
 
-  it('reminds a gather entry with an ordinary final step only on its first edit result, and never after a handoff', async () => {
+  it('reminds a gather entry only on its first edit result, and never after a handoff', async () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;
     const content = [{ type: 'text', text: 'edited' }];
-    investigating({ deliverable: 'gather', terminalBand: 'standard', contextStatus: undefined });
+    investigating({ deliverable: 'gather', contextStatus: undefined });
 
     expect(await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx)).toBeUndefined();
     expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, routerAutoCtx))
@@ -1638,7 +1550,7 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.commitWorkPhaseState({
       ...state,
       reasoningHandoff: {
-        id: 'intent-a', requester: 'test/cheap', target: 'plan', minimum: 0.5, requirement: 0.5,
+        id: 'intent-a', requester: 'test/cheap', target: 'plan',
         rubric: DIFFICULTY, evidence: { applicable: false, files: 0, directories: 0 }, pending: true,
       },
     });

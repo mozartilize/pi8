@@ -75,14 +75,14 @@ describe('formatStatus', () => {
     expect(formatDecisionDetail(investigating, served)).toContain('  cause:      collecting context, read-only, before the deliverable');
     expect(formatDecisionDetail(investigating, served)).toContain('  handoff:    collecting context (deliverable plan)');
     const handoff = {
-      id: 'k', requester: 'alpha/model', target: 'plan' as const, minimum: 0.62, requirement: 0.62,
+      id: 'k', requester: 'alpha/model', target: 'plan' as const,
       rubric: { alternatives: 3, stakes: 2, spread: 1, knowledge: 1, uncertainty: 1 },
       evidence: { applicable: false, files: 0, directories: 0 }, pending: true,
     };
     const planning = { ...decision, dimension: 'plan' as const, cause: 'investigation-handoff' as const, reasoningHandoff: handoff };
-    expect(formatDecisionDetail(planning, served)).toContain('  handoff:    planning, minimum 0.62, pending');
+    expect(formatDecisionDetail(planning, served)).toContain('  handoff:    planning, pending');
     const owned = { ...planning, reasoningHandoff: { ...handoff, pending: false, owner: 'beta/planner' } };
-    expect(formatDecisionDetail(owned, served)).toContain('  handoff:    planning, minimum 0.62, owned by beta/planner');
+    expect(formatDecisionDetail(owned, served)).toContain('  handoff:    planning, owned by beta/planner');
   });
 
   it('explains an execution plan handoff and its return to the submitter', () => {

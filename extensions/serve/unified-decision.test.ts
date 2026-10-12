@@ -141,8 +141,7 @@ describe('production selection adapter', () => {
     const turn = input([model('one'), model('two')]);
     turn.workState = {
       intentKey: 'entry-a', workItemId: 'work-a', providerInvocation: 1, observedMutationTools: 0,
-      terminal: { kind: 'implement', complexity: 'moderate', scope: 'bounded' },
-      terminalBand: 'standard', excludedExecutors: ['test/one:low'],
+      excludedExecutors: ['test/one:low'],
     };
     const implementation = await resolveUnifiedDecision(turn, noPreparation);
     expect(implementation.kind).toBe('decision');

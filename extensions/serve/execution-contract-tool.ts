@@ -61,7 +61,6 @@ import { changeFactsParameter } from './change-facts-schema.js';
 import { measureChange } from './change-measurements.js';
 import { remainingWorkParameter } from './rubric-schema.js';
 import { decisionEvidence } from '../routing/policy/decision-evidence.js';
-import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 
 const DESCRIPTION =
   `${ROUTER_TOOLS_CONDITION} ` +
@@ -506,7 +505,7 @@ export function submitExecutionContract(
   const declared = { ...parseDeclaredFacts(params?.facts), ...stepFacts(steps ?? []) };
   const valued = accepted.contract
     ? { ...accepted, contract: { ...accepted.contract,
-      facts: factsLog('implement', declared, change, undefined, evaluationPolicyVersion()) } }
+      facts: factsLog('implement', declared, change) } }
     : accepted;
   // The context handoff this plan came from records that it led to one.
   const next = valued.reasoningHandoff && !valued.reasoningHandoff.contractAccepted

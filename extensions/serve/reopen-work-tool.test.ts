@@ -68,21 +68,20 @@ describe('reopen_work', () => {
     expect(persisted).toHaveLength(1);
   });
 
-  it('forces a new repick when this entry already served, including a plan minimum', () => {
+  it('forces a new repick when this entry already served', () => {
     const session = doneSession({
       priorCompletion: undefined,
       completion: { workItemId: 'w_1', status: 'done' },
       contextStatus: 'served',
       reasoningHandoff: {
         id: 'old', pending: false, owner: 'a/model', requester: 'a/model', target: 'review',
-        minimum: 0.4, requirement: 0.4,
         rubric: { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 },
         evidence: CONVERSATION_EVIDENCE,
       },
     });
     const result = submitReopenWork({ ...SHAPE, deliverable: 'plan', difficulty: { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 } }, AUTO, session);
     expect(result.accepted).toBe(true);
-    expect(result.text).toContain('minimum');
+    expect(result.text).toContain('A planning model continues');
     const state = session.getWorkPhaseState();
     expect(state?.contextStatus).toBe('ready-pending');
     expect(state?.completion).toBeUndefined();
@@ -111,16 +110,14 @@ describe('reopen_work', () => {
     expect(submitReopenWork({ ...SHAPE, deliverable: 'implement', remainingWork }, AUTO, session).accepted).toBe(true);
     const handoff = session.getWorkPhaseState()?.reasoningHandoff;
     expect(handoff).toMatchObject({ pending: true, target: 'implement', rubric: remainingWork });
-    expect(handoff?.minimum).toBeCloseTo(handoff!.requirement!);
   });
 
-  it('gives a bounded reopened implementation with no open behavior or design choice at most 65%', () => {
+  it('leaves the rubric undefined when a reopened implementation scores no criterion', () => {
     const session = doneSession({ priorCompletion: undefined, completion: { workItemId: 'w_1', status: 'done' }, contextStatus: 'served' });
-    const remainingWork = { openDecisions: 3, spread: 5, verification: 5, knowledge: 5, coupling: 5 };
-    expect(submitReopenWork({ ...SHAPE, deliverable: 'implement', remainingWork }, AUTO, session).accepted).toBe(true);
+    expect(submitReopenWork({ ...SHAPE, deliverable: 'implement' }, AUTO, session).accepted).toBe(true);
     const handoff = session.getWorkPhaseState()?.reasoningHandoff;
-    expect(handoff?.requirement).toBeGreaterThan(0.85);
-    expect(handoff?.minimum).toBeCloseTo(0.65, 12);
+    expect(handoff).toMatchObject({ pending: true, target: 'implement' });
+    expect(handoff).not.toHaveProperty('rubric');
   });
 
   it('refuses a stale entry or an unread referenced file without reopening', async () => {

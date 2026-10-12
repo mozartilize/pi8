@@ -21,10 +21,9 @@ import { readBranch } from '../routing/context/persistence.js';
 import { contextCheck, promptAnchorsForItem, referencedArtifactPaths, reopenEvents } from '../routing/context/resolve.js';
 import type { EntryResolution, GroundedArtifact, WorkItem } from '../routing/context/types.js';
 import { CONVERSATION_EVIDENCE, acceptContextHandoff } from '../routing/policy/context-acquisition.js';
-import { declaredRequirement } from '../routing/policy/execution-difficulty.js';
+import { declaredRubric } from '../routing/policy/execution-difficulty.js';
 import { REOPEN_WORK_TOOL, completedIncumbent } from '../routing/policy/work-completion.js';
-import { handoffMinimum, rubricCeiling, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
-import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
+import { withContinuedPenalties, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { PendingIdentity } from './context-resolution.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER, closeContractEntry } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -187,10 +186,10 @@ function reject(state: WorkPhaseState | undefined, served: string | undefined, c
   return { accepted: false, text: REJECTIONS[code] + detail };
 }
 
-function acceptedText(deliverable: ReopenDeliverable, minimum: number | undefined): string {
-  if ((deliverable === 'plan' || deliverable === 'review') && minimum != null) {
+function acceptedText(deliverable: ReopenDeliverable): string {
+  if (deliverable === 'plan' || deliverable === 'review') {
     const role = deliverable === 'plan' ? 'planning' : 'review';
-    return `Work item reopened (${deliverable}, minimum ${minimum.toFixed(2)}). A ${role} model continues from the next step. Make no changes now. ${CONTINUE_TURN}`;
+    return `Work item reopened (${deliverable}). A ${role} model continues from the next step. Make no changes now. ${CONTINUE_TURN}`;
   }
   return `Work item reopened (${deliverable}). The next step continues this work. Make no changes now. ${CONTINUE_TURN}` +
     (deliverable === 'implement' ? `\nFor the next implementation step:\n${CONTRACT_REMINDER}` : '');
@@ -261,19 +260,13 @@ export function submitReopenWork(
   ]);
   if (!recorded) return reject(state, served, 'not-recorded');
 
-  const continued = withContinuedPenalties(
-    withStrongerTerminal(state, { kind: deliverable, complexity, scope }, evaluationPolicyVersion()),
-    item.id,
-    'reopen',
-  );
+  const continued = withContinuedPenalties(state, item.id, 'reopen');
   const closed = closeContractEntry(continued, served);
-  let minimum: number | undefined;
   let reasoning;
   if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement') {
-    // Without a rubric the default minimums of the task type apply. The final step only raises them.
-    const { rubric, requirement } = declaredRequirement(deliverable, params, CONVERSATION_EVIDENCE);
-    minimum = handoffMinimum(continued, deliverable, requirement, evaluationPolicyVersion(), rubricCeiling(deliverable, scope, rubric));
-    reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence: CONVERSATION_EVIDENCE };
+    // Without a rubric the demand of the next step is unknown, and the selector uses its highest capability targets.
+    const rubric = declaredRubric(deliverable, params);
+    reasoning = { requester: served, target: deliverable, ...(rubric ? { rubric } : {}), evidence: CONVERSATION_EVIDENCE };
   }
   const resolution: EntryResolution = {
     sourceEntryId,
@@ -320,7 +313,7 @@ export function submitReopenWork(
     intentKey: state.intentKey, served, action: 'reopen-accept', workItemId: item.id, deliverable,
     ...(facts.oversized ? { oversizedArtifacts: facts.oversized } : {}),
   });
-  return { accepted: true, text: acceptedText(deliverable, minimum), workItemId: item.id };
+  return { accepted: true, text: acceptedText(deliverable), workItemId: item.id };
 }
 
 export function registerReopenWorkTool(pi: ExtensionAPI, session: RouterSession): void {

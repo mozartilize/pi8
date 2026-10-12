@@ -16,17 +16,10 @@ import {
   serveContextHandoff,
 } from './context-acquisition.js';
 import type { WorkPhaseState } from './work-phase.js';
-import type { TerminalAssessment } from '../../types.js';
-
-const terminal = (over: Partial<TerminalAssessment> = {}): TerminalAssessment => ({
-  kind: 'gather', complexity: 'routine', scope: 'bounded', ...over,
-});
 
 const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
   intentKey: 'intent-a',
   deliverable: 'plan',
-  terminal: terminal(),
-  terminalBand: 'standard',
   providerInvocation: 2,
   observedMutationTools: 0,
   ...over,

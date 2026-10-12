@@ -5,7 +5,7 @@ import { decisionEvidence } from './decision-evidence.js';
 const facts: FactsLog = {
   declared: { modify: 2, decisions: 1, answers: { ordering: 'Y' } },
   measured: { files: 2, directories: 1, existingLines: 198, fanIn: 3, coveringTests: 1, scoutFiles: 4, scoutRequests: 6 },
-  shadow: { requirement: 0.6, band: 'standard', used: 0.5 },
+  shadow: { requirement: 0.6 },
 };
 
 describe('decisionEvidence', () => {

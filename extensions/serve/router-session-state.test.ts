@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setDebugPath } from '../host/debuglog.js';
-import { terminalAssessment, routingDecision } from '../test-support/router-fixtures.js';
+import { routingDecision } from '../test-support/router-fixtures.js';
 import { defaultRouterSession, RouterSession } from './router-session-state.js';
 import { defaultBlacklistState } from './blacklist.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
@@ -160,8 +160,6 @@ describe('session generation and reset', () => {
   it('clears the entry state on reset', () => {
     defaultRouterSession.intent.commitWorkPhaseState({
       intentKey: 'intent-a',
-      terminal: terminalAssessment(),
-      terminalBand: 'frontier',
       providerInvocation: 2,
       observedMutationTools: 1,
     });

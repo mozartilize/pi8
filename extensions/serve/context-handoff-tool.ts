@@ -33,9 +33,8 @@ import {
   evidenceShape,
   owedContext,
 } from '../routing/policy/context-acquisition.js';
-import { declaredRequirement } from '../routing/policy/execution-difficulty.js';
-import { handoffMinimum, rubricCeiling, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
-import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
+import { declaredRubric } from '../routing/policy/execution-difficulty.js';
+import { withContinuedPenalties, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
@@ -50,7 +49,6 @@ import { CLARIFICATION_TEXT, countContextRefusal, logContextHandoff as log } fro
 import { decisionEvidence } from '../routing/policy/decision-evidence.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 import { factsLog, parseDeclaredFacts, type ChangeMeasurements } from '../routing/policy/change-facts.js';
-import { defaultRequirement } from '../routing/score/scorer.js';
 import { changeFactsParameter } from './change-facts-schema.js';
 import { difficultyParameter, remainingWorkParameter } from './rubric-schema.js';
 import { measureChange } from './change-measurements.js';
@@ -354,16 +352,13 @@ export function submitContextHandoff(
     return reject(session, 'use-reopen-work', state, served);
   }
   if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
-  const policyVersion = evaluationPolicyVersion();
-  const terminal = withStrongerTerminal(state, { kind: deliverable, complexity, scope }, policyVersion);
 
   let reasoning;
   if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement' || deliverable === 'gather') {
     const evidence = facts.evidence ?? CONVERSATION_EVIDENCE;
-    // Without a rubric the default minimums of the task type apply. The final step only raises them.
-    const { rubric, requirement } = declaredRequirement(deliverable, params, evidence);
-    const minimum = handoffMinimum(terminal, deliverable, requirement, policyVersion, rubricCeiling(deliverable, scope, rubric));
-    reasoning = { requester: served, target: deliverable, minimum, requirement, rubric, evidence };
+    // Without a rubric the demand of the next step is unknown, and the selector uses its highest capability targets.
+    const rubric = declaredRubric(deliverable, params);
+    reasoning = { requester: served, target: deliverable, ...(rubric ? { rubric } : {}), evidence };
   }
   const key = handoffKey(params);
   const plan = selection?.plan;
@@ -387,20 +382,20 @@ export function submitContextHandoff(
   }
   const selected = plan ? publishSelectedWork(session, plan) : undefined;
   const materialized = selected
-    ? withContinuedPenalties({ ...terminal, pendingIdentity: undefined, provisionalGrounding: undefined,
+    ? withContinuedPenalties({ ...state, pendingIdentity: undefined, provisionalGrounding: undefined,
       contextResolution: selected.resolution, workItemId: selected.workItemId,
       contextReasons: selected.resolution.contextReasons, contextSatisfied: true },
     selected.workItemId, selected.resolution.relation)
-    : terminal;
+    : state;
   if (selected) {
     const cached = session.getCachedIntent();
     if (cached?.key === state.intentKey) session.setCachedIntent({ ...cached, context: selected, dimension: deliverable });
   }
   const declared = parseDeclaredFacts(params?.facts);
-  // The shadow requirement is logged next to the one routing uses; it does not route.
+  // The shadow requirement is logged; it does not route.
   const changeFacts = {
     ...(declared ? { declared } : {}),
-    log: factsLog(deliverable, declared, facts.change ?? {}, reasoning?.minimum ?? defaultRequirement(deliverable, policyVersion), policyVersion),
+    log: factsLog(deliverable, declared, facts.change ?? {}),
   };
   const next = acceptContextHandoff(materialized, { deliverable, key, ...(reasoning ? { reasoning } : {}) });
   session.commitWorkPhaseState({ ...next, changeFacts, priorCompletion: undefined, completion: undefined });
@@ -419,7 +414,7 @@ export function submitContextHandoff(
       : deliverable === 'gather' ? 'investigation' : 'implementation';
     return {
       accepted: true,
-      text: `Context handed off (${deliverable}, ${next.reasoningHandoff.minimum !== undefined ? `minimum ${next.reasoningHandoff.minimum.toFixed(2)}` : 'default minimum'}). A ${role} model ` +
+      text: `Context handed off (${deliverable}). A ${role} model ` +
         'chosen for this difficulty continues from the next step with your findings and question. Make no changes now. ' +
         CONTINUE_TURN +
         (deliverable === 'implement' ? `\nFor the next implementation step:\n${CONTRACT_REMINDER}` : ''),

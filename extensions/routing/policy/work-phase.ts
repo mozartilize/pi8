@@ -1,20 +1,12 @@
-import type { CapabilityBand, Dimension, HandoffRubric, ReasoningHandoffMeta, TaskScope, TerminalAssessment } from '../../types.js';
+import type { Dimension, ReasoningHandoffMeta } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
 import type { ContextReason, EntryResolution, ExecutorPenalties } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
 import type { ChangeFactsState, CheckVerdicts } from './change-facts.js';
 import type { GroundedArtifact } from '../context/types.js';
 import type { PendingIdentity } from '../../serve/context-resolution.js';
-import { defaultRequirement, FRONTIER_REQUIREMENT, parseCandidateKey } from '../score/scorer.js';
-import type { PolicyVersion } from './policy-version.js';
+import { parseCandidateKey } from '../score/scorer.js';
 import type { BoundaryAuthorizationV1 } from './boundary-authorization.js';
-
-const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
-const COMPLEXITY = { trivial: 0, routine: 0.25, moderate: 0.5, hard: 0.75, frontier: 1 } as const;
-/** Handoff requirement each band asks for; economy asks for none. */
-const BAND_REQUIREMENT = { economy: undefined, standard: 0.45, strong: 0.70, frontier: 0.85 } as const;
-/** Highest rubric requirement of a settled bounded implementation handoff ({@link rubricCeiling}). */
-const SETTLED_IMPLEMENT_CEILING = 0.65;
 
 /** Execution penalties of one work item, carried until an entry continues it. */
 export interface PriorWork {
@@ -23,17 +15,11 @@ export interface PriorWork {
   excludedExecutors?: string[];
 }
 
-/** Per-entry routing state: the entry's final step and its explicit handoffs. */
+/** Per-entry routing state: the entry's task type and its explicit handoffs. */
 export interface WorkPhaseState {
   intentKey: string;
   /** Task type declared at the handoff, or the incumbent's last served task type. */
   deliverable?: Dimension;
-  /** The handoff's task shape; absent until a handoff declares it. */
-  terminal?: TerminalAssessment;
-  /** The legacy policy keeps the final step as a band. */
-  terminalBand?: CapabilityBand;
-  /** The candidate policy keeps the final step as its requirement. It never has a band. */
-  terminalRequirement?: number;
   providerInvocation: number;
   /** Mutation calls observed in this entry; drives the `editing` status only. */
   observedMutationTools: number;
@@ -111,108 +97,9 @@ export interface WorkPhaseState {
   settleOutcomeLogged?: boolean;
 }
 
-const clamp = (value: number): number => Math.max(0, Math.min(1, value));
-
-export function terminalRequirement(terminal: TerminalAssessment): number {
-  return clamp(
-    KIND_BASE[terminal.kind] +
-    0.5 * COMPLEXITY[terminal.complexity] +
-    (terminal.scope === 'open-ended' ? 0.1 : 0),
-  );
-}
-
-export function capabilityBandFor(requirement: number): CapabilityBand {
-  if (requirement < 0.30) return 'economy';
-  if (requirement < 0.50) return 'standard';
-  if (requirement < 0.75) return 'strong';
-  return 'frontier';
-}
-
-export function bandRequirement(band: CapabilityBand | undefined): number | undefined {
-  return band == null ? undefined : BAND_REQUIREMENT[band];
-}
-
-/** A `gather` entry whose final step has at least this requirement gets the handoff reminder on its first tool result. */
-export const GATHER_REMINDER_REQUIREMENT = 0.50;
-
-/** `state` with `terminal` as its final step when that one asks for more. */
-export function withStrongerTerminal(
-  state: WorkPhaseState,
-  terminal: TerminalAssessment,
-  version: PolicyVersion = 'legacy',
-): WorkPhaseState {
-  const requirement = terminalRequirement(terminal);
-  if (state.terminal && requirement <= terminalRequirement(state.terminal)) return state;
-  return version === 'cheapest-sufficient'
-    ? { ...state, terminal, terminalRequirement: requirement }
-    : { ...state, terminal, terminalBand: capabilityBandFor(requirement) };
-}
-
 /**
- * What the final step adds to the minimum of a plan or review handoff, or undefined when it adds
- * nothing. The final step can only raise a minimum. Under the candidate policy the step's own
- * requirement counts, and only when it is above the default requirement of the task type: a
- * requirement below the default must not lower the default minimums.
- */
-export function terminalMinimum(state: WorkPhaseState, target: Dimension, version: PolicyVersion = 'legacy'): number | undefined {
-  if (version !== 'cheapest-sufficient') return bandRequirement(state.terminalBand);
-  const requirement = state.terminalRequirement;
-  return requirement != null && requirement > defaultRequirement(target, version) ? requirement : undefined;
-}
-
-/**
- * `minimum` when it is above the default requirement of the task type, else undefined. A handoff
- * without a difficulty rubric keeps the default minimums, so only a final step that asks for more
- * than the default may set a handoff minimum.
- */
-export function aboveDefault(minimum: number | undefined, target: Dimension, version: PolicyVersion = 'legacy'): number | undefined {
-  return minimum != null && minimum > defaultRequirement(target, version) ? minimum : undefined;
-}
-
-/**
- * Highest rubric requirement of a handoff. An implementation handoff with a bounded scope and
- * no open behavior, interface, or design choice (`openDecisions` at most 3) gets at most 65%:
- * a fixed model at 66% of the Intelligence reference completed 9 of 10 repository fixes of that
- * shape, so spread, verification, knowledge, coupling, and the measurements must not move such
- * a handoff to the frontier. Every other handoff gets at most the frontier requirement.
- */
-export function rubricCeiling(target: Dimension, scope: TaskScope, rubric: HandoffRubric | undefined): number {
-  const settled = target === 'implement' && scope === 'bounded'
-    && rubric != null && 'openDecisions' in rubric && rubric.openDecisions <= 3;
-  return settled ? SETTLED_IMPLEMENT_CEILING : FRONTIER_REQUIREMENT;
-}
-
-/**
- * The minimum of a plan, review, or implement declaration. Every declaration of
- * one task type gets it in the same way: the declared requirement, at most the
- * ceiling ({@link rubricCeiling}, the frontier requirement by default), raised
- * by the final step. Without a declared requirement the default minimums of
- * the task type apply, and only a final step above the default raises them.
- */
-export function handoffMinimum(
-  state: WorkPhaseState,
-  target: Dimension,
-  requirement: number | undefined,
-  version: PolicyVersion = 'legacy',
-  ceiling: number = FRONTIER_REQUIREMENT,
-): number | undefined {
-  const raised = terminalMinimum(state, target, version);
-  return requirement !== undefined
-    ? Math.max(Math.min(requirement, ceiling), raised ?? 0)
-    : aboveDefault(raised, target, version);
-}
-
-/** True when the final step is strong enough to remind a `gather` entry of the handoff at once. */
-export function strongFinalStep(state: WorkPhaseState, version: PolicyVersion = 'legacy'): boolean {
-  return version === 'cheapest-sufficient'
-    ? (state.terminalRequirement ?? -Infinity) >= GATHER_REMINDER_REQUIREMENT
-    : state.terminalBand === 'strong' || state.terminalBand === 'frontier';
-}
-
-/**
- * What an entry leaves to a branch it is not on, after `/tree`: the task type
- * and final step, kept only as conservative minimums, with `deliverable` as
- * the task type. They establish no work identity. Strikes, excluded
+ * What an entry leaves to a branch it is not on, after `/tree`: `deliverable`
+ * as the task type. It establishes no work identity. Strikes, excluded
  * executors, contracts, handoffs, and context-collection state belong to the
  * entries of the branch Pi left.
  */
@@ -220,9 +107,6 @@ export function carryAcrossBranch(state: WorkPhaseState, deliverable: Dimension 
   return {
     intentKey: state.intentKey,
     ...(deliverable ? { deliverable } : {}),
-    terminal: state.terminal,
-    terminalBand: state.terminalBand,
-    terminalRequirement: state.terminalRequirement,
     providerInvocation: state.providerInvocation,
     observedMutationTools: 0,
   };

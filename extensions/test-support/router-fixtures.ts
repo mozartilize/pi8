@@ -12,7 +12,7 @@
 import type { Api } from '@earendil-works/pi-ai';
 
 import type { RegistryModelInfo } from '../routing/score/scorer.js';
-import type { BenchModel, Candidate, RoutingDecision, TerminalAssessment } from '../types.js';
+import type { BenchModel, Candidate, RoutingDecision } from '../types.js';
 import type { SubagentResultRow } from '../agents/subagent-results.js';
 
 /** A minimal, hand-filled routing decision across `chain`. */
@@ -26,18 +26,6 @@ export function routingDecision(chain: string[]): RoutingDecision {
     routedDown: false,
     cause: 'heuristic',
     fallbackChain: [...chain],
-  };
-}
-
-/** Default terminal assessment: a hard, open-ended change. */
-export function terminalAssessment(
-  overrides: Partial<TerminalAssessment> = {},
-): TerminalAssessment {
-  return {
-    kind: 'implement',
-    complexity: 'hard',
-    scope: 'open-ended',
-    ...overrides,
   };
 }
 

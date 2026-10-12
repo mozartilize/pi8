@@ -185,18 +185,9 @@ export type MessageProvenance =
   | 'assistant'
   | 'tool-result';
 
-/** Terminal-axis kind is the same vocabulary as routing dimensions. */
-export type TaskKind = Dimension;
 export type TaskScope = 'bounded' | 'open-ended';
 export type ComplexityBand = 'trivial' | 'routine' | 'moderate' | 'hard' | 'frontier';
 export type CapabilityBand = 'economy' | 'standard' | 'strong' | 'frontier';
-
-/** The final step of a request, from keywords: what it is, how hard, how wide. */
-export interface TerminalAssessment {
-  kind: TaskKind;
-  complexity: ComplexityBand;
-  scope: TaskScope;
-}
 
 export type RubricCriterion = 'openDecisions' | 'spread' | 'verification' | 'knowledge' | 'coupling';
 /** Submitter's description of the remaining work: one level per criterion, 1 (easiest) to 5 (hardest). */
@@ -236,14 +227,7 @@ export interface ReasoningHandoffMeta {
   /** Served key of the model that called the tool. */
   requester: string;
   target: HandoffTarget;
-  /**
-   * Requirement the next phase needs, at most the frontier requirement.
-   * Undefined when the requester gave no rubric and no final-step band
-   * raises it: then the default minimums of the task type apply.
-   */
-  minimum?: number;
-  /** Requirement before the cap. */
-  requirement?: number;
+  /** The declared rubric; undefined when no criterion was scored, so the demand is unknown. */
   rubric?: HandoffRubric;
   evidence: ReasoningEvidence;
   /** The boundary still releases the incumbent: no invocation has served the phase yet. */

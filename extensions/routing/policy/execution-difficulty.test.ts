@@ -6,7 +6,7 @@ import {
   REASONING_CRITERIA,
   RUBRIC_CRITERIA,
   bandForRequirement,
-  declaredRequirement,
+  declaredRubric,
   executionRequirement,
   isTestPath,
   parseReasoningRubric,
@@ -78,13 +78,12 @@ describe('rubric parsing', () => {
     expect(parseRubric(undefined)).toBeUndefined();
   });
 
-  it('values every declaration of a task type on the rubric of that task type', () => {
-    const evidence: ReasoningEvidence = { applicable: true, files: 1, directories: 1, existingLines: 100, fixCommits: 0 };
-    const implement = declaredRequirement('implement', { remainingWork: EASY, difficulty: { alternatives: 5 } }, evidence);
-    expect(implement).toEqual({ rubric: EASY, requirement: executionRequirement(EASY, QUIET) });
-    const plan = declaredRequirement('plan', { remainingWork: HARD, difficulty: { alternatives: 1 } }, evidence);
-    expect(plan.rubric).toEqual({ alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 });
-    expect(declaredRequirement('implement', { difficulty: { alternatives: 5 } }, evidence)).toEqual({});
+  it('reads the rubric of the declared task type', () => {
+    expect(declaredRubric('implement', { remainingWork: EASY, difficulty: { alternatives: 5 } })).toEqual(EASY);
+    const reasoning = { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 };
+    expect(declaredRubric('plan', { remainingWork: HARD, difficulty: { alternatives: 1 } })).toEqual(reasoning);
+    expect(declaredRubric('gather', { remainingWork: HARD, difficulty: { alternatives: 1 } })).toEqual(reasoning);
+    expect(declaredRubric('implement', { difficulty: { alternatives: 5 } })).toBeUndefined();
   });
 
   it('adds nothing for evidence that no file backs, and the hardest value for a failed measurement', () => {

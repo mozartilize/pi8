@@ -10,8 +10,8 @@
  * router, not the model, turns that description into a requirement, and adds
  * the facts it measures itself (size and history of the files involved). No
  * input can make the requirement lower than its base. A rubric with no scored
- * criterion is no rubric: the default minimums of the task type apply. An
- * unscored criterion in a partly scored rubric counts as the highest level
+ * criterion is no rubric: the demand is unknown, and the selector uses its
+ * highest capability targets. An unscored criterion in a partly scored rubric counts as the highest level
  * the requester gave, and an unmeasured fact counts as harder, never easier.
  *
  * The weights are hand-set. Every accepted handoff logs its rubric, its
@@ -58,8 +58,8 @@ const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 /**
  * A declared rubric, or undefined when the requester scored no criterion:
- * then the default minimums of the task type apply. Missing information
- * selects the default band. It buys evidence, not the frontier. An unscored or
+ * then the demand is unknown, and the selector uses its highest capability
+ * targets. An unscored or
  * invalid criterion in a partly scored rubric counts as the highest level the
  * requester gave, so it never lowers what was declared.
  */
@@ -158,22 +158,16 @@ export function reasoningMinimum(requirement: number): number {
 }
 
 /**
- * The rubric and requirement that a handoff declares for its target: the
- * execution rubric (`remainingWork`) for an implementation, the reasoning
- * rubric (`difficulty`) for a plan or review. Both are undefined without a
+ * The rubric that a handoff declares for its target: the execution rubric
+ * (`remainingWork`) for an implementation, the reasoning rubric
+ * (`difficulty`) for a plan, review, or investigation. Undefined without a
  * scored criterion.
  */
-export function declaredRequirement(
+export function declaredRubric(
   target: HandoffTarget,
   params: { difficulty?: unknown; remainingWork?: unknown } | undefined,
-  evidence: ReasoningEvidence,
-): { rubric?: HandoffRubric; requirement?: number } {
-  if (target === 'implement') {
-    const rubric = parseRubric(params?.remainingWork);
-    return rubric ? { rubric, requirement: executionRequirement(rubric, evidence) } : {};
-  }
-  const rubric = parseReasoningRubric(params?.difficulty);
-  return rubric ? { rubric, requirement: reasoningRequirement(rubric, evidence) } : {};
+): HandoffRubric | undefined {
+  return target === 'implement' ? parseRubric(params?.remainingWork) : parseReasoningRubric(params?.difficulty);
 }
 
 export { bandForRequirement } from '../score/scorer.js';

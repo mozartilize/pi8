@@ -1917,15 +1917,6 @@ describe('context acquisition', () => {
       return submitContextHandoff(complete, routerCtx, harness.session, facts);
     }
 
-    // A plan request's final step sets the least planning minimum; lowering it
-    // to a trivial bounded plan lets the rubric decide, as for an obvious plan.
-    function easyFinalStep(): void {
-      const state = harness.session.getWorkPhaseState()!;
-      harness.session.commitWorkPhaseState({
-        ...state, terminal: { kind: 'plan', complexity: 'trivial', scope: 'bounded' }, terminalBand: 'standard',
-      });
-    }
-
     it('keeps a gather entry an investigation, with no handoff owed', async () => {
       const session = await newSession();
       const first = await session.routeTurn('investigate the flaky test');
@@ -1984,13 +1975,12 @@ describe('context acquisition', () => {
       expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'gather' });
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
 
-      easyFinalStep();
       expect((await submitPrepared(handoff(1))).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
       expect(planning).toMatchObject({ dimension: 'plan', cause: 'investigation-handoff' });
       // The invocation that takes the boundary records its owner, in the
       // decision `/router-why` reads and in the decision log.
-      expect(planning?.reasoningHandoff).toMatchObject({ minimum: 0.45, pending: false, owner: planning?.chosen });
+      expect(planning?.reasoningHandoff).toMatchObject({ pending: false, owner: planning?.chosen });
       expect(harness.session.getWorkPhaseState()?.reasoningHandoff)
         .toMatchObject({ pending: false, owner: planning?.chosen });
       const logged = (await session.readDecisionRecords())
@@ -2010,36 +2000,6 @@ describe('context acquisition', () => {
       expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.rubric).toMatchObject({ alternatives: 1 });
     });
 
-    describe('an implementation handoff with a bounded scope and no open behavior or design choice', () => {
-      // The other criteria at level 5 put the rubric requirement above the frontier requirement.
-      // A routine step keeps the legacy band minimum (standard, 45%) below the ceiling.
-      const implementation = (openDecisions: number, scope: string, complexity = 'routine') => ({
-        outcome: 'ready', deliverable: 'implement', complexity, scope,
-        findings: 'three paths read the asset multiplier', question: 'use the activity multiplier in every path',
-        remainingWork: { openDecisions, spread: 5, verification: 5, knowledge: 5, coupling: 5 },
-      });
-      async function accepted(params: Record<string, unknown>) {
-        const session = await newSession();
-        expect((await session.routeTurn('investigate the multiplier bug'))?.dimension).toBe('gather');
-        expect((await submitPrepared(params)).accepted).toBe(true);
-        return harness.session.getWorkPhaseState()?.reasoningHandoff;
-      }
-
-      it('gets at most 65% from its rubric', async () => {
-        const handoff = await accepted(implementation(3, 'bounded'));
-        expect(handoff?.requirement).toBeGreaterThan(0.85);
-        expect(handoff?.minimum).toBeCloseTo(0.65, 12);
-      });
-
-      it.each([[4, 'bounded'], [3, 'open-ended']])('keeps the frontier requirement with openDecisions %i and a %s scope', async (openDecisions, scope) => {
-        expect((await accepted(implementation(openDecisions, scope)))?.minimum).toBeCloseTo(0.85, 12);
-      });
-
-      it('lets the final step raise the minimum above 65%', async () => {
-        expect((await accepted(implementation(3, 'bounded', 'frontier')))?.minimum).toBeGreaterThanOrEqual(0.80);
-      });
-    });
-
     it('plans with the model that leads on intelligence', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
@@ -2052,9 +2012,10 @@ describe('context acquisition', () => {
       await session.routeTurn(PLAN_PROMPT);
       await submitPrepared(handoff(5));
       const planner = (await session.routeTurnAgainWithSameUserEntry())?.chosen;
-      // Lowering the minimum after the boundary served cannot move the phase to a cheaper model.
+      // Lowering the declared difficulty after the boundary served cannot move the phase to a cheaper model.
       const state = harness.session.getWorkPhaseState()!;
-      harness.session.commitWorkPhaseState({ ...state, reasoningHandoff: { ...state.reasoningHandoff!, minimum: 0.4 } });
+      const easiest = { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 };
+      harness.session.commitWorkPhaseState({ ...state, reasoningHandoff: { ...state.reasoningHandoff!, rubric: easiest } });
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe(planner);
     });
 
@@ -2153,7 +2114,6 @@ describe('context acquisition', () => {
     it('applies planner struggle within the reasoning phase and logs it at phase end', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
-      easyFinalStep();
       await submitPrepared(handoff(1));
       await session.routeTurnAgainWithSameUserEntry();
       const served = harness.session.getLastServed()!;
@@ -2507,7 +2467,7 @@ describe('context acquisition', () => {
         return { session, planning, state: harness.session.getWorkPhaseState()! };
       }
 
-      it('keeps the declaration in state and logs only codes, next to the minimum routing used', async () => {
+      it('keeps the declaration in state and logs only codes', async () => {
         const { session, state } = await handOff(HARD_FACTS);
         expect(state.changeFacts?.declared?.decisions).toEqual(HARD_FACTS.decisions);
         const records = await session.readDecisionRecords();
@@ -2515,15 +2475,14 @@ describe('context acquisition', () => {
           .find((h) => h?.action === 'accept');
         expect(accept?.facts?.declared).toMatchObject({ checkCommands: 1, checkState: 'fails', modify: 2, create: 0, decisions: 3, unknowns: 1 });
           expect(accept?.evidence).toMatchObject({ version: 1, declaredFacts: { decisions: 3 } });
-        expect(accept?.facts?.shadow.used).toBe(state.reasoningHandoff?.minimum);
+        expect(accept?.facts?.shadow.requirement).toBeGreaterThan(0);
         expect(JSON.stringify(records)).not.toContain('secret');
       });
 
       it('does not route on the shadow requirement', async () => {
         const plain = await handOff();
-        const minimum = plain.state.reasoningHandoff?.minimum;
         const withFacts = await handOff({ ...HARD_FACTS, decisions: [], answers: { mapping: 'Y', rewrites: 'N' } });
-        expect(withFacts.state.reasoningHandoff?.minimum).toBe(minimum);
+        expect(withFacts.state.reasoningHandoff?.rubric).toEqual(plain.state.reasoningHandoff?.rubric);
         expect(withFacts.planning?.chosen).toBe(plain.planning?.chosen);
       });
 
@@ -2535,7 +2494,7 @@ describe('context acquisition', () => {
         expect(submitExecutionContract({ ...smallPlan, facts }, routerCtx, harness.session, EXISTING_TARGETS, { files: 1 }).accepted).toBe(true);
         const contract = harness.session.getWorkPhaseState()!.contract!;
         expect(contract.facts?.declared).toMatchObject({ modify: 1, create: 0, checkCommands: 1, decisions: 1, precedent: true });
-        expect(contract.facts?.shadow.used).toBeGreaterThan(0);
+        expect(contract.facts?.shadow.requirement).toBeGreaterThan(0);
         expect(contract).toMatchObject({ release: true });
         expect(JSON.stringify(contractMeta(harness.session.getWorkPhaseState()!))).not.toContain('secret');
       });
@@ -3681,8 +3640,6 @@ describe('an entry without an incumbent', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.dimension).toBe('gather');
     expect(decision?.cause).toBe('investigation');
-    expect(harness.session.getWorkPhaseState()?.terminal).toBeUndefined();
-    expect(harness.session.getWorkPhaseState()?.terminalBand).toBeUndefined();
     for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
   });
 });

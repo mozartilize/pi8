@@ -7,18 +7,17 @@
  * contains its own condition, so a statement whose condition is not present is
  * answered N; U means that the files the model read cannot show the answer.
  *
- * The requirement here is a shadow. It is logged next to the requirement that
- * routing uses and does not route. Its weights are starting values: logged
- * outcomes fit them before routing uses them.
+ * The requirement here is a shadow. It is logged and does not route. Its
+ * weights are starting values: logged outcomes fit them before routing uses
+ * them.
  *
  * Model-written text (paths, commands, labels) stays in the session state.
  * Logs get only `factCodes`: counts and codes.
  *
  * Pure functions only: no I/O.
  */
-import type { CapabilityBand, Dimension } from '../../types.js';
-import { bandForRequirement, defaultRequirement, FRONTIER_REQUIREMENT } from '../score/scorer.js';
-import type { PolicyVersion } from './policy-version.js';
+import type { Dimension } from '../../types.js';
+import { defaultRequirement, FRONTIER_REQUIREMENT } from '../score/scorer.js';
 
 /** Yes/no questions the handing-off model answers; `FACT_STATEMENTS` words each one. */
 export const FACT_QUESTIONS = [
@@ -167,13 +166,9 @@ export interface FactCodes {
   domains?: ChangeDomain[];
 }
 
-/** The facts requirement of one handoff, with the requirement routing used. */
+/** The facts requirement of one handoff. */
 export interface ShadowRequirement {
   requirement: number;
-  /** Absent under the candidate policy, which names no band. */
-  band?: CapabilityBand;
-  /** Requirement routing used for the same step: the handoff minimum, or the task type's default. */
-  used: number;
 }
 
 /** Logged once per accepted handoff or plan. */
@@ -355,22 +350,11 @@ export function factsRequirement(dimension: Dimension, facts: DeclaredFacts | un
   return Math.round(Math.max(LOWEST_REQUIREMENT, Math.min(FRONTIER_REQUIREMENT, sum)) * 1000) / 1000;
 }
 
-/** Build the log record of one accepted handoff or plan. `used` defaults to the task type's default requirement. */
-export function factsLog(
-  dimension: Dimension,
-  facts: DeclaredFacts | undefined,
-  measured: ChangeMeasurements,
-  used?: number,
-  version: PolicyVersion = 'legacy',
-): FactsLog {
-  const requirement = factsRequirement(dimension, facts, measured);
+/** Build the log record of one accepted handoff or plan. */
+export function factsLog(dimension: Dimension, facts: DeclaredFacts | undefined, measured: ChangeMeasurements): FactsLog {
   return {
     declared: factCodes(facts),
     measured,
-    shadow: {
-      requirement,
-      ...(version === 'legacy' ? { band: bandForRequirement(requirement) } : {}),
-      used: used ?? defaultRequirement(dimension, version),
-    },
+    shadow: { requirement: factsRequirement(dimension, facts, measured) },
   };
 }

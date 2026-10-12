@@ -23,8 +23,7 @@ import {
   owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { isMutationCall } from '../routing/policy/mutation-detector.js';
-import { strongFinalStep, type WorkPhaseState } from '../routing/policy/work-phase.js';
-import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
+import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { ContextReason } from '../routing/context/types.js';
 import type { RouterSession } from './router-session-state.js';
 import { insideCwd } from './context-grounding.js';
@@ -178,8 +177,7 @@ function currentEntry(session: RouterSession): WorkPhaseState | undefined {
 /**
  * Remind an entry of the handoff once, appended to a tool result so the
  * transcript prefix and prompt cache stay intact:
- * - an entry acquiring owed context, or a `gather` entry whose final step
- *   needs a strong model: on its first tool result;
+ * - an entry acquiring owed context: on its first tool result;
  * - any other `gather` entry: on its first native edit/write result.
  * Each reminder is logged as a `reminder`.
  */
@@ -193,8 +191,7 @@ export function remindContextHandoff(
     if (!state || state.contextReminded || state.reasoningHandoff) return undefined;
     const acquiring = state.contextStatus === 'acquiring';
     if (!acquiring && (state.contextStatus != null || session.getLastDecision()?.dimension !== 'gather')) return undefined;
-    const anyResult = acquiring || strongFinalStep(state, evaluationPolicyVersion());
-    if (!anyResult && event.toolName !== 'edit' && event.toolName !== 'write') return undefined;
+    if (!acquiring && event.toolName !== 'edit' && event.toolName !== 'write') return undefined;
     session.commitWorkPhaseState({ ...state, contextReminded: true });
     const lastServed = session.getLastServed();
     logContextHandoff(state, lastServed ? servedKey(lastServed) : 'unknown/unknown', 'reminder');
