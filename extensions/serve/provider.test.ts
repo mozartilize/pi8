@@ -3,8 +3,8 @@
  *
  * These tests cover provider-level orchestration and its integration with
  * delegation: route-up system-prompt injection, thinking-level re-adaptation,
- * registry model registration, concrete subagent delegation, status
- * reporting, and the decision-log/lastDecision consistency smoke for top-pick
+ * registry model registration, status reporting, and the
+ * decision-log/lastDecision consistency smoke for top-pick
  * and fallback turns. Fallback-lifecycle policy itself (failover, retries,
  * timeouts, circuit breaking, abort/cleanup, and bounded auth-metadata
  * lookup) is owned directly by `delegation.test.ts`.
@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { Api, Context, Model } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { buildSubagentProviderAuthFilter, expandModelCandidates } from './provider.js';
+import { expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
 import { handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
@@ -429,43 +429,6 @@ async function prepareSelectedWork(harness: ProviderTestHarness, tree: SessionTr
   return context;
 }
 
-describe('provider auth filtering', () => {
-  it('fails closed when the registry has no snapshot auth', () => {
-    const filter = buildSubagentProviderAuthFilter(undefined, [{ provider: 'unavailable', id: 'model' }]);
-    expect(filter('unavailable')).toBe(false);
-  });
-
-  it('fails closed when no provider has configured credentials', () => {
-    const registry = {
-      getProviderAuthStatus: () => ({ configured: false }),
-    } as unknown as ExtensionContext['modelRegistry'];
-    const filter = buildSubagentProviderAuthFilter(registry, [{ provider: 'unavailable', id: 'model' }]);
-    expect(filter('unavailable')).toBe(false);
-  });
-
-  it('uses the synchronous snapshot auth status — no async I/O', () => {
-    const registry = {
-      getProviderAuthStatus: (p: string) => ({ configured: p === 'configured-only' }),
-    } as unknown as ExtensionContext['modelRegistry'];
-    const filter = buildSubagentProviderAuthFilter(registry, [
-      { provider: 'configured-only', id: 'model' },
-      { provider: 'unconfigured', id: 'model' },
-    ]);
-    expect(filter('configured-only')).toBe(true);
-    expect(filter('unconfigured')).toBe(false);
-  });
-
-  it('excludes the router provider itself', () => {
-    const registry = {
-      getProviderAuthStatus: () => ({ configured: true }),
-    } as unknown as ExtensionContext['modelRegistry'];
-    const filter = buildSubagentProviderAuthFilter(registry, [
-      { provider: 'router', id: 'auto' },
-    ]);
-    expect(filter('router')).toBe(false);
-  });
-});
-
 describe('benchmark data prerequisite', () => {
   const missing = { ready: false as const, message: 'router/auto has no benchmark data. Run /router-sync <key>.' };
 
@@ -705,8 +668,6 @@ describe('provider orchestration', () => {
     expect(targets.some((id) => id.startsWith('router/'))).toBe(false);
   });
 
-  // ─── concrete subagent model delegation ─────────────────────────────
-
   it('serves the winning candidate at its measured effort', async () => {
     // The store binds alpha/first to one effort-labelled row; expansion
     // produces the alpha/first:high candidate, and implement's floor
@@ -935,38 +896,6 @@ describe('provider orchestration', () => {
     expect(auto?.reasoning).toBe(true);
     expect(auto?.thinkingLevelMap?.high).toBe('high');
     expect(auto?.thinkingLevelMap?.max).toBe('max');
-  });
-
-  it('a concrete subagent model survives a provider stream error by falling back', async () => {
-    // Subagents receive the selected concrete model directly. The fallback
-    // loop still protects that spawn when its first provider attempt fails.
-    let call = 0;
-    harness.scriptReply(() => {
-      call += 1;
-      if (call === 1) {
-        return asStream([
-          { type: 'error', error: { errorMessage: 'Provider finish_reason: error' } },
-        ]);
-      }
-      return asStream([{ type: 'text_delta', delta: 'review ok' }, { type: 'done' }]);
-    });
-
-    await harness.serve(context, undefined, { id: 'reviewer' } as Model<Api>);
-
-    expect(call).toBe(2);
-    expect(harness.outStream.events.filter((e) => e.type === 'error')).toHaveLength(0);
-    expect(
-      harness.outStream.events.some((e) => e.type === 'text_delta' && e.delta === 'review ok'),
-    ).toBe(true);
-  });
-
-  it('collects context for a concrete subagent call without treating the model id as a role', async () => {
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-
-    await harness.serve(context, undefined, { id: 'first' } as Model<Api>);
-
-    const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'investigation' } });
   });
 
   it('never makes context size the cause or the task type of a long-context turn', async () => {

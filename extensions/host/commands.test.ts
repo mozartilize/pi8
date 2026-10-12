@@ -111,6 +111,18 @@ function fakeCtx(
   };
 }
 
+describe('/router-agents', () => {
+  it('reports disabled integration without inspecting models or credentials', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, new RouterSession());
+    const { ctx, messages } = fakeCtx();
+    const getAvailable = vi.fn(() => { throw new Error('Subagent routing must not inspect the registry'); });
+    await handlers.get('router-agents')!('', { ...(ctx as object), modelRegistry: { getAvailable } });
+    expect(getAvailable).not.toHaveBeenCalled();
+    expect(messages).toEqual(['Automatic subagent routing is disabled. Pi-subagents uses its own model settings.']);
+  });
+});
+
 describe('/router-manual', () => {
   const models = [
     { provider: 'alpha', id: 'first' },
@@ -682,7 +694,7 @@ describe('/router-report', () => {
     expect(messages.at(-1)).toContain('baseline changed mid-session');
   });
 
-  it('folds foreground subagent spend into the totals as its own line', async () => {
+  it('includes persisted foreground child spend in report totals', async () => {
     const { pi, handlers } = fakePi();
     registerCommands(pi);
     const { ctx, messages } = fakeCtx();

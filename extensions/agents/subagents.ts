@@ -39,6 +39,9 @@ import { effortDropsPerStep } from '../routing/score/effort-estimate.js';
 import { loadModelFilter } from '../routing/policy/allowlist.js';
 import { identityKey } from '../bench/matcher.js';
 
+/** Pi-subagents owns child model selection; the retained selection helpers are inactive. */
+export const SUBAGENT_ROUTING_ENABLED = false;
+
 /** Marker so we can distinguish router-authored overrides from user pins. */
 export const AUTO_ROUTER_SOURCE = 'pi8';
 

@@ -12,7 +12,7 @@ Enter these commands in Pi, not in a shell. Replace angle-bracket arguments with
 | `/router-why` | Details of the last model selection and execution plan |
 | `/router-report` | Estimated routed spend, baseline spend, and counts by task type |
 | `/router-models` | Automatic allowlist and matching registry models |
-| `/router-agents` | Resolved model for each supported subagent role |
+| `/router-agents` | Report that automatic subagent integration is disabled |
 
 `/router-report` is not an invoice or an outcome benchmark. See [Observability](observability.md#cost-report).
 

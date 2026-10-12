@@ -7,9 +7,11 @@ It creates work-item and phase permissions before comparison, checks them before
 dispatch, and settles pending handoffs and contract releases after actual serve.
 Empty preferences use the default coefficient domain.
 
-In-provider pre-output recovery and subagent selection still use the existing
-selection paths. The preference command, full transactional reservation, legacy
-state migration and production Pi host exit checks remain incomplete. This is
+In-provider pre-output recovery still uses the existing selection path.
+Automatic subagent integration is disabled and excluded from the cutover;
+its inactive implementation files remain. Tests cover the disconnected hooks,
+not child selection. The preference command, full transactional reservation,
+legacy state migration and production Pi host exit checks remain incomplete. This is
 not a complete production release.
 
 The following modules have executable offline tests:
@@ -79,7 +81,7 @@ conditions.
 | Feasible summary route | Native virtual routing can use a fitting larger model for summaries. Direct switching to a smaller model can send an oversized summary request to that model. | Validate the actual summary action's capacity and accounting. Failed, disabled or cancelled compaction must send no oversized request to the selected target. |
 | Production selection budget | Approved: 500 ms in total with no pair cap (`PRODUCTION_SOLVER_BUDGET`). The allowlisted pool solved exactly in every recorded 500 ms sample. | Validate cold starts and representative profiles in the production adapter. |
 | Preference command | Schema, persisted profile snapshots and domain compilation exist. | Implement the five-question command, truthful applied/softened/nonbinding status and nonblocking one-time interactive notice. Make no provider calls. |
-| Pi host mechanism tests | Maintained SDK tests cover pre-run preparation fallback, context preparation, final abort guards, after-tool checks, manual compaction ordering, cancellation and file-backed resume. Controlled-port tests also exist. | Add production adapter coverage for asynchronous hook selection, preserved child arguments and each operational fallback. |
+| Pi host mechanism tests | Maintained SDK tests cover pre-run preparation fallback, context preparation, final abort guards, after-tool checks, manual compaction ordering, cancellation and file-backed resume. Controlled-port tests also exist. | Add production adapter coverage for asynchronous provider selection and each operational fallback. Child-selection integration is excluded. |
 
 See [Pi context preparation](pi-context-preparation.md) for the settled
 integration policy and its evidence. The executable probes are in
@@ -96,7 +98,7 @@ restriction applies to the fallback chain of one call. Ordinary routing keeps
 smaller-window targets, and the next run prepares for them. A private-session
 patch is not an accepted integration.
 
-Full prepared-dispatch, settlement, recovery, child-argument and resume tests
+Full prepared-dispatch, settlement, recovery and resume tests
 are runtime migration exit conditions. They are not all prerequisites for the
 first production adapter edit. They must pass before release.
 
@@ -152,7 +154,7 @@ Fixture-only measurements do not satisfy that condition.
 ## Verification of the provider integration
 
 - `npm run tsc`: passed, including eval compilation.
-- `timeout 300 npx vitest run`: 116 files passed and 2 skipped. 1973 tests passed
+- `timeout 300 npx vitest run`: 112 files passed and 2 skipped. 1872 tests passed
   and 3 skipped.
 - Six production selection adapter tests cover effort enumeration, thinking
   minimums, smaller-window retention, scoped exclusions, stale profiles and
@@ -162,8 +164,13 @@ Fixture-only measurements do not satisfy that condition.
   recovery test to fail. Both tests passed after restoration.
 - Estimated fixture axes remain estimated unless they declare measured
   provenance explicitly.
+- Active subagent hooks preserve caller arguments and perform no role selection
+  or child credential sweep. Child results do not change parent exclusions.
+  Enabling injection or removing the result guard makes these tests fail.
+- Elicitation fixture projects use `node:test` and are excluded from Vitest
+  discovery without changing their files.
 
 Provider tests use scripted streams. They make no model-provider calls. No
 subagent was started. The new production adapters still need the Pi host exit
-checks above. Pre-output recovery, subagent selection and preference UI remain
-incomplete.
+checks above. Pre-output recovery and preference UI remain incomplete.
+Subagent selection is excluded from this cutover.

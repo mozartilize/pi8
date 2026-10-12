@@ -90,8 +90,8 @@ function contextWithRegistry(
 
 describe('session lifecycle', () => {
 
-describe('registry-only role routing', () => {
-  it('assigns a concrete model to a worker subagent when the benchmark store is absent', async () => {
+describe('disconnected subagent routing', () => {
+  it('leaves an omitted child model to pi-subagents even without a benchmark store', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -116,10 +116,10 @@ describe('registry-only role routing', () => {
     };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-1', input }, ctx);
 
-    expect(input.model).toBe('alpha/cheap');
+    expect(input).toEqual({ agent: 'worker', task: 'implement the change' });
   });
 
-  it('fills the tool-level model on workflowScript spawns when the session is router/auto', async () => {
+  it('leaves workflow scripts and their omitted default model unchanged', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -134,15 +134,13 @@ describe('registry-only role routing', () => {
     const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
     await sessionStart!({ reason: 'new' }, ctx);
 
-    // Children defined inside a workflowScript string are invisible to the
-    // structured spec walker; the tool schema's top-level `model` slot is the
-    // one lever that still governs them, filled from the worker pick.
+    // Pi-subagents owns script-defined children and the tool-level model default.
     const input: { workflowScript: string; model?: string } = {
       workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })",
     };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-wf', input }, ctx);
 
-    expect(input.model).toBe('alpha/cheap');
+    expect(input).toEqual({ workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })" });
   });
 
   it('is completely inert for a subagent spawn when no ctx/model is available (matches a session that never opted into router/auto)', async () => {
@@ -196,7 +194,7 @@ describe('registry-only role routing', () => {
     expect(input.model).toBeUndefined();
   });
 
-  it('threads ctx (cwd) through to computeRoleModels so project-scoped subagent pins are discovered', async () => {
+  it('does not compute role models or read project subagent pins at session start', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -213,14 +211,7 @@ describe('registry-only role routing', () => {
     );
     await sessionStart!({ reason: 'new' }, ctx);
 
-    // computeRoleModels must receive the live ctx so subagents.ts can resolve
-    // .pi/settings.json under ctx.cwd — without this, project-scoped pins
-    // silently lose to router injection at spawn time even though the
-    // project-pin-discovery mechanism in subagents.ts is fully implemented.
-    expect(computeRoleModels).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ ctx: expect.objectContaining({ cwd: '/workspace/some-project' }) }),
-    );
+    expect(computeRoleModels).not.toHaveBeenCalled();
   });
 
   describe('auth sweep gating (pi#7508 amplification)', () => {
@@ -275,7 +266,7 @@ describe('registry-only role routing', () => {
       expect(calls()).toBe(before);
     });
 
-    it('restarts the credential sweep when the user switches TO router/auto', async () => {
+    it('does not start a child credential sweep when the user switches to router/auto', async () => {
       const handlers = new Map<string, (...args: any[]) => unknown>();
       const pi = {
         on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -292,9 +283,7 @@ describe('registry-only role routing', () => {
       modelSelect!({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctx);
       await tick();
 
-      // The session_start gate skipped the sweep; switching into the router
-      // must restart it so subagent role routing is populated mid-session.
-      expect(calls()).toBe(before + 1);
+      expect(calls()).toBe(before);
     });
 
     it('does not sweep when a model_select lands on a concrete model', async () => {
@@ -364,7 +353,7 @@ describe('registry-only role routing', () => {
     expect(input.model).toBe('github-copilot/claude-sonnet-4.6');
   });
 
-  it('injects a routed model for the router/auto sentinel', async () => {
+  it('preserves an explicit router/auto child model without resolving it', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -386,9 +375,7 @@ describe('registry-only role routing', () => {
     };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-3', input }, ctx);
 
-    // Sentinel is treated as router-owned and resolved to a concrete model.
-    expect(input.model).not.toBe('router/auto');
-    expect(input.model).toMatch(/^(alpha|beta)\//);
+    expect(input.model).toBe('router/auto');
   });
 
   it('leaves an explicit child model unchanged when the parent session is not router/auto', async () => {
@@ -417,8 +404,8 @@ describe('registry-only role routing', () => {
   });
 });
 
-describe('region-restricted parallel reviewers', () => {
-  it('injects routed models and leaves a child failure fail-open (no retry, no blacklist)', async () => {
+describe('child results do not affect parent routing', () => {
+  it('preserves parallel child arguments and leaves child recovery to pi-subagents', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -448,12 +435,11 @@ describe('region-restricted parallel reviewers', () => {
       ],
     };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-region', input }, ctx);
-    expect(input.tasks[0].model).toBe('gamma/moderate');
-    expect(input.tasks[1].model).toBe('gamma/moderate');
+    expect(input.tasks[0].model).toBeUndefined();
+    expect(input.tasks[1].model).toBeUndefined();
     expect(input.tasks[2].model).toBe('user/explicit');
 
-    // A child hard-failure no longer blacklists the model or appends a retry
-    // directive: the router injects once and leaves recovery to the parent.
+    // Child results cannot change parent routing or append retry instructions.
     const plan = (await toolResult!(
       {
         toolName: 'subagent',
@@ -490,7 +476,7 @@ describe('region-restricted parallel reviewers', () => {
     expect(defaultRouterSession.getBlacklistedModels().size).toBe(0);
     expect(plan?.content).toBeUndefined();
 
-    // The next spawn still routes to the same model — nothing was blacklisted.
+    // Later calls also keep their caller-supplied arguments.
     const retry: {
       tasks: Array<{ agent: string; task: string; model?: string }>;
     } = {
@@ -500,11 +486,11 @@ describe('region-restricted parallel reviewers', () => {
       ],
     };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-retry', input: retry }, ctx);
-    expect(retry.tasks.map((task) => task.model)).toEqual(['gamma/moderate', 'gamma/moderate']);
+    expect(retry.tasks.map((task) => task.model)).toEqual([undefined, undefined]);
     expect(input.tasks[2].model).toBe('user/explicit');
   });
 
-  it('blacklists the whole provider when a child hits a usage limit', async () => {
+  it('does not blacklist parent providers when a child hits a usage limit', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
@@ -523,7 +509,7 @@ describe('region-restricted parallel reviewers', () => {
 
     const input: { agent: string; task: string; model?: string } = { agent: 'reviewer', task: 'review routing' };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-cap', input }, ctx);
-    expect(input.model).toBe('gamma/moderate');
+    expect(input.model).toBeUndefined();
 
     const cap = '429 {"type":"GoUsageLimitError","message":"Weekly usage limit reached"}';
     await toolResult!(
@@ -548,13 +534,12 @@ describe('region-restricted parallel reviewers', () => {
       { ...ctx, modelRegistry: { getAvailable: () => models as unknown as unknown[] } },
     );
 
-    // A shared usage limit excludes the whole provider, not just one model.
-    expect(defaultRouterSession.getBlacklistedProviders().has('gamma')).toBe(true);
+    expect(defaultRouterSession.getBlacklistedProviders().size).toBe(0);
 
-    // The next spawn skips the capped provider and routes to the sibling.
+    // Pi-subagents owns quota handling and model selection for later calls.
     const retry: { agent: string; task: string; model?: string } = { agent: 'reviewer', task: 'review routing' };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-cap-retry', input: retry }, ctx);
-    expect(retry.model).toBe('delta/strong');
+    expect(retry.model).toBeUndefined();
   });
 
   it('leaves a non-usage-limit child failure fail-open (no provider blacklist)', async () => {
@@ -625,7 +610,7 @@ describe('region-restricted parallel reviewers', () => {
       async: true,
     };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-async', input: asyncInput }, ctx);
-    expect(asyncInput.model).toBe('gamma/moderate');
+    expect(asyncInput).toEqual({ agent: 'reviewer', task: 'review in background', async: true });
 
     const dynamicInput: {
       chain: Array<{
@@ -641,7 +626,7 @@ describe('region-restricted parallel reviewers', () => {
       ],
     };
     toolCall!({ toolName: 'subagent', toolCallId: 'call-dynamic', input: dynamicInput }, ctx);
-    expect(dynamicInput.chain[0].parallel.model).toBe('gamma/moderate');
+    expect(dynamicInput.chain).toEqual([{ expand: { from: { output: 'targets', path: '/items' } }, parallel: { agent: 'reviewer', task: 'review each {item}' } }]);
 
     defaultRouterSession.clearSessionBlacklist();
     const asyncPlan = (await toolResult!(

@@ -17,6 +17,8 @@ export default defineConfig({
       '**/.worktrees/**',
       // The queue bench holds node:test projects that models write against; they are not router tests.
       'bench/**',
+      // Elicitation fixtures are standalone node:test projects, not Vitest suites.
+      'scripts/elicitation/fixtures/**',
     ],
   },
 });

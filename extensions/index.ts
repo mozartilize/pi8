@@ -38,6 +38,7 @@ import {
 import { registerAutoRouterProvider, buildSubagentProviderAuthFilter } from './serve/provider.js';
 
 import {
+  SUBAGENT_ROUTING_ENABLED,
   computeRoleModels,
   injectSubagentRoutingWithMetadata,
   pickSubagentDefaultModel,
@@ -227,6 +228,7 @@ async function refreshRoleModelsState(
   modelRegistry: ModelRegistry,
   ctx?: ExtensionContext,
 ): Promise<void> {
+  if (!SUBAGENT_ROUTING_ENABLED) return;
   // A refresh is only valid for the generation in which it began. If reset()
   // or a newer refresh happens while we are awaiting auth probes, this
   // result must be discarded so stale maps cannot overwrite current ones.
@@ -557,6 +559,7 @@ function handleSubagentToolCall(
   routingState: SubagentRoutingState,
   subagentCalls: Map<string, SubagentCallObservation>,
 ): void {
+  if (!SUBAGENT_ROUTING_ENABLED) return;
   try {
     const { isExcluded, live } = liveRoleRouting(session, routingState);
     const usage = (ctx as ExtensionContext & {
@@ -646,6 +649,7 @@ function handleSubagentToolResult(
   subagentCalls: Map<string, SubagentCallObservation>,
   refreshRoleModels: RoleModelRefresher,
 ): void {
+  if (!SUBAGENT_ROUTING_ENABLED) return;
   try {
     const snapshot = routingState.snapshot();
     const pending = subagentCalls.get(event.toolCallId);

@@ -23,6 +23,7 @@ import {
 } from '../serve/provider.js';
 import { formatDecisionDetail, formatWorkContext } from './ui.js';
 import {
+  SUBAGENT_ROUTING_ENABLED,
   computeRoleModels,
   readExistingOverrides,
   ALL_ROLES,
@@ -656,6 +657,10 @@ async function handleModelsCommand(ctx: ExtensionCommandContext): Promise<void> 
 }
 
 async function handleAgentsCommand(ctx: ExtensionCommandContext): Promise<void> {
+  if (!SUBAGENT_ROUTING_ENABLED) {
+    ctx.ui.notify('Automatic subagent routing is disabled. Pi-subagents uses its own model settings.', 'info');
+    return;
+  }
   const registryModels = (ctx.modelRegistry?.getAvailable() ?? []) as unknown as Array<{
     provider: string;
     id: string;
@@ -819,7 +824,7 @@ export function registerCommands(
   });
 
   pi.registerCommand('router-agents', {
-    description: 'Show which model each pi-subagents role gets (researcher/planner/worker/reviewer/advisor)',
+    description: 'Show whether automatic subagent routing is enabled',
     handler: safeCommand('/router-agents', (_args, ctx) => handleAgentsCommand(ctx)),
   });
 

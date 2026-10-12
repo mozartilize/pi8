@@ -1,6 +1,6 @@
 # pi8 overview
 
-pi8 selects models for Pi turns and subagent roles. It uses benchmark measurements, registry metadata, and accepted task declarations.
+pi8 selects models for main-session Pi turns. Automatic subagent integration is disabled. It uses benchmark measurements, registry metadata, and accepted task declarations.
 
 The router runs inside Pi. It does not start a gateway or make separate model calls to classify requests.
 
@@ -24,7 +24,7 @@ Every model call serves the user's request.
 | [Scoring](scoring.md) | Candidate expansion, quality references, price/speed scales, cache credit, and effort |
 | [Delegation](delegation.md) | Attempts, retries, provider exclusions, output safety, and manual/resume state |
 | [Work lifecycle](work-lifecycle.md) | Context collection, execution plans, review, completion, and reopen |
-| [Subagents](subagents.md) | Role selection, explicit models, workflow limits, and provider exclusions |
+| [Subagents](subagents.md) | Disabled integration and Pi-subagents ownership of child selection |
 | [Benchmark data](benchmark-data.md) | Data sources, model matching, effort identity, and refresh behavior |
 | [Observability](observability.md) | Logs, attempt timing, cost reports, and privacy limits |
 | [Glossary](glossary.md) | Project terms and their meanings |
@@ -66,9 +66,9 @@ Tool gates control the workflow. They do not isolate files, shell commands, or c
 | [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan release, execution, review, and strikes |
 | [Contract tool](../extensions/serve/execution-contract-tool.ts) | Plan acceptance and tool-event tracking |
 | [Benchmark adapters](../extensions/adapters/artificial-analysis.ts) | Join API and public-page measurements |
-| [Subagent injection](../extensions/agents/subagents.ts) | Select and inject role models without a separate credential probe |
+| [Subagent helpers](../extensions/agents/subagents.ts) | Retained offline implementation; automatic integration is disabled |
 
-The provider owns the three-second credential probe for subagent selection. Hook wiring runs that probe before role assignment.
+The subagent credential probe and child-selection helpers are not called by active hooks.
 
 ### Session state
 

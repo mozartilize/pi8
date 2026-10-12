@@ -10,7 +10,7 @@
     "index.ts",
     "README.md"
   ],
-  "description": "Benchmark-aware auto model router for Pi — routes per-turn and per-subagent-role to the best available model based on live intelligence, speed, and cost data.",
+  "description": "Benchmark-aware model selection for Pi main-session turns based on intelligence, speed, and cost data.",
   "keywords": [
     "pi-package",
     "pi",
