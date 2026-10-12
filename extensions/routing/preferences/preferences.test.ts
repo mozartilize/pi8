@@ -23,15 +23,15 @@ import {
 
 /** Frozen v1 vectors, restated here so a change to the source cannot pass silently. */
 const FROZEN_V1: Record<string, { usd: [number, number]; A: number[]; B: number[] }> = {
-  settledImplementation: { usd: [0.07, 0.1], A: [0.45, 0.52, 0.3, 0.55, 0.764252, 0.6, 0.55, 1, 0, 0], B: [0.45, 0.62, 0.3, 0.55, 0.704163, 0.6, 0.55, 1, 0, 0] },
-  openDesignDecisions: { usd: [0.05, 0.1], A: [0.55, 0.45, 0.3, 0.55, 0.813348, 0.6, 0.6, 1, 0, 0], B: [0.74, 0.45, 0.3, 0.55, 0.704163, 0.6, 0.6, 1, 0, 0] },
-  handoffWarmCache: { usd: [0.04, 0.15], A: [0.56, 0.45, 0.4, 0.55, 0.841719, 0.6, 0.65, 1, 0, 0], B: [0.8, 0.45, 0.4, 0.55, 0.626695, 0.6, 0.45, 1, 0, 0] },
-  researchTasks: { usd: [0.06, 0.12], A: [0.55, 0.62, 0.4, 0.55, 0.787682, 0.6, 0.55, 1, 0, 0], B: [0.55, 0.44, 0.75, 0.55, 0.670459, 0.6, 0.55, 1, 0, 0] },
-  afterRework: { usd: [0.1, 0.1], A: [0.6, 0.6, 0.3, 0.55, 0.704163, 0.6, 0.78, 1, 1, 0], B: [0.6, 0.6, 0.3, 0.55, 0.704163, 0.6, 0.48, 1, 0, 1] },
+  settledImplementation: { usd: [0.07, 0.1], A: [0.45, 0.52, 0.3, 0.55, 0.35915, 0.6, 0.55, 1, 0, 0], B: [0.45, 0.62, 0.3, 0.55, 0.333333, 0.6, 0.55, 1, 0, 0] },
+  openDesignDecisions: { usd: [0.05, 0.1], A: [0.55, 0.45, 0.3, 0.55, 0.383505, 0.6, 0.6, 1, 0, 0], B: [0.74, 0.45, 0.3, 0.55, 0.333333, 0.6, 0.6, 1, 0, 0] },
+  handoffWarmCache: { usd: [0.04, 0.15], A: [0.56, 0.45, 0.4, 0.55, 0.399657, 0.6, 0.65, 1, 0, 0], B: [0.8, 0.45, 0.4, 0.55, 0.303985, 0.6, 0.45, 1, 0, 0] },
+  researchTasks: { usd: [0.06, 0.12], A: [0.55, 0.62, 0.4, 0.55, 0.370308, 0.6, 0.55, 1, 0, 0], B: [0.55, 0.44, 0.75, 0.55, 0.320136, 0.6, 0.55, 1, 0, 0] },
+  afterRework: { usd: [0.1, 0.1], A: [0.6, 0.6, 0.3, 0.55, 0.333333, 0.6, 0.78, 1, 1, 0], B: [0.6, 0.6, 0.3, 0.55, 0.333333, 0.6, 0.48, 1, 0, 1] },
 };
 
 /** The frozen price transform, written out independently of mapping.ts. */
-const transform = (usd: number) => Math.min(1, Math.max(0, 1 - Math.log(1 + usd / 0.05) / Math.log(1 + 2 / 0.05)));
+const transform = (usd: number) => Math.min(1, Math.max(0, 1 - Math.log10(usd / 0.00001) / 6));
 
 describe('frozen v1 scenarios', () => {
   it('has exactly the five core keys with the checked-in vectors and prices', () => {
@@ -81,8 +81,8 @@ describe('answer compilation', () => {
 
   it('orients B answers as the negated scenario delta', () => {
     const [constraint] = compilePreferenceConstraints({ version: 1, settledImplementation: 'higher_coding_capability' });
-    // lower_cost would require 0.060089*cost - 0.10*agentic >= margin; the B answer reverses it.
-    expect(constraint!.delta[FEATURE_INDEX.costDesirability]).toBeCloseTo(-0.060089, 9);
+    // lower_cost would require 0.025817*cost - 0.10*agentic >= margin; the B answer reverses it.
+    expect(constraint!.delta[FEATURE_INDEX.costDesirability]).toBeCloseTo(-0.025817, 9);
     expect(constraint!.delta[FEATURE_INDEX.agenticFit]).toBeCloseTo(0.1, 12);
   });
 

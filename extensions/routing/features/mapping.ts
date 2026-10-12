@@ -14,14 +14,21 @@ export const clamp01 = (value: number): number => Math.min(1, Math.max(0, value)
 
 // ─── Cost ────────────────────────────────────────────────────────────
 
-/** Shape parameter of the cost transform, USD. Not a budget. */
-export const COST_SHAPE_USD = 0.05;
-/** Saturation reference of the cost transform, USD. Not a market price. */
-export const COST_SATURATION_USD = 2.0;
+/** Lower end of the cost scale, USD. A cheaper or free action has desirability 1. */
+export const COST_FLOOR_USD = 0.00001;
+/** Decades of cost from the lower end to desirability 0, at $10. */
+export const COST_DECADES = 6;
 
-/** Desirability of a predicted all-in USD cost for one decision. */
+/**
+ * Desirability of a predicted all-in USD cost for one decision: log10 of the
+ * cost, linear over [$0.00001, $10]. The selector compares only differences,
+ * so the difference of two actions depends only on their cost ratio: an action
+ * at half the cost gains log10(2)/6 at any price level. A preference answer
+ * about a relative saving then applies the same way to a $0.001 turn and a $1 turn.
+ */
 export function costDesirability(usd: number): number {
-  return clamp01(1 - Math.log(1 + usd / COST_SHAPE_USD) / Math.log(1 + COST_SATURATION_USD / COST_SHAPE_USD));
+  if (usd <= COST_FLOOR_USD) return 1;
+  return clamp01(1 - Math.log10(usd / COST_FLOOR_USD) / COST_DECADES);
 }
 
 // ─── Time ────────────────────────────────────────────────────────────

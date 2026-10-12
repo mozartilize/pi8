@@ -1775,8 +1775,9 @@ describe('context acquisition', () => {
   async function newSession(): Promise<Session> {
     harness = await setupProviderTest({
       dir: temp.path,
-      // A cheaper model leads on research. A costlier model leads on
-      // intelligence and agentic coding. Phase and task difficulty distinguish them.
+      // A cheaper model leads on research. A model at about five times the
+      // price leads on intelligence and agentic coding. Phase and task
+      // difficulty distinguish them; the cost feature scores the price ratio.
       benchmarks: [
         {
           registryId: 'alpha/cheap',
@@ -1794,10 +1795,10 @@ describe('context acquisition', () => {
           benchSlug: 'beta-strong',
           active: true,
           quality: { intelligence: 70, coding: 78, agenticCoding: 90, knowledge: -10, research: 0.1 },
-          costPerTask: 2.5,
+          costPerTask: 0.1,
           outputSpeedTps: 100,
-          priceInputPer1M: 5,
-          priceOutputPer1M: 25,
+          priceInputPer1M: 0.5,
+          priceOutputPer1M: 1,
           source: 'test',
         },
       ],
@@ -1810,7 +1811,7 @@ describe('context acquisition', () => {
         registryModel('beta/strong', {
           contextWindow: 200000,
           maxTokens: 8192,
-          cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 },
+          cost: { input: 0.5, output: 1, cacheRead: 0, cacheWrite: 0 },
         }),
       ],
     });

@@ -285,7 +285,7 @@ describe('N3: feature boundaries and fixed missing shares', () => {
   it('derives the known-price feature from the frozen log transform', () => {
     // 10,000 input at $1/M + 1,024 output at $4/M = 0.014096 USD, no cache evidence.
     const usd = 10_000 / 1e6 + 1024 * 4 / 1e6;
-    const expected = 1 - Math.log(1 + usd / 0.05) / Math.log(41);
+    const expected = 1 - Math.log10(usd / 0.00001) / 6;
     const result = candidateFeatures(state(), model, action, []);
     expect(result.spend.centralUSD).toBeCloseTo(usd, 12);
     expect(feature(result.features, 'costDesirability')[0]).toBeCloseTo(expected, 9);
@@ -487,7 +487,7 @@ describe('task difficulty', () => {
     expectTriple(feature(unknown, 'reasoningFit'), [0.372, 0.372, 0.372]);
     expectTriple(feature(unknown, 'agenticFit'), [0.4, 0.4, 0.4]);
     const usd = 10_000 / 1e6 + 1024 * 4 / 1e6;
-    expect(feature(unknown, 'costDesirability')[0]).toBeCloseTo(1 - Math.log(1 + usd / 0.05) / Math.log(41), 9);
+    expect(feature(unknown, 'costDesirability')[0]).toBeCloseTo(1 - Math.log10(usd / 0.00001) / 6, 9);
     expect(unknown.evidence.find((e) => e.feature === 'reasoningFit')!.details).toContain('difficulty:unknown');
   });
 
