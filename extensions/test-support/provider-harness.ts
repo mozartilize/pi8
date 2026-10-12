@@ -21,7 +21,7 @@ import type {
 } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 
-import type { BenchModel, RoutingDecision } from '../types.js';
+import { PROVENANCE_AXES, type BenchModel, type RoutingDecision } from '../types.js';
 import type { ServedInfo } from '../host/ui.js';
 import type { BenchmarkCheck } from '../bench/store.js';
 import { RouterSession, RuntimeBindings } from '../serve/router-session-state.js';
@@ -87,7 +87,7 @@ export const REGISTRY_MODELS = [
     maxTokens: 8192,
     reasoning: true,
     thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
-    cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 1, output: 5, cacheRead: 0, cacheWrite: 0 },
   }),
   registryModel('beta/second', {
     contextWindow: 200000,
@@ -105,6 +105,25 @@ export const ROUTER_AUTO_MODEL = registryModel('router/auto', {
   input: ['text', 'image'],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 });
+
+/**
+ * Store JSON for a provider test. Explicit axis provenance takes precedence.
+ * A legacy estimated row has no measured axis unless it declares one. Other
+ * present axes are measured; the index version supports feature normalization.
+ */
+export function benchStoreJson(store: { models: readonly unknown[] } & Record<string, unknown>): string {
+  const models = (store.models as readonly Record<string, unknown>[]).map((row) => {
+    const quality = (row.quality ?? {}) as Record<string, unknown>;
+    const provenance = { ...(row.axisProvenance as Record<string, string> | undefined) };
+    for (const axis of PROVENANCE_AXES) {
+      if (quality[axis] !== undefined && provenance[axis] === undefined) {
+        provenance[axis] = row.qualityEstimated === true ? 'estimated' : 'measured';
+      }
+    }
+    return Object.keys(provenance).length > 0 ? { ...row, axisProvenance: provenance } : row;
+  });
+  return JSON.stringify({ indexVersion: '4.3', ...store, models });
+}
 
 // ─── Harness ─────────────────────────────────────────────────────────
 
@@ -194,7 +213,7 @@ export async function setupProviderTest(options: ProviderHarnessOptions): Promis
   if (benchmarks) {
     writeFileSync(
       join(dir, 'benchmarks.json'),
-      JSON.stringify({ version: 2, syncedAt: Date.now(), aliases: {}, models: benchmarks }),
+      benchStoreJson({ version: 2, syncedAt: Date.now(), aliases: {}, models: benchmarks }),
       'utf8',
     );
   }

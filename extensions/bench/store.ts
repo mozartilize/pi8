@@ -234,6 +234,14 @@ export function checkBenchmarkStore(store: BenchmarkStore | undefined = loadStor
       message: 'The benchmark data has no Artificial Analysis models-page measurements. Run /router-sync.',
     };
   }
+  // The selector uses a quality value only with its axis provenance; without
+  // any, every model compares on price alone.
+  if (!active.some((m) => m.axisProvenance && Object.keys(m.axisProvenance).length > 0)) {
+    return {
+      ready: false,
+      message: 'The benchmark data has no per-axis provenance. Run /router-sync to refresh it.',
+    };
+  }
   return { ready: true };
 }
 

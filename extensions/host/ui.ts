@@ -254,7 +254,7 @@ function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined)
 }
 
 function trajectoryLine(tf: NonNullable<RoutingDecision['trajectoryFriction']>): string {
-  if (tf.unavailable) return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}; no stronger model available`;
+  if (tf.unavailable) return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}; no permitted recovery action can accept this prompt`;
   const kinds = tf.signals.map((signal) => `${signal.severity} ${signal.kind.replaceAll('-', ' ')}`).join(', ');
   return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}${kinds ? ` (${kinds})` : ''}`;
 }

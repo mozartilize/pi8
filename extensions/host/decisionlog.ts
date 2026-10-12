@@ -102,6 +102,8 @@ export interface DecisionLogEntry {
   /** Set only when an evaluation process runs the candidate policy. */
   policyVersion?: string;
   capabilityEvidence?: RoutingDecision['capabilityEvidence'];
+  /** Unified selection evidence: identities, codes and counts only. */
+  unified?: RoutingDecision['unified'];
   /** Objective trajectory-friction evidence when it influenced the pick. */
   trajectoryFriction?: RoutingDecision['trajectoryFriction'];
   /** Set on `kind: 'attempt-usage'` records only. */
@@ -436,6 +438,7 @@ export function appendDecision(
         provenance: decision.provenanceCounts,
       ...(decision.policyVersion ? { policyVersion: decision.policyVersion } : {}),
       ...(decision.capabilityEvidence ? { capabilityEvidence: decision.capabilityEvidence } : {}),
+      ...(decision.unified ? { unified: decision.unified } : {}),
       trajectoryFriction: decision.trajectoryFriction,
       contextPressure: decision.contextPressure,
       candidateDiagnostics: decision.candidateDiagnostics,

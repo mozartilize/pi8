@@ -293,8 +293,8 @@ export interface ExecutionContractMeta {
   release: boolean;
   /** Implementation requirement the executor must meet; absent when the submitter keeps the plan. */
   minimum?: number;
-  /** Requirement computed from the rubric and measurements, before band minimums. */
-  requirement: number;
+  /** Requirement from a legacy contract; unified selection uses feature evidence. */
+  requirement?: number;
   keepReason?: ContractKeepReason;
   /** Undefined when the submitter scored no criterion. */
   rubric?: ExecutionRubric;
@@ -404,8 +404,31 @@ export interface AttemptUsageEvent {
   price?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
 }
 
+/** Evidence of a unified selection: identities, codes and counts only. */
+export interface UnifiedDecisionMeta {
+  solver: 'exact' | 'fallback-central' | 'no-feasible-action';
+  solverFallbackReason?: string;
+  domainStatus: string;
+  /** False when preference answers exist but were not applied. */
+  constraintsEnforced: boolean;
+  profileDigest: string;
+  compiledDomainIdentity?: string;
+  benchmarkSnapshotDigest?: string;
+  featureSchemaDigest: string;
+  /** Legal actions in the ranking. */
+  ranked: number;
+  /** Actions ranked last for lack of required evidence. */
+  insufficientEvidence: number;
+  /** Ranked actions whose window holds the current prompt. */
+  holdingPrompt: number;
+  /** Better-ranked action that waits for context preparation. */
+  preparationTarget?: string;
+}
+
 export interface RoutingDecision {
   dimension: Dimension;
+  /** Present when the unified selector made this decision. */
+  unified?: UnifiedDecisionMeta;
   /** Set only when an evaluation process runs the candidate policy. */
   policyVersion?: import('./routing/policy/policy-version.js').PolicyVersion;
   /** Frozen capability inputs of the development comparator. No task text or paths. */

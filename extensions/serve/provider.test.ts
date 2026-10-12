@@ -10,7 +10,7 @@
  * lookup) is owned directly by `delegation.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { Api, Context, Model } from '@earendil-works/pi-ai';
@@ -27,7 +27,7 @@ import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition
 import { contractMeta } from '../routing/policy/execution-contract.js';
 import type { FactsLog } from '../routing/policy/change-facts.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
-import { candidatePolicyRun, registryModel, routingDecision } from '../test-support/router-fixtures.js';
+import { candidatePolicyRun, registryModel } from '../test-support/router-fixtures.js';
 
 afterEach(() => { vi.unstubAllEnvs(); });
 import { SessionTree } from '../test-support/session-tree.js';
@@ -35,6 +35,7 @@ import {
   asStream,
   expectDecisionContract,
   fetchDecisionContractHandles,
+  benchStoreJson,
   setupProviderTest,
   type ProviderTestHarness,
   type ResolvedRequestAuth,
@@ -275,11 +276,11 @@ describe('candidate expansion — model × measured effort', () => {
       { ...benchRow('off', 29.3), quality: { intelligence: 29.3 } },
       {
         ...benchRow('high', 39),
-        quality: { intelligence: 39, coding: 52, agenticCoding: 30.3 },
+        quality: { intelligence: 39, coding: 52, agenticCoding: 30.3, research: 0.351 },
       },
       {
         ...benchRow('max', 42.1),
-        quality: { intelligence: 42.1, coding: 56.2, agenticCoding: 33.7 },
+        quality: { intelligence: 42.1, coding: 56.2, agenticCoding: 33.7, research: 0.379 },
       },
     ], { intelligence: 5.95, coding: 7.4, agenticCoding: 7.6 });
     const byEffort = new Map(candidates.map((c) => [c.effort, c]));
@@ -399,7 +400,7 @@ const REGISTRY_MODELS = [
     maxTokens: 8192,
     reasoning: true,
     thinkingLevelMap: { off: 'off', low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null },
-    cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 1, output: 5, cacheRead: 0, cacheWrite: 0 },
   }),
   registryModel('beta/second', {
     contextWindow: 200000,
@@ -587,7 +588,10 @@ describe('provider orchestration', () => {
   it('names failed models, not the allowlist, when every candidate is excluded', async () => {
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
     await harness.serve(context);
-    for (const key of harness.getProviderState().lastDecision!.fallbackChain) harness.session.blacklistModel(key);
+    // Exclusions are per action: exclude every effort of every model.
+    for (const model of ['alpha/first', 'beta/second']) {
+      for (const effort of ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) harness.session.blacklistModel(`${model}:${effort}`);
+    }
     harness.resetEventStream();
 
     await harness.serve(context);
@@ -689,58 +693,6 @@ describe('provider orchestration', () => {
     expectDecisionContract({ ...handles, match: { cause: 'investigation' } });
   });
 
-  it.skipIf(candidatePolicyRun)('uses JSON-configured dimension weights when serving a turn', async () => {
-    writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ dimensionWeights: {
-        implement: { quality: 1, cost: 0, speed: 0 },
-      },
-    }));
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
-      version: 2,
-      syncedAt: Date.now(),
-      aliases: {},
-      models: [
-        { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, } },
-        { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90, } },
-      ],
-    }));
-    const { routedContext } = await selectedTurn('implement the parser');
-    await harness.serve(routedContext);
-
-    // With default implement weights the much cheaper beta candidate wins;
-    // the JSON override makes quality decisive.
-    expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first');
-  });
-
-  it('under the candidate policy, ignores configured dimension weights and serves the cheaper candidate that meets the minimums', async () => {
-    vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient');
-    try {
-      writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ dimensionWeights: {
-          implement: { quality: 1, cost: 0, speed: 0 },
-        },
-      }));
-      writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
-        version: 2,
-        syncedAt: Date.now(),
-        aliases: {},
-        models: [
-          { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, } },
-          { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90, } },
-        ],
-      }));
-      const { routedContext } = await selectedTurn('implement the parser');
-      await harness.serve(routedContext);
-      expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second');
-      const { DECISION_LOG_FILE } = await import('../host/decisionlog.js');
-      const decisions = readFileSync(join(temp.path, DECISION_LOG_FILE), 'utf8').trim().split('\n')
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((record) => record.kind == null || record.kind === 'decision');
-      expect(decisions.length).toBeGreaterThan(0);
-      expect(new Set(decisions.map((record) => record.policyVersion))).toEqual(new Set(['cheapest-sufficient']));
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
   it('never delegates to its own router/auto model, even as a last resort', async () => {
     // Every real model fails, so the loop is forced to walk the entire
     // fallback chain — router/auto must not be in it.
@@ -755,34 +707,17 @@ describe('provider orchestration', () => {
 
   // ─── concrete subagent model delegation ─────────────────────────────
 
-  it('uses the served effort, not the scored key, for the incumbent capability floor', async () => {
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
-      version: 2, syncedAt: Date.now(), aliases: {}, models: [
-        { registryId: 'alpha/first', benchSlug: 'first-low', effort: 'low', active: true, source: 'test', quality: { intelligence: 75, coding: 75, agenticCoding: 38.8 } },
-        { registryId: 'alpha/first', benchSlug: 'first-medium', effort: 'medium', active: true, source: 'test', quality: { intelligence: 80, coding: 76, agenticCoding: 46 } },
-        { registryId: 'beta/second', benchSlug: 'second-high', effort: 'high', active: true, source: 'test', quality: { intelligence: 78, coding: 74, agenticCoding: 42.1 } },
-      ],
-    }));
-    harness.session.setLastDecision(routingDecision(['alpha/first:low']));
-    harness.session.setLastServed({ registryId: 'alpha/first', thinkingLevel: 'medium', viaFallback: false, accumulatedCost: 0 });
-    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
-    await harness.serve({ messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context);
-    expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first:medium');
-    expect(harness.getProviderState().lastDecision?.fallbackChain[0]).toBe('alpha/first:medium');
-    expect(harness.getProviderState().lastDecision?.reason).toContain('kept current model');
-  });
-
   it('serves the winning candidate at its measured effort', async () => {
     // The store binds alpha/first to one effort-labelled row; expansion
     // produces the alpha/first:high candidate, and implement's floor
     // (medium) lets the measured high win — the effort must reach
     // streamSimple and the chain entry must carry it.
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2,
       syncedAt: Date.now(),
       aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'first-high', active: true, effort: 'high', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+        { registryId: 'alpha/first', benchSlug: 'first-high', active: true, effort: 'high', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 } },
       ],
     }));
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
@@ -797,12 +732,12 @@ describe('provider orchestration', () => {
   });
 
   it('serves a scored low effort as low after selecting implementation work', async () => {
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2,
       syncedAt: Date.now(),
       aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 } },
       ],
     }));
     const { routedContext } = await selectedTurn('implement the parser');
@@ -813,12 +748,12 @@ describe('provider orchestration', () => {
   });
 
   it('lets an explicit user reasoning level suppress the router effort choice', async () => {
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2,
       syncedAt: Date.now(),
       aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 } },
       ],
     }));
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
@@ -833,36 +768,36 @@ describe('provider orchestration', () => {
   });
 
   it('does not read the level Pi echoes back as a user choice: the next scored effort serves', async () => {
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2,
       syncedAt: Date.now(),
       aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 } },
       ],
     }));
     const { routedContext, firstReasoning } = await selectedTurn('implement a function to parse the pending adjustment payload');
     expect(firstReasoning).toBe('low');
     // The next sync scores the same model at high; Pi still echoes low.
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2,
       syncedAt: Date.now() + 1,
       aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'first-high', active: true, effort: 'high', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+        { registryId: 'alpha/first', benchSlug: 'first-high', active: true, effort: 'high', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 } },
       ],
     }));
     await harness.serve(routedContext, { reasoning: firstReasoning });
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
   });
 
-  it('keeps the effort the incumbent served at when no row measures that effort', async () => {
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+  it('serves the measured effort after an explicit level when Pi echoes that level back', async () => {
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2,
       syncedAt: Date.now(),
       aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+        { registryId: 'alpha/first', benchSlug: 'first-low', active: true, effort: 'low', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 } },
       ],
     }));
     harness = await setupProviderTest({
@@ -870,28 +805,28 @@ describe('provider orchestration', () => {
       pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI,
     });
     const request = { messages: [{ role: 'user', content: 'implement the parser' }] } as unknown as Context;
-    // An explicit user level serves the low row at high.
+    // An explicit user level is the only legal effort of each model.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
     await harness.serve(request, { reasoning: 'high' });
-    expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first:low');
+    expect(harness.getProviderState().lastDecision?.chosen).toMatch(/:high$/);
     expect(harness.delegatedCall().options?.reasoning).toBe('high');
     harness.resetEventStream();
     vi.mocked(streamSimple).mockClear();
 
-    // Pi echoes high back. The same request scores the incumbent at the
-    // effort it served at, not at the chosen row's effort.
+    // Pi echoes high back. An echoed level is not a user choice, and no
+    // incumbent minimum keeps the unmeasured effort: the measured row serves.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
     await harness.serve(request, { reasoning: 'high' });
-    expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first:high');
-    expect(harness.delegatedCall().options?.reasoning).toBe('high');
+    expect(harness.getProviderState().lastDecision?.chosen).toBe('alpha/first:low');
+    expect(harness.delegatedCall().options?.reasoning).toBe('low');
   });
 
   it('never routes to a provider that rejects delegated calls, even when it scores best', async () => {
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2, syncedAt: Date.now(), aliases: {},
       models: [
-        { registryId: 'cursor/grok', benchSlug: 'g', active: true, effort: 'high', source: 'test', quality: { intelligence: 95, coding: 95, agenticCoding: 95 }, costPerTask: 0.1, timePerTaskSeconds: 1 },
-        { registryId: 'alpha/first', benchSlug: 'a', active: true, effort: 'high', source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90 }, costPerTask: 5, timePerTaskSeconds: 5 },
+        { registryId: 'cursor/grok', benchSlug: 'g', active: true, effort: 'high', source: 'test', quality: { intelligence: 95, coding: 95, agenticCoding: 95, research: 0.855 }, costPerTask: 0.1, timePerTaskSeconds: 1 },
+        { registryId: 'alpha/first', benchSlug: 'a', active: true, effort: 'high', source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90, research: 0.81 }, costPerTask: 5, timePerTaskSeconds: 5 },
       ],
     }));
     const cursor = registryModel('cursor/grok', { contextWindow: 200000, maxTokens: 8192, reasoning: true, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } });
@@ -903,12 +838,12 @@ describe('provider orchestration', () => {
     expect(decision.fallbackChain.filter((key) => key.startsWith('cursor/'))).toEqual([]);
   });
 
-  it.each([false, true])('sets incumbent minimums only from a model the router still serves (ended=%s)', async (ended) => {
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+  it.each([false, true])('treats as incumbent only a model the router still serves (ended=%s)', async (ended) => {
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2, syncedAt: Date.now(), aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'a', active: true, effort: 'high', source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90 }, costPerTask: 5, timePerTaskSeconds: 5 },
-        { registryId: 'beta/second', benchSlug: 'b', active: true, effort: 'high', source: 'test', quality: { intelligence: 50, coding: 50, agenticCoding: 50 }, costPerTask: 1, timePerTaskSeconds: 1 },
+        { registryId: 'alpha/first', benchSlug: 'a', active: true, effort: 'high', source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90, research: 0.81 }, costPerTask: 5, timePerTaskSeconds: 5 },
+        { registryId: 'beta/second', benchSlug: 'b', active: true, effort: 'high', source: 'test', quality: { intelligence: 50, coding: 50, agenticCoding: 50, research: 0.45 }, costPerTask: 1, timePerTaskSeconds: 1 },
       ],
     }));
     harness = await setupProviderTest({ dir: temp.path, models: REGISTRY_MODELS, pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI });
@@ -921,17 +856,17 @@ describe('provider orchestration', () => {
     await harness.serve({ messages: [{ role: 'user', content: 'what does the cache module do' }] } as unknown as Context);
     const decision = harness.getProviderState().lastDecision!;
     expect(decision.dimension).toBe('gather');
-    expect(decision.chosen).toBe(ended ? 'beta/second:high' : 'alpha/first:high');
-    expect(decision.incumbentEffort).toEqual(ended ? undefined : { model: 'alpha/first', effort: 'high' });
+    // `switched` is set only against an incumbent.
+    expect(decision.switched === undefined).toBe(ended);
   });
 
   it('sends the effort it scored, call after call, without a user thinking level', async () => {
     const row = (effort: string, intelligence: number, costPerTask: number) => ({
       registryId: 'alpha/first', benchSlug: `first-${effort}`, active: true, effort, source: 'test',
-      quality: { intelligence, coding: 100, agenticCoding: 100 }, costPerTask, timePerTaskSeconds: costPerTask,
+      quality: { intelligence, coding: 100, agenticCoding: 100, research: 0.9 }, costPerTask, timePerTaskSeconds: costPerTask,
     });
     const sync = (syncedAt: number, models: unknown[]) =>
-      writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({ version: 2, syncedAt, aliases: {}, models }));
+      writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({ version: 2, syncedAt, aliases: {}, models }));
     harness = await setupProviderTest({
       dir: temp.path, models: REGISTRY_MODELS,
       pi: { setThinkingLevel: setThinkingLevelSpy } as unknown as ExtensionAPI,
@@ -963,12 +898,12 @@ describe('provider orchestration', () => {
     // manually, never reflecting what the router actually picked per-turn.
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2,
       syncedAt: Date.now(),
       aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'first-high', active: true, effort: 'high', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
+        { registryId: 'alpha/first', benchSlug: 'first-high', active: true, effort: 'high', source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 } },
       ],
     }));
     const { routedContext } = await selectedTurn('implement a function to parse the pending adjustment payload');
@@ -1034,9 +969,7 @@ describe('provider orchestration', () => {
     expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'investigation' } });
   });
 
-  it('flags context pressure against the chosen model window (not registry max)', async () => {
-    // Pressure advice attaches only under uncertainty; a threshold above any
-    // confidence makes this deep context uncertain.
+  it('never makes context size the cause or the task type of a long-context turn', async () => {
     writeFileSync(join(temp.path, 'config.json'), JSON.stringify({ lowConfidenceThreshold: 1 }, null, 2));
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
@@ -1046,12 +979,12 @@ describe('provider orchestration', () => {
 
     await harness.serve(longContext);
 
-    // Pressure is advisory metadata: it never owns the cause or the task type.
     const { lastDecision } = harness.getProviderState();
     const handles = await fetchDecisionContractHandles(temp.path);
     expectDecisionContract({ ...handles, match: { cause: lastDecision?.cause, dimension: lastDecision?.dimension } });
     expect(lastDecision?.cause).not.toBe('context-pressure');
-    expect(lastDecision?.contextPressure?.usageRatio).toBeGreaterThanOrEqual(0.6);
+    // Every dispatched action holds the prompt.
+    expect(lastDecision?.unified?.holdingPrompt).toBe(lastDecision?.fallbackChain.length);
   });
 
   it('treats a literal "!escalate" in prompt text as ordinary content', async () => {
@@ -1067,36 +1000,34 @@ describe('provider orchestration', () => {
     const { lastDecision } = harness.getProviderState();
     // Routing comes from the ordinary passive path; the prompt text earns no
     // escalation cause of its own.
-    expect(lastDecision?.contextPressure).toBeDefined();
     expect(lastDecision?.reason).not.toContain('[manual:');
-    expect(lastDecision?.reason).toContain('[context nearly full: prefer a fresh planner subagent]');
+    expect(lastDecision?.cause).not.toBe('manual-override');
   });
 });
 
 describe('semi-automatic confirmation gate', () => {
-  // Force `alpha/first` to be the routed pick so a `beta/second` incumbent is a
-  // real switch; `beta/second` stays a routable candidate (it just loses on
+  // `alpha/first` is the routed pick, so a `beta/second` incumbent is a real
+  // switch; `beta/second` stays a routable candidate (it just loses on
   // quality), so the "keep" path has something to serve.
-  const semiConfig = {
-    semi: true,
-    dimensionWeights: { implement: { quality: 1, cost: 0, speed: 0 } },
-  };
-  // Both measured (no unknown-quality upgrade): quality weight 1 then makes
-  // alpha/first the unambiguous winner over the weaker beta/second.
+  const semiConfig = { semi: true };
+  // Both measured at the same effort and price: alpha/first is better on every
+  // quality axis, so it wins for every admissible weight vector.
   const semiBenchmarks = [
     {
       registryId: 'alpha/first',
       benchSlug: 'a',
       active: true,
+      effort: 'high',
       source: 'test',
-      quality: { intelligence: 100, coding: 100, agenticCoding: 100 },
+      quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 },
     },
     {
       registryId: 'beta/second',
       benchSlug: 'b',
       active: true,
+      effort: 'high',
       source: 'test',
-      quality: { intelligence: 10, coding: 10, agenticCoding: 10 },
+      quality: { intelligence: 10, coding: 10, agenticCoding: 10, research: 0.09 },
     },
   ] as unknown as Parameters<typeof setupProviderTest>[0]['benchmarks'];
   const implementTurn = {
@@ -1152,8 +1083,9 @@ describe('semi-automatic confirmation gate', () => {
 
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.cause).toBe('semi-hold');
-    expect(decision?.chosen).toBe('beta/second');
-    expect(decision?.fallbackChain).toEqual(['beta/second']);
+    // The measured row is labelled with its effort.
+    expect(decision?.chosen).toBe('beta/second:high');
+    expect(decision?.fallbackChain).toEqual(['beta/second:high']);
     expect(harness.streamedModels()).toEqual(['beta/second']);
     // A hold is transient: it must not create a persistent manual pin.
     expect(harness.session.getManualModel()).toBeUndefined();
@@ -1172,7 +1104,7 @@ describe('semi-automatic confirmation gate', () => {
 
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.cause).toBe('manual-override');
-    expect(decision?.chosen).toBe('beta/second');
+    expect(decision?.chosen).toBe('beta/second:high');
     expect(harness.streamedModels()).toEqual(['beta/second']);
     // The pin persists so subsequent turns take the manual path.
     expect(harness.session.getManualModel()).toBe('beta/second');
@@ -1276,7 +1208,7 @@ describe('semi-automatic confirmation gate', () => {
 
     expect(ui.input).toHaveBeenCalledTimes(1);
     expect(harness.streamedModels()).toEqual(['alpha/first', 'beta/second']);
-    expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second');
+    expect(harness.getProviderState().lastDecision?.chosen).toBe('beta/second:high');
     expect(harness.getProviderState().lastDecision?.cause).toBe('manual-override');
   });
 
@@ -1446,14 +1378,14 @@ describe('incumbent keeps serving across unresolved entries', () => {
           registryId: 'alpha/strong',
           benchSlug: 'strong',
           active: true,
-          quality: { intelligence: 95, coding: 95, agenticCoding: 95 },
+          quality: { intelligence: 95, coding: 95, agenticCoding: 95, research: 0.855 },
           source: 'test',
         },
         {
           registryId: 'beta/cheap',
           benchSlug: 'cheap',
           active: true,
-          quality: { intelligence: 60, coding: 60, agenticCoding: 60 },
+          quality: { intelligence: 60, coding: 60, agenticCoding: 60, research: 0.54 },
           source: 'test',
         },
       ],
@@ -1630,13 +1562,13 @@ describe('provider auth filtering', () => {
 
   it('keeps an auth-failing top candidate in the chain and lets delegation serve fallback', async () => {
     await setup(['beta']);
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify({
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson({
       version: 2,
       syncedAt: Date.now(),
       aliases: {},
       models: [
-        { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 99, coding: 99, agenticCoding: 99, } },
-        { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 19, coding: 19, agenticCoding: 19 } },
+        { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 99, coding: 99, agenticCoding: 99, research: 0.891 } },
+        { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 19, coding: 19, agenticCoding: 19, research: 0.171 } },
       ],
     }));
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
@@ -1650,7 +1582,7 @@ describe('provider auth filtering', () => {
     expect(lastDecision?.fallbackChain.join(',')).toContain('beta/second');
     // The cause-precedence row must agree with the log and the rendered detail.
     const handles = await fetchDecisionContractHandles(temp.path);
-    expectDecisionContract({ ...handles, match: { chosen: 'beta/second', cause: 'error-fallback' } });
+    expectDecisionContract({ ...handles, match: { chosen: expect.stringMatching(/^beta\/second(:|$)/), cause: 'error-fallback' } });
 
     // Credential failures spend no provider requests; only the fallback reaches the provider.
     expect(harness.streamedModels()).toEqual(['beta/second']);
@@ -1754,23 +1686,25 @@ describe('provider status reporting', () => {
     const final = statuses[statuses.length - 1][1] ?? '';
     expect(final).toContain('(fallback #2)');
 
+    // Keys name an action; the delegated call names its model.
+    const model = (key: string | undefined) => key?.split(':')[0];
     const decision = harness.getProviderState().lastDecision;
-    expect(decision?.chosen).toBe(attempted[1]);
-    expect(decision?.fallbackChain[0]).toBe(attempted[1]);
+    expect(model(decision?.chosen)).toBe(attempted[1]);
+    expect(model(decision?.fallbackChain[0])).toBe(attempted[1]);
     expect(new Set(decision?.fallbackChain).size).toBe(decision?.fallbackChain.length);
-    expect(new Set(decision?.fallbackChain)).toEqual(new Set(attempted));
+    expect(new Set(decision?.fallbackChain.map(model))).toEqual(new Set(attempted));
     expect(decision?.cause).toBe('error-fallback');
 
     const { readRecentEntries } = await import('../host/decisionlog.js');
     const logged = readRecentEntries(1, temp.path)[0];
     expect(logged).toMatchObject({
-      chosen: attempted[1],
+      chosen: decision?.chosen,
       cause: 'error-fallback',
       viaFallback: true,
     });
     // The served key names the fallback model; its effort suffix is present only when an effort was sent.
     expect(logged.served?.split(':')[0]).toBe(attempted[1]);
-    expect(logged.chain[0]).toBe(attempted[1]);
+    expect(model(logged.chain[0])).toBe(attempted[1]);
   });
 
   it('keeps the original decision when the top pick serves', async () => {
@@ -1783,8 +1717,8 @@ describe('provider status reporting', () => {
     await harness.serve(context);
 
     const decision = harness.getProviderState().lastDecision;
-    expect(decision?.chosen).toBe(served);
-    expect(decision?.fallbackChain[0]).toBe(served);
+    expect(decision?.chosen.split(':')[0]).toBe(served);
+    expect(decision?.fallbackChain[0]).toBe(decision?.chosen);
     expect(decision?.cause).not.toBe('error-fallback');
 
     const { readRecentEntries } = await import('../host/decisionlog.js');
@@ -1911,13 +1845,16 @@ describe('context acquisition', () => {
   async function newSession(): Promise<Session> {
     harness = await setupProviderTest({
       dir: temp.path,
-      // Seed benchmark rows so the no-data cause does not mask heuristic causes.
+      // A cheaper model leads on research. A costlier model leads on
+      // intelligence and agentic coding. Phase and task difficulty distinguish them.
       benchmarks: [
         {
           registryId: 'alpha/cheap',
           benchSlug: 'alpha-cheap',
           active: true,
-          quality: { intelligence: 30, coding: 60, agenticCoding: 29, knowledge: 10, research: 0.32 },
+          quality: { intelligence: 20, coding: 60, agenticCoding: 60, knowledge: 40, research: 0.9 },
+          costPerTask: 0.02,
+          outputSpeedTps: 100,
           priceInputPer1M: 0.1,
           priceOutputPer1M: 0.2,
           source: 'test',
@@ -1926,9 +1863,11 @@ describe('context acquisition', () => {
           registryId: 'beta/strong',
           benchSlug: 'beta-strong',
           active: true,
-          quality: { intelligence: 55, coding: 78, agenticCoding: 55, knowledge: 30, research: 0.61 },
-          priceInputPer1M: 2,
-          priceOutputPer1M: 8,
+          quality: { intelligence: 70, coding: 78, agenticCoding: 90, knowledge: -10, research: 0.1 },
+          costPerTask: 2.5,
+          outputSpeedTps: 100,
+          priceInputPer1M: 5,
+          priceOutputPer1M: 25,
           source: 'test',
         },
       ],
@@ -1941,7 +1880,7 @@ describe('context acquisition', () => {
         registryModel('beta/strong', {
           contextWindow: 200000,
           maxTokens: 8192,
-          cost: { input: 2, output: 8, cacheRead: 0, cacheWrite: 0 },
+          cost: { input: 5, output: 25, cacheRead: 0, cacheWrite: 0 },
         }),
       ],
     });
@@ -2075,7 +2014,7 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
     });
 
-    it.skipIf(candidatePolicyRun)('investigates a plan request until the handoff, then plans at the handoff minimum', async () => {
+    it('investigates a plan request until the handoff, then records the planner as the boundary owner', async () => {
       const session = await newSession();
       const first = await session.routeTurn(PLAN_PROMPT);
       expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation', deliverable: 'gather' });
@@ -2084,8 +2023,7 @@ describe('context acquisition', () => {
       easyFinalStep();
       expect((await submitPrepared(handoff(1))).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
-      // An obvious decision: the cheaper model clears the minimum.
-      expect(planning).toMatchObject({ dimension: 'plan', cause: 'investigation-handoff', chosen: 'alpha/cheap' });
+      expect(planning).toMatchObject({ dimension: 'plan', cause: 'investigation-handoff' });
       // The invocation that takes the boundary records its owner, in the
       // decision `/router-why` reads and in the decision log.
       expect(planning?.reasoningHandoff).toMatchObject({ minimum: 0.45, pending: false, owner: planning?.chosen });
@@ -2099,33 +2037,13 @@ describe('context acquisition', () => {
       expect((await submitPrepared(handoff(2))).accepted).toBe(false);
     });
 
-    it('under the candidate policy, plans at the minimum of the rubric when the final step is easy', async () => {
-      vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient');
-      try {
-        const session = await newSession();
-        await session.routeTurn(PLAN_PROMPT);
-        await session.routeTurnAgainWithSameUserEntry();
-        const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({
-          ...state, terminal: { kind: 'plan', complexity: 'trivial', scope: 'bounded' }, terminalRequirement: 0.35,
-        });
-        expect((await submitPrepared(handoff(1))).accepted).toBe(true);
-        const planning = await session.routeTurnAgainWithSameUserEntry();
-        expect(planning).toMatchObject({ dimension: 'plan', cause: 'investigation-handoff', chosen: 'alpha/cheap' });
-        expect(planning?.reasoningHandoff?.minimum).toBeCloseTo(0.40);
-        expect(harness.session.getWorkPhaseState()?.terminalBand).toBeUndefined();
-      } finally {
-        vi.unstubAllEnvs();
-      }
-    });
-
-    it('raises the planning minimum from the task shape declared at the handoff', async () => {
+    it('selects the planning phase from the accepted task declaration', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       expect((await submitPrepared({ ...handoff(1), complexity: 'moderate', scope: 'open-ended' })).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
-      expect(planning).toMatchObject({ dimension: 'plan', chosen: 'beta/strong' });
-      expect(planning?.reasoningHandoff?.minimum).toBeGreaterThanOrEqual(0.7);
+      expect(planning).toMatchObject({ dimension: 'plan', unified: { ranked: 2 } });
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.rubric).toMatchObject({ alternatives: 1 });
     });
 
     describe('an implementation handoff with a bounded scope and no open behavior or design choice', () => {
@@ -2158,7 +2076,7 @@ describe('context acquisition', () => {
       });
     });
 
-    it('picks a stronger planner for a harder handoff', async () => {
+    it('plans with the model that leads on intelligence', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       expect((await submitPrepared(handoff(5))).accepted).toBe(true);
@@ -2176,20 +2094,6 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe(planner);
     });
 
-    it('keeps the boundary pending when only a fallback below the minimum serves', async () => {
-      const session = await newSession();
-      await session.routeTurn(PLAN_PROMPT);
-      await submitPrepared(handoff(5));
-      await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
-      expect(harness.session.getLastServed()?.registryId).toBe('alpha/cheap');
-      expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toMatchObject({ pending: true });
-      expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.owner).toBeUndefined();
-      harness.session.clearBlacklistedModels();
-      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
-      expect(harness.session.getWorkPhaseState()?.reasoningHandoff)
-        .toMatchObject({ pending: false, owner: expect.stringMatching(/^beta\/strong/) });
-    });
-
     describe('a plan submitted while the planning step is still owed', () => {
       // A plan phase for a change request keeps a minimum until a qualifying planner serves.
       const REFERENCED = 'implement the corrected race-condition logic across the codebase from scratch';
@@ -2200,30 +2104,6 @@ describe('context acquisition', () => {
       const contractRecords = async (session: Session) => (await session.readDecisionRecords())
         .map((r) => r.executionContract as { action?: string; rejectReason?: string } | undefined)
         .filter((c) => c != null);
-
-      it('rejects a plan from a fallback below the planning minimum and keeps the step owed', async () => {
-        const session = await newSession();
-        await session.routeTurn(REFERENCED);
-        await submitPrepared(handoff(5));
-        await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
-        expect(harness.session.getLastServed()?.registryId).toBe('alpha/cheap');
-        expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(false);
-        expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
-        expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toMatchObject({ pending: true });
-        expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.contractAccepted).toBeUndefined();
-        expect(await contractRecords(session)).toContainEqual(expect.objectContaining({ action: 'reject', rejectReason: 'handoff-pending' }));
-
-        harness.session.clearBlacklistedModels();
-        expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
-        const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, deliverable: 'implement' });
-        expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
-        await session.routeTurn('thanks, what else is left in the backlog');
-        const phaseEnd = (await session.readDecisionRecords())
-          .map((r) => r.investigationHandoff as { action?: string; handoff?: Record<string, unknown> } | undefined)
-          .find((h) => h?.action === 'phase-end');
-        expect(phaseEnd?.handoff).toMatchObject({ pending: false, contractAccepted: true, owner: expect.stringMatching(/^beta\/strong/) });
-      });
 
       it('accepts a plan from a qualifying planner before its serve settles the step', async () => {
         const session = await newSession();
@@ -2238,6 +2118,7 @@ describe('context acquisition', () => {
           reasoningHandoff: { ...state.reasoningHandoff!, pending: true, owner: undefined },
         });
         expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
+        expect((await contractRecords(session)).some((record) => record?.action === 'accept')).toBe(true);
       });
     });
 
@@ -2305,12 +2186,12 @@ describe('context acquisition', () => {
       expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
     });
 
-    it('repicks a struggling planner within the reasoning phase and logs it at phase end', async () => {
+    it('applies planner struggle within the reasoning phase and logs it at phase end', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       easyFinalStep();
       await submitPrepared(handoff(1));
-      expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
+      await session.routeTurnAgainWithSameUserEntry();
       const served = harness.session.getLastServed()!;
       setStruggleAfterRecovery(
       harness.session,
@@ -2319,8 +2200,10 @@ describe('context acquisition', () => {
         'plan',
         false,
       );
-      const repicked = await session.routeTurnAgainWithSameUserEntry();
-      expect(repicked).toMatchObject({ dimension: 'plan', chosen: 'beta/strong' });
+      const repicked = await session.routeTurnAgainWithSameUserEntry() as RoutingDecision & { trajectoryFriction?: { fromModel: string } };
+      // The struggle is friction evidence of the exact served model in the plan decision.
+      expect(repicked).toMatchObject({ dimension: 'plan' });
+      expect(repicked?.trajectoryFriction?.fromModel.split(':')[0]).toBe(served.registryId);
       expect(repicked?.reasoningHandoff?.trajectoryFired).toBe(true);
 
       await session.routeTurn('now plan the rollout for the second region as well');
@@ -2680,7 +2563,7 @@ describe('context acquisition', () => {
         expect(withFacts.planning?.chosen).toBe(plain.planning?.chosen);
       });
 
-      it('logs a plan\'s targets and checks from its steps, and keeps the plan\'s minimum', async () => {
+      it('logs plan facts without adding a capability minimum', async () => {
         await planned();
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const plain = harness.session.getWorkPhaseState()!.contract!;
@@ -2689,7 +2572,9 @@ describe('context acquisition', () => {
         expect(submitExecutionContract({ ...smallPlan, facts }, routerCtx, harness.session, EXISTING_TARGETS, { files: 1 }).accepted).toBe(true);
         const contract = harness.session.getWorkPhaseState()!.contract!;
         expect(contract.facts?.declared).toMatchObject({ modify: 1, create: 0, checkCommands: 1, decisions: 1, precedent: true });
-        expect(contract.facts?.shadow.used).toBe(contract.minimum ?? contract.requirement);
+        expect(contract.facts?.shadow.used).toBeGreaterThan(0);
+        expect(contract.minimum).toBeUndefined();
+        expect(contract.band).toBeUndefined();
         expect({ minimum: contract.minimum, requirement: contract.requirement, band: contract.band })
           .toEqual({ minimum: plain.minimum, requirement: plain.requirement, band: plain.band });
         expect(JSON.stringify(contractMeta(harness.session.getWorkPhaseState()!))).not.toContain('secret');
@@ -2699,20 +2584,40 @@ describe('context acquisition', () => {
     describe.each(['legacy', 'cheapest-sufficient'] as const)('a settled plan under the %s policy', (version) => {
       beforeEach(() => { vi.stubEnv('PI8_POLICY_VERSION', version); });
       afterEach(() => { vi.unstubAllEnvs(); });
-      // Every criterion at level 3: alpha/cheap measures below the minimum, beta/strong above it.
+      // The same closed plan must be released by either measured submitter.
       const settledPlan = { ...smallPlan, remainingWork: { openDecisions: 3, spread: 3, verification: 3, knowledge: 3, coupling: 3 } };
+      // Different benchmark quality cannot change a closed plan's release permission.
+      beforeEach(async () => {
+        const { loadStore, saveStore } = await import('../bench/store.js');
+        const measured: Record<string, { intelligence: number; agenticCoding: number }> = {
+          'alpha/cheap': { intelligence: 30, agenticCoding: 29 },
+          'beta/strong': { intelligence: 55, agenticCoding: 55 },
+        };
+        restoreSettledIntelligence = () => {
+          const store = loadStore();
+          if (store) saveStore({ ...store, syncedAt: store.syncedAt + 1, models: store.models.map((row) => ({ ...row, quality: { ...row.quality, ...measured[row.registryId] } })) });
+        };
+      });
 
-      it('stays with a submitter measured below its minimum', async () => {
-        await planned();
+      let restoreSettledIntelligence = (): void => {};
+      it('releases a closed plan even from a weaker measured submitter', async () => {
+        const session = await planned();
+        restoreSettledIntelligence();
+        // A routed request expands the candidates from the restored rows.
+        await session.routeTurnAgainWithSameUserEntry();
         harness.session.updateLastServed({ registryId: 'alpha/cheap', thinkingLevel: undefined });
         const result = submitExecutionContract(settledPlan, routerCtx, harness.session, EXISTING_TARGETS);
         expect(result.accepted).toBe(true);
-        expect(result.text).toContain('The current model keeps executing it');
-        expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: false, keepReason: 'above-submitter' });
+        expect(result.text).toContain('Execution plan accepted');
+        expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true, releasePending: true });
+        expect(harness.session.getWorkPhaseState()?.contract?.keepReason).toBeUndefined();
       });
 
-      it('is released by a submitter that meets its minimum', async () => {
-        await planned();
+      it('releases the same closed plan from a stronger measured submitter', async () => {
+        const session = await planned();
+        restoreSettledIntelligence();
+        // A routed request expands the candidates from the restored rows.
+        await session.routeTurnAgainWithSameUserEntry();
         expect(submitExecutionContract(settledPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const contract = harness.session.getWorkPhaseState()?.contract;
         expect(contract?.release).toBe(true);
@@ -2737,7 +2642,8 @@ describe('context acquisition', () => {
       expect(executing?.dimension).toBe('implement');
       expect(executing?.cause).toBe('execution-contract');
       expect(executing?.chosen).toBe('alpha/cheap');
-      expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'active', band: 'economy', release: true });
+      expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'active', release: true });
+      expect(harness.getProviderState().lastDecision?.executionContract?.band).toBeUndefined();
       // The executor keeps serving the rest of the entry.
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
     });
@@ -2746,7 +2652,7 @@ describe('context acquisition', () => {
       beforeEach(() => { vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient'); });
       afterEach(() => { vi.unstubAllEnvs(); });
 
-      it.each([false, true])('requires measured Intelligence for an excluded executor replacement: estimated=%s', async (estimated) => {
+      it.each([false, true])('excludes an executor regardless of replacement measurement: estimated=%s', async (estimated) => {
         const session = await planned();
         const { loadStore, saveStore } = await import('../bench/store.js');
         const store = loadStore()!;
@@ -2757,8 +2663,8 @@ describe('context acquisition', () => {
         harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['beta/strong'] });
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const next = await session.routeTurnAgainWithSameUserEntry();
-        expect(next?.chosen).toBe(estimated ? 'beta/strong' : 'alpha/cheap');
-        if (!estimated) expect(next?.fallbackChain).not.toContain('beta/strong');
+        expect(next?.chosen).toBe('alpha/cheap');
+        expect(next?.fallbackChain).not.toContain('beta/strong');
       });
 
       it('scores the replaced rows when the store keeps its timestamp and row count', async () => {
@@ -2776,13 +2682,13 @@ describe('context acquisition', () => {
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next?.chosen).toBe('alpha/cheap');
         const digest = createHash('sha256').update(JSON.stringify(loadStore() ?? null)).digest('hex');
-        expect(harness.getProviderState().lastDecision?.capabilityEvidence?.benchmarkSnapshotDigest).toBe(digest);
+        expect(harness.getProviderState().lastDecision?.unified?.benchmarkSnapshotDigest).toBe(digest);
       });
 
       it('recomputes a resumed route when the benchmark snapshot changed', async () => {
         const session = await planned();
         const saved = await session.routeTurnAgainWithSameUserEntry();
-        expect(harness.getProviderState().lastDecision?.capabilityEvidence?.benchmarkSnapshotDigest).toBeDefined();
+        expect(harness.getProviderState().lastDecision?.unified?.benchmarkSnapshotDigest).toBeDefined();
         void saved;
         harness.session.setManualModel('alpha/first');
         expect(harness.session.resumeManual()).toBe(true);
@@ -2803,7 +2709,7 @@ describe('context acquisition', () => {
         expect((await session.routeTurnAgainWithSameUserEntry())?.cause).toBe('resume');
       });
 
-      it('records the complete benchmark snapshot and required minimums without task text', async () => {
+      it('records selection identities and counts without task text or capability minimums', async () => {
         const session = await planned();
         submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
         await session.routeTurnAgainWithSameUserEntry();
@@ -2811,19 +2717,21 @@ describe('context acquisition', () => {
         const { loadStore } = await import('../bench/store.js');
         const { createHash } = await import('node:crypto');
         const digest = createHash('sha256').update(JSON.stringify(loadStore() ?? null)).digest('hex');
-        expect(decision.capabilityEvidence?.benchmarkSnapshotDigest).toBe(digest);
-        expect(decision.capabilityEvidence?.minimums).toEqual({ intelligence: decision.executionContract!.minimum! * 57.6 });
+        expect(decision.unified?.benchmarkSnapshotDigest).toBe(digest);
+        expect(decision.capabilityEvidence).toBeUndefined();
+        expect(decision.executionContract?.minimum).toBeUndefined();
         const records = await session.readDecisionRecords();
         const record = records.filter((row) => row.kind == null && row.dimension === 'implement').at(-1)!;
-        expect(record.capabilityEvidence).toEqual(decision.capabilityEvidence);
-        expect(JSON.stringify(record.capabilityEvidence)).not.toContain('src/a.ts');
+        expect(record.unified).toEqual(decision.unified);
+        expect(JSON.stringify(record.unified)).not.toContain('src/a.ts');
       });
 
       it('hands a small accepted plan to a cheaper executor, and the plan has no band', async () => {
         const session = await planned();
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const executing = await session.routeTurnAgainWithSameUserEntry();
-        expect(executing).toMatchObject({ dimension: 'implement', cause: 'execution-contract', chosen: 'alpha/cheap', policyVersion: 'cheapest-sufficient' });
+        expect(executing).toMatchObject({ dimension: 'implement', cause: 'execution-contract', chosen: 'alpha/cheap', unified: { ranked: 2 } });
+        expect(executing).not.toHaveProperty('policyVersion');
         const meta = harness.getProviderState().lastDecision?.executionContract;
         expect(meta).toMatchObject({ status: 'active', release: true });
         expect(meta?.band).toBeUndefined();
@@ -2851,7 +2759,7 @@ describe('context acquisition', () => {
         expect(meta?.minimum).toBe(firstMinimum);
       });
 
-      it('releases a plan whose excluded executor left the pool, and the submitter serves it when no stronger model is provable', async () => {
+      it('releases a plan when an unrelated excluded executor left the pool', async () => {
         const session = await planned();
         const state = harness.session.getWorkPhaseState()!;
         harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });
@@ -2861,7 +2769,7 @@ describe('context acquisition', () => {
         expect(contract?.band).toBeUndefined();
         expect(contract?.keepReason).toBeUndefined();
         const next = await session.routeTurnAgainWithSameUserEntry();
-        expect(next).toMatchObject({ dimension: 'implement', chosen: 'beta/strong' });
+        expect(next).toMatchObject({ dimension: 'implement', chosen: 'alpha/cheap' });
       });
     });
 
@@ -2933,13 +2841,14 @@ describe('context acquisition', () => {
       expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
     });
 
-    it('keeps a broken plan bound to its submitter while another model serves the handback', async () => {
+    it('keeps a broken plan pending when its permitted submitter fails', async () => {
       const session = await planned();
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       await session.routeTurnAgainWithSameUserEntry();
       breakWithUndeclaredEdit();
-      await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
-      expect(harness.session.getLastServed()?.registryId).toBe('alpha/cheap');
+      const failed = await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
+      expect(failed?.fallbackChain).toEqual(['beta/strong']);
+      expect(harness.session.getLastServed()).toBeUndefined();
       expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('broken');
       harness.session.clearBlacklistedModels();
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
@@ -2977,14 +2886,14 @@ describe('context acquisition', () => {
       await session.routeTurnAgainWithSameUserEntry();
       expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
 
-      // Second break excludes it: the next plan is one band higher and must be
-      // served by a strictly stronger model.
+      // The second break excludes the executor from implementation. It cannot
+      // occur in either the selection or the availability fallback chain.
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       const escalated = await session.routeTurnAgainWithSameUserEntry();
       expect(escalated?.dimension).toBe('implement');
       expect(escalated?.chosen).toBe('beta/strong');
       expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
-      expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ band: 'standard' });
+      expect(harness.getProviderState().lastDecision?.executionContract?.band).toBeUndefined();
     });
 
     it.skipIf(candidatePolicyRun)('keeps the submitter when an excluded executor is no longer in the pool', async () => {
@@ -2992,10 +2901,11 @@ describe('context acquisition', () => {
       const state = harness.session.getWorkPhaseState()!;
       harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-      expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true, band: 'standard' });
+      expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true });
+      expect(harness.session.getWorkPhaseState()?.contract?.band).toBeUndefined();
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
-      expect(next?.chosen).toBe('beta/strong');
+      expect(next?.chosen).toBe('alpha/cheap');
     });
 
     it('treats executor struggle as a broken plan', async () => {
@@ -3049,7 +2959,7 @@ describe('context acquisition', () => {
       expect(next?.dimension).toBe('implement');
       expect(next?.chosen).toBe('beta/strong');
       expect(harness.getProviderState().lastDecision?.executionContract)
-        .toMatchObject({ release: false, keepReason: 'difficulty' });
+        .toMatchObject({ release: false, keepReason: 'open-decisions' });
     });
 
     it('returns an executed plan to the submitter for review until the entry ends', async () => {
@@ -3194,7 +3104,7 @@ describe('deep context', () => {
   it('holds the work choice unresolved at a large context size', async () => {
     const session = await newSession();
     const first = await session.routeTurn('investigate the flaky test', {
-      estimatedContextTokens: 150_000,
+      estimatedContextTokens: 120_000,
     });
     const after = await session.routeTurnAgainWithSameUserEntry();
     expect(first?.dimension).toBe('gather');
@@ -3208,6 +3118,35 @@ describe('deep context', () => {
 });
 
 describe('trajectory capability escalation', () => {
+  it('permits higher effort on the requesting model after recovery', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      benchmarks: [
+        { registryId: 'alpha/source', benchSlug: 'source-low', active: true, effort: 'low', quality: { intelligence: 50, research: 0.7 }, source: 'test' },
+        { registryId: 'alpha/source', benchSlug: 'source-high', active: true, effort: 'high', quality: { intelligence: 80, research: 0.9 }, source: 'test' },
+      ],
+      models: [registryModel('alpha/source', {
+        reasoning: true, contextWindow: 200000,
+        thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: null },
+      })],
+    });
+    const context = { messages: [{ role: 'user', content: 'investigate the failing check' }] } as unknown as Context;
+    harness.session.setManualModel('alpha/source:low');
+    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+    await harness.serve(context);
+    expect(harness.session.getLastServed()?.thinkingLevel).toBe('low');
+    expect(harness.session.resumeManual()).toBe(true);
+    setStruggleAfterRecovery(harness.session, {
+      escalate: true, tfi: 1,
+      signals: [{ kind: 'aor', severity: 'severe', evidenceIds: ['check-a'], evidenceCount: 1 }],
+    }, 'alpha/source:low', 'gather', false);
+    harness.resetEventStream();
+    await harness.serve(context);
+    expect(harness.session.getLastDecision()?.chosen).toBe('alpha/source:high');
+    expect(harness.delegatedCall(1).options?.reasoning).toBe('high');
+    expect(harness.session.getLastDecision()?.trajectoryFriction?.unavailable).toBeUndefined();
+  });
+
   it('repicks a strictly stronger model on the next invocation', async () => {
     const harness = await setupProviderTest({
       dir: temp.path,
@@ -3217,14 +3156,14 @@ describe('trajectory capability escalation', () => {
           registryId: 'alpha/source',
           benchSlug: 'source',
           active: true,
-          quality: { intelligence: 90, coding: 90, agenticCoding: 90 },
+          quality: { intelligence: 90, coding: 90, agenticCoding: 90, research: 0.81 },
           source: 'test',
         },
         {
           registryId: 'gamma/strong',
           benchSlug: 'strong',
           active: true,
-          quality: { intelligence: 95, coding: 95, agenticCoding: 95 },
+          quality: { intelligence: 95, coding: 95, agenticCoding: 95, research: 0.855 },
           source: 'test',
         },
       ],
@@ -3279,8 +3218,8 @@ describe('trajectory capability escalation', () => {
       dir: temp.path,
       config: { switchMargin: 0.15 },
       benchmarks: [
-        { registryId: 'alpha/source', benchSlug: 'source', active: true, quality: { intelligence: 90, coding: 90, agenticCoding: 90 }, source: 'test' },
-        { registryId: 'gamma/strong', benchSlug: 'strong', active: true, quality: { intelligence: 95, coding: 95, agenticCoding: 95 }, source: 'test' },
+        { registryId: 'alpha/source', benchSlug: 'source', active: true, quality: { intelligence: 90, coding: 90, agenticCoding: 90, research: 0.81 }, source: 'test' },
+        { registryId: 'gamma/strong', benchSlug: 'strong', active: true, quality: { intelligence: 95, coding: 95, agenticCoding: 95, research: 0.855 }, source: 'test' },
       ],
       models: [
         registryModel('alpha/source', { contextWindow: 200000, maxTokens: 8192, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 } }),
@@ -3336,21 +3275,21 @@ describe('trajectory capability escalation', () => {
           registryId: 'alpha/source',
           benchSlug: 'source',
           active: true,
-          quality: { intelligence: 90, coding: 90, agenticCoding: 90 },
+          quality: { intelligence: 90, coding: 90, agenticCoding: 90, research: 0.81 },
           source: 'test',
         },
         {
           registryId: 'gamma/strong',
           benchSlug: 'strong',
           active: true,
-          quality: { intelligence: 95, coding: 95, agenticCoding: 95 },
+          quality: { intelligence: 95, coding: 95, agenticCoding: 95, research: 0.855 },
           source: 'test',
         },
         {
           registryId: 'delta/cheap',
           benchSlug: 'cheap',
           active: true,
-          quality: { intelligence: 50, coding: 50, agenticCoding: 50 },
+          quality: { intelligence: 50, coding: 50, agenticCoding: 50, research: 0.45 },
           source: 'test',
         },
       ],
@@ -3421,7 +3360,7 @@ describe('no-stronger escalation gate', () => {
         registryId: 'alpha/solo',
         benchSlug: 'solo',
         active: true,
-        quality: { intelligence: 80, coding: 80, agenticCoding: 80 },
+        quality: { intelligence: 80, coding: 80, agenticCoding: 80, research: 0.72 },
         source: 'test',
       }] as unknown as Parameters<typeof setupProviderTest>[0]['benchmarks'],
       models: [registryModel('alpha/solo', {
@@ -3498,7 +3437,7 @@ describe('no-stronger escalation gate', () => {
     // is the only 'warning'-level notification.
     const warnings = ui.notify.mock.calls.filter((c) => c[1] === 'warning');
     expect(warnings).toHaveLength(1);
-    expect(String(warnings[0]?.[0])).toContain('no stronger model');
+    expect(String(warnings[0]?.[0])).toContain('no permitted recovery action');
     expect(harness.streamedModels()).toEqual(['alpha/solo']);
   });
 });
@@ -3636,15 +3575,15 @@ const SEEDED_BENCHMARKS = {
   syncedAt: Date.now(),
   aliases: {},
   models: [
-    { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100 } },
-    { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90 } },
+    { registryId: 'alpha/first', benchSlug: 'alpha-first', active: true, source: 'test', quality: { intelligence: 100, coding: 100, agenticCoding: 100, research: 0.9 } },
+    { registryId: 'beta/second', benchSlug: 'beta-second', active: true, source: 'test', quality: { intelligence: 90, coding: 90, agenticCoding: 90, research: 0.81 } },
   ],
 };
 
 describe('an entry without an incumbent', () => {
   it.each(['спроектируй систему', 'implement the retry loop', 'review the diff', 'hello'])(
     'gathers without classifying %s', async (prompt) => {
-    writeFileSync(join(temp.path, 'benchmarks.json'), JSON.stringify(SEEDED_BENCHMARKS), 'utf8');
+    writeFileSync(join(temp.path, 'benchmarks.json'), benchStoreJson(SEEDED_BENCHMARKS), 'utf8');
     const harness = await setupProviderTest({ dir: temp.path });
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
 
@@ -3715,14 +3654,14 @@ describe('router-report counterfactual baseline', () => {
       registryId: 'alpha/strong',
       benchSlug: 'strong',
       active: true,
-      quality: { intelligence: 95, coding: 95, agenticCoding: 95 },
+      quality: { intelligence: 95, coding: 95, agenticCoding: 95, research: 0.855 },
       source: 'test',
     },
     {
       registryId: 'beta/cheap',
       benchSlug: 'cheap',
       active: true,
-      quality: { intelligence: 60, coding: 60, agenticCoding: 60 },
+      quality: { intelligence: 60, coding: 60, agenticCoding: 60, research: 0.54 },
       source: 'test',
     },
   ];

@@ -800,6 +800,13 @@ export function escalationChain(
 
 // ─── pickBest steps ───────────────────────────────────────────────────
 
+/** A context window holds a prompt with this margin for output and estimation error. */
+export const CONTEXT_FIT_MARGIN = 1.2;
+
+/** True when the window holds the prompt. An unknown window is not a reason to reject. */
+export const holdsPrompt = (contextWindow: number | undefined, promptTokens: number): boolean =>
+  !contextWindow || contextWindow <= 0 || contextWindow >= promptTokens * CONTEXT_FIT_MARGIN;
+
 /**
  * Drop models that cannot hold the estimated context, then prefer vision
  * when the turn carries an image. Both guards fail open: an empty context
@@ -814,10 +821,7 @@ export function applyCandidateGuards(
 ): Candidate[] {
   let filtered = candidates;
   if (opts.estimatedContextTokens > 0) {
-    const guardFiltered = filtered.filter((c) => {
-      const win = c.contextWindow ?? 0;
-      return win <= 0 || win >= opts.estimatedContextTokens * 1.2;
-    });
+    const guardFiltered = filtered.filter((c) => holdsPrompt(c.contextWindow, opts.estimatedContextTokens));
     if (guardFiltered.length > 0) {
       filtered = guardFiltered;
     } else {

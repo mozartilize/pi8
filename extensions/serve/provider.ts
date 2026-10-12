@@ -9,10 +9,9 @@
  * by entering context acquisition so the serving model can inspect the
  * session and call `hand_off_context`.
  */
-import { appendModelEvent, compliancePenalties, sharedPrefixCredits } from '../bench/model-history.js';
+import { appendModelEvent, sharedPrefixCredits } from '../bench/model-history.js';
 import { modelEventEntry, modelEventSession } from '../host/decisionlog.js';
-import { createHash } from 'node:crypto';
-import { addReasonDetail } from '../routing/score/decision-reason.js';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   createAssistantMessageEventStream,
   type Api,
@@ -31,7 +30,7 @@ import { loadStore, activeModels } from '../bench/store.js';
 import { estimateTokenCount } from '../routing/token-estimate.js';
 import { getTurnClassificationInput } from '../routing/policy/continuation.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter, loadConfigBlacklistFilter } from '../routing/policy/allowlist.js';
-import { loadConfig } from '../config.js';
+import { loadConfig, loadPreferenceSnapshot } from '../config.js';
 
 import {
   appendAttemptUsage,
@@ -45,16 +44,14 @@ import {
   buildCandidate,
   buildRouterThinkingLevelMap,
   candidateKey,
-  capabilityForDimension,
-  isStrictlyStrongerCandidate,
   findSourceCandidate,
   parseCandidateKey,
   isThinkingSupportedByRegistryModel,
   servesThinkingOff,
   resolveThinkingLevel,
   MODEL_THINKING_LEVELS,
+  holdsPrompt,
   type RegistryModelInfo,
-  type StrongerCompareOpts,
 } from '../routing/score/scorer.js';
 import { pickBaseline } from './baseline.js';
 import { resolveManualModel } from './manual-model.js';
@@ -72,14 +69,17 @@ import {
 } from './router-session-state.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop, type DelegationOptions } from './delegation.js';
+import { resolveUnifiedDecision } from './unified-decision.js';
+import type { DecisionStateV1, ServedIdentity } from '../routing/features/state.js';
+import { phaseDifficulty } from '../routing/features/difficulty.js';
+import { enumerateEffectiveActions, effortRank, overrideAction } from '../routing/features/actions.js';
+import { actorAllowedForBoundary, createBoundaryAuthorization, settleBoundary as settleAuthorization, type BoundaryAuthorizationV1 } from '../routing/policy/boundary-authorization.js';
 import { makeTerminalErrorEvent } from './error-event.js';
-import { resolveRoutingDecisionForEvaluation, scoredIncumbentKey } from '../routing/policy/routing-policy.js';
+import { POLICY_PASSIVE_CAUSES, scoredIncumbentKey } from '../routing/policy/routing-policy.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import {
   penaltiesOf,
   nextProviderInvocation,
-  boundaryQualifiers,
-  servesBoundary,
   type WorkPhaseState,
 } from '../routing/policy/work-phase.js';
 import {
@@ -87,11 +87,11 @@ import {
   contractMeta,
   attributeExecutor,
   expireContract,
-  isExcludedExecutor,
   isUnderReview,
   handBackContract,
   serveContractRelease,
   servedBySubmitter,
+  isExcludedExecutor,
   type ExecutionContract,
 } from '../routing/policy/execution-contract.js';
 import { appendContractOutcome, closeContractEntry } from './execution-contract-tool.js';
@@ -678,7 +678,7 @@ interface ResolvedTurn {
 }
 
 interface ScoredTurn {
-  decision: ReturnType<typeof resolveRoutingDecisionForEvaluation>['decision'];
+  decision: RoutingDecision;
   routableCandidates: Candidate[];
   requestedReasoning: string | undefined;
   /** A broken contract this invocation hands back; consumed only once it serves. */
@@ -687,6 +687,7 @@ interface ScoredTurn {
   pendingBoundary?: boolean;
   /** This invocation releases an accepted plan's incumbent minimums; consumed only once it serves. */
   releasesContract?: boolean;
+  authorization?: BoundaryAuthorizationV1;
 }
 
 /** Resolve the registry, this turn's input identity, and the candidate pool. */
@@ -868,55 +869,18 @@ function submitterKey(candidates: readonly Candidate[], submitter: string): stri
   return row ? candidateKey(row) : submitter;
 }
 
-/**
- * Candidates allowed to execute a released contract: no excluded executor
- * model at any effort, and, once any executor is excluded, measured implement
- * quality strictly above the strongest excluded one. Undefined — the
- * submitter keeps the plan with both incumbent minimums — when the contract
- * keeps the submitter, nobody qualifies, or an excluded executor's quality
- * cannot be found, since then no candidate can be shown to be stronger.
- */
-function executorPool(
-  candidates: Candidate[],
-  state: WorkPhaseState | undefined,
-  contract: ExecutionContract,
-  compareOpts: StrongerCompareOpts,
-): { pool: Candidate[]; minimum: number } | undefined {
-  const minimum = contract.minimum;
-  if (minimum == null) return undefined;
-  const excluded = state?.excludedExecutors ?? [];
-  if (compareOpts.policyVersion === 'cheapest-sufficient') {
-    const pool = candidates.filter((c) => !isExcludedExecutor(state, candidateKey(c)) && excluded.every((key) =>
-      isStrictlyStrongerCandidate(c, key, 'implement', findSourceCandidate(candidates, key), { ...compareOpts, candidates }),
-    ));
-    return pool.length > 0 ? { pool, minimum } : undefined;
-  }
-  const excludedQualities = excluded.map((key) => {
-    const row = findSourceCandidate(candidates, key);
-    return row ? capabilityForDimension(row, 'implement') : undefined;
-  });
-  if (excludedQualities.some((quality) => quality == null)) return undefined;
-  const excludedQuality = Math.max(-Infinity, ...(excludedQualities as number[]));
-  const pool = candidates.filter((c) => {
-    const key = candidateKey(c);
-    if (isExcludedExecutor(state, key)) return false;
-    if (excluded.length === 0) return true;
-    const quality = capabilityForDimension(c, 'implement');
-    return quality != null && quality > excludedQuality;
-  });
-  return pool.length > 0 ? { pool, minimum } : undefined;
-}
-
 /** Advance the work phase, score the live pool, and record the decision. */
-function scoreRouterTurn(args: {
+async function scoreRouterTurn(args: {
   prepared: PreparedTurn;
   resolved: ResolvedTurn;
   options: SimpleStreamOptions | undefined;
   session: RouterSession;
   /** An explicit user pin is served even if it failed earlier this session. */
   pinned?: boolean;
-}): { kind: 'ready'; scored: ScoredTurn } | RouterTurnOutcome {
-  const { prepared, resolved, options, session, pinned } = args;
+  /** The pool names exact actions (a manual or semi pin); no other effort is legal. */
+  exactActions?: boolean;
+}): Promise<{ kind: 'ready'; scored: ScoredTurn } | RouterTurnOutcome> {
+  const { prepared, resolved, options, session, pinned, exactActions } = args;
   const { config, measured, intent, candidates, trajectoryEscalation } = prepared;
   const { turnInput, needsVision, estContextTokens } = measured;
   const { cacheHit } = intent;
@@ -978,12 +942,9 @@ function scoreRouterTurn(args: {
   }
   const routedDimension = reviewing ? 'review' : implementing ? 'implement' : phase.dimension;
   const routedCause = reviewing || implementing ? 'execution-contract' : phase.cause ?? baseCause;
-  // The reasoning phase is scored at its handoff's minimum; its incumbent
-  // minimums are skipped once, until a model serves the phase. A recovery
-  // entry keeps its deliverable's strength: no rubric discounts it.
+  // The handoff that owns this phase, until a model serves it.
   const reasoning = routedDimension === entry?.reasoningHandoff?.target ? entry.reasoningHandoff : undefined;
   const pendingBoundary = entry?.contextStatus === 'ready-pending' && !handBack;
-  const reasoningPending = pendingBoundary && reasoning?.pending === true;
 
   // Pi clears lastServed at stream start; the rotated value is the model and
   // effort that actually served, including an incumbent effort raise or fallback.
@@ -998,13 +959,7 @@ function scoreRouterTurn(args: {
   const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
   const userReasoningOverride =
     requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
-  const execution = contractActive && contract.release
-    ? executorPool(routableCandidates, session.getWorkPhaseState(), contract, {
-        policyVersion: prepared.policyVersion,
-        userReasoning: requestedReasoning as ThinkingLevel | undefined,
-        userReasoningOverride,
-      })
-    : undefined;
+  const execution = contractActive && contract.release;
   const warm = session.warmPrefixTokens(Date.now(), estContextTokens, PROMPT_CACHE_TTL_MS);
   const history = config.reputation === false ? undefined : session.getModelHistory(turnInput.key);
   if (history) {
@@ -1012,54 +967,120 @@ function scoreRouterTurn(args: {
       warm.set(key, Math.max(warm.get(key) ?? 0, tokens));
     }
   }
-  const policy = resolveRoutingDecisionForEvaluation({
-    candidates: execution?.pool ?? routableCandidates,
-    benchmarkIndexVersion: prepared.benchmarkIndexVersion,
-    benchmarkSnapshotDigest: prepared.benchmarkSnapshotDigest,
-    baseDimension: routedDimension,
-    baseCause: routedCause,
-    trajectoryEscalation,
-    userReasoning: requestedReasoning as ThinkingLevel | undefined,
-    userReasoningOverride,
+  const identity = (key: string): ServedIdentity => {
+    const parsed = parseCandidateKey(key);
+    return { registryId: `${parsed.provider}/${parsed.id}`, ...(parsed.effort ? { effort: parsed.effort } : {}) };
+  };
+  const rework = trajectoryEscalation ? identity(trajectoryEscalation.fromModel) : undefined;
+  // Without a work item, the entry scopes friction evidence.
+  const workItemId = session.getWorkPhaseState()?.workItemId ?? turnInput.key;
+  const state: DecisionStateV1 = {
+    phase: routedDimension,
+    workItemId,
+    difficulty: phaseDifficulty(entry, routedDimension),
+    openDecisions: entry?.changeFacts?.declared?.decisions?.length,
     estimatedContextTokens: estContextTokens,
-    warmPrefixTokens: warm,
-    protocolPenalties: history ? compliancePenalties(history, config.reputationWeights, config.switchMargin) : undefined,
     needsVision,
-    incumbentRegistryId,
-    sameIntentAsLast: session.getLastDecision()?.intentKey === turnInput.key,
-    ...(execution
-      ? { handoffMinimum: execution.minimum, handoffPending: contract?.releasePending === true }
-      : reasoning ? { handoffMinimum: reasoning.minimum, handoffPending: reasoningPending }
-        // Any accepted handoff lets the router choose the next phase's model once.
-        : pendingBoundary ? { handoffPending: true } : {}),
-    // The conservative fallback records new work without evidence of a change.
-    ...(resolved.context ? {
-      workRelation: resolved.context.resolution.resolver === 'fallback'
-        ? 'unknown' as const
-        : resolved.context.resolution.relation,
-    } : {}),
-    config,
-  }, prepared.policyVersion);
+    boundary: rework ? 'rework' : 'ordinary',
+    ...(rework ? { rework: { failed: rework, workItemId } } : {}),
+    ...(!rework && incumbentRegistryId ? { incumbent: identity(incumbentRegistryId) } : {}),
+    // Objective struggle is friction of the exact served model and effort.
+    friction: rework && trajectoryEscalation ? [{
+      ...rework,
+      workItemId,
+      kind: trajectoryEscalation.signals.some((signal) => signal.kind === 'reasoning-loop' && signal.severity === 'severe')
+        ? 'severe-reasoning-loop' as const : 'attributed-rework' as const,
+    }] : [],
+    cache: {
+      observedAtMs: Date.now(),
+      promptIdentity: prepared.cacheHead.identity,
+      ...(incumbentRegistryId ? { incumbentKey: incumbentRegistryId } : {}),
+      warmPrefixTokens: warm,
+      ttlMs: PROMPT_CACHE_TTL_MS,
+      source: history ? 'model-history' : warm.size > 0 ? 'session' : 'none',
+    },
+    promptIdentity: prepared.cacheHead.identity,
+    nowMs: Date.now(),
+    isSubagentSpawn: false,
+    ...(prepared.benchmarkIndexVersion ? { benchmarkIndexVersion: prepared.benchmarkIndexVersion } : {}),
+  };
+  session.preparation.observe(turnInput.key, estContextTokens);
+  const liveExclusions = session.getBlacklistedModels();
+  const continuing = !entry?.priorCompletion && !trajectoryEscalation && !pendingBoundary && !contract?.releasePending && previous
+    && session.getLastDecision()?.dimension === routedDimension
+    && (entry?.incumbentServes || entry?.contextStatus === 'served');
+  const heldOwner = handBack?.submitter ?? (contractActive && !contract.release ? contract.submitter
+    : continuing ? servedCandidateKey : undefined);
+  const ownershipPool = heldOwner
+    ? routableCandidates.filter((candidate) => candidate.registryId === identity(heldOwner).registryId)
+    : routableCandidates;
+  const registryModels = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
+  const sameOrLowerRecovery = (key: string): boolean => {
+    const actor = identity(key);
+    return rework !== undefined && actor.registryId === rework.registryId
+      && effortRank(actor.effort) <= effortRank(rework.effort);
+  };
+  // Recovery permits another model or a higher supported effort. If neither
+  // can accept this prompt, the requesting model remains callable.
+  const poolWindows = new Map(ownershipPool.map((candidate) => [candidate.registryId, candidate.contextWindow]));
+  const recoveryAlternative = rework !== undefined && registryModels.some((model) =>
+    poolWindows.has(`${model.provider}/${model.id}`)
+    && holdsPrompt(poolWindows.get(`${model.provider}/${model.id}`)!, estContextTokens)
+    && enumerateEffectiveActions(model).some((action) => !sameOrLowerRecovery(action.key)
+      && !liveExclusions.has(action.key)
+      && !(routedDimension === 'implement' && isExcludedExecutor(entry, action.key))));
+  const outcome = await resolveUnifiedDecision({
+    state,
+    cause: routedCause,
+    authorizationScope: {
+      boundaryId: turnInput.key, workItemId, phase: routedDimension,
+      assignmentId: randomUUID(), revision: (entry?.boundaryAuthorization?.revision ?? 0) + 1,
+    },
+    ...(!pinned && entry ? { workState: entry } : {}),
+    candidates: ownershipPool,
+    registryModels,
+    rows: prepared.store ? activeModels(prepared.store) : [],
+    // An explicit pin is served even if it failed earlier this session.
+    isExcluded: (key) => !pinned && (liveExclusions.has(key) || (recoveryAlternative && sameOrLowerRecovery(key))),
+    ...(exactActions ? { exactActions: true } : {}),
+    ...(!userReasoningOverride && handBack && identity(handBack.submitter).effort
+      ? { minimumEffort: identity(handBack.submitter).effort }
+      : continuing && !userReasoningOverride && previous?.thinkingLevel
+        ? { minimumEffort: previous.thinkingLevel as ModelThinkingLevel } : {}),
+    ...(userReasoningOverride && requestedReasoning && (MODEL_THINKING_LEVELS as readonly string[]).includes(requestedReasoning)
+      ? { effortOverride: requestedReasoning as ModelThinkingLevel } : {}),
+    ...(incumbentRegistryId ? { incumbentKey: incumbentRegistryId } : {}),
+    signal: options?.signal,
+    isCurrent: () => resolved.stillCurrent()
+      && session.getWorkPhaseState()?.intentKey === turnInput.key
+      && (session.getWorkPhaseState()?.workItemId ?? turnInput.key) === workItemId
+      && session.getWorkPhaseState()?.providerInvocation === entry?.providerInvocation,
+
+  }, (ranking, chosen, candidates) => session.preparation.plan(ranking, chosen, candidates, estContextTokens)?.key);
+  if (outcome.kind === 'cancelled') return { kind: 'terminal', reason: 'aborted', message: 'Routing was cancelled.' };
+  if (outcome.kind === 'stale') return SESSION_CHANGED;
+  // Every legal action is excluded: name the exclusions, as for an empty pool.
+  if (outcome.decision.fallbackChain.length === 0) return noRoutableCandidates(session);
+  const live = session.getWorkPhaseState();
+  if (!resolved.stillCurrent() || live?.intentKey !== turnInput.key || (live.workItemId ?? turnInput.key) !== workItemId) return SESSION_CHANGED;
+  session.commitWorkPhaseState({ ...live, boundaryAuthorization: outcome.authorization });
+  const policy = { decision: outcome.decision, candidates: outcome.candidates, trajectoryApplied: rework !== undefined };
   const decision = policy.decision;
-  // An unproved executor replacement retains the submitter. Estimated quality
-  // can exceed its incumbent minimum without proving a stronger replacement.
-  if (prepared.policyVersion === 'cheapest-sufficient' && contractActive && contract?.release && !execution && !policy.trajectoryApplied) {
-    const submitter = submitterKey(policy.candidates, contract.submitter);
-    const index = decision.fallbackChain.indexOf(submitter);
-    if (index >= 0 && index !== 0) {
-      decision.fallbackChain.splice(index, 1);
-      decision.fallbackChain.unshift(submitter);
-      decision.chosen = submitter;
-      decision.switched = incumbentRegistryId != null && incumbentRegistryId !== submitter;
-      addReasonDetail(decision, { kind: 'executor-unavailable' });
-    }
+  if (decision.unified) decision.unified.benchmarkSnapshotDigest = prepared.benchmarkSnapshotDigest;
+  if (rework && trajectoryEscalation) {
+    decision.trajectoryFriction = {
+      tfi: trajectoryEscalation.tfi,
+      signals: trajectoryEscalation.signals.map(({ kind, severity, evidenceCount }) => ({
+        kind, severity: severity as 'warning' | 'severe', evidenceCount,
+      })),
+      fromModel: trajectoryEscalation.fromModel,
+      preOutput: trajectoryEscalation.preOutput,
+      // The requesting action remains only when no permitted recovery action can accept the prompt.
+      ...(sameOrLowerRecovery(decision.chosen) ? { unavailable: true } : {}),
+    };
+    if (!decision.trajectoryFriction.unavailable && POLICY_PASSIVE_CAUSES.has(decision.cause)) decision.cause = 'trajectory-escalation';
   }
-  // The scored pool can hold an incumbent row at its served effort that the
-  // routable pool does not; later lookups by chain key need it.
-  const scoredCandidates = [
-    ...routableCandidates,
-    ...policy.candidates.filter((c) => !routableCandidates.some((r) => candidateKey(r) === candidateKey(c))),
-  ];
+  const scoredCandidates = policy.candidates.filter((candidate) => actorAllowedForBoundary(outcome.authorization, candidateKey(candidate)));
   if (reasoning && policy.trajectoryApplied && !reasoning.trajectoryFired) {
     const current = session.getWorkPhaseState()!;
     session.commitWorkPhaseState({ ...current, reasoningHandoff: { ...reasoning, trajectoryFired: true } });
@@ -1104,43 +1125,12 @@ function scoreRouterTurn(args: {
     decision,
     routableCandidates: scoredCandidates,
     requestedReasoning,
+    authorization: outcome.authorization,
     ...(restore ? { restoredContract: restore } : {}),
     ...(pendingBoundary ? { pendingBoundary: true } : {}),
     ...(execution && contract?.releasePending ? { releasesContract: true } : {}),
   };
-  // Outside collecting context and its boundary, the incumbent serves: only
-  // a plan, trajectory evidence, or a pin routes elsewhere.
-  const status = session.getWorkPhaseState()?.contextStatus;
-  const holds = !pinned && !contract && !policy.trajectoryApplied
-    && status !== 'acquiring' && status !== 'clarification-only' && status !== 'ready-pending';
-  return { kind: 'ready', scored: (holds && holdIncumbentServing(prepared, scored, session)) || scored };
-}
-
-/**
- * The incumbent at its served thinking level, with the scored chain behind it
- * as fallback. Undefined when it is not routable now: an excluded or removed
- * model is never restored by holding it.
- */
-function holdIncumbentServing(prepared: PreparedTurn, scored: ScoredTurn, session: RouterSession): ScoredTurn | undefined {
-  const incumbent = session.context.getIncumbent();
-  if (!incumbent) return undefined;
-  const preferred = incumbent.thinkingLevel ? `${incumbent.registryId}:${incumbent.thinkingLevel}` : incumbent.registryId;
-  const held = scored.routableCandidates.find((c) => candidateKey(c) === preferred)
-    ?? scored.routableCandidates.find((c) => candidateKey(c) === incumbent.registryId);
-  if (!held) return undefined;
-  const key = candidateKey(held);
-  if (key === scored.decision.chosen) return undefined;
-  const pinned = pinnedScored({
-    base: scored,
-    chosen: held,
-    routableCandidates: scored.routableCandidates,
-    cause: 'incumbent',
-    reason: `kept ${key}, the model serving this session`,
-    prepared,
-    session,
-  });
-  pinned.decision.fallbackChain = [key, ...scored.decision.fallbackChain.filter((other) => other !== key)];
-  return { ...scored, decision: pinned.decision };
+  return { kind: 'ready', scored };
 }
 
 /**
@@ -1356,12 +1346,23 @@ async function delegateRouterTurn(args: {
       appendContractOutcome(afterServe, 'broken');
       session.commitWorkPhaseState({ ...afterServe, contract: undefined });
     }
-    // A plan's release and a reasoning handoff's boundary belong to the first
-    // invocation served by a candidate that clears the phase's minimum. A
-    // fallback below it leaves the boundary pending; when no candidate clears
-    // it, whichever serves is the best the pool offers.
-    const qualifiers = boundaryQualifiers(scored.decision);
-    if (qualifiers.length > 0 && !servesBoundary(served, qualifiers)) return finalDecision;
+    const authorization = scored.authorization;
+    const currentAuthorization = session.getWorkPhaseState()?.boundaryAuthorization;
+    if (authorization) {
+      if (!resolved.stillCurrent() || currentAuthorization?.assignmentId !== authorization.assignmentId
+        || settling?.intentKey !== intentKey || (settling.workItemId ?? intentKey) !== authorization.workItemId
+        || finalDecision.dimension !== authorization.phase) return finalDecision;
+      const model = registryModels.find((model) => `${model.provider}/${model.id}` === lastServed.registryId);
+      const actualServed = model && lastServed.thinkingLevel
+        ? overrideAction(model, lastServed.thinkingLevel as ModelThinkingLevel)?.key ?? served
+        : served;
+      const confirmed = settleAuthorization(authorization, {
+        boundaryId: authorization.boundaryId, workItemId: authorization.workItemId, phase: finalDecision.dimension,
+        assignmentId: authorization.assignmentId, revision: authorization.revision, actualServed, answered: true,
+      });
+      if (confirmed.state !== 'served') return finalDecision;
+      session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, boundaryAuthorization: confirmed });
+    }
     const releasing = session.getWorkPhaseState();
     if (scored.releasesContract && releasing?.contract?.status === 'active') {
       session.commitWorkPhaseState(serveContractRelease(releasing));
@@ -1381,6 +1382,8 @@ async function delegateRouterTurn(args: {
     });
     return handoff ? { ...finalDecision, reasoningHandoff: handoff } : finalDecision;
   };
+  if (!resolved.stillCurrent() || (scored.authorization
+    && session.getWorkPhaseState()?.boundaryAuthorization?.assignmentId !== scored.authorization.assignmentId)) return SESSION_CHANGED;
   const result = await runDelegationLoop(delegationOptions, stream);
   if (result.success && session.getSessionGeneration() === delegationSessionGeneration) {
     recordServedWork(session, session.getWorkPhaseState()?.workItemId);
@@ -1553,8 +1556,13 @@ function pinnedScored(args: {
   } catch {
     // Best-effort report telemetry only; failure must not stop routing.
   }
+  const authorization = base.authorization && createBoundaryAuthorization({
+    ...base.authorization, assignmentId: randomUUID(), revision: base.authorization.revision + 1,
+  }, [key]);
+  const current = session.getWorkPhaseState();
+  if (current && authorization) session.commitWorkPhaseState({ ...current, boundaryAuthorization: authorization });
   session.setLastDecision(decision);
-  return { decision, routableCandidates, requestedReasoning: base.requestedReasoning };
+  return { ...base, decision, routableCandidates, authorization, requestedReasoning: base.requestedReasoning };
 }
 
 type SemiOutcome = { kind: 'proceed' } | { kind: 'override'; scored: ScoredTurn } | { kind: 'terminal'; reason: 'error' | 'aborted'; message: string };
@@ -1716,7 +1724,7 @@ async function resolveTrajectoryUnavailableGate(args: {
     if (pinned) return { kind: 'proceed' };
     if (decision.trajectoryFriction?.unavailable !== true) return { kind: 'proceed' };
     const fromModel = decision.trajectoryFriction.fromModel;
-    const message = `${fromModel} is struggling and no stronger model is available for this turn.`;
+    const message = `${fromModel} is struggling and no permitted recovery action can accept this prompt.`;
     if (semi && ctx?.hasUI) {
       const cont = 'Yes \u2014 continue with the current model';
       const stop = 'No \u2014 stop';
@@ -1726,7 +1734,7 @@ async function resolveTrajectoryUnavailableGate(args: {
         options?.signal ? { signal: options.signal } : undefined,
       );
       if (choice === undefined || choice === stop) {
-        return { kind: 'terminal', reason: 'aborted', message: 'Stopped: no stronger model available for a struggling turn.' };
+        return { kind: 'terminal', reason: 'aborted', message: 'Stopped: no other model ranks higher for a struggling turn.' };
       }
       return { kind: 'proceed' };
     }
@@ -1814,12 +1822,13 @@ async function runManualTurn(args: {
     ...(resolvedContext ? { context: resolvedContext } : {}),
     ...(pendingIdentity ? { pendingIdentity } : {}),
   };
-  const scoring = scoreRouterTurn({
+  const scoring = await scoreRouterTurn({
     prepared: manualPrepared,
     resolved,
     options,
     session,
     pinned: cause === 'manual-override',
+    exactActions: true,
   });
   if (scoring.kind !== 'ready') return scoring;
 
@@ -1859,10 +1868,9 @@ async function runManualTurn(args: {
 }
 
 /**
- * Serve `/router-manual resume`: reuse the pre-pin auto decision's model and
- * fallback chain for this user entry instead of recomputing. Returns
- * `{ kind: 'recompute' }` when none of the snapshot's chain survives the live
- * runtime exclusions, so the caller falls through to ordinary auto routing.
+ * Resume the pre-pin task when its benchmark snapshot and preferences match.
+ * The selector applies live exclusions and creates a fresh authorization.
+ * A changed snapshot returns to ordinary auto routing.
  */
 async function runResumeTurn(args: {
   prepared: PreparedTurn;
@@ -1875,26 +1883,15 @@ async function runResumeTurn(args: {
   stream: AssistantMessageEventStream;
 }): Promise<RouterTurnOutcome | { kind: 'recompute' }> {
   const { prepared, resume, context, options, pi, session, turnTimer, stream } = args;
-  // A saved candidate-policy decision names the snapshot it compared. Its fallback chain and
-  // capability evidence are valid only against the same policy and rows.
-  if (
-    (resume.policyVersion ?? 'legacy') !== prepared.policyVersion
-    || (prepared.policyVersion === 'cheapest-sufficient'
-      && resume.capabilityEvidence?.benchmarkSnapshotDigest !== prepared.benchmarkSnapshotDigest)
+  // A saved route is valid only for its benchmark snapshot and preference profile.
+  if (!resume.unified
+    || resume.unified.benchmarkSnapshotDigest !== prepared.benchmarkSnapshotDigest
+    || resume.unified.profileDigest !== loadPreferenceSnapshot().digest
   ) {
     session.clearPendingResume();
     return { kind: 'recompute' };
   }
-  const routableCandidates = applyRuntimeExclusions(prepared.candidates, session);
-  const present = new Set(routableCandidates.map((c) => candidateKey(c)));
-  const chain = resume.fallbackChain.filter((key) => present.has(key));
-  if (chain.length === 0) {
-    // The remembered route no longer exists (blacklisted/usage-limited); expire
-    // the one-shot and recompute rather than serve an empty chain.
-    session.clearPendingResume();
-    return { kind: 'recompute' };
-  }
-
+  const generation = session.getSessionGeneration();
   const entryContext = await resolvePinnedEntryContext(prepared, session);
   const { turnInput } = prepared.measured;
   if (entryContext === 'aborted') return SESSION_CHANGED;
@@ -1911,41 +1908,17 @@ async function runResumeTurn(args: {
     });
   }
 
-  const decision: RoutingDecision = {
-    ...resume,
-    chosen: chain[0],
-    fallbackChain: chain,
-    cause: 'resume',
-    reason: `Resumed prior route: ${chain[0]}`,
-    intentKey: turnInput.key,
-    provenanceCounts: turnInput.provenanceCounts,
-    ...(entryContext ? { workContext: workContextMeta(entryContext) } : {}),
-  };
-  // Drop annotations that belonged to the snapshot's own turn: this turn did
-  // not re-derive friction, a pick change, or its work context.
-  delete decision.trajectoryFriction;
-  delete decision.confidence;
-  delete decision.routedUp;
-  delete decision.routedDown;
-  if (!entryContext) delete decision.workContext;
-  delete decision.routedPickChanged;
-  try {
-    decision.baseline = pickBaseline(routableCandidates, decision.dimension, prepared.config.baselineModel);
-  } catch {
-    // Best-effort report telemetry only.
-  }
-  session.setLastDecision(decision);
-
   const resolved: ResolvedTurn = {
-    baseDimension: decision.dimension,
+    baseDimension: resume.dimension,
     baseCause: 'resume',
-    stillCurrent: () => true,
+    stillCurrent: () => session.getSessionGeneration() === generation,
+    ...(entryContext ? { context: entryContext } : {}),
   };
-  const scored: ScoredTurn = {
-    decision,
-    routableCandidates,
-    requestedReasoning: typeof options?.reasoning === 'string' ? options.reasoning : undefined,
-  };
+  const selection = await scoreRouterTurn({ prepared, resolved, options, session });
+  if (selection.kind !== 'ready') return selection;
+  const scored = selection.scored;
+  scored.decision.cause = 'resume';
+  session.setLastDecision(scored.decision);
   return delegateRouterTurn({
     prepared,
     resolved,
@@ -2024,7 +1997,7 @@ async function runRouterTurn(args: {
   if (resolvedTurn.kind !== 'ready') return resolvedTurn;
   const { resolved } = resolvedTurn;
 
-  const scoring = scoreRouterTurn({ prepared, resolved, options, session });
+  const scoring = await scoreRouterTurn({ prepared, resolved, options, session });
   if (scoring.kind !== 'ready') return scoring;
 
   const semi = await resolveSemiGate({ prepared, scored: scoring.scored, options, session });
@@ -2101,6 +2074,10 @@ export function registerAutoRouterProvider(
       m.provider === served.registryId.slice(0, slash) && m.id === served.registryId.slice(slash + 1))
     : undefined;
   if (servedModel?.contextWindow && servedModel.contextWindow > 0) maxCw = servedModel.contextWindow;
+  // A better-ranked action that needs a smaller prompt: Pi compacts for its
+  // window before the next request (see context-preparation.ts).
+  const preparationWindow = session.preparation.advertisedWindow();
+  if (preparationWindow) maxCw = preparationWindow;
   if (servedModel?.maxTokens && servedModel.maxTokens > 0) maxMT = servedModel.maxTokens;
   // A configured `routerContextWindow` lets the user advertise a smaller
   // effective window so Pi compacts earlier and keeps cheaper models eligible

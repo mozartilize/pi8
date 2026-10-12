@@ -7,6 +7,7 @@ import type { GroundedArtifact } from '../context/types.js';
 import type { PendingIdentity } from '../../serve/context-resolution.js';
 import { defaultRequirement, FRONTIER_REQUIREMENT, MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
 import type { PolicyVersion } from './policy-version.js';
+import type { BoundaryAuthorizationV1 } from './boundary-authorization.js';
 
 const KIND_BASE = { lightweight: 0.10, gather: 0.20, implement: 0.30, review: 0.30, plan: 0.35 } as const;
 const COMPLEXITY = { trivial: 0, routine: 0.25, moderate: 0.5, hard: 0.75, frontier: 1 } as const;
@@ -52,6 +53,8 @@ export interface WorkPhaseState {
   partialReadCount?: number;
   /** Context → planning/review handoff for this entry; never inherited. */
   reasoningHandoff?: ReasoningHandoffMeta;
+  /** Permissions for the current work item, phase and provider assignment. */
+  boundaryAuthorization?: BoundaryAuthorizationV1;
   /** Facts declared at this entry's accepted handoff, and their log record; never inherited. */
   changeFacts?: ChangeFactsState;
   /** Verifier results this entry observed, before and after its handoff; never inherited. */

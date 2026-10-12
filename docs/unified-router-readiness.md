@@ -2,9 +2,15 @@
 
 ## Current implementation
 
-The unified selector is not connected to production routing. Provider routing,
-delegation and subagent selection still use the existing selection paths.
-Selector tests do not establish runtime migration safety.
+The production provider uses the unified selector for model and effort selection.
+It creates work-item and phase permissions before comparison, checks them before
+dispatch, and settles pending handoffs and contract releases after actual serve.
+Empty preferences use the default coefficient domain.
+
+In-provider pre-output recovery and subagent selection still use the existing
+selection paths. The preference command, full transactional reservation, legacy
+state migration and production Pi host exit checks remain incomplete. This is
+not a complete production release.
 
 The following modules have executable offline tests:
 
@@ -24,9 +30,10 @@ Two policy decisions are settled:
 2. Pre-output intervention awaits the shared selector on demand. The final
    output check, abort and reservation form one atomic operation.
 
-These modules currently have controlled-port tests, not complete Pi integration
-coverage. `/router-preferences` and its optional setup notice are not implemented.
-Preference storage and notice-state helpers exist.
+Controlled-port tests and provider orchestration tests cover these modules.
+They do not establish complete Pi integration coverage. `/router-preferences`
+and its optional setup notice are not implemented. Preference storage and
+notice-state helpers exist.
 
 ## Work-item and phase permissions
 
@@ -53,8 +60,16 @@ identity. Actual-serve receipts must match the work item, phase, boundary,
 assignment and revision. A failed attempt, stale receipt or unauthorized model
 cannot settle the boundary or release a pending contract.
 
-This path has controlled-host tests. The production provider cutover remains
-separate; these tests do not establish that production uses these permissions.
+The production provider applies these permissions to ordinary routing and
+execution contracts. A contract that returns to its submitter permits only that
+submitter; failed dispatch leaves the return pending. An open behavior, interface
+or design choice also keeps a plan with its submitter. Benchmark quality and task
+difficulty do not change this release permission.
+
+Provider tests cover legal fallback settlement, excluded executors, pending
+returns, cancellation, stale preferences and unchanged-snapshot manual resume.
+Complete single-use reservation and branch restoration checks remain release
+conditions.
 
 ## Conditions before runtime migration
 
@@ -134,17 +149,21 @@ The report includes uncapped timings and actual results for each tested budget.
 Missing local data leaves the local production-budget condition unmeasured.
 Fixture-only measurements do not satisfy that condition.
 
-## Verification of this preparation step
+## Verification of the provider integration
 
 - `npm run tsc`: passed, including eval compilation.
-- `timeout 900 npx vitest run`: 110 files passed and 2 skipped. 1896 tests passed
+- `timeout 300 npx vitest run`: 116 files passed and 2 skipped. 1973 tests passed
   and 3 skipped.
-- `npm run measure:pool`: the opt-in measurement test passed.
-- Removing an active row's provenance, while updating its digest, caused the
-  fixture provenance test to fail. The correct fixture passed after removal
-  of the mutation.
+- Six production selection adapter tests cover effort enumeration, thinking
+  minimums, smaller-window retention, scoped exclusions, stale profiles and
+  cancellation.
+- Removing the live preference-digest check caused the stale-profile test to
+  fail. Classifying higher effort on the same model as unavailable caused the
+  recovery test to fail. Both tests passed after restoration.
+- Estimated fixture axes remain estimated unless they declare measured
+  provenance explicitly.
 
-No production routing path changed. No model-provider calls were made by the
-fixture generator or measurement. The requested oracle review produced no
-review because the bridge failed to resolve its conversation. No substitute
-advisor was used. Real Pi integration remains unverified for the new adapters.
+Provider tests use scripted streams. They make no model-provider calls. No
+subagent was started. The new production adapters still need the Pi host exit
+checks above. Pre-output recovery, subagent selection and preference UI remain
+incomplete.

@@ -23,6 +23,7 @@ import { debugLog } from '../host/debuglog.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
+import { ContextPreparationState } from './context-preparation.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
 import type { PendingTrajectoryEscalation, StruggleDecision } from '../routing/struggle/types.js';
 import type { ToolCycleInput } from '../routing/struggle/fingerprints.js';
@@ -295,6 +296,8 @@ export class RouterSession {
   public readonly context = new RoutingContextState();
   /** Router notes recorded on the active branch; the persistence binding survives resets. */
   public readonly notes = new RequestNoteState();
+  /** Smaller-window action that waits for Pi compaction. */
+  public readonly preparation = new ContextPreparationState();
   private readonly trajectory = new TrajectoryState();
   private recoveryNoteDue = false;
 
@@ -733,6 +736,7 @@ export class RouterSession {
     this.intent.reset();
     this.context.reset();
     this.notes.reset();
+    this.preparation.reset();
     this.trajectory.reset();
     // Note: blacklist exclusions are cleared independently via blacklist.clearSessionBlacklist()
   }

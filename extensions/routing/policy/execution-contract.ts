@@ -105,7 +105,7 @@ export interface ExecutionContract {
    * served it yet. The first invocation that serves the plan owns it.
    */
   releasePending?: boolean;
-  requirement: number;
+  requirement?: number;
   keepReason?: ContractKeepReason;
   /** Undefined when the submitter scored no criterion. */
   rubric?: ExecutionRubric;
@@ -339,6 +339,27 @@ function acceptContractByRequirement(state: WorkPhaseState, input: AcceptInput):
   return { ...state, contract };
 }
 
+/** A closed, safe plan can be released regardless of benchmark quality or task difficulty. */
+export function acceptContractV2(state: WorkPhaseState, input: AcceptInput): WorkPhaseState {
+  const { validation, rubric, measured } = input;
+  const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
+    ? 'unknown-target'
+    : validation.deletes ? 'delete' : validation.shapeBand == null ? 'size'
+        : (rubric?.openDecisions ?? 0) >= OPEN_DECISION_LEVEL ? 'open-decisions' : undefined;
+  return {
+    ...state,
+    contract: {
+      status: 'active', submitter: input.submitter,
+      ...(input.submitterTemporary ? { submitterTemporary: true } : {}),
+      release: keepReason === undefined,
+      ...(keepReason ? { keepReason } : { releasePending: true }),
+      ...(rubric ? { rubric } : {}), measured,
+      targets: validation.targets, pending: validation.editTargets,
+      steps: validation.steps, acceptedAt: state.providerInvocation,
+    },
+  };
+}
+
 export function acceptContract(state: WorkPhaseState, input: AcceptInput, version: PolicyVersion = 'legacy'): WorkPhaseState {
   if (version === 'cheapest-sufficient') return acceptContractByRequirement(state, input);
   const { validation, rubric, measured } = input;
@@ -546,7 +567,7 @@ export function contractMeta(state: WorkPhaseState): ExecutionContractMeta | und
     ...(contract.band ? { band: contract.band } : {}),
     release: contract.release,
     ...(contract.minimum != null ? { minimum: contract.minimum } : {}),
-    requirement: contract.requirement,
+    ...(contract.requirement !== undefined ? { requirement: contract.requirement } : {}),
     ...(contract.keepReason ? { keepReason: contract.keepReason } : {}),
     rubric: contract.rubric,
     measured: contract.measured,

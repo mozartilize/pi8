@@ -35,6 +35,7 @@ import {
   EXECUTION_CONTRACT_TOOL,
   MAX_CONTRACT_STEPS,
   acceptContract,
+  acceptContractV2,
   attributeExecutor,
   breakContract,
   contractMeta,
@@ -161,12 +162,16 @@ function handoffInapplicable(
   // only after the invocation's stream ends.
   const reasoning = state.reasoningHandoff;
   if (reasoning?.pending && last.dimension === reasoning.target && served) {
-    const qualifiers = boundaryQualifiers(last);
-    if (qualifiers.length > 0 && !servesBoundary(served, qualifiers)) {
+    const qualifiers = last.unified ? [] : boundaryQualifiers(last);
+    const authorization = state.boundaryAuthorization;
+    if (last.unified
+      ? authorization?.state !== 'served' || authorization.phase !== reasoning.target
+      : qualifiers.length > 0 && !servesBoundary(served, qualifiers)) {
       return {
         ok: false,
         code: 'handoff-pending',
-        reason: `this model serves the ${reasoning.target} step only as a fallback below its minimum`,
+        reason: last.unified ? `the ${reasoning.target} handoff has no confirmed permitted model`
+          : `this model serves the ${reasoning.target} step only as a fallback below its minimum`,
       };
     }
   }
@@ -496,7 +501,7 @@ export function submitExecutionContract(
     // The revised plan replaces a broken one whose handback has not been consumed yet.
     appendContractOutcome(state, 'broken');
   }
-  const accepted = acceptContract(base, {
+  const input = {
     submitter: served,
     // A model that serves only because of an escalation or a fallback does
     // not own the review of the plan it submits.
@@ -505,8 +510,9 @@ export function submitExecutionContract(
     validation,
     rubric: parseRubric(params?.remainingWork),
     measured: { ...validation.structural, ...observed },
-  }, evaluationPolicyVersion());
-  // The shadow requirement is logged next to the one routing uses; it does not route.
+  };
+  const accepted = last.unified ? acceptContractV2(base, input) : acceptContract(base, input, evaluationPolicyVersion());
+  // The shadow requirement is diagnostic evidence only.
   const declared = { ...parseDeclaredFacts(params?.facts), ...stepFacts(steps ?? []) };
   const valued = accepted.contract
     ? { ...accepted, contract: { ...accepted.contract,
@@ -535,7 +541,8 @@ export function submitExecutionContract(
   recordBoundary(session, next, 'execution-contract', state.intentKey);
   const contract = next.contract!;
   const header = contract.release
-    ? `Execution plan accepted (${contract.band ? `${contract.band}, ` : ''}executor minimum ${contract.minimum!.toFixed(2)}). A model ` +
+    ? (last.unified ? 'Execution plan accepted. A model '
+      : `Execution plan accepted (${contract.band ? `${contract.band}, ` : ''}executor minimum ${contract.minimum!.toFixed(2)}). A model `) +
       'chosen for this plan executes it from the next step. When every listed file is edited, the work returns ' +
       'to the submitting model for review.'
     : `Execution plan accepted. The current model keeps executing it: ${KEEP_REASONS[contract.keepReason ?? 'difficulty']}.`;

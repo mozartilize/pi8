@@ -182,7 +182,7 @@ describe('execution contract lifecycle', () => {
   it('requires the higher of the computed requirement and the band minimum', () => {
     const contract = accepted([edit('a.ts')], state(), { openDecisions: 2 }).contract!;
     expect(contract.band).toBe('economy');
-    expect(contract.minimum).toBeCloseTo(contract.requirement);
+    expect(contract.minimum).toBeCloseTo(contract.requirement!);
     expect(contract.minimum).toBeGreaterThan(BASE_REQUIREMENT);
   });
 
@@ -381,7 +381,7 @@ describe('execution contract under the candidate policy', () => {
 
   it('requires the larger of the assessed requirement and the shape requirement, and keeps a plan at the delegation limit', () => {
     const raised = candidate([edit('a.ts')], state(), { openDecisions: 2 });
-    expect(raised.minimum).toBeCloseTo(raised.requirement);
+    expect(raised.minimum).toBeCloseTo(raised.requirement!);
     expect(raised.minimum).toBeGreaterThan(BASE_REQUIREMENT);
     expect(candidate(files(3)).minimum).toBe(0.45);
     expect(candidate([edit('a.ts')], state(), { openDecisions: 5 })).toMatchObject({ release: false, keepReason: 'difficulty' });

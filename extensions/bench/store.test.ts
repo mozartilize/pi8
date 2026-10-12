@@ -236,7 +236,12 @@ describe('store', () => {
     // API-only data has no Briefcase or LCR measurement.
     expect(checkBenchmarkStore(store([{ ...row, quality: { intelligence: 40, knowledge: 10 } }])))
       .toMatchObject({ ready: false, message: expect.stringMatching(/models-page/) });
-    expect(checkBenchmarkStore(store([{ ...row, quality: { intelligence: 40, longContext: 0.5 } }]))).toEqual({ ready: true });
+    // A store synced before per-axis provenance compares models on price alone.
+    expect(checkBenchmarkStore(store([{ ...row, quality: { intelligence: 40, longContext: 0.5 } }])))
+      .toMatchObject({ ready: false, message: expect.stringMatching(/provenance.*\/router-sync/) });
+    expect(checkBenchmarkStore(store([{
+      ...row, quality: { intelligence: 40, longContext: 0.5 }, axisProvenance: { intelligence: 'measured', longContext: 'measured' },
+    }]))).toEqual({ ready: true });
   });
 
   it('preserves unresolved rows after merge', () => {
