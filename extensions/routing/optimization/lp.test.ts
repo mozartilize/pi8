@@ -2,6 +2,7 @@
  * The worker LP adapter agrees with independent oracles, rejects answers that
  * fail verification, and enforces a hard deadline by terminating the worker.
  */
+import { readFileSync } from 'node:fs';
 import fc from 'fast-check';
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -47,6 +48,18 @@ describe('WorkerLpAdapter', () => {
         expect(result!.objective!).toBeCloseTo(oracle.value!, 6);
       }
     }), { numRuns: 40 });
+  });
+
+  it('solves every objective of a batch whose warm start leaves an infeasible basis', async () => {
+    const batch = JSON.parse(readFileSync(new URL('../../../fixtures/lp-warm-start-batch.json', import.meta.url), 'utf8')) as {
+      polytope: Polytope; objectives: number[][]; sense: 'max';
+    };
+    const results = await lp.solve({ polytope: batch.polytope, objectives: batch.objectives, sense: batch.sense });
+    expect(results).toHaveLength(batch.objectives.length);
+    results.forEach((result, i) => {
+      expect(lpAnswerProblem(batch.polytope, batch.objectives[i]!, result)).toBeUndefined();
+      expect(result.objective!).toBeCloseTo(oracleSolve(batch.polytope, batch.objectives[i]!).value!, 6);
+    });
   });
 
   it('flags an answer that is outside the polytope or whose objective does not match', () => {

@@ -11,7 +11,8 @@ import loadHighs from 'highs';
 
 const highsPromise = loadHighs();
 
-const STATUS = { 7: 'optimal', 8: 'infeasible', 9: 'infeasible-or-unbounded', 10: 'unbounded' };
+const OPTIMAL = 7;
+const STATUS = { [OPTIMAL]: 'optimal', 8: 'infeasible', 9: 'infeasible-or-unbounded', 10: 'unbounded' };
 
 function toModelData(highs, polytope, sense) {
   const starts = [0];
@@ -54,7 +55,14 @@ parentPort.on('message', async (message) => {
       for (const objective of objectives) {
         model.changeColsCost({ kind: 'range', from: 0, to: polytope.numCols - 1 }, objective);
         model.run();
-        const code = model.getModelStatus();
+        let code = model.getModelStatus();
+        // A basis kept from the previous objective can be primal infeasible for this one,
+        // and HiGHS then stops with an unknown status. A cold start decides the status.
+        if (code !== OPTIMAL) {
+          model.clearSolver();
+          model.run();
+          code = model.getModelStatus();
+        }
         const status = STATUS[code] ?? `status-${code}`;
         if (status === 'optimal') {
           results.push({ status, objective: model.getObjectiveValue(), x: Array.from(model.getSolution().colValue) });
