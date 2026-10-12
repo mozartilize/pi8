@@ -32,7 +32,7 @@ Preference storage and notice-state helpers exist.
 |---|---|---|
 | Controlled prepared dispatch | The integration policy is settled and uses only the installed public API. Maintained Pi 1.1.0 SDK probes cover each point: pre-run preparation fallback with a compaction attempt limit, in-run compaction against an advertised target window, and `ctx.abort()` in the context hook. Throwing from that hook does not prevent dispatch. | Implement the policy in the production adapter, with a complete-request estimate. Restrict operational fallback and recovery inside one provider call to targets that hold the prepared prompt. Resolve physical-target compaction overrides. |
 | Feasible summary route | Native virtual routing can use a fitting larger model for summaries. Direct switching to a smaller model can send an oversized summary request to that model. | Validate the actual summary action's capacity and accounting. Failed, disabled or cancelled compaction must send no oversized request to the selected target. |
-| Production selection budget | Real expanded pools and actual budget outcomes are measured below. | Approve the deadline and pair policy explicitly. Validate cold starts and representative profiles. A timing sample is not release approval. |
+| Production selection budget | Approved: 500 ms in total with no pair cap (`PRODUCTION_SOLVER_BUDGET`). The allowlisted pool solved exactly in every recorded 500 ms sample. | Validate cold starts and representative profiles in the production adapter. |
 | Preference command | Schema, persisted profile snapshots and domain compilation exist. | Implement the five-question command, truthful applied/softened/nonbinding status and nonblocking one-time interactive notice. Make no provider calls. |
 | Pi host mechanism tests | Maintained SDK tests cover pre-run preparation fallback, context preparation, final abort guards, after-tool checks, manual compaction ordering, cancellation and file-backed resume. Controlled-port tests also exist. | Add production adapter coverage for asynchronous hook selection, preserved child arguments and each operational fallback. |
 
@@ -80,8 +80,9 @@ sample. Cold operator-domain compilation, including worker start, took 80.8 ms
 in one sample. Warm uncapped operator P95 was 628.1 ms for the broad text pool
 and 237.7 ms for the local text pool.
 
-These results reject an unreported 200 ms/4096 production assumption. A 1000 ms
-uncapped deadline is a candidate for approval, not an approved release setting.
+These results reject an unreported 200 ms/4096 production assumption. The
+approved production budget is 500 ms with no pair cap. At that deadline, the
+broad fixture text pool can use the labeled central fallback.
 The samples do not establish population P95/P99, cold-start distributions,
 performance for every profile, or end-to-end solve-rate improvement.
 

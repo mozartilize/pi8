@@ -35,6 +35,14 @@ export type SolverFallbackReason =
 /** Spike parameters for solver measurement only; not approved production limits. */
 export const SPIKE_SOLVER_BUDGET = Object.freeze({ deadlineMs: 200, pairCap: 4096 });
 
+/**
+ * Production selection budget: 500 ms in total, with no pair cap. Selection
+ * runs before each routed request, so this deadline is the most latency it can
+ * add. In recorded samples with a preference domain, the allowlisted pool
+ * solved exactly in 15 of 15 runs. A timeout uses the labeled central fallback.
+ */
+export const PRODUCTION_SOLVER_BUDGET = Object.freeze({ deadlineMs: 500 });
+
 export interface SelectionCandidate {
   model: RegistryModelInfo;
   action: EffectiveAction;
