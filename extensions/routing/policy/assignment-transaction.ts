@@ -10,6 +10,12 @@
  *   starts. A started attempt that fails does not restore eligibility.
  * - Boundary ownership and contract release settle only from an actual-serve
  *   receipt (boundary-authorization.ts), never from commit or reservation.
+ * - Failed preparation excludes every target with the same input budget at
+ *   the same context revision. The remaining ranking uses the current context
+ *   without another selection. A new context checks the ranking again.
+ * - Each summary request is a paid model call, so one invocation permits at
+ *   most MAX_COMPACTION_ATTEMPTS. After that limit, only targets that already
+ *   fit can be prepared.
  * - Cancellation wins over staleness and starts no retry and no fallback.
  *   A stale result may use one fresh selection within the original budget.
  *
@@ -154,10 +160,28 @@ export class AssignmentLedger {
 
 // ─── Orchestration ───────────────────────────────────────────────────
 
-export type PrepareOutcome =
-  | { kind: 'ready' }
-  | { kind: 'failed' }
-  | { kind: 'cancelled' };
+/** The selected target and one fallback can each request one summary. */
+export const MAX_COMPACTION_ATTEMPTS = 2;
+
+export interface PrepareRequest {
+  /** False after the compaction attempt limit. The host must not start a summary request. */
+  allowCompaction: boolean;
+}
+
+export type PrepareOutcome = {
+  kind: 'ready' | 'failed' | 'cancelled';
+  /** True when the host started a summary request, whatever its result. */
+  compactionAttempted?: boolean;
+};
+
+/** Counts for the decision log; no target names or messages. */
+export interface PreparationRecord {
+  attempts: number;
+  failures: number;
+  /** Failures from an exception in the host, not from a preparation result. */
+  errors: number;
+  compactionAttempts: number;
+}
 
 export interface AssignmentHost {
   ledger: AssignmentLedger;
@@ -168,45 +192,103 @@ export interface AssignmentHost {
   /**
    * Pi preparation of the target's context (compaction when needed). A
    * self-caused compaction increases the context revision through the
-   * ledger; the transaction keeps its target and checks again.
+   * ledger; the transaction keeps its target and checks again. Check the
+   * current prompt against each target's resolved input budget. Return ready
+   * only after the prepared request fits. Persisted compaction remains
+   * available to the next target.
    */
-  prepare(target: string, signal: AbortSignal): Promise<PrepareOutcome>;
+  prepare(target: string, signal: AbortSignal, request: PrepareRequest): Promise<PrepareOutcome>;
+  /**
+   * Resolved input budget of a target. Targets with the same budget have the
+   * same preparation result for one context. Undefined compares by target.
+   */
+  inputBudget?(target: string): number | undefined;
 }
 
-export type RouteOutcome =
-  | { kind: 'reserved'; reservation: Reservation; decision: UnifiedDecision; selections: number }
-  | { kind: 'cancelled'; selections: number }
-  | { kind: 'stale'; selections: number }
-  | { kind: 'no-target'; decision?: UnifiedDecision; selections: number }
-  | { kind: 'preparation-failed'; target: string; selections: number };
+export type RouteOutcome = { selections: number; preparation: PreparationRecord } & (
+  | {
+    kind: 'reserved';
+    /** The prepared action. `decision.chosen` names the selection, which can differ. */
+    target: string;
+    reservation: Reservation;
+    decision: UnifiedDecision;
+  }
+  | { kind: 'cancelled' }
+  | { kind: 'stale' }
+  | { kind: 'no-target'; decision?: UnifiedDecision }
+  | { kind: 'preparation-failed'; target: string }
+);
+
+type RouteOutcomeBody = RouteOutcome extends infer O
+  ? O extends unknown ? Omit<O, 'selections' | 'preparation'> : never
+  : never;
 
 /** One assignment transaction with at most one fresh selection after a stale result. */
 export async function routeAssignment(host: AssignmentHost, signal: AbortSignal, maxSelections = 2): Promise<RouteOutcome> {
   let selections = 0;
-  while (selections < maxSelections) {
-    if (signal.aborted) return { kind: 'cancelled', selections };
+  const preparation: PreparationRecord = { attempts: 0, failures: 0, errors: 0, compactionAttempts: 0 };
+  // `${context revision}:${input budget}` of each failed preparation.
+  const failed = new Set<string>();
+  const failureKey = (target: string): string =>
+    `${host.ledger.revisions.context}:${host.inputBudget?.(target) ?? target}`;
+  let lastFailedTarget: string | undefined;
+  const done = (outcome: RouteOutcomeBody): RouteOutcome =>
+    ({ ...outcome, selections, preparation: { ...preparation } }) as RouteOutcome;
+
+  selectionLoop: while (selections < maxSelections) {
+    if (signal.aborted) return done({ kind: 'cancelled' });
     let plan = host.ledger.plan(host.transitions(), host.recoveryClaim?.());
     selections++;
     const result = await host.select(plan, () => host.ledger.isCurrent(plan), signal);
-    if (signal.aborted || result.kind === 'cancelled') return { kind: 'cancelled', selections };
+    if (signal.aborted || result.kind === 'cancelled') return done({ kind: 'cancelled' });
     if (result.kind === 'stale' || !host.ledger.isCurrent(plan)) continue;
-    if (result.solver === 'no-feasible-action' || !result.chosen) return { kind: 'no-target', decision: result, selections };
-    const target = result.chosen;
+    if (result.solver === 'no-feasible-action' || !result.chosen) return done({ kind: 'no-target', decision: result });
+    const targets = [...new Set([result.chosen, ...result.ranking])];
 
-    const prepared = await host.prepare(target, signal);
-    if (signal.aborted || prepared.kind === 'cancelled') return { kind: 'cancelled', selections };
-    if (prepared.kind === 'failed') return { kind: 'preparation-failed', target, selections };
-    // A self-caused context revision keeps the target: rebase the plan on the
-    // prepared context only when nothing else changed.
-    if (!sameRevisions({ ...plan.revisions, context: host.ledger.revisions.context }, host.ledger.revisions)) continue;
-    plan = { ...plan, revisions: { ...host.ledger.revisions } };
+    rankingLoop: for (;;) {
+      for (const target of targets) {
+        if (failed.has(failureKey(target))) continue;
+        if (signal.aborted) return done({ kind: 'cancelled' });
+        const allowCompaction = preparation.compactionAttempts < MAX_COMPACTION_ATTEMPTS;
+        const contextBefore = host.ledger.revisions.context;
+        preparation.attempts++;
+        let prepared: PrepareOutcome;
+        try {
+          prepared = await host.prepare(target, signal, { allowCompaction });
+        } catch {
+          preparation.errors++;
+          // The host can have started a summary request before the exception.
+          prepared = { kind: 'failed', compactionAttempted: allowCompaction };
+        }
+        const compacted = prepared.compactionAttempted === true;
+        if (compacted) preparation.compactionAttempts++;
+        if (signal.aborted || prepared.kind === 'cancelled') return done({ kind: 'cancelled' });
+        if (prepared.kind === 'failed') {
+          failed.add(failureKey(target));
+          preparation.failures++;
+          lastFailedTarget = target;
+        }
+        // Persisted compaction belongs to the invocation, including when its
+        // prompt did not fit this target. External revisions require selection.
+        if (!sameRevisions({ ...plan.revisions, context: host.ledger.revisions.context }, host.ledger.revisions)) continue selectionLoop;
+        plan = { ...plan, revisions: { ...host.ledger.revisions } };
+        if (prepared.kind === 'failed') {
+          // A compacted context can make an earlier, preferred target fit.
+          // Restarts need a compaction attempt, so the attempt limit stops them.
+          if (compacted && host.ledger.revisions.context !== contextBefore) continue rankingLoop;
+          continue;
+        }
 
-    const reservation = host.ledger.commitAndReserve(plan, target, signal);
-    if (!reservation) {
-      if (signal.aborted) return { kind: 'cancelled', selections };
-      continue;
+        const reservation = host.ledger.commitAndReserve(plan, target, signal);
+        if (!reservation) {
+          if (signal.aborted) return done({ kind: 'cancelled' });
+          continue selectionLoop;
+        }
+        return done({ kind: 'reserved', target, reservation, decision: result });
+      }
+      break;
     }
-    return { kind: 'reserved', reservation, decision: result, selections };
+    return done({ kind: 'preparation-failed', target: lastFailedTarget ?? result.chosen });
   }
-  return { kind: 'stale', selections };
+  return done({ kind: 'stale' });
 }

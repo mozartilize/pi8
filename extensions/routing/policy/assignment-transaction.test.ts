@@ -63,7 +63,7 @@ class FakeHost implements AssignmentHost {
     this.compactions++;
     this.promptTokens = 20_000;
     this.ledger.bump({ context: this.ledger.revisions.context + 1 });
-    return { kind: 'ready' };
+    return { kind: 'ready', compactionAttempted: true };
   }
 }
 
@@ -100,7 +100,7 @@ describe('H1: recovery and observations across a stale replan', () => {
   it('allows at most two selections and makes no write when every snapshot goes stale', async () => {
     const host = new FakeHost();
     host.beforeSelectReturns = () => host.ledger.bump({ session: host.ledger.revisions.session + 1 });
-    expect(await routeAssignment(host, new AbortController().signal)).toEqual({ kind: 'stale', selections: 2 });
+    expect(await routeAssignment(host, new AbortController().signal)).toMatchObject({ kind: 'stale', selections: 2 });
     expect(host.ledger.applied).toEqual([]);
     expect(host.ledger.reservations.size).toBe(0);
   });
@@ -261,7 +261,7 @@ describe('H6 revision rules: 1M incumbent to a 272k target', () => {
   it('failed preparation sends nothing and makes no assignment write', async () => {
     const host = new FakeHost();
     host.prepareHook = () => ({ kind: 'failed' });
-    expect(await routeAssignment(host, new AbortController().signal)).toEqual({ kind: 'preparation-failed', target: 'B', selections: 1 });
+    expect(await routeAssignment(host, new AbortController().signal)).toMatchObject({ kind: 'preparation-failed', target: 'B', selections: 1 });
     expect(host.ledger.applied).toEqual([]);
     expect(host.ledger.reservations.size).toBe(0);
   });
