@@ -1404,7 +1404,7 @@ describe('attempt lifecycle', () => {
     expect(h.session.getLastDecision()?.chosen).toBe('newer/model');
   });
 
-  it('forwards caller cancellation onto the attempt abort signal', async () => {
+  it('keeps a served attempt signal open and linked to the caller', async () => {
     const controller = new AbortController();
     const h = createDelegationHarness({
       chain: ['alpha/model'],
@@ -1413,13 +1413,25 @@ describe('attempt lifecycle', () => {
         'alpha/model': [[{ type: 'start' }, { type: 'text_delta', delta: 'x' }, { type: 'done', message: { stopReason: 'stop' } }]],
       },
     });
-    const pending = h.run();
-    await h.waitForAttempts(1);
-    // After serve the attempt is already aborted in finally; aborting the caller
-    // after completion must not throw (listener removed).
+    await h.run();
+    // A provider with its own agent loop waits on this signal for the next tool result.
+    expect(h.abortSignals[0]?.aborted).toBe(false);
     controller.abort();
-    await pending;
     expect(h.abortSignals[0]?.aborted).toBe(true);
+  });
+
+  it('aborts the signal of an attempt that failed before the next candidate starts', async () => {
+    const h = createDelegationHarness({
+      chain: ['alpha/model', 'beta/model'],
+      scripts: {
+        'alpha/model': [[{ type: 'error', error: { stopReason: 'error', errorMessage: 'boom' } }]],
+        'beta/model': [[{ type: 'start' }, { type: 'text_delta', delta: 'x' }, { type: 'done', message: { stopReason: 'stop' } }]],
+      },
+    });
+    const result = await h.run();
+    expect(result.success).toBe(true);
+    expect(h.abortSignals[0]?.aborted).toBe(true);
+    expect(h.abortSignals.at(-1)?.aborted).toBe(false);
   });
 });
 

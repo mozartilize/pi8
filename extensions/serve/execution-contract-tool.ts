@@ -124,8 +124,9 @@ export const CONTRACT_REMINDER =
   'Rate only the remaining implementation, not the completed investigation.';
 
 /**
- * A handoff does not end the turn. The model that wrote it may also serve the
- * next step, and a final reply there ends the run with no work done.
+ * A handoff or an accepted plan does not end the turn. The model that wrote it
+ * may also serve the next step, and a final reply there ends the run with no
+ * work done.
  */
 export const CONTINUE_TURN = 'Do not give a final reply. Make your next tool call.';
 
@@ -555,7 +556,7 @@ export function submitExecutionContract(
   return {
     accepted: true,
     text: [
-      header,
+      `${header} ${CONTINUE_TURN}`,
       'Execute these steps in order:',
       ...stepLines(steps ?? []),
       'Use edit/write for the listed files. Editing a file that is not listed, or writing files from a shell ' +

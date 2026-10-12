@@ -17,7 +17,7 @@ import type { Api, Context, Model } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
-import { handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
+import { CONTINUE_TURN, handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
 import { submitCompleteWork } from './complete-work-tool.js';
 import { gateCompletedWorkToolCall } from './completed-work-gate.js';
@@ -2539,6 +2539,8 @@ describe('context acquisition', () => {
         const result = submitExecutionContract(settledPlan, routerCtx, harness.session, EXISTING_TARGETS);
         expect(result.accepted).toBe(true);
         expect(result.text).toContain('Execution plan accepted');
+        // The submitter may also serve the next step; a final reply there ends the run with no edits.
+        expect(result.text).toContain(CONTINUE_TURN);
         expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true, releasePending: true });
         expect(harness.session.getWorkPhaseState()?.contract?.keepReason).toBeUndefined();
       });
@@ -2884,7 +2886,9 @@ describe('context acquisition', () => {
     it('keeps the submitter when the rubric says design choices remain', async () => {
       const session = await planned();
       const open = { ...smallPlan, remainingWork: { ...EASY, openDecisions: 5 } };
-      expect(submitExecutionContract(open, routerCtx, harness.session, EXISTING_TARGETS).text).toContain('keeps executing it');
+      const kept = submitExecutionContract(open, routerCtx, harness.session, EXISTING_TARGETS).text;
+      expect(kept).toContain('keeps executing it');
+      expect(kept).toContain(CONTINUE_TURN);
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
       expect(next?.chosen).toBe('beta/strong');

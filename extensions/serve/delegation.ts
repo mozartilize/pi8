@@ -914,6 +914,7 @@ async function runCandidateAttempt(
   const controller = new AttemptController(ctx, candidate);
   let requestReady = false;
   let dispatchCancelled = false;
+  let served = false;
   let revisedChain: string[] | undefined;
   const actionKey = overrideAction(candidate.chosen, candidate.effectiveReasoning ?? 'off')?.key ?? candidate.candidateId;
   const timing: NonNullable<AttemptUsageEvent['timing']> = { durationMs: 0, maxEventGapMs: 0 };
@@ -1041,6 +1042,7 @@ async function runCandidateAttempt(
     }
 
     if (!failure) {
+      served = true;
       debugLog('attempt.served', {
         candidate: candidate.candidateId,
         attemptNumber: candidate.attemptIndex + 1,
@@ -1082,8 +1084,14 @@ async function runCandidateAttempt(
     });
     controller.commitUsage(requestReady, failure === undefined, timing, failure ? attemptFailureInfo(failure, callerSignal?.aborted === true) : undefined);
     ctx.opts.dispatch?.release(actionKey);
-    callerSignal?.removeEventListener('abort', forwardAbort);
-    if (!attemptAbort.signal.aborted) attemptAbort.abort();
+    // A served stream has ended, so its signal stays open and linked to the
+    // caller. A provider that runs its own agent loop (claude-bridge) keeps its
+    // query open across turns and ends that query on this signal. An abort here
+    // ends the query that waits for this turn's tool results.
+    if (!served || dispatchCancelled) {
+      callerSignal?.removeEventListener('abort', forwardAbort);
+      if (!attemptAbort.signal.aborted) attemptAbort.abort();
+    }
     if (iterator) closeIterator(iterator);
   }
 }
