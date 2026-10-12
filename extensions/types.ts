@@ -203,7 +203,7 @@ export type RubricCriterion = 'openDecisions' | 'spread' | 'verification' | 'kno
 export type ExecutionRubric = Record<RubricCriterion, number>;
 
 export type ReasoningCriterion = 'alternatives' | 'stakes' | 'spread' | 'knowledge' | 'uncertainty';
-/** Investigator's description of the planning or review left to do: 1 (easiest) to 5 (hardest). */
+/** Investigator's description of the planning, review, or investigation left to do: 1 (easiest) to 5 (hardest). */
 export type ReasoningRubric = Record<ReasoningCriterion, number>;
 
 /**
@@ -221,14 +221,14 @@ export interface ReasoningEvidence {
   fixCommits?: number;
 }
 
-/** A task type that a handoff values with a rubric. */
-export type HandoffTarget = 'plan' | 'review' | 'implement';
-/** The execution rubric of an implementation, or the reasoning rubric of a plan or review. */
+/** A task type that a handoff values with a rubric. `gather` is an investigation that collecting context hands off. */
+export type HandoffTarget = 'plan' | 'review' | 'implement' | 'gather';
+/** The execution rubric of an implementation, or the reasoning rubric of a plan, review, or investigation. */
 export type HandoffRubric = ExecutionRubric | ReasoningRubric;
 
 /**
- * An accepted context handoff to a plan, review, or implementation, as routing
- * and logs see it. The identifier keeps its name in the decision log.
+ * An accepted context handoff to a plan, review, implementation, or investigation,
+ * as routing and logs see it. The identifier keeps its name in the decision log.
  */
 export interface ReasoningHandoffMeta {
   /** Joins the handoff to later records; the intent key of the entry that accepted it. */

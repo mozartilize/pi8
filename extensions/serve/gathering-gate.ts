@@ -153,10 +153,11 @@ export function workChoiceNote(state: WorkPhaseState): string {
 export function gatheringNote(state: WorkPhaseState): string {
   return `Router: ${owedNote(state)}${workChoiceNote(state)} Until you call ${CONTEXT_HANDOFF_TOOL}, only these tools run: ${ALLOWED_TOOLS}, ` +
     `and routing_context updates; other calls are refused. When you have what the next step needs, call ` +
-    `${CONTEXT_HANDOFF_TOOL} with outcome "ready", deliverable, complexity, and scope. To answer directly without a plan, review, or change, ` +
+    `${CONTEXT_HANDOFF_TOOL} with outcome "ready", deliverable, complexity, and scope. When the answer needs an investigation, ` +
+    'for example the cause of a bug, hand off with deliverable "gather". To answer from the context you collected, without a plan, review, change, or investigation, ' +
     'call it with outcome "answer", deliverable "gather" or "lightweight", complexity, and scope before giving a text answer. If the request is unclear or what it rests on cannot be read, ' +
     `call it with outcome "needs-user" and your question. You may send at most ${ACQUISITION_REQUEST_LIMIT} ` +
-    'model requests. Do not write the plan, review, or change yourself.';
+    'model requests. Do not write the plan, review, change, or investigation yourself.';
 }
 
 /** The instruction for the one request after collecting context ended without a ready handoff. */

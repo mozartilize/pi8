@@ -59,12 +59,14 @@ const DESCRIPTION =
   `${ROUTER_TOOLS_CONDITION} ` +
   'Stop collecting context and give the request to the next step. Call it with outcome "ready" once you have ' +
   'what the next step needs: the task type the user wants, your findings, and what the next step must decide or ' +
-  'do. Give the facts that you observed about the remaining work. For a plan or review, also rate the reasoning left. ' +
+  'do. Give the facts that you observed about the remaining work. For a plan, review, or investigation, also rate the reasoning left. ' +
   'For an implementation, rate only the remaining work that your evidence supports. ' +
+  'When the answer needs an investigation, for example the cause of a bug, call it with outcome "ready" and deliverable "gather". ' +
+  'Use outcome "answer" only when the context you collected already gives the answer. ' +
   'Use facts.decisions to name unresolved choices. Use facts.unknowns to identify missing evidence. ' +
   'Call it with outcome "needs-user" when the request is ' +
   'unclear or what it rests on cannot be read, with the question to ask. The router picks the next model. Do not ' +
-  'write the plan, review, or change yourself.';
+  'write the plan, review, change, or investigation yourself.';
 
 const DIMENSIONS: readonly Dimension[] = ['lightweight', 'gather', 'implement', 'review', 'plan'];
 const COMPLEXITIES: readonly ComplexityBand[] = ['trivial', 'routine', 'moderate', 'hard', 'frontier'];
@@ -76,12 +78,12 @@ function contextHandoffParameters() {
   const oneOf = (values: readonly string[], description: string) =>
     Type.Union(values.map((value) => Type.Literal(value)), { description });
   return Type.Object({
-    outcome: oneOf(['ready', 'answer', 'needs-user'], 'ready: hand off to a work phase. answer: answer directly as gather or lightweight. needs-user: ask the user first.'),
+    outcome: oneOf(['ready', 'answer', 'needs-user'], 'ready: hand off to a work phase, which can be an investigation (gather). answer: answer directly as gather or lightweight. needs-user: ask the user first.'),
     question: Type.Optional(Type.String({
       description: 'Required for ready or needs-user: what the next step must do, or the question for the user.',
     })),
     findings: Type.Optional(Type.String({ description: 'ready: what you found.' })),
-    deliverable: Type.Optional(oneOf(DIMENSIONS, 'Required for ready or answer: declare the task type. answer accepts only gather or lightweight.')),
+    deliverable: Type.Optional(oneOf(DIMENSIONS, 'Required for ready or answer: declare the task type. ready accepts plan, review, implement, or gather. answer accepts only gather or lightweight.')),
     workItemId: Type.Optional(Type.String({ description: 'ready, when work is not yet selected: an offered work item or legacy id, NEW_WORK_ITEM, or NONE for a lightweight side question.' })),
     topicId: Type.Optional(Type.String({ description: 'ready: the offered topic id, or NEW_TOPIC. Required when creating work in an existing topic.' })),
     topicTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_TOPIC.' })),
@@ -92,7 +94,7 @@ function contextHandoffParameters() {
       maxItems: MAX_EVIDENCE_PATHS,
       description: 'ready: files the next step rests on. Leave empty when the evidence is in the conversation.',
     })),
-    difficulty: Type.Optional(difficultyParameter('ready, for a plan or review: the reasoning left, rated per criterion.')),
+    difficulty: Type.Optional(difficultyParameter('ready, for a plan, review, or investigation (gather): the reasoning left, rated per criterion.')),
     remainingWork: Type.Optional(remainingWorkParameter(
       'ready, for an implementation: what the next model still has to work out, rated 1 (easiest) to 5 (hardest) per criterion.',
     )),
@@ -122,7 +124,7 @@ const REJECTIONS = {
   'missing-task-shape': 'Context not handed off: give complexity and scope for the declared task. Call it again with both.',
   'artifact-not-read': 'Context not handed off: the request rests on files not read in full as they are now. Read every ' +
     'line of each file. Reads in parts count when together they show every line. Then call it again:',
-  'no-next-step': 'Context not handed off: a gather entry hands off only to implement, review, or plan. Call it again with one of those, or continue.',
+  'no-next-step': 'Context not handed off: hand off to implement, review, or plan. Hand off to gather only while collecting context. Call it again with one of those, or continue.',
   'missing-work-choice': 'Context not handed off: choose a listed workItemId, NEW_WORK_ITEM, or NONE for a lightweight side question.',
   'invalid-work-choice': 'Context not handed off: the work and topic ids must be from this entry’s offered choices. Choose again.',
   'missing-work-title': 'Context not handed off: give a short workItemTitle for NEW_WORK_ITEM.',
@@ -237,9 +239,14 @@ export async function measureEvidence(
   };
 }
 
-/** Ready declares the next work phase; gather/lightweight answers use a separate outcome. */
-function adoptedDeliverable(reported: Dimension): Dimension | undefined {
-  return reported === 'implement' || reported === 'review' || reported === 'plan' ? reported : undefined;
+/**
+ * Ready declares the next work phase. An investigation (gather) is a next phase only while
+ * collecting context: a gather entry that already serves does not hand off to itself.
+ * Lightweight answers use outcome `answer`.
+ */
+function adoptedDeliverable(reported: Dimension, acquiring: boolean): Dimension | undefined {
+  if (reported === 'implement' || reported === 'review' || reported === 'plan') return reported;
+  return reported === 'gather' && acquiring ? reported : undefined;
 }
 
 /** I/O the submission needs, supplied by the caller so the decision itself stays synchronous. */
@@ -327,7 +334,7 @@ export function submitContextHandoff(
   }
   const complexity = member(COMPLEXITIES, params?.complexity);
   const scope = member(SCOPES, params?.scope);
-  const deliverable = adoptedDeliverable(reported);
+  const deliverable = adoptedDeliverable(reported, opened.acquiring);
   if (!deliverable) return reject(session, 'no-next-step', state, served);
   if (facts.selectionError) return reject(session, facts.selectionError, state, served);
   if (facts.unmet && facts.unmet.length > 0) {
@@ -351,7 +358,7 @@ export function submitContextHandoff(
   const terminal = withStrongerTerminal(state, { kind: deliverable, complexity, scope }, policyVersion);
 
   let reasoning;
-  if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement') {
+  if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement' || deliverable === 'gather') {
     const evidence = facts.evidence ?? CONVERSATION_EVIDENCE;
     // Without a rubric the default minimums of the task type apply. The final step only raises them.
     const { rubric, requirement } = declaredRequirement(deliverable, params, evidence);
@@ -408,7 +415,8 @@ export function submitContextHandoff(
     ...(facts.oversized ? { oversizedArtifacts: facts.oversized } : {}),
   });
   if (next.reasoningHandoff) {
-    const role = deliverable === 'plan' ? 'planning' : deliverable === 'review' ? 'review' : 'implementation';
+    const role = deliverable === 'plan' ? 'planning' : deliverable === 'review' ? 'review'
+      : deliverable === 'gather' ? 'investigation' : 'implementation';
     return {
       accepted: true,
       text: `Context handed off (${deliverable}, ${next.reasoningHandoff.minimum !== undefined ? `minimum ${next.reasoningHandoff.minimum.toFixed(2)}` : 'default minimum'}). A ${role} model ` +
@@ -425,7 +433,7 @@ export function submitContextHandoff(
 
 /**
  * Measure what a ready handoff rests on, before {@link submitContextHandoff}:
- * the evidence of a planning, review, or implementation target, and the referenced files not
+ * the evidence of a planning, review, implementation, or investigation target, and the referenced files not
  * read as they are now. Nothing is measured for a handoff that will be
  * declined.
  */
@@ -442,7 +450,7 @@ export async function prepareHandoffFacts(
   const reported = member(DIMENSIONS, params.deliverable);
   if ('reject' in opened || !reported || !filled(params.findings) || !filled(params.question)) return {};
   const facts: HandoffFacts = {};
-  const deliverable = adoptedDeliverable(reported);
+  const deliverable = adoptedDeliverable(reported, opened.acquiring);
   if (!deliverable) return {};
   const pending = opened.state.pendingIdentity;
   if (pending) {
@@ -510,7 +518,7 @@ export async function prepareHandoffFacts(
     scoutFiles: opened.state.readPaths?.length ?? 0,
     scoutRequests: opened.state.contextRequests ?? 0,
   }, signal);
-  if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement') {
+  if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement' || deliverable === 'gather') {
     const paths = evidencePaths(declaredFiles(params, ctx.cwd), opened.state.readPaths);
     facts.evidence = await measureEvidence(exec, ctx.cwd, paths, signal);
   }

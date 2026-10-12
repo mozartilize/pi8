@@ -1407,9 +1407,11 @@ describe('mutation observation hooks', () => {
       await tool.execute('p', { ...READY, ...request }, undefined, undefined, routerAutoCtx);
       return defaultRouterSession.getWorkPhaseState()!;
     };
-    // A ready handoff names the next work phase; gather is not a ready work phase.
+    // A ready handoff names the next work phase. While collecting context, gather is an investigation phase.
     const change = { deliverable: 'implement' as const, contextReasons: ['carried-open-context' as const], contextSatisfied: false };
-    expect((await hand(change, { deliverable: 'gather', scope: 'bounded' })).deliverable).toBe('implement');
+    const investigation = await hand(change, { deliverable: 'gather', scope: 'bounded' });
+    expect(investigation.deliverable).toBe('gather');
+    expect(investigation.reasoningHandoff).toMatchObject({ target: 'gather' });
     expect((await hand(change, { deliverable: 'implement' })).reasoningHandoff).toMatchObject({ target: 'implement' });
     expect((await hand(change, { deliverable: 'plan' })).reasoningHandoff).toMatchObject({ target: 'plan' });
     expect((await hand({}, { deliverable: 'review', scope: 'bounded' })).deliverable).toBe('review');

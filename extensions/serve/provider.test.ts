@@ -1961,6 +1961,23 @@ describe('context acquisition', () => {
       expect(trace()?.capabilityShortfall).toBeCloseTo(7 / 3, 5);
     });
 
+    it.each([[1, 'alpha/cheap'], [5, 'beta/strong']] as const)(
+      'routes an investigation handoff with reasoning level %i to the model its rubric requires',
+      async (level, investigator) => {
+        const session = await newSession();
+        await session.routeTurn('investigate the flaky test');
+        const rubric = { alternatives: level, stakes: level, spread: level, knowledge: level, uncertainty: level };
+        expect((await submitPrepared({ ...handoff(level, 'gather'), difficulty: rubric })).accepted).toBe(true);
+        expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toMatchObject({ target: 'gather', rubric });
+        const investigating = await session.routeTurnAgainWithSameUserEntry();
+        expect(investigating).toMatchObject({ dimension: 'gather', cause: 'investigation-handoff', chosen: investigator });
+        expect(investigating?.reasoningHandoff).toMatchObject({ target: 'gather', pending: false, owner: investigator });
+        // The investigator is scored with the rubric's demand, not the collecting-context target.
+        expect(harness.getProviderState().lastDecision?.unified).toMatchObject({ difficulty: level === 1 ? 0 : 1 });
+        expect(harness.getProviderState().lastDecision?.unified?.top?.find((t) => t.key === 'alpha/cheap')?.features.researchFit).toBe(1);
+      },
+    );
+
     it('investigates a plan request until the handoff, then records the planner as the boundary owner', async () => {
       const session = await newSession();
       const first = await session.routeTurn(PLAN_PROMPT);
@@ -2171,7 +2188,7 @@ describe('context acquisition', () => {
       const first = userBlocks();
       // The tools note comes first: the request must say that the router tools are on.
       expect(first.map((b) => b.text)).toEqual([PLAN_PROMPT, ROUTER_TOOLS_ON_NOTE, expect.stringContaining('hand_off_context')]);
-      expect(first[2]!.text).toContain('Do not write the plan, review, or change yourself');
+      expect(first[2]!.text).toContain('Do not write the plan, review, change, or investigation yourself');
       // Pi's own transcript never carries the note.
       expect(session.piContext!.messages[0]!.content).toBe(PLAN_PROMPT);
       await session.routeTurnAgainWithSameUserEntry();

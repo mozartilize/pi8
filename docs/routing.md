@@ -81,6 +81,8 @@ While collecting context:
 
 The mark ends at an accepted handoff or a declared direct answer. A `gather` answer, and every plan, review, or implementation phase, uses the targets above. The 0.20 target is authored policy. It is not a measured minimum for the quality of collected context.
 
+An investigation is not collecting context. When the answer needs one, for example the cause of a bug, the collecting model hands off with outcome `ready`, deliverable `gather`, and a reasoning rubric. The router then selects the investigator with the rubric's demand, as for a plan or review. A handoff without a rubric leaves the demand unknown, so the highest targets apply. Only an entry that is collecting context can hand off to `gather`.
+
 ## Difficulty declarations
 
 An accepted handoff or execution plan supplies demand only for its target phase. Each rubric level maps to `(level − 1) / 4`. Independent requirements use their maximum, not an average.

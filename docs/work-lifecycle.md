@@ -54,7 +54,7 @@ Appending the reminder to a tool result preserves the transcript prefix. Reminde
 
 ## Handoff declarations
 
-A ready handoff declares the task type, complexity, scope, and work-item relation.
+A ready handoff declares the task type, complexity, scope, and work-item relation. Its task type is plan, review, implement, or, while collecting context, gather. A `gather` handoff passes an investigation, such as the cause of a bug, to a model that the reasoning rubric selects. A direct answer from the collected context uses outcome `answer` instead.
 
 The router grounds referenced files against the model's reads. Missing evidence can prevent acceptance.
 
