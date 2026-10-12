@@ -1945,6 +1945,22 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
     });
 
+    it('uses collecting-context capabilities only until the model declares a direct gather answer', async () => {
+      const session = await newSession();
+      const trace = () => harness.getProviderState().lastDecision?.unified?.top?.find((t) => t.key === 'alpha/cheap');
+      await session.routeTurn('investigate the flaky test');
+      expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+      expect(trace()?.features).toMatchObject({ reasoningFit: 0.4, researchFit: 0.5 });
+      expect(trace()?.capabilityShortfall).toBe(0);
+      expect((await submitPrepared({ ...handoff(1), outcome: 'answer', deliverable: 'gather' })).accepted).toBe(true);
+      // The entry stays restricted to read tools, but writing the answer is the gather deliverable.
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
+      expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+      expect(trace()?.features.reasoningFit).toBe(0);
+      expect(trace()?.features.researchFit).toBe(1);
+      expect(trace()?.capabilityShortfall).toBeCloseTo(7 / 3, 5);
+    });
+
     it('investigates a plan request until the handoff, then records the planner as the boundary owner', async () => {
       const session = await newSession();
       const first = await session.routeTurn(PLAN_PROMPT);
@@ -3356,10 +3372,11 @@ describe('trajectory capability escalation', () => {
           source: 'test',
         },
         {
+          // Below the collecting-context reasoning target: the rework selects gamma first, and delta serves only as fallback.
           registryId: 'delta/cheap',
           benchSlug: 'cheap',
           active: true,
-          quality: { intelligence: 50, coding: 50, agenticCoding: 50, research: 0.45 },
+          quality: { intelligence: 15, coding: 50, agenticCoding: 50, research: 0.45 },
           source: 'test',
         },
       ],

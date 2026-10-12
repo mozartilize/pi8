@@ -1,6 +1,6 @@
 # Routing
 
-[Overview](overview.md) · [Glossary](glossary.md)
+[Overview](overview.md) · [Glossary](glossary.md) · [Selection matrix](unified-selection-matrix.md)
 
 ## Pipeline
 
@@ -67,6 +67,19 @@ Smaller deficits rank first. Equal deficits form one tier. A zero deficit means 
 Minimax regret applies preferences within each tier. Central fallback follows the same tier order. Price, speed, cache credit, and continuity cannot compensate for a larger deficit. Every tier remains in the fallback chain. Logged regret values are comparable only within a tier.
 
 Axes with zero phase relevance do not contribute a shortfall. Vision and long-context evidence rules remain separate from these three targets.
+
+## Collecting context
+
+Collecting context is not the same work as a `gather` deliverable. The host marks a decision as collecting context only when all of these are true: the routed task type is `gather`, the entry is collecting context with read-only tools, and the model has not declared a direct answer. The model's prose cannot set this mark.
+
+While collecting context:
+
+- The reasoning target is 0.20, whatever the deliverable's demand. Unknown deliverable demand stays unknown in the evidence.
+- Reasoning relevance does not change. Observed open decisions still raise it.
+- Research and knowledge quality give every action the same `researchFit` value, 0.5, and no shortfall.
+- Intelligence is the required evidence, not Research. Long-context and vision evidence rules still apply.
+
+The mark ends at an accepted handoff or a declared direct answer. A `gather` answer, and every plan, review, or implementation phase, uses the targets above. The 0.20 target is authored policy. It is not a measured minimum for the quality of collected context.
 
 ## Difficulty declarations
 

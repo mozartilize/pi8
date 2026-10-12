@@ -53,6 +53,8 @@ export interface TaskDifficulty {
 
 export interface DecisionStateV1 {
   phase: Dimension;
+  /** True only while the host restricts the entry to collecting context, before a handoff or a declared answer. */
+  contextAcquisition?: boolean;
   workItemId?: string;
   /** Explicitly observed open decisions; undefined when not declared. */
   openDecisions?: number;

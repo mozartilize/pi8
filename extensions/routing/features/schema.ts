@@ -25,7 +25,7 @@ export const FEATURE_INDEX: Readonly<Record<FeatureName, number>> = Object.fromE
 ) as Record<FeatureName, number>;
 
 /** Mapping identity recorded with every feature value. */
-export const FEATURE_MAPPING_VERSION = 'feature-v3' as const;
+export const FEATURE_MAPPING_VERSION = 'feature-v4' as const;
 
 export const FEATURE_SCHEMA_DIGEST = digestOf({ names: FEATURE_NAMES, mapping: FEATURE_MAPPING_VERSION });
 

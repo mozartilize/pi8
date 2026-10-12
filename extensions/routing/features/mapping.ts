@@ -137,7 +137,12 @@ export const CAPABILITY_TARGETS: Readonly<Record<keyof TaskRelevance, readonly [
   research: [0.25, 0.65],
 };
 
-/** Unknown demand uses the highest target without claiming that it was measured. */
+/** Collecting context has a fixed reasoning target, independent of the deliverable's unknown demand. */
+export const ACQUISITION_REASONING_TARGET = 0.20;
+/** Research does not distinguish actions while collecting context. */
+export const ACQUISITION_RESEARCH_VALUE = 0.5;
+
+/** Unknown deliverable demand uses the highest target without claiming that it was measured. */
 export function capabilityTarget(axis: keyof TaskRelevance, difficulty: number | undefined): number {
   const [easy, hard] = CAPABILITY_TARGETS[axis];
   const demand = difficulty === undefined || !Number.isFinite(difficulty) ? 1 : clamp01(difficulty);
@@ -163,7 +168,8 @@ export const capabilityFit = (quality: number, target: number, axis: keyof TaskR
  * same-metric, same-model, same-effort source estimate. A model without it
  * stays callable and stays in the fallback chain after every model with
  * evidence, but it is not compared by regret.
- * `lightweight` relies on no single axis.
+ * `lightweight` relies on no single axis. Collecting context requires
+ * Intelligence instead of the gather deliverable's Research evidence.
  */
 export const REQUIRED_EVIDENCE_AXES: Readonly<Record<Dimension, readonly ProvenanceAxis[]>> = {
   lightweight: [],

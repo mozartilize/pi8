@@ -985,6 +985,9 @@ async function scoreRouterTurn(args: {
   const workItemId = session.getWorkPhaseState()?.workItemId ?? turnInput.key;
   const state: DecisionStateV1 = {
     phase: routedDimension,
+    // A declared direct answer ends collecting context: writing a gather answer is the deliverable.
+    contextAcquisition: routedDimension === 'gather' && phase.cause === 'investigation'
+      && entry?.contextStatus === 'acquiring' && entry.contextAnswer === undefined,
     workItemId,
     difficulty: phaseDifficulty(entry, routedDimension),
     openDecisions: entry?.changeFacts?.declared?.decisions?.length,

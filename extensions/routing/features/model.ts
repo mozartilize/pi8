@@ -25,6 +25,8 @@ import {
   capabilityFit,
   capabilityTarget,
   CAPABILITY_SHORTFALL,
+  ACQUISITION_REASONING_TARGET,
+  ACQUISITION_RESEARCH_VALUE,
   type TaskRelevance,
 } from './mapping.js';
 import { FEATURE_MAPPING_VERSION, type AxisProvenance, type FeatureEvidence, type FeatureName } from './schema.js';
@@ -125,7 +127,8 @@ export const difficultyDetail = (state: Pick<DecisionStateV1, 'difficulty'>): st
  * estimated context reaches the long-context relevance size.
  */
 export function evidenceGaps(row: BenchModel | undefined, state: DecisionStateV1): ProvenanceAxis[] {
-  const required = new Set<ProvenanceAxis>(REQUIRED_EVIDENCE_AXES[state.phase]);
+  const collecting = state.phase === 'gather' && state.contextAcquisition === true;
+  const required = new Set<ProvenanceAxis>(collecting ? ['intelligence'] : REQUIRED_EVIDENCE_AXES[state.phase]);
   if (state.needsVision) required.add('visionReasoning');
   if (state.estimatedContextTokens >= LONG_CONTEXT_RELEVANCE_TOKENS) required.add('longContext');
   return [...required].filter((axis) => observeAxis(row, axis, state).normalized === undefined);
@@ -141,6 +144,7 @@ export interface CapabilityFeature {
 
 export function capabilityFeatures(row: BenchModel | undefined, state: DecisionStateV1): CapabilityFeature[] {
   const relevance = taskRelevance(state);
+  const collecting = state.phase === 'gather' && state.contextAcquisition === true;
   const observe = (axis: ProvenanceAxis) => observeAxis(row, axis, state);
   const intelligence = observe('intelligence');
   const terminalBench = observe('agenticCoding');
@@ -167,7 +171,8 @@ export function capabilityFeatures(row: BenchModel | undefined, state: DecisionS
 
   const difficulty = difficultyDetail(state);
   const target = (axis: keyof TaskRelevance): number =>
-    capabilityTarget(axis, state.difficulty?.axes?.[axis] ?? state.difficulty?.value);
+    collecting && axis === 'reasoning' ? ACQUISITION_REASONING_TARGET
+      : capabilityTarget(axis, state.difficulty?.axes?.[axis] ?? state.difficulty?.value);
   const targets: TaskRelevance = { reasoning: target('reasoning'), agentic: target('agentic'), research: target('research') };
   const fit = (interval: Interval, axis: keyof TaskRelevance): Interval => scale({
     center: capabilityFit(interval.center, targets[axis], axis),
@@ -184,7 +189,12 @@ export function capabilityFeatures(row: BenchModel | undefined, state: DecisionS
     demandFeature('reasoning', componentInterval(intelligence), [intelligence],
       [state.openDecisions === undefined ? 'openDecisions:unknown' : `openDecisions:${state.openDecisions}`]),
     demandFeature('agentic', componentInterval(terminalBench), [terminalBench]),
-    demandFeature('research', combine([
+    collecting ? {
+      name: 'researchFit',
+      interval: { center: ACQUISITION_RESEARCH_VALUE, lower: ACQUISITION_RESEARCH_VALUE, upper: ACQUISITION_RESEARCH_VALUE },
+      shortfall: 0,
+      evidence: { feature: 'researchFit', code: 'not-relevant', mapping: FEATURE_MAPPING_VERSION },
+    } : demandFeature('research', combine([
       [componentInterval(research), RESEARCH_SHARE],
       [componentInterval(knowledge), KNOWLEDGE_SHARE],
     ]), [research, knowledge]),
