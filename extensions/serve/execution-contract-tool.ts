@@ -51,7 +51,7 @@ import {
   type ExecutionStepInput,
 } from '../routing/policy/execution-contract.js';
 import { parseRubric } from '../routing/policy/execution-difficulty.js';
-import { boundaryQualifiers, servesBoundary, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { actionFromTool, cycleFromToolResult, isVerifier } from '../routing/struggle/fingerprints.js';
 import { findSourceCandidate, parseCandidateKey } from '../routing/score/scorer.js';
 import { classifyMutationCall, isMutationCall } from '../routing/policy/mutation-detector.js';
@@ -163,22 +163,19 @@ function handoffInapplicable(
       reason: 'a handoff applies only to planning, review, or implementation',
     };
   }
-  // A plan written by a fallback below the planning step's minimum must not
-  // end that step: the step stays owed to a model that clears it. The test is
-  // on the serving model, not on the step's pending flag, which is settled
+  // A plan written by a model that has no confirmed permission for the
+  // planning step must not end that step: the step stays owed to a model
+  // that the boundary authorization confirmed after it served. The test is
+  // on the authorization, not on the step's pending flag, which is settled
   // only after the invocation's stream ends.
   const reasoning = state.reasoningHandoff;
   if (reasoning?.pending && last.dimension === reasoning.target && served) {
-    const qualifiers = last.unified ? [] : boundaryQualifiers(last);
     const authorization = state.boundaryAuthorization;
-    if (last.unified
-      ? authorization?.state !== 'served' || authorization.phase !== reasoning.target
-      : qualifiers.length > 0 && !servesBoundary(served, qualifiers)) {
+    if (authorization?.state !== 'served' || authorization.phase !== reasoning.target) {
       return {
         ok: false,
         code: 'handoff-pending',
-        reason: last.unified ? `the ${reasoning.target} handoff has no confirmed permitted model`
-          : `this model serves the ${reasoning.target} step only as a fallback below its minimum`,
+        reason: `the ${reasoning.target} handoff has no confirmed permitted model`,
       };
     }
   }

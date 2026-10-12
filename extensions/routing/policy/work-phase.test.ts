@@ -6,9 +6,7 @@ import {
   bandRequirement,
   penaltiesOf,
   withContinuedPenalties,
-  boundaryQualifiers,
   nextProviderInvocation,
-  servesBoundary,
   strongFinalStep,
   terminalMinimum,
   terminalRequirement,
@@ -107,27 +105,6 @@ describe('carryAcrossBranch', () => {
       observedMutationTools: 0,
     });
     expect(carryAcrossBranch(prior, undefined)).not.toHaveProperty('deliverable');
-  });
-});
-
-describe('phase boundary qualifiers', () => {
-  it('keeps only the first-tier chain candidates', () => {
-    expect(boundaryQualifiers({
-      fallbackChain: ['a/x:high', 'b/y:max', 'c/z', 'd/w:low'],
-      candidateDiagnostics: [
-        { candidateKey: 'b/y:max', excludedReason: 'below-intelligence-minimum' },
-        { candidateKey: 'c/z', excludedReason: 'unknown-quality' },
-      ],
-    })).toEqual(['a/x:high', 'd/w:low']);
-  });
-
-  it('matches the served model at the qualifying effort or higher', () => {
-    expect(servesBoundary('a/x:high', ['a/x:high'])).toBe(true);
-    expect(servesBoundary('a/x:max', ['a/x:high'])).toBe(true);
-    expect(servesBoundary('a/x:medium', ['a/x:high'])).toBe(false);
-    expect(servesBoundary('a/x:low', ['a/x'])).toBe(true);
-    expect(servesBoundary('a/x', ['a/x:high'])).toBe(false);
-    expect(servesBoundary('b/x:high', ['a/x:high'])).toBe(false);
   });
 });
 

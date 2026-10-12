@@ -5,7 +5,7 @@ import type { ContextStatus } from './context-acquisition.js';
 import type { ChangeFactsState, CheckVerdicts } from './change-facts.js';
 import type { GroundedArtifact } from '../context/types.js';
 import type { PendingIdentity } from '../../serve/context-resolution.js';
-import { defaultRequirement, FRONTIER_REQUIREMENT, MODEL_THINKING_LEVELS, parseCandidateKey } from '../score/scorer.js';
+import { defaultRequirement, FRONTIER_REQUIREMENT, parseCandidateKey } from '../score/scorer.js';
 import type { PolicyVersion } from './policy-version.js';
 import type { BoundaryAuthorizationV1 } from './boundary-authorization.js';
 
@@ -313,35 +313,4 @@ export function withContinuedPenalties(
     ...(prior.contractStrikes ? { contractStrikes: prior.contractStrikes } : {}),
     ...(prior.excludedExecutors ? { excludedExecutors: prior.excludedExecutors } : {}),
   };
-}
-
-/**
- * Chain candidates that clear a phase boundary's minimum: those the scorer
- * left in the first capability tier. A candidate kept only as a fallback —
- * below the minimum, or of unknown quality — may serve an invocation, but it
- * does not satisfy the boundary.
- */
-export function boundaryQualifiers(decision: {
-  fallbackChain: readonly string[];
-  candidateDiagnostics?: ReadonlyArray<{ candidateKey: string; excludedReason?: string }>;
-}): string[] {
-  const excluded = new Set((decision.candidateDiagnostics ?? [])
-    .filter((diagnostic) => diagnostic.excludedReason != null)
-    .map((diagnostic) => diagnostic.candidateKey));
-  return decision.fallbackChain.filter((key) => !excluded.has(key));
-}
-
-/**
- * Whether the served key is one of `qualifiers`. Serving can raise a
- * candidate's effort to a supported level or to the incumbent's minimum
- * thinking level, never lowers it, so the same model at a higher effort than
- * a qualifying key also qualifies.
- */
-export function servesBoundary(served: string, qualifiers: readonly string[]): boolean {
-  const s = parseCandidateKey(served);
-  const rank = (effort: string | undefined) => (effort == null ? -1 : MODEL_THINKING_LEVELS.indexOf(effort as never));
-  return qualifiers.some((key) => {
-    const q = parseCandidateKey(key);
-    return q.provider === s.provider && q.id === s.id && (q.effort == null || rank(s.effort) >= rank(q.effort));
-  });
 }
