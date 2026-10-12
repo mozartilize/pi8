@@ -92,6 +92,9 @@ const decisionState: DecisionStateV1 = {
   friction: [], nowMs: 0, isSubagentSpawn: false, benchmarkIndexVersion: '4.3',
 };
 
+/** Both candidates meet these targets, so solver-path tests exercise an actual within-tier comparison. */
+const solverState: DecisionStateV1 = { ...decisionState, difficulty: { value: 0, source: 'execution-rubric' } };
+
 const snapshot = (profile: UserRoutingPreferencesV1) => validatePreferences(profile);
 const OPERATOR: UserRoutingPreferencesV1 = {
   version: 1, settledImplementation: 'lower_cost', openDesignDecisions: 'higher_reasoning_capability',
@@ -187,7 +190,7 @@ describe('selectByRegret result paths', () => {
   it('uses no LP for a profile without constraints: the closed form is exact', async () => {
     const profile = { version: 1 } as UserRoutingPreferencesV1;
     const noLp: LPAdapter = { solve: async () => { throw new Error('LP must not run'); }, close: async () => {} };
-    const result = await selectByRegret(decisionState, candidates, rows, snapshot(profile), portsWith(() => undefined, noLp),
+    const result = await selectByRegret(solverState, candidates, rows, snapshot(profile), portsWith(() => undefined, noLp),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 0 });
     expect(result).toMatchObject({ kind: 'decision', solver: 'exact', constraintsEnforced: true });
     const viaLp = await solveMinimaxRegret(candidates.map((c) => ({ features: (result as UnifiedDecision).actions.find((a) => a.action.key === c.action.key)!.features })), { ...thetaBaseDomain(), mode: 'hard' }, lp);
@@ -242,7 +245,7 @@ describe('selectByRegret result paths', () => {
     const profile = OPERATOR;
     let current = true;
     const gated = new GatedLp();
-    const pending = selectByRegret(decisionState, candidates, rows, snapshot(profile), readyPorts(gated),
+    const pending = selectByRegret(solverState, candidates, rows, snapshot(profile), readyPorts(gated),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000, isSnapshotCurrent: () => current });
     await new Promise((resolve) => setTimeout(resolve, 10));
     current = false;
@@ -252,7 +255,7 @@ describe('selectByRegret result paths', () => {
     const controller = new AbortController();
     const gated2 = new GatedLp();
     let current2 = true;
-    const both = selectByRegret(decisionState, candidates, rows, snapshot(profile), readyPorts(gated2),
+    const both = selectByRegret(solverState, candidates, rows, snapshot(profile), readyPorts(gated2),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000, isSnapshotCurrent: () => current2, signal: controller.signal });
     await new Promise((resolve) => setTimeout(resolve, 10));
     current2 = false;
@@ -264,7 +267,7 @@ describe('selectByRegret result paths', () => {
   it('labels each solver failure as a fallback with the current representative, and cancellation as cancelled', async () => {
     const profile = OPERATOR;
     const run = (adapter: LPAdapter, extra: { decisionDeadlineMs?: number; pairCap?: number } = {}) =>
-      selectByRegret(decisionState, candidates, rows, snapshot(profile), readyPorts(adapter),
+      selectByRegret(solverState, candidates, rows, snapshot(profile), readyPorts(adapter),
         { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: extra.decisionDeadlineMs ?? 5_000, pairCap: extra.pairCap });
     expect(await run(lp, { decisionDeadlineMs: 0 })).toMatchObject({ solver: 'fallback-central', solverFallbackReason: 'timeout', constraintsEnforced: true, theta: operatorArtifact.thetaRepresentative });
     expect(await run(lp, { pairCap: 1 })).toMatchObject({ solver: 'fallback-central', solverFallbackReason: 'spike-pair-cap' });
@@ -346,7 +349,7 @@ describe('evidence guard: a model without required evidence is not compared', ()
   it('keeps the unmeasured model last on the fallback paths too', async () => {
     const broken: LPAdapter = { solve: async () => { throw new Error('no solver'); }, close: async () => {} };
     const profile = OPERATOR;
-    const result = await selectByRegret(decisionState, pick([A, B, U]), guardRows, snapshot(profile), readyPorts(broken),
+    const result = await selectByRegret(solverState, pick([A, B, U]), guardRows, snapshot(profile), readyPorts(broken),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000 });
     if (result.kind !== 'decision') throw new Error('expected a decision');
     expect(result.solver).toBe('fallback-central');
@@ -375,6 +378,52 @@ describe('evidence guard: a model without required evidence is not compared', ()
       { expectedProfileDigest: preferenceProfileDigest(empty), decisionDeadlineMs: 5_000, pairCap: 2 });
     // Two compared actions make 2 ordered pairs: within the cap, so no capped fallback.
     expect(result).toMatchObject({ kind: 'decision', solver: 'exact' });
+  });
+});
+
+describe('capability targets before price and preferences', () => {
+  const costProfile: UserRoutingPreferencesV1 = {
+    version: 1, settledImplementation: 'lower_cost', openDesignDecisions: 'lower_cost',
+    handoffWarmCache: 'keep_warm_incumbent', researchTasks: 'lower_cost', afterRework: 'increase_effort',
+  };
+  const free = { ...cheap, cost: { input: 0, output: 0 } };
+  const pool = [free, strong].map((m) => ({ model: m, action: enumerateEffectiveActions(m)[0]! }));
+  const prefs = snapshot(costProfile);
+  let costArtifact: DomainArtifact;
+  beforeAll(async () => { costArtifact = await compileDomainArtifact(costProfile, lp); });
+  const run = (bench: BenchModel[], fallback: 'exact' | 'not-ready' | 'cap' = 'exact') =>
+    selectByRegret(decisionState, pool, bench, prefs, portsWith(() => fallback === 'not-ready' ? undefined : costArtifact),
+      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000, ...(fallback === 'cap' ? { pairCap: 0 } : {}) });
+
+  it.each(['exact', 'not-ready', 'cap'] as const)('a free model just below the target cannot beat a model that meets it (%s)', async (mode) => {
+    const result = await run([benchRow('c/cheap', 54.99, 65), benchRow('s/strong', 55, 60)], mode);
+    expect(result).toMatchObject({ chosen: 's/strong:high', ranking: ['s/strong:high', 'c/cheap:high'], solver: mode === 'exact' ? 'exact' : 'fallback-central' });
+    if (result.kind !== 'decision') throw new Error('expected decision');
+    expect(result.actions.find((a) => a.action.registryId === 's/strong')!.capabilityShortfall).toBeCloseTo(0);
+    expect(result.actions.find((a) => a.action.registryId === 'c/cheap')!.capabilityShortfall).toBeGreaterThan(0);
+  });
+
+  it('prefers lower cost within the group that meets every relevant target', async () => {
+    const result = await run([benchRow('c/cheap', 55, 60), benchRow('s/strong', 80, 90)]);
+    expect(result).toMatchObject({ chosen: 'c/cheap:high', ranking: ['c/cheap:high', 's/strong:high'] });
+  });
+
+  it('chooses the smallest deficit when both bounded capability fits are zero', async () => {
+    const result = await run([benchRow('c/cheap', 60, 0), benchRow('s/strong', 60, 20)]);
+    expect(result).toMatchObject({ chosen: 's/strong:high', ranking: ['s/strong:high', 'c/cheap:high'] });
+    if (result.kind !== 'decision') throw new Error('expected decision');
+    expect(result.actions[0]!.capabilityShortfall).toBeCloseTo(3);
+    expect(result.actions[1]!.capabilityShortfall).toBeCloseTo(2);
+  });
+
+  it('keeps uncertain quality above measured weak quality without narrowing its interval', async () => {
+    const estimated = { ...benchRow('c/cheap', 60, 0), axisProvenance: { intelligence: 'measured', agenticCoding: 'source-estimated' } } as BenchModel;
+    const result = await run([estimated, benchRow('s/strong', 60, 20)]);
+    expect(result).toMatchObject({ chosen: 'c/cheap:high', insufficientEvidence: [] });
+    if (result.kind !== 'decision') throw new Error('expected decision');
+    const uncertain = result.actions.find((a) => a.action.registryId === 'c/cheap')!;
+    expect(uncertain.capabilityShortfall).toBe(0);
+    expect([uncertain.features.lower[1], uncertain.features.upper[1]]).toEqual([0, 1]);
   });
 });
 

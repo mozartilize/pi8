@@ -44,7 +44,7 @@ Estimated quality can satisfy ordinary eligibility. It cannot prove a strictly s
 
 ## Capability minimums and ranking axes
 
-See [Routing](routing.md#default-capability-minimums) for the default eligibility table.
+See [capability targets](routing.md#capability-targets) for automatic selection's target scales and tier order.
 
 Under `legacy`, ranking uses Intelligence for lightweight, gather, plan, and review work.
 

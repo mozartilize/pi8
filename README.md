@@ -36,7 +36,7 @@ Sync reads both the API and the public models page, so `/router-sync` needs Chro
 
 `router/auto` routes only from synced benchmark data that includes the models-page measurements. Without that data, selecting `router/auto` shows an error, and automatic turns stop with a message to run `/router-sync`; they make no model call. A manual pin and concrete-model sessions are unaffected. A missing browser does not stop routing: the current data stays in use, and selecting `router/auto` shows a warning that `/router-sync` cannot refresh it.
 
-The capability minimums are calibrated for Artificial Analysis Intelligence Index version 4.3. When a sync reports a different version, the router saves the data, keeps routing, and shows a warning at sync, at `router/auto` selection, and in `/router-status`.
+The Intelligence normalization uses Artificial Analysis Intelligence Index version 4.3. Capability targets are authored policy, not measured task-success thresholds. When a sync reports a different version, the router saves the data, keeps routing, and shows a warning at sync, at `router/auto` selection, and in `/router-status`.
 
 ## How it works
 
@@ -57,6 +57,8 @@ The capability minimums are calibrated for Artificial Analysis Intelligence Inde
                     ↓
      planner reviews ──→ new plan → rework (a strike)
 ```
+
+Automatic selection uses separate reasoning, agentic coding, and research targets. Unknown demand uses the highest targets. Candidates that meet the targets rank before those that miss; if all miss, the smallest deficit ranks first. Preferences apply only within the same capability tier. See [capability targets](docs/routing.md#capability-targets).
 
 ## Commands
 

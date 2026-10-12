@@ -40,74 +40,54 @@ Simple implementation remains `implement`. It does not become `lightweight` beca
 
 See [Work lifecycle](work-lifecycle.md) for the declaration tools and execution plans.
 
+## Capability targets
+
+Each relevant axis has a demand `D` in [0, 1]. Zero means easy. One means extremely hard or unresolved requirements. Unknown demand uses the target for one, but remains unknown in the evidence.
+
+Targets use absolute benchmark scales. They do not depend on which models are in the pool.
+
+| Axis | Normalized quality | Target at D=0 | Target at D=1 | Shortfall scale |
+|---|---|---:|---:|---:|
+| Reasoning | Intelligence / 100 | 0.20 | 0.55 | 0.15 |
+| Agentic coding | Terminal-Bench 4.0 percent / 100 | 0.01 | 0.60 | 0.20 |
+| Research | 0.75 × Briefcase + 0.25 × (Omniscience + 100) / 200 | 0.25 | 0.65 | 0.20 |
+
+The target interpolates linearly between its endpoints. These endpoints and shortfall scales are authored policy, not measured task-success thresholds.
+
+For quality `q`, target `t`, and shortfall scale `w`, capability fit is `clamp(1 − max(0, t − q) / w, 0, 1)`. Surplus capability earns no extra fit. Phase relevance multiplies this fit; demand does not change relevance or price sensitivity.
+
 ## Capability tiers
 
-The router assigns each candidate to one of three tiers:
+First, the selector separates actions that lack evidence for required axes. Those actions remain at the end of the fallback chain. If every action lacks required evidence, all actions are compared and the decision records this condition.
 
-| Tier | Condition |
-|---|---|
-| 0 | The candidate meets every required minimum. |
-| 1 | A required measurement is missing, with no measured failure. |
-| 2 | A measured value is below a required minimum. |
+Within the compared set, the selector computes `max(0, (target − upperQuality) / shortfallScale)` for each relevant axis. The largest shortfall determines the action's capability tier. The deficit is not clipped at one. Thus two actions far below a target can still be distinguished.
 
-Tier 0 precedes tier 1. Tier 1 precedes tier 2. Every tier remains in the fallback chain.
+Smaller deficits rank first. Equal deficits form one tier. A zero deficit means the available evidence establishes no shortfall; it does not certify task success. Unknown and source-estimated quality retain their full uncertainty interval. They cannot establish a deficit from their central estimate alone. A measured failure on another axis still counts.
 
-Missing information does not count as low difficulty or weak quality. A measured failure still counts when another measurement is missing.
+Minimax regret applies preferences within each tier. Central fallback follows the same tier order. Price, speed, cache credit, and continuity cannot compensate for a larger deficit. Every tier remains in the fallback chain. Logged regret values are comparable only within a tier.
 
-Price, speed, cache credit, and protocol preference cannot compensate for a missed minimum across tiers.
-
-## Default capability minimums
-
-The production policy is `legacy`:
-
-| Task type | Required measurements |
-|---|---|
-| `lightweight` | None |
-| `gather` | Intelligence ≥ 20 |
-| `plan`, `review` | Intelligence ≥ 30, Omniscience ≥ 0, Briefcase rubric ≥ 0.35 |
-| `implement` | Agentic coding ≥ 34 |
-
-Agentic coding is the Terminal-Bench 4.0 pass rate, expressed as a percentage.
-
-An explicit implementation requirement below 0.45 uses the AA Agentic Index. Its minimum is `requirement × 57.9`.
-
-Requirements of 0.45 or more use agentic coding. The default implementation request also uses agentic coding.
-
-Long requests need additional measurements. At 64,000 estimated tokens or more, LCR must be at least 0.30.
-
-Image requests need registry image support and MMMU-Pro of at least 0.30.
-
-These values use the calibrated benchmark scales. They do not depend on which models your allowlist contains.
+Axes with zero phase relevance do not contribute a shortfall. Vision and long-context evidence rules remain separate from these three targets.
 
 ## Difficulty declarations
 
-A plan or review declaration uses the reasoning rubric. An implementation declaration uses the execution rubric.
+An accepted handoff or execution plan supplies demand only for its target phase. Each rubric level maps to `(level − 1) / 4`. Independent requirements use their maximum, not an average.
 
-The router combines rubric levels and source measurements into a requirement. It does not accept a model's cost estimate as a capability judgment.
+| Rubric | Reasoning demand | Agentic demand | Research demand |
+|---|---|---|---|
+| Implementation | max(openDecisions, knowledge, coupling) | max(openDecisions, spread, verification, coupling) | max(openDecisions, knowledge) |
+| Plan/review | max(alternatives, stakes, knowledge, uncertainty) | max(spread, stakes, uncertainty) | max(knowledge, uncertainty) |
 
-Without a scored criterion, task defaults apply. Missing criteria inherit the highest supplied level in a partly scored rubric.
+File measurements supplement agentic demand, capped at one. File count, directory count, existing lines, and fix commits each add at most 0.05. Their full contributions occur at five files, four directories, 4,000 lines, and five fixes. Lines contribute nothing through 250, then increase logarithmically. A failed measurement adds its maximum. Evidence that is not applicable adds nothing.
 
-For bounded implementation, `openDecisions` of at most 3 limits the rubric contribution to 0.65.
-
-The declared final step can still raise the handoff minimum. In legacy, a `moderate` final step can retain the strong-band minimum of 0.70.
-
-This handoff ceiling does not cap `commit_execution` requirements. Execution plans use their own retention rules.
-
-See [Work lifecycle](work-lifecycle.md#requirement-formulas) for the formulas and plan-release thresholds.
+The logged scalar difficulty is the maximum of the three axis demands. Selection uses the axes, not that summary. Missing rubric criteria inherit the highest supplied level. No rubric means unknown demand, not zero.
 
 ## Cost, speed, and cache
 
-The router uses one cost scale for each selection. It prefers task cost when benchmark coverage is sufficient.
+Predicted spend uses registry input, output, and eligible cache prices. Benchmark output demand scales the predicted output tokens at the action's effort. Cost desirability is logarithmic from $0.00001 to $10 per invocation. A known zero price is free; an unknown price is not zero.
 
-Otherwise, it uses blended registry token prices. It does not mix task cost and token prices within one selection.
+Latency is an output-token proxy, not measured task wall time. Demand changes neither the cost nor time transform. Cache estimates are not guaranteed cache hits. Preferences apply only within capability tiers.
 
-Speed similarly uses task time or output tokens per second. Missing values receive no credit on the selected scale.
-
-Recent candidates can receive bounded prompt-cache credit from their published cache rates. A cache estimate is not a guaranteed cache hit.
-
-Protocol penalties require sufficient history and configured weights. Neither preference can change capability tiers.
-
-See [Scoring](scoring.md) for candidate expansion, scale coverage, reference strengths, cache estimates, and effort resolution.
+The offline target probe uses API catalog prices, including Anthropic prices for its bridge proxy. Production still uses the registered prices. There is no `apiCostModels` configuration.
 
 ## Thinking effort
 
@@ -141,7 +121,7 @@ See [Delegation](delegation.md) for retry counts, provider exclusions, attempt b
 
 ## Evaluation comparator
 
-`PI8_POLICY_VERSION=cheapest-sufficient` selects the evaluation comparator. Production remains `legacy`.
+`PI8_POLICY_VERSION=cheapest-sufficient` selects the retained evaluation comparator. The automatic selector uses the targets and tiers described above.
 
 The comparator uses Intelligence for every implementation requirement. The default minimum is `0.65 × 57.6`, or approximately 37.4.
 
@@ -155,7 +135,9 @@ Paid evaluations and production activation require separate approval.
 
 | Source | Responsibility |
 |---|---|
-| [Scorer](../extensions/routing/score/scorer.ts) | Capability checks, preference, and effort resolution |
+| [Selector](../extensions/routing/optimization/select.ts) | Capability tiers and within-tier preferences |
+| [Feature mapping](../extensions/routing/features/mapping.ts) | Absolute targets, shortfall scales, and feature transforms |
+| [Difficulty](../extensions/routing/features/difficulty.ts) | Axis demands from accepted declarations |
 | [Work phase](../extensions/routing/policy/work-phase.ts) | Final-step requirements and handoff minimums |
 | [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan state and retention decisions |
 | [Provider](../extensions/serve/provider.ts) | Candidate preparation and stream orchestration |

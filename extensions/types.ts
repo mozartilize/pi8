@@ -409,7 +409,9 @@ export interface UnifiedActionTrace {
   key: string;
   /** Position in the full ranking, starting at 1. */
   rank: number;
-  /** Exact max regret; absent for a central fallback. */
+  /** Capability tier key: smaller deficits rank before larger deficits. */
+  capabilityShortfall?: number;
+  /** Exact max regret within the capability tier; absent for a central fallback. */
   maxRegret?: number;
   /** Dot product of the fallback weights and the central features; absent for an exact decision. */
   centralScore?: number;
@@ -440,8 +442,9 @@ export interface UnifiedDecisionMeta {
   holdingPrompt: number;
   /** Better-ranked action that waits for context preparation. */
   preparationTarget?: string;
-  /** Phase difficulty that scaled capability relevance and cost sensitivity. */
+  /** Maximum declared axis demand. Absent means unknown; targets use demand 1. */
   difficulty?: number;
+  difficultyAxes?: { reasoning: number; agentic: number; research: number };
   /** Weights of a central fallback, in feature order. */
   theta?: number[];
   /** Best-ranked actions (all of them in debug), the chosen action and the incumbent, with their numbers. */

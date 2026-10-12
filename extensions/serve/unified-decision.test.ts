@@ -73,7 +73,10 @@ describe('production selection adapter', () => {
 
   it('records the numbers that ordered the best actions, including the chosen action and the incumbent', async () => {
     const models = [model('one'), model('two')];
-    const result = await resolveUnifiedDecision({ ...input(models), incumbentKey: 'test/two:high' }, noPreparation);
+    const turn = input(models);
+    turn.rows = [{ ...row('test/one'), quality: { intelligence: 50, agenticCoding: 60 } }, row('test/two')];
+    turn.state.difficulty = { value: 1, source: 'execution-rubric', axes: { reasoning: 0.5, agentic: 1, research: 0 } };
+    const result = await resolveUnifiedDecision({ ...turn, incumbentKey: 'test/two:high' }, noPreparation);
     if (result.kind !== 'decision') throw new Error('Expected a decision');
     const { top } = result.decision.unified!;
     expect(top!.map((trace) => trace.rank)).toEqual([...top!.map((trace) => trace.rank)].sort((a, b) => a - b));
@@ -84,7 +87,10 @@ describe('production selection adapter', () => {
     const compared = top!.filter((trace) => trace.maxRegret !== undefined);
     expect(compared.length).toBeGreaterThan(0);
     expect(compared[0]).toBe(top![0]);
-    expect(top![0]!.maxRegret).toBeLessThanOrEqual(Math.min(...compared.map((trace) => trace.maxRegret!)));
+    expect(compared.map((trace) => trace.capabilityShortfall)).toEqual([0, 0.5]);
+    expect(result.decision.unified).toMatchObject({ difficulty: 1, difficultyAxes: { reasoning: 0.5, agentic: 1, research: 0 } });
+    const firstTier = compared.filter((trace) => trace.capabilityShortfall === compared[0]!.capabilityShortfall);
+    expect(top![0]!.maxRegret).toBeLessThanOrEqual(Math.min(...firstTier.map((trace) => trace.maxRegret!)));
     expect(top!.filter((trace) => trace.maxRegret === undefined).every((trace) => trace.evidenceGaps.length > 0)).toBe(true);
   });
 

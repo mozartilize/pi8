@@ -25,12 +25,27 @@ describe('task difficulty from a rubric and router measurements', () => {
     expect(values.filter((value) => value > 0 && value < 1)).toHaveLength(3);
   });
 
+  it('keeps distinct axis demands and does not average away an open requirement', () => {
+    expect(executionDifficulty({ ...execution(1), knowledge: 5 }, noFiles).axes)
+      .toEqual({ reasoning: 1, agentic: 0, research: 1 });
+    expect(executionDifficulty({ ...execution(1), verification: 4 }, noFiles).axes)
+      .toEqual({ reasoning: 0, agentic: 0.75, research: 0 });
+    expect(executionDifficulty({ ...execution(1), openDecisions: 5 }, noFiles).axes)
+      .toEqual({ reasoning: 1, agentic: 1, research: 1 });
+    expect(reasoningDifficulty({ ...reasoning(1), uncertainty: 5 }, noFiles).axes)
+      .toEqual({ reasoning: 1, agentic: 1, research: 1 });
+    expect(reasoningDifficulty({ ...reasoning(1), alternatives: 4 }, noFiles).axes)
+      .toEqual({ reasoning: 0.75, agentic: 0, research: 0 });
+  });
+
   it('adds what the router measures, and a failed measurement counts as harder', () => {
     const wide: MeasuredFeatures = { ...small, files: 8, directories: 5, existingLines: 6000, fixCommits: 6 };
     const failed: MeasuredFeatures = { ...small, existingLines: undefined, fixCommits: undefined };
     const easy = executionDifficulty(execution(1), small).value;
     expect(executionDifficulty(execution(1), wide).value).toBeGreaterThan(easy);
     expect(executionDifficulty(execution(1), failed).value).toBeGreaterThan(easy);
+    expect(executionDifficulty(execution(1), failed).axes).toEqual({ reasoning: 0, agentic: 0.1, research: 0 });
+    expect(executionDifficulty(execution(1), wide).axes).toEqual({ reasoning: 0, agentic: 0.2, research: 0 });
   });
 });
 
@@ -49,10 +64,10 @@ describe('difficulty of the routed phase', () => {
 
   it('applies a handoff rubric only to the phase it targets', () => {
     const planned = state({ reasoningHandoff: handoff('plan', reasoning(5)) });
-    expect(phaseDifficulty(planned, 'plan')).toEqual({ value: 1, source: 'reasoning-rubric' });
+    expect(phaseDifficulty(planned, 'plan')).toEqual({ value: 1, axes: { reasoning: 1, agentic: 1, research: 1 }, source: 'reasoning-rubric' });
     expect(phaseDifficulty(planned, 'implement')).toBeUndefined();
     const implementation = state({ reasoningHandoff: handoff('implement', execution(1)) });
-    expect(phaseDifficulty(implementation, 'implement')).toEqual({ value: 0, source: 'execution-rubric' });
+    expect(phaseDifficulty(implementation, 'implement')).toEqual({ value: 0, axes: { reasoning: 0, agentic: 0, research: 0 }, source: 'execution-rubric' });
   });
 
   it('uses an active plan rubric and its measurements for implementation', () => {

@@ -45,7 +45,9 @@ export type DecisionBoundary =
 
 /** Task difficulty in [0, 1] and the rubric it came from. */
 export interface TaskDifficulty {
+  /** Maximum axis demand, for summaries. Scalar inputs apply to every axis. */
   value: number;
+  axes?: { reasoning: number; agentic: number; research: number };
   source: 'execution-rubric' | 'reasoning-rubric';
 }
 

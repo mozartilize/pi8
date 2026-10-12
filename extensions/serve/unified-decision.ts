@@ -168,6 +168,7 @@ function traceActions(result: UnifiedDecision, chosen: string, incumbentKey: str
     return [{
       key,
       rank: result.ranking.indexOf(key) + 1,
+      capabilityShortfall: round(action.capabilityShortfall),
       ...(regret !== undefined ? { maxRegret: round(regret) } : {}),
       ...(result.theta ? { centralScore: round(result.theta.reduce((sum, weight, index) => sum + weight * (values[index] ?? 0), 0)) } : {}),
       features: Object.fromEntries(FEATURE_NAMES.map((name, index) => [name, round(values[index] ?? 0)])),
@@ -183,7 +184,7 @@ function reasonText(result: UnifiedDecision, chosen: string, preparationTarget: 
   const method = result.solver === 'exact'
     ? 'minimax regret'
     : `central weights (${result.solverFallbackReason ?? 'fallback'})`;
-  const head = `ranked by ${method} among ${result.ranking.length} actions`;
+  const head = `ranked by capability shortfall, then ${method}, among ${result.ranking.length} actions`;
   return preparationTarget ? `${head}; ${preparationTarget} waits for compaction, ${chosen} holds the prompt` : head;
 }
 
@@ -231,7 +232,7 @@ export async function resolveUnifiedDecision(
     insufficientEvidence: result.insufficientEvidence.length,
     holdingPrompt: chain.length,
     ...(preparationTarget ? { preparationTarget } : {}),
-    ...(input.state.difficulty ? { difficulty: input.state.difficulty.value } : {}),
+    ...(input.state.difficulty ? { difficulty: input.state.difficulty.value, difficultyAxes: input.state.difficulty.axes } : {}),
     ...(result.theta ? { theta: result.theta.map(round) } : {}),
     top: traceActions(result, chosen, input.incumbentKey, isDebugEnabled() ? result.ranking.length : TRACE_TOP),
   };

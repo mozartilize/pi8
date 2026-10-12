@@ -22,7 +22,9 @@ import {
   normalizeKnowledge,
   normalizeResearch,
   normalizeTerminalBench,
-  relevanceScale,
+  capabilityFit,
+  capabilityTarget,
+  CAPABILITY_SHORTFALL,
   type TaskRelevance,
 } from './mapping.js';
 import { FEATURE_MAPPING_VERSION, type AxisProvenance, type FeatureEvidence, type FeatureName } from './schema.js';
@@ -105,16 +107,12 @@ const evidenceCode = (observations: readonly AxisObservation[]): FeatureEvidence
     : observations.some((o) => o.normalized !== undefined) ? 'source-estimated'
       : 'missing';
 
-/**
- * Task relevances from the phase, explicitly observed open decisions and the
- * task difficulty. Unknown difficulty keeps the full phase relevance.
- */
+/** Phase relevance stays independent of capability demand and price. */
 export function taskRelevance(state: Pick<DecisionStateV1, 'phase' | 'openDecisions' | 'difficulty'>): TaskRelevance {
   const base = PHASE_RELEVANCE[state.phase];
   const openDecisions = state.openDecisions !== undefined && state.openDecisions > 0;
   const reasoning = openDecisions ? Math.max(base.reasoning, OPEN_DECISIONS_REASONING) : base.reasoning;
-  const scale = state.difficulty ? relevanceScale(state.difficulty.value) : 1;
-  return { reasoning: reasoning * scale, agentic: base.agentic * scale, research: base.research * scale };
+  return { reasoning, agentic: base.agentic, research: base.research };
 }
 
 /** Evidence detail of the task difficulty. */
@@ -134,6 +132,8 @@ export function evidenceGaps(row: BenchModel | undefined, state: DecisionStateV1
 }
 
 export interface CapabilityFeature {
+  /** Optimistic shortfall on the axis scale. Missing quality cannot prove a deficit. */
+  shortfall?: number;
   name: FeatureName;
   interval: Interval;
   evidence: FeatureEvidence;
@@ -166,14 +166,28 @@ export function capabilityFeatures(row: BenchModel | undefined, state: DecisionS
     : feature('inputFit', combine(relevantInputs.map((o) => [componentInterval(o), 1 / relevantInputs.length])), relevantInputs);
 
   const difficulty = difficultyDetail(state);
+  const target = (axis: keyof TaskRelevance): number =>
+    capabilityTarget(axis, state.difficulty?.axes?.[axis] ?? state.difficulty?.value);
+  const targets: TaskRelevance = { reasoning: target('reasoning'), agentic: target('agentic'), research: target('research') };
+  const fit = (interval: Interval, axis: keyof TaskRelevance): Interval => scale({
+    center: capabilityFit(interval.center, targets[axis], axis),
+    lower: capabilityFit(interval.lower, targets[axis], axis),
+    upper: capabilityFit(interval.upper, targets[axis], axis),
+  }, relevance[axis]);
+  const demandFeature = (axis: keyof TaskRelevance, interval: Interval, observations: AxisObservation[], extra: string[] = []): CapabilityFeature => ({
+    ...feature(`${axis}Fit`, fit(interval, axis), observations,
+      [...extra, difficulty, `target:${axis}:${targets[axis].toFixed(3)}`]),
+    // Do not clip the deficit: when all actions miss, the nearest must still rank first.
+    shortfall: relevance[axis] === 0 ? 0 : Math.max(0, (targets[axis] - interval.upper) / CAPABILITY_SHORTFALL[axis]),
+  });
   return [
-    feature('reasoningFit', scale(componentInterval(intelligence), relevance.reasoning), [intelligence],
-      [state.openDecisions === undefined ? 'openDecisions:unknown' : `openDecisions:${state.openDecisions}`, difficulty]),
-    feature('agenticFit', scale(componentInterval(terminalBench), relevance.agentic), [terminalBench], [difficulty]),
-    feature('researchFit', scale(combine([
+    demandFeature('reasoning', componentInterval(intelligence), [intelligence],
+      [state.openDecisions === undefined ? 'openDecisions:unknown' : `openDecisions:${state.openDecisions}`]),
+    demandFeature('agentic', componentInterval(terminalBench), [terminalBench]),
+    demandFeature('research', combine([
       [componentInterval(research), RESEARCH_SHARE],
       [componentInterval(knowledge), KNOWLEDGE_SHARE],
-    ]), relevance.research), [research, knowledge], [difficulty]),
+    ]), [research, knowledge]),
     input,
   ];
 }

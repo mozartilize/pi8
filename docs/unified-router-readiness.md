@@ -22,8 +22,10 @@ The following modules have executable offline tests:
 
 - Effective-action enumeration and per-axis benchmark provenance.
 - Candidate features, cache accounting and AA output-equivalent demand scaling.
-- Task difficulty from the handoff or plan rubric and router measurements
-  (`feature-v2`): it scales capability relevance and cost sensitivity continuously.
+- Separate axis demands from the handoff or plan rubric and file measurements
+  (`feature-v3`). Absolute targets determine capability tiers before preferences.
+  Unknown demand uses the highest targets. Cost and time transforms are independent
+  of demand. Every tier remains in the fallback chain; regret is local to a tier.
 - Preference validation, scenarios, domain identity and exact regret selection.
 - Transactional assignment, preparation fallback through the retained ranking,
   recovery consumption and single-use dispatch.

@@ -7,9 +7,12 @@ Use these terms consistently in issues, documentation, and model-facing instruct
 | Term | Meaning |
 |---|---|
 | Task type | The kind of work: `lightweight`, `gather`, `plan`, `implement`, or `review`. Code uses `Dimension`. |
-| Capability tier | Eligibility class: meets every minimum, has unknown quality, or has a measured failure. |
+| Capability tier | Actions with the same largest relevant-axis shortfall. Smaller deficits rank first; preferences apply within a tier. |
 | Capability band | Named requirement range used by legacy routing: `economy`, `standard`, `strong`, or `frontier`. |
-| Requirement | A normalized capability value that determines required benchmark minimums. |
+| Requirement | The work's declared needs. Accepted rubric levels determine separate axis demands for automatic selection. |
+| Axis demand | Difficulty in [0, 1] for reasoning, agentic coding, or research. Unknown demand uses the highest target. |
+| Capability target | Absolute benchmark value requested by one axis demand. |
+| Capability shortfall | Largest relevant-axis deficit, measured in each axis's shortfall scale. |
 | Capability minimum | A required measurement value for the task and input shape. |
 | Handoff minimum | Requirement that applies after an accepted task declaration. |
 | Executor minimum | Implementation requirement that applies to a released execution plan. |

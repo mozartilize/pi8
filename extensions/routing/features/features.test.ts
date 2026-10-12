@@ -76,19 +76,19 @@ describe('N1: supported effort coverage, scored effort = sent effort', () => {
   it('scores the measured effort exactly and unmeasured efforts with the missing interval', () => {
     const actions = enumerateEffectiveActions(model);
     const at = (effort: ModelThinkingLevel) => featuresOf(state(), model, actions.find((a) => a.effort === effort)!, rows);
-    expectTriple(feature(at('high'), 'reasoningFit'), [0.372, 0.372, 0.372]);
-    expectTriple(feature(at('high'), 'agenticFit'), [0.4, 0.4, 0.4]);
-    expectTriple(feature(at('medium'), 'reasoningFit'), [0.3, 0, 0.6]);
-    expectTriple(feature(at('max'), 'reasoningFit'), [0.3, 0, 0.6]);
+    expectTriple(feature(at('high'), 'reasoningFit'), [0.6, 0.6, 0.6]);
+    expectTriple(feature(at('high'), 'agenticFit'), [0, 0, 0]);
+    expectTriple(feature(at('medium'), 'reasoningFit'), [0.4, 0, 0.6]);
+    expectTriple(feature(at('max'), 'reasoningFit'), [0.4, 0, 0.6]);
     expectTriple(feature(at('max'), 'agenticFit'), [0.5, 0, 1]);
   });
 
   it('does not let an effort step-down estimate replace the missing representative', () => {
     const stepped = estimateRow('medium', rows, { intelligence: 6 })!;
-    expect(stepped.quality.intelligence).toBeCloseTo(56, 9); // would give 0.336
+    expect(stepped.quality.intelligence).toBeCloseTo(56, 9);
     expect(stepped.axisProvenance?.intelligence).toBe('effort-stepdown');
     const medium = enumerateEffectiveActions(model).find((a) => a.effort === 'medium')!;
-    expectTriple(feature(featuresOf(state(), model, medium, [...rows, stepped]), 'reasoningFit'), [0.3, 0, 0.6]);
+    expectTriple(feature(featuresOf(state(), model, medium, [...rows, stepped]), 'reasoningFit'), [0.4, 0, 0.6]);
   });
 
   it('resolves an explicit high override to the single high action', () => {
@@ -144,10 +144,10 @@ describe('N2: axis provenance through the real pipeline', () => {
 
   it('keeps the exact Intelligence feature and ignores the regression in center and interval', () => {
     const p = featuresOf(state(), P, pHigh, rows);
-    expectTriple(feature(p, 'reasoningFit'), [0.372, 0.372, 0.372]);
+    expectTriple(feature(p, 'reasoningFit'), [0.6, 0.6, 0.6]);
     expectTriple(feature(p, 'agenticFit'), [0.5, 0, 1]);
-    expect(p.evidence.find((e) => e.feature === 'agenticFit')).toMatchObject({ code: 'missing', details: ['agenticCoding:regression-bridge', 'difficulty:unknown'] });
-    expectTriple(feature(featuresOf(state(), Q, qHigh, rows), 'agenticFit'), [0.45, 0.45, 0.45]);
+    expect(p.evidence.find((e) => e.feature === 'agenticFit')).toMatchObject({ code: 'missing', details: ['agenticCoding:regression-bridge', 'difficulty:unknown', 'target:agentic:0.600'] });
+    expectTriple(feature(featuresOf(state(), Q, qHigh, rows), 'agenticFit'), [0.25, 0.25, 0.25]);
   });
 
   it('treats a source-estimated value as a center with the full missing interval', () => {
@@ -156,13 +156,13 @@ describe('N2: axis provenance through the real pipeline', () => {
       [{ slug: 'qmodel', name: 'Q Model (high)', intelligenceIndexIsEstimated: true }],
       [Q],
     );
-    expectTriple(feature(featuresOf(state(), Q, qHigh, estimated), 'reasoningFit'), [0.372, 0, 0.6]);
+    expectTriple(feature(featuresOf(state(), Q, qHigh, estimated), 'reasoningFit'), [0.6, 0, 0.6]);
   });
 
   it('gives no evidence for an ambiguous legacy row or an incompatible index version', () => {
     const legacy: BenchModel = { ...pRow, axisProvenance: undefined };
-    expectTriple(feature(featuresOf(state(), P, pHigh, [legacy]), 'reasoningFit'), [0.3, 0, 0.6]);
-    expectTriple(feature(featuresOf(state({ benchmarkIndexVersion: '5.0' }), P, pHigh, rows), 'reasoningFit'), [0.3, 0, 0.6]);
+    expectTriple(feature(featuresOf(state(), P, pHigh, [legacy]), 'reasoningFit'), [0.4, 0, 0.6]);
+    expectTriple(feature(featuresOf(state({ benchmarkIndexVersion: '5.0' }), P, pHigh, rows), 'reasoningFit'), [0.4, 0, 0.6]);
   });
 });
 
@@ -252,8 +252,9 @@ describe('N3: feature boundaries and fixed missing shares', () => {
     [{ registryId: 'p/xmodel', benchSlug: 'xmodel', active: true, effort: 'high', source: 'aa', quality, axisProvenance }];
 
   it('keeps the missing Knowledge share instead of rescaling Research (review)', () => {
-    const rows = row({ research: 0.8 }, { research: 'measured' });
-    expectTriple(feature(featuresOf(state({ phase: 'review' }), model, action, rows), 'researchFit'), [0.58, 0.48, 0.68]);
+    const rows = row({ research: 0.6 }, { research: 'measured' });
+    // Combined quality is [0.45, 0.575, 0.70]; target 0.65, shortfall 0.2, relevance 0.8.
+    expectTriple(feature(featuresOf(state({ phase: 'review' }), model, action, rows), 'researchFit'), [0.5, 0, 0.8]);
   });
 
   it('makes long-context quality relevant at exactly 64,000 tokens', () => {
@@ -266,9 +267,9 @@ describe('N3: feature boundaries and fixed missing shares', () => {
   it('distinguishes unknown, zero and positive open decisions', () => {
     const rows = row({ intelligence: 62 }, { intelligence: 'measured' });
     const at = (openDecisions: number | undefined) => featuresOf(state({ openDecisions }), model, action, rows);
-    expectTriple(feature(at(undefined), 'reasoningFit'), [0.372, 0.372, 0.372]);
-    expectTriple(feature(at(0), 'reasoningFit'), [0.372, 0.372, 0.372]);
-    expectTriple(feature(at(2), 'reasoningFit'), [0.558, 0.558, 0.558]);
+    expectTriple(feature(at(undefined), 'reasoningFit'), [0.6, 0.6, 0.6]);
+    expectTriple(feature(at(0), 'reasoningFit'), [0.6, 0.6, 0.6]);
+    expectTriple(feature(at(2), 'reasoningFit'), [0.9, 0.9, 0.9]);
     const details = (vector: ReturnType<typeof at>) => vector.evidence.find((e) => e.feature === 'reasoningFit')!.details;
     expect(details(at(undefined))).toContain('openDecisions:unknown');
     expect(details(at(0))).toContain('openDecisions:0');
@@ -482,46 +483,39 @@ describe('task difficulty', () => {
     featuresOf(state({ phase, ...(value === undefined ? {} : { difficulty: { value, source: 'execution-rubric' } }) }), model, action, rows);
   const unknown = at();
 
-  it('unknown difficulty keeps full phase relevance and full cost sensitivity', () => {
-    // Implement: reasoning 0.6 x 0.62, agentic 1 x 0.40.
-    expectTriple(feature(unknown, 'reasoningFit'), [0.372, 0.372, 0.372]);
-    expectTriple(feature(unknown, 'agenticFit'), [0.4, 0.4, 0.4]);
-    const usd = 10_000 / 1e6 + 1024 * 4 / 1e6;
-    expect(feature(unknown, 'costDesirability')[0]).toBeCloseTo(1 - Math.log10(usd / 0.00001) / 6, 9);
+  it('unknown demand uses the hardest targets but remains unknown in evidence', () => {
+    expect(unknown.values).toEqual(at(1).values);
+    expectTriple(feature(unknown, 'reasoningFit'), [0.6, 0.6, 0.6]);
+    expectTriple(feature(unknown, 'agenticFit'), [0, 0, 0]);
     expect(unknown.evidence.find((e) => e.feature === 'reasoningFit')!.details).toContain('difficulty:unknown');
   });
 
-  it('D = 1 keeps full relevance and shrinks cost and time differences to a quarter', () => {
-    const hard = at(1);
-    expectTriple(feature(hard, 'reasoningFit'), [0.372, 0.372, 0.372]);
-    for (const name of ['costDesirability', 'timeDesirability'] as const) {
-      const base = feature(unknown, name);
-      expectTriple(feature(hard, name), base.map((value) => 1 - 0.25 * (1 - value)) as [number, number, number]);
-    }
+  it('D = 0 awards full fit for meeting the easy targets', () => {
+    expectTriple(feature(at(0), 'reasoningFit'), [0.6, 0.6, 0.6]);
+    expectTriple(feature(at(0), 'agenticFit'), [1, 1, 1]);
   });
 
-  it('D = 0 scales capability relevance to 0.3 and keeps cost and time', () => {
-    const easy = at(0);
-    expectTriple(feature(easy, 'reasoningFit'), [0.1116, 0.1116, 0.1116]);
-    expectTriple(feature(easy, 'agenticFit'), [0.12, 0.12, 0.12]);
-    for (const name of ['costDesirability', 'timeDesirability'] as const) {
-      expectTriple(feature(easy, name), feature(unknown, name) as [number, number, number]);
-    }
-  });
-
-  it('a harder task never lowers capability relevance or raises cost sensitivity', () => {
+  it('higher demand cannot improve the same capability fit or change economics', () => {
     let previous = at(0);
     for (const value of [0.1, 0.25, 0.5, 0.75, 0.9, 1]) {
       const next = at(value);
       for (const name of ['reasoningFit', 'agenticFit', 'researchFit'] as const) {
-        expect(feature(next, name)[0]).toBeGreaterThanOrEqual(feature(previous, name)[0] - EPS);
+        expect(feature(next, name)[0]).toBeLessThanOrEqual(feature(previous, name)[0] + EPS);
       }
       for (const name of ['costDesirability', 'timeDesirability'] as const) {
-        // Closer to 1 means a smaller difference from the cheapest or fastest action.
-        expect(feature(next, name)[0]).toBeGreaterThanOrEqual(feature(previous, name)[0] - EPS);
+        expect(feature(next, name)).toEqual(feature(previous, name));
       }
       previous = next;
     }
+  });
+
+  it('uses each axis demand, not the maximum summary, for its target', () => {
+    const mixed = featuresOf(state({ difficulty: {
+      value: 1, source: 'execution-rubric', axes: { reasoning: 1, agentic: 0, research: 0.5 },
+    } }), model, action, rows);
+    expect(feature(mixed, 'reasoningFit')).toEqual(feature(at(1), 'reasoningFit'));
+    expect(feature(mixed, 'agenticFit')).toEqual(feature(at(0), 'agenticFit'));
+    expect(mixed.evidence.find((e) => e.feature === 'researchFit')!.details).toContain('target:research:0.450');
   });
 
   it('keeps every interval ordered, the unknown price included', () => {
@@ -536,7 +530,7 @@ describe('task difficulty', () => {
   });
 
   it('records the difficulty and its source in the evidence', () => {
-    const details = at(0.5).evidence.find((e) => e.feature === 'costDesirability')!.details;
+    const details = at(0.5).evidence.find((e) => e.feature === 'reasoningFit')!.details;
     expect(details).toContain('difficulty:execution-rubric:0.500');
   });
 });
