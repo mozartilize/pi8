@@ -123,6 +123,12 @@ export const CONTRACT_REMINDER =
   `Then call ${EXECUTION_CONTRACT_TOOL} before making those edits. Continue inspecting while decisions remain. ` +
   'Rate only the remaining implementation, not the completed investigation.';
 
+/**
+ * A handoff does not end the turn. The model that wrote it may also serve the
+ * next step, and a final reply there ends the run with no work done.
+ */
+export const CONTINUE_TURN = 'Do not give a final reply. Make your next tool call.';
+
 /** The error of the stopped first change of a plan/review entry without a plan. */
 export const CONTRACT_GATE =
   `Router: this change was not made. If the user asked for it and the remaining work is fully decided, call ` +

@@ -44,6 +44,16 @@ function selectorPorts(): SelectorPorts {
   return ports;
 }
 
+/**
+ * Ends the LP worker thread. An idle worker keeps its message port open, and a
+ * one-shot Pi process waits for that port after the session ends.
+ */
+export async function closeSelectorPorts(): Promise<void> {
+  const current = ports;
+  ports = undefined;
+  if (current?.lp instanceof WorkerLpAdapter) await current.lp.close();
+}
+
 /** A config that cannot be read applies no preferences; it never blocks a turn. */
 export function readPreferences(): ValidatedPreferences {
   try {

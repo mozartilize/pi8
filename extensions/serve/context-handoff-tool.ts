@@ -36,7 +36,7 @@ import {
 import { declaredRequirement } from '../routing/policy/execution-difficulty.js';
 import { handoffMinimum, rubricCeiling, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
-import { CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
+import { CONTINUE_TURN, CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
 import { readBranch } from '../routing/context/persistence.js';
@@ -412,13 +412,14 @@ export function submitContextHandoff(
     return {
       accepted: true,
       text: `Context handed off (${deliverable}, ${next.reasoningHandoff.minimum !== undefined ? `minimum ${next.reasoningHandoff.minimum.toFixed(2)}` : 'default minimum'}). A ${role} model ` +
-        'chosen for this difficulty continues from the next step with your findings and question. Make no changes now.' +
+        'chosen for this difficulty continues from the next step with your findings and question. Make no changes now. ' +
+        CONTINUE_TURN +
         (deliverable === 'implement' ? `\nFor the next implementation step:\n${CONTRACT_REMINDER}` : ''),
     };
   }
   return {
     accepted: true,
-    text: `Context handed off (${deliverable}). The next step continues with your findings; make no changes now.`,
+    text: `Context handed off (${deliverable}). The next step continues with your findings; make no changes now. ${CONTINUE_TURN}`,
   };
 }
 

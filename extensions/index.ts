@@ -53,6 +53,7 @@ import {
   type SubagentResultRow,
 } from './agents/subagent-results.js';
 import { isUsageLimitErrorMessage } from './serve/usage-limit.js';
+import { closeSelectorPorts } from './serve/unified-decision.js';
 import { computeSubagentSpend } from './agents/subagent-spend.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './routing/policy/allowlist.js';
 import { loadConfig } from './config.js';
@@ -779,6 +780,7 @@ export default async function autoModelRouterExtension(
       reason: event.reason,
       ...session.blacklist.getDebugState(),
     });
+    return closeSelectorPorts().catch(() => undefined);
   });
 
   pi.on('model_select', (event, ctx) => handleModelSelect(pi, event, ctx, refreshRoleModels, session, runtime));

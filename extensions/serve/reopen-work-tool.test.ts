@@ -8,7 +8,7 @@ import { routingDecision } from '../test-support/router-fixtures.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import type { PendingIdentity } from './context-resolution.js';
 import { RouterSession } from './router-session-state.js';
-import { CONTRACT_REMINDER } from './execution-contract-tool.js';
+import { CONTINUE_TURN, CONTRACT_REMINDER } from './execution-contract-tool.js';
 import { prepareReopenFacts, registerReopenWorkTool, submitReopenWork, type ReopenWorkParams } from './reopen-work-tool.js';
 
 vi.mock('../host/decisionlog.js', () => ({ appendWorkLifecycleSignal: vi.fn() }));
@@ -95,6 +95,7 @@ describe('reopen_work', () => {
     const result = submitReopenWork({ ...SHAPE, deliverable }, AUTO, session);
     expect(result.accepted).toBe(true);
     expect(result.text).toContain('Make no changes now.');
+    expect(result.text).toContain(CONTINUE_TURN);
     if (deliverable === 'implement') {
       expect(result.text).toContain('For the next implementation step:');
       expect(result.text).toContain(CONTRACT_REMINDER);

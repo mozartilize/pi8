@@ -26,7 +26,7 @@ import { REOPEN_WORK_TOOL, completedIncumbent } from '../routing/policy/work-com
 import { handoffMinimum, rubricCeiling, withContinuedPenalties, withStrongerTerminal, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import type { PendingIdentity } from './context-resolution.js';
-import { CONTRACT_REMINDER, closeContractEntry } from './execution-contract-tool.js';
+import { CONTINUE_TURN, CONTRACT_REMINDER, closeContractEntry } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 import { difficultyParameter, remainingWorkParameter } from './rubric-schema.js';
@@ -190,9 +190,9 @@ function reject(state: WorkPhaseState | undefined, served: string | undefined, c
 function acceptedText(deliverable: ReopenDeliverable, minimum: number | undefined): string {
   if ((deliverable === 'plan' || deliverable === 'review') && minimum != null) {
     const role = deliverable === 'plan' ? 'planning' : 'review';
-    return `Work item reopened (${deliverable}, minimum ${minimum.toFixed(2)}). A ${role} model continues from the next step. Make no changes now.`;
+    return `Work item reopened (${deliverable}, minimum ${minimum.toFixed(2)}). A ${role} model continues from the next step. Make no changes now. ${CONTINUE_TURN}`;
   }
-  return `Work item reopened (${deliverable}). The next step continues this work. Make no changes now.` +
+  return `Work item reopened (${deliverable}). The next step continues this work. Make no changes now. ${CONTINUE_TURN}` +
     (deliverable === 'implement' ? `\nFor the next implementation step:\n${CONTRACT_REMINDER}` : '');
 }
 

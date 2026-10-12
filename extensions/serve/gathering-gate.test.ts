@@ -6,7 +6,7 @@ import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { routingDecision } from '../test-support/router-fixtures.js';
 import { RouterSession } from './router-session-state.js';
 import { submitContextHandoff } from './context-handoff-tool.js';
-import { CONTRACT_REMINDER } from './execution-contract-tool.js';
+import { CONTINUE_TURN, CONTRACT_REMINDER } from './execution-contract-tool.js';
 import { CLARIFICATION_TEXT, closeContextEntry, countContextRefusal, gateContextToolCall } from './gathering-gate.js';
 import { factsLog } from '../routing/policy/change-facts.js';
 
@@ -133,6 +133,7 @@ describe('implementation boundary guidance', () => {
     const result = submitContextHandoff({ ...READY, deliverable }, ROUTER_AUTO, session);
     expect(result.accepted).toBe(true);
     expect(result.text).toContain('Make no changes now.');
+    expect(result.text).toContain(CONTINUE_TURN);
     if (deliverable === 'implement') {
       expect(result.text).toContain('For the next implementation step:');
       expect(result.text).toContain(CONTRACT_REMINDER);

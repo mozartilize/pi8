@@ -19,6 +19,7 @@ import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
 import { ROUTER_TOOLS_OFF_NOTE } from './serve/router-tools-note.js';
 import type { WorkPhaseState } from './routing/policy/work-phase.js';
 import { createBoundaryAuthorization } from './routing/policy/boundary-authorization.js';
+import { closeSelectorPorts } from './serve/unified-decision.js';
 import { SessionTree } from './test-support/session-tree.js';
 import { activateEvent, createEvent, workItem } from './test-support/context-fixtures.js';
 import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, requestRouting } from './routing/context/persistence.js';
@@ -28,6 +29,10 @@ vi.mock('./serve/provider.js', () => ({
   registerAutoRouterProvider: vi.fn(),
   buildSubagentProviderAuthFilter: vi.fn(() => () => true),
   getBlacklistDebugState: vi.fn(() => ({ instance: 'test' })),
+}));
+vi.mock('./serve/unified-decision.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./serve/unified-decision.js')>()),
+  closeSelectorPorts: vi.fn(async () => undefined),
 }));
 vi.mock('./bench/store.js', () => ({
   loadStore: vi.fn(() => undefined),
@@ -213,6 +218,21 @@ describe('disconnected subagent routing', () => {
     await sessionStart!({ reason: 'new' }, ctx);
 
     expect(computeRoleModels).not.toHaveBeenCalled();
+  });
+
+  it('ends the selector worker thread when the session shuts down, and a failure there is not raised', async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const pi = {
+      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+      registerTool: vi.fn(),
+    } as unknown as ExtensionAPI;
+    await autoModelRouterExtension(pi);
+
+    await handlers.get('session_shutdown')!({ reason: 'quit' });
+    expect(closeSelectorPorts).toHaveBeenCalledTimes(1);
+
+    vi.mocked(closeSelectorPorts).mockRejectedValueOnce(new Error('terminate failed'));
+    await expect(handlers.get('session_shutdown')!({ reason: 'reload' })).resolves.toBeUndefined();
   });
 
   describe('auth sweep gating (pi#7508 amplification)', () => {
