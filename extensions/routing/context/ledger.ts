@@ -15,6 +15,7 @@ import {
   type AnchorKind,
   type AnchorRole,
   type BoundaryKind,
+  type ExecutorPenalties,
   type GroundedArtifact,
   type ContextReason,
   type Incumbent,
@@ -35,6 +36,9 @@ export const CONTEXT_LIMITS = {
   anchors: 32,
   grounding: 32,
   id: 64,
+  /** Models with a penalty record in one item. */
+  penaltyModels: 32,
+  penaltyKey: 128,
 } as const;
 
 export interface TopicLedger {
@@ -212,6 +216,11 @@ export function applyEvent(ledger: TopicLedger, event: RoutingContextEvent): Top
       // item's open context; a contract only associates its record.
       const next = event.boundary === 'investigation-handoff' ? { ...item, openContext: [] } : item;
       return withItem(ledger, next, false);
+    }
+    case 'executor-penalty': {
+      const item = ledger.items.get(event.workItemId);
+      if (!item) return ledger;
+      return withItem(ledger, { ...item, penalties: { strikes: event.strikes, excluded: event.excluded } }, false);
     }
     case 'incumbent': {
       const current = ledger.incumbent;
@@ -407,6 +416,22 @@ function parsePatch(value: unknown): WorkItemPatch | undefined {
   return patch;
 }
 
+/** A bounded penalty snapshot; a damaged field rejects the whole record. */
+function parsePenalties(data: Record_): ExecutorPenalties | undefined {
+  const { strikes, excluded } = data;
+  if (!isRecord(strikes) || !Array.isArray(excluded)) return undefined;
+  const keys = Object.keys(strikes);
+  if (keys.length > CONTEXT_LIMITS.penaltyModels || excluded.length > CONTEXT_LIMITS.penaltyModels) return undefined;
+  const counts: Record<string, number> = {};
+  for (const key of keys) {
+    const count = strikes[key];
+    if (key.length > CONTEXT_LIMITS.penaltyKey || typeof count !== 'number' || !Number.isInteger(count) || count < 1) return undefined;
+    counts[key] = count;
+  }
+  if (!excluded.every((key) => text(key) && key.length <= CONTEXT_LIMITS.penaltyKey)) return undefined;
+  return { strikes: counts, excluded: [...new Set(excluded as string[])] };
+}
+
 /**
  * Validate one persisted event. An unknown version or operation, or any
  * malformed field, yields undefined: the fold skips it rather than guessing.
@@ -464,6 +489,11 @@ function parseFlatContextEvent(data: unknown): FlatContextEvent | undefined {
         if (!workItemId || !text(data.handoffId)) return undefined;
         if (!BOUNDARIES.has(data.boundary as BoundaryKind)) return undefined;
         return { v: 1, op: 'boundary', workItemId, boundary: data.boundary as BoundaryKind, handoffId: data.handoffId, sourceEntryId };
+      }
+      case 'executor-penalty': {
+        const workItemId = parseId(data.workItemId);
+        const penalties = parsePenalties(data);
+        return workItemId && penalties ? { v: 1, op: 'executor-penalty', workItemId, ...penalties, sourceEntryId } : undefined;
       }
       case 'incumbent': {
         const served = isRecord(data.served) ? data.served : undefined;

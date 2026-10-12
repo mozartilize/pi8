@@ -1,6 +1,6 @@
 import type { CapabilityBand, Dimension, HandoffRubric, ReasoningHandoffMeta, TaskScope, TerminalAssessment } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
-import type { ContextReason, EntryResolution } from '../context/types.js';
+import type { ContextReason, EntryResolution, ExecutorPenalties } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
 import type { ChangeFactsState, CheckVerdicts } from './change-facts.js';
 import type { GroundedArtifact } from '../context/types.js';
@@ -244,6 +244,56 @@ export function penaltiesOf(state: WorkPhaseState): PriorWork | undefined {
     workItemId: state.workItemId,
     ...(state.contractStrikes ? { contractStrikes: state.contractStrikes } : {}),
     ...(state.excludedExecutors ? { excludedExecutors: state.excludedExecutors } : {}),
+  };
+}
+
+/** The execution penalties that `state` holds. */
+export function statePenalties(state: WorkPhaseState): ExecutorPenalties {
+  return { strikes: state.contractStrikes ?? {}, excluded: state.excludedExecutors ?? [] };
+}
+
+const modelId = (key: string): string => parseCandidateKey(key).id;
+
+/** Penalties never shrink: the higher strike count and every excluded model of either side. */
+export function mergePenalties(a: ExecutorPenalties, b: ExecutorPenalties): ExecutorPenalties {
+  const strikes = { ...a.strikes };
+  for (const [id, count] of Object.entries(b.strikes)) strikes[id] = Math.max(strikes[id] ?? 0, count);
+  const excluded = [...a.excluded];
+  for (const key of b.excluded) {
+    if (!excluded.some((known) => modelId(known) === modelId(key))) excluded.push(key);
+  }
+  return { strikes, excluded };
+}
+
+export function samePenalties(a: ExecutorPenalties, b: ExecutorPenalties): boolean {
+  const ids = Object.keys(a.strikes);
+  return ids.length === Object.keys(b.strikes).length && ids.every((id) => a.strikes[id] === b.strikes[id])
+    && a.excluded.length === b.excluded.length && a.excluded.every((key) => b.excluded.some((other) => modelId(other) === modelId(key)));
+}
+
+/** `state` with the penalties its work item holds on the branch; the same object when it adds none. */
+export function withBranchPenalties(state: WorkPhaseState, branch: ExecutorPenalties | undefined): WorkPhaseState {
+  if (!branch) return state;
+  const current = statePenalties(state);
+  const merged = mergePenalties(current, branch);
+  if (samePenalties(merged, current)) return state;
+  return {
+    ...state,
+    ...(Object.keys(merged.strikes).length > 0 ? { contractStrikes: merged.strikes } : {}),
+    ...(merged.excluded.length > 0 ? { excludedExecutors: merged.excluded } : {}),
+  };
+}
+
+/** `state` with exactly the penalties its work item holds on the branch; the same object when they match. */
+export function withExactBranchPenalties(state: WorkPhaseState, branch: ExecutorPenalties | undefined): WorkPhaseState {
+  const current = statePenalties(state);
+  const target = branch ?? { strikes: {}, excluded: [] };
+  if (samePenalties(current, target)) return state;
+  const { contractStrikes: _strikes, excludedExecutors: _excluded, ...rest } = state;
+  return {
+    ...rest,
+    ...(Object.keys(target.strikes).length > 0 ? { contractStrikes: target.strikes } : {}),
+    ...(target.excluded.length > 0 ? { excludedExecutors: target.excluded } : {}),
   };
 }
 

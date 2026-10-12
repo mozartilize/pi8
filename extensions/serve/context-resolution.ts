@@ -24,7 +24,7 @@ import {
   type WorkTitles,
 } from '../routing/context/resolve.js';
 import type { BoundaryKind, EntryResolution } from '../routing/context/types.js';
-import { carryAcrossBranch, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import { carryAcrossBranch, withExactBranchPenalties, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { servedKey } from '../host/ui.js';
 import { debugLog } from '../host/debuglog.js';
 import type { RouterSession } from './router-session-state.js';
@@ -237,7 +237,16 @@ export function recordBoundary(
 export function carryPhaseAcrossTree(session: RouterSession, branch: readonly unknown[] | undefined): void {
   try {
     const state = session.getWorkPhaseState();
-    if (!state || branchHoldsEntry(branch, state.intentKey)) return;
+    if (!state) return;
+    if (branchHoldsEntry(branch, state.intentKey)) {
+      // The entry continues here, with the penalties this branch recorded for
+      // its work item; those earned later on another branch stay there.
+      const kept = state.workItemId
+        ? withExactBranchPenalties(state, getWorkItem(session.context.getLedger(), state.workItemId)?.penalties)
+        : state;
+      if (kept !== state) session.commitWorkPhaseState(kept);
+      return;
+    }
     const itemDeliverable = activeWorkItem(session.context.getLedger())?.lastDeliverable;
     const deliverable = state.deliverable ? atLeast(state.deliverable, itemDeliverable) : itemDeliverable;
     session.commitWorkPhaseState(carryAcrossBranch(state, deliverable));

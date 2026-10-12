@@ -80,6 +80,7 @@ import { POLICY_PASSIVE_CAUSES, scoredIncumbentKey } from '../routing/policy/rou
 import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import {
   penaltiesOf,
+  withBranchPenalties,
   nextProviderInvocation,
   type WorkPhaseState,
 } from '../routing/policy/work-phase.js';
@@ -894,7 +895,12 @@ async function scoreRouterTurn(args: {
   const routableCandidates = pinned ? candidates : applyRuntimeExclusions(candidates, session);
   if (routableCandidates.length === 0) return noRoutableCandidates(session);
 
-  const observed = session.getWorkPhaseState();
+  // Penalties that the branch recorded for this work item apply again after /tree or a resume.
+  const stored = session.getWorkPhaseState();
+  const observed = stored?.workItemId
+    ? withBranchPenalties(stored, session.context.getLedger().items.get(stored.workItemId)?.penalties)
+    : stored;
+  if (observed !== stored) session.commitWorkPhaseState(observed);
   const intentState = observed?.intentKey === turnInput.key ? observed : undefined;
   const mutationObserved = intentState != null && intentState.observedMutationTools > 0;
   const contract = settleExecutionContract(intentState, trajectoryEscalation, session);

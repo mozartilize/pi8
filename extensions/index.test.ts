@@ -18,6 +18,7 @@ import { defaultRouterSession } from './serve/router-session-state.js';
 import { REQUEST_NOTE_ENTRY_TYPE } from './serve/request-notes.js';
 import { ROUTER_TOOLS_OFF_NOTE } from './serve/router-tools-note.js';
 import type { WorkPhaseState } from './routing/policy/work-phase.js';
+import { createBoundaryAuthorization } from './routing/policy/boundary-authorization.js';
 import { SessionTree } from './test-support/session-tree.js';
 import { activateEvent, createEvent, workItem } from './test-support/context-fixtures.js';
 import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, requestRouting } from './routing/context/persistence.js';
@@ -847,8 +848,8 @@ describe('work ledger lifecycle', () => {
       terminalBand: 'standard',
       providerInvocation: 3,
       observedMutationTools: 1,
-      contractStrikes: { 'beta/strong': 2 },
-      excludedExecutors: ['beta/strong'],
+      boundaryAuthorization: createBoundaryAuthorization(
+        { boundaryId: 'b', workItemId: 'w_1', phase: 'gather', assignmentId: 'a1', revision: 1 }, ['alpha/cheap']),
       contextStatus: 'acquiring',
       workItemId: 'w_1',
     };

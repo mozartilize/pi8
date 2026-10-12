@@ -71,7 +71,11 @@ difficulty do not change this release permission.
 
 Provider tests cover legal fallback settlement, excluded executors, pending
 returns, cancellation, stale preferences and unchanged-snapshot manual resume.
-Complete single-use reservation and branch restoration checks remain release
+Executor strikes and exclusions of a work item are recorded on the session branch
+as `executor-penalty` events. `/tree`, return to a recorded branch, and resume
+restore them; a branch that lacks the event does not have them. They only grow.
+Authorization snapshots and reservations stay in memory and expire when the
+entry leaves the branch. Complete single-use reservation checks remain release
 conditions.
 
 ## Conditions before runtime migration
@@ -155,7 +159,7 @@ Fixture-only measurements do not satisfy that condition.
 ## Verification of the provider integration
 
 - `npm run tsc`: passed, including eval compilation.
-- `timeout 300 npx vitest run`: 113 files passed and 2 skipped. 1871 tests passed
+- `timeout 300 npx vitest run`: 113 files passed and 2 skipped. 1877 tests passed
   and 3 skipped.
 - Six production selection adapter tests cover effort enumeration, thinking
   minimums, smaller-window retention, scoped exclusions, stale profiles and

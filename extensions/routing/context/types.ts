@@ -79,11 +79,22 @@ export interface WorkItem {
    */
   openContext?: ContextReason[];
   /**
+   * Execution penalties of this item on the branch: contract breaks by model
+   * id, and the served keys of models excluded from executing it. The branch
+   * that recorded them owns them; absent means none.
+   */
+  penalties?: ExecutorPenalties;
+  /**
    * The user entry, recorded before tracking started on the branch, this
    * item was found from. It identifies the item for later entries that
    * return to the same history; nothing routes on it.
    */
   legacySourceEntryId?: string;
+}
+
+export interface ExecutorPenalties {
+  strikes: Record<string, number>;
+  excluded: string[];
 }
 
 /**
@@ -156,6 +167,8 @@ export type FlatContextEvent =
       sourceEntryId: string;
     }
   | { v: 1; op: 'boundary'; workItemId: WorkItemId; boundary: BoundaryKind; handoffId: string; sourceEntryId: string }
+  /** The complete penalties of an item after a change; the latest on the branch applies. */
+  | ({ v: 1; op: 'executor-penalty'; workItemId: WorkItemId; sourceEntryId: string } & ExecutorPenalties)
   | {
       v: 1;
       op: 'incumbent';

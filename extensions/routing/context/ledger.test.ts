@@ -141,6 +141,18 @@ describe('ledger fold', () => {
     }
   });
 
+  it('keeps the latest penalty snapshot of an item, and ignores one for an unknown item', () => {
+    const penalty = (strikes: Record<string, number>, excluded: string[], workItemId = 'w_1'): RoutingContextEvent =>
+      ({ v: 1, op: 'executor-penalty', workItemId, strikes, excluded, sourceEntryId: 'u2' });
+    const base = foldEvents([create(workItem('w_1', 't_1')), create(workItem('w_2', 't_2'))]);
+    const first = applyEvent(base, penalty({ strong: 1 }, []));
+    const second = applyEvent(first, penalty({ strong: 2 }, ['a/strong']));
+    expect(second.items.get('w_1')?.penalties).toEqual({ strikes: { strong: 2 }, excluded: ['a/strong'] });
+    expect(second.items.get('w_2')?.penalties).toBeUndefined();
+    expect(second.recency).toEqual(base.recency);
+    expect(applyEvent(base, penalty({ strong: 1 }, [], 'w_9'))).toBe(base);
+  });
+
   it('replays a commit that activates a completed item before its status update', () => {
     // Branches recorded before reopen boundaries existed wrote this order.
     const ledger = foldEvents([
@@ -224,6 +236,20 @@ describe('parseContextEvent', () => {
       { v: 1, op: 'incumbent', served: { registryId: 'a/b' }, dimension: 'plan', workItemId: 'w_1', sourceEntryId: 'u' },
     ];
     for (const event of events) expect(parseContextEvent(JSON.parse(JSON.stringify(event)))).toEqual(event);
+  });
+
+  it('round-trips a penalty snapshot and rejects a damaged one', () => {
+    const event: RoutingContextEvent = { v: 1, op: 'executor-penalty', workItemId: 'w_1', strikes: { strong: 2 }, excluded: ['a/strong'], sourceEntryId: 'u' };
+    expect(parseContextEvent(JSON.parse(JSON.stringify(event)))).toEqual(event);
+    for (const damaged of [
+      { ...event, strikes: { strong: -1 } },
+      { ...event, strikes: { strong: 1.5 } },
+      { ...event, strikes: [2] },
+      { ...event, excluded: 'a/strong' },
+      { ...event, excluded: [7] },
+      { ...event, workItemId: 'NONE' },
+      { ...event, strikes: Object.fromEntries(Array.from({ length: CONTEXT_LIMITS.penaltyModels + 1 }, (_, i) => [`m${i}`, 1])) },
+    ]) expect(parseContextEvent(damaged)).toBeUndefined();
   });
 
   it('rejects an incumbent whose work item id is damaged, and an unknown boundary', () => {

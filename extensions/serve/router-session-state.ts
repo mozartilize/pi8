@@ -21,19 +21,20 @@ import type {
 import { checkBenchmarkStore, type BenchmarkCheck } from '../bench/store.js';
 import { debugLog } from '../host/debuglog.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import { mergePenalties, samePenalties, statePenalties, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
 import { ContextPreparationState } from './context-preparation.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
 import type { PendingTrajectoryEscalation, StruggleDecision } from '../routing/struggle/types.js';
 import type { ToolCycleInput } from '../routing/struggle/fingerprints.js';
-import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/ledger.js';
+import { applyEvent, emptyLedger, parseContextEvent, type TopicLedger } from '../routing/context/ledger.js';
 import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
 import { ReadCoverage, type LineRange } from '../routing/context/grounding.js';
 import type { LegacyIndex } from '../routing/context/legacy.js';
 import {
   CONTEXT_COMMIT_EVENT_LIMIT,
   type BranchState,
+  type ExecutorPenalties,
   type FlatContextEvent,
   type Incumbent,
   type RoutingContextEvent,
@@ -211,6 +212,20 @@ export class RoutingContextState {
       return;
     }
     this.ledger = next;
+  }
+
+  /**
+   * Record the penalties an item earned on this branch, so that `/tree` back
+   * to the branch and a resume restore them. They only grow, and a record
+   * the branch could not hold is not written.
+   */
+  recordPenalties(workItemId: string, observed: ExecutorPenalties, sourceEntryId: string): void {
+    const known = this.ledger.items.get(workItemId)?.penalties ?? { strikes: {}, excluded: [] };
+    const merged = mergePenalties(known, observed);
+    if (samePenalties(merged, known)) return;
+    const event: RoutingContextEvent = { v: 1, op: 'executor-penalty', workItemId, ...merged, sourceEntryId };
+    if (parseContextEvent(JSON.parse(JSON.stringify(event))) == null) return;
+    this.append(event);
   }
 
   /** Pi switched to another model: the next router entry starts without an incumbent. */
@@ -607,6 +622,12 @@ export class RouterSession {
 
   commitWorkPhaseState(next: WorkPhaseState | undefined): void {
     this.intent.commitWorkPhaseState(next);
+    try {
+      const source = this.context.getEntrySource();
+      if (next?.workItemId && source) this.context.recordPenalties(next.workItemId, statePenalties(next), source);
+    } catch {
+      // A penalty that cannot be recorded stays in memory for this session.
+    }
   }
 
   bindTrajectoryIntent(intentKey: string): void {
