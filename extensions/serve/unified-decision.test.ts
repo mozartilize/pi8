@@ -70,6 +70,23 @@ describe('production selection adapter', () => {
     expect(result.candidates.find((c) => c.effort === 'low')?.effort).toBe('low');
   });
 
+  it('records the numbers that ordered the best actions, including the chosen action and the incumbent', async () => {
+    const models = [model('one'), model('two')];
+    const result = await resolveUnifiedDecision({ ...input(models), incumbentKey: 'test/two:high' }, noPreparation);
+    if (result.kind !== 'decision') throw new Error('Expected a decision');
+    const { top } = result.decision.unified!;
+    expect(top!.map((trace) => trace.rank)).toEqual([...top!.map((trace) => trace.rank)].sort((a, b) => a - b));
+    expect(top![0]!.key).toBe(result.decision.chosen);
+    expect(top!.some((trace) => trace.key === 'test/two:high')).toBe(true);
+    for (const trace of top!) expect(Object.keys(trace.features)).toHaveLength(10);
+    // An action without evidence is ranked last and was not compared by regret.
+    const compared = top!.filter((trace) => trace.maxRegret !== undefined);
+    expect(compared.length).toBeGreaterThan(0);
+    expect(compared[0]).toBe(top![0]);
+    expect(top![0]!.maxRegret).toBeLessThanOrEqual(Math.min(...compared.map((trace) => trace.maxRegret!)));
+    expect(top!.filter((trace) => trace.maxRegret === undefined).every((trace) => trace.evidenceGaps.length > 0)).toBe(true);
+  });
+
   it('preserves an owned thinking minimum but permits an explicit lower effort at a new boundary', async () => {
     const held = await resolveUnifiedDecision({ ...input(), minimumEffort: 'high' }, noPreparation);
     expect(held.kind).toBe('decision');

@@ -404,7 +404,24 @@ export interface AttemptUsageEvent {
   price?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
 }
 
-/** Evidence of a unified selection: identities, codes and counts only. */
+/** The numbers that ordered one action in a unified decision. */
+export interface UnifiedActionTrace {
+  key: string;
+  /** Position in the full ranking, starting at 1. */
+  rank: number;
+  /** Exact max regret; absent for a central fallback. */
+  maxRegret?: number;
+  /** Dot product of the fallback weights and the central features; absent for an exact decision. */
+  centralScore?: number;
+  /** Central feature values by feature name. */
+  features: Record<string, number>;
+  /** Predicted spend in USD; absent when the price is unknown. */
+  costUsd?: { central: number; min?: number; max?: number };
+  /** Required quality axes without evidence. */
+  evidenceGaps: string[];
+}
+
+/** Evidence of a unified selection: identities, codes, counts and the numbers that ordered the best actions. */
 export interface UnifiedDecisionMeta {
   solver: 'exact' | 'fallback-central' | 'no-feasible-action';
   solverFallbackReason?: string;
@@ -423,6 +440,12 @@ export interface UnifiedDecisionMeta {
   holdingPrompt: number;
   /** Better-ranked action that waits for context preparation. */
   preparationTarget?: string;
+  /** Phase difficulty that scaled capability relevance and cost sensitivity. */
+  difficulty?: number;
+  /** Weights of a central fallback, in feature order. */
+  theta?: number[];
+  /** Best-ranked actions, the chosen action and the incumbent, with their numbers. */
+  top?: UnifiedActionTrace[];
 }
 
 export interface RoutingDecision {

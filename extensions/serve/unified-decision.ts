@@ -31,7 +31,8 @@ import {
 import { validatePreferences, type ValidatedPreferences } from '../routing/preferences/schema.js';
 import { buildCandidate, candidateKey, holdsPrompt, type RegistryModelInfo } from '../routing/score/scorer.js';
 import { loadPreferenceSnapshot } from '../config.js';
-import type { BenchModel, Candidate, DecisionCause, RoutingDecision, UnifiedDecisionMeta } from '../types.js';
+import { FEATURE_NAMES } from '../routing/features/schema.js';
+import type { BenchModel, Candidate, DecisionCause, RoutingDecision, UnifiedActionTrace, UnifiedDecisionMeta } from '../types.js';
 
 let ports: SelectorPorts | undefined;
 
@@ -128,6 +129,34 @@ function legalActions(input: UnifiedTurnInput): { selection: SelectionCandidate[
   return { selection, candidates };
 }
 
+const TRACE_TOP = 12;
+const round = (value: number): number => Math.round(value * 1e5) / 1e5;
+
+/** The best-ranked actions, the chosen action and the incumbent, with the numbers that ordered them. */
+function traceActions(result: UnifiedDecision, chosen: string, incumbentKey: string | undefined): UnifiedActionTrace[] {
+  const byKey = new Map(result.actions.map((action) => [action.features.key, action]));
+  const keys = new Set(result.ranking.slice(0, TRACE_TOP));
+  for (const key of [chosen, incumbentKey]) if (key && byKey.has(key)) keys.add(key);
+  return [...keys].flatMap((key): UnifiedActionTrace[] => {
+    const action = byKey.get(key);
+    if (!action) return [];
+    const { values } = action.features;
+    const regret = result.maxRegret?.get(key);
+    const { centralUSD, minUSD, maxUSD } = action.spend;
+    return [{
+      key,
+      rank: result.ranking.indexOf(key) + 1,
+      ...(regret !== undefined ? { maxRegret: round(regret) } : {}),
+      ...(result.theta ? { centralScore: round(result.theta.reduce((sum, weight, index) => sum + weight * (values[index] ?? 0), 0)) } : {}),
+      features: Object.fromEntries(FEATURE_NAMES.map((name, index) => [name, round(values[index] ?? 0)])),
+      ...(centralUSD !== undefined ? {
+        costUsd: { central: round(centralUSD), ...(minUSD !== undefined ? { min: round(minUSD) } : {}), ...(maxUSD !== undefined ? { max: round(maxUSD) } : {}) },
+      } : {}),
+      evidenceGaps: [...action.evidenceGaps],
+    }];
+  }).sort((a, b) => a.rank - b.rank);
+}
+
 function reasonText(result: UnifiedDecision, chosen: string, preparationTarget: string | undefined): string {
   const method = result.solver === 'exact'
     ? 'minimax regret'
@@ -180,6 +209,9 @@ export async function resolveUnifiedDecision(
     insufficientEvidence: result.insufficientEvidence.length,
     holdingPrompt: chain.length,
     ...(preparationTarget ? { preparationTarget } : {}),
+    ...(input.state.difficulty ? { difficulty: input.state.difficulty.value } : {}),
+    ...(result.theta ? { theta: result.theta.map(round) } : {}),
+    top: traceActions(result, chosen, input.incumbentKey),
   };
   const decision: RoutingDecision = {
     dimension: input.state.phase,
