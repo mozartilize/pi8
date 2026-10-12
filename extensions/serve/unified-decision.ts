@@ -30,7 +30,7 @@ import {
 } from '../routing/optimization/select.js';
 import { hasSubstantiveAnswers, validatePreferences, type ValidatedPreferences } from '../routing/preferences/schema.js';
 import { buildCandidate, candidateKey, holdsPrompt, type RegistryModelInfo } from '../routing/score/scorer.js';
-import { loadPreferenceSnapshot } from '../config.js';
+import { loadConfig, loadPreferenceSnapshot } from '../config.js';
 import { fileDomainStore } from './domain-artifact-store.js';
 import { FEATURE_NAMES } from '../routing/features/schema.js';
 import type { BenchModel, Candidate, DecisionCause, RoutingDecision, UnifiedActionTrace, UnifiedDecisionMeta } from '../types.js';
@@ -148,13 +148,22 @@ function legalActions(input: UnifiedTurnInput): { selection: SelectionCandidate[
   return { selection, candidates };
 }
 
+/** Ranked actions that a decision record lists; debug lists every ranked action. */
 const TRACE_TOP = 12;
+
+const debugEnabled = (): boolean => {
+  try {
+    return Boolean(loadConfig().debug);
+  } catch {
+    return false;
+  }
+};
 const round = (value: number): number => Math.round(value * 1e5) / 1e5;
 
-/** The best-ranked actions, the chosen action and the incumbent, with the numbers that ordered them. */
-function traceActions(result: UnifiedDecision, chosen: string, incumbentKey: string | undefined): UnifiedActionTrace[] {
+/** The first `limit` ranked actions, the chosen action and the incumbent, with the numbers that ordered them. */
+function traceActions(result: UnifiedDecision, chosen: string, incumbentKey: string | undefined, limit: number): UnifiedActionTrace[] {
   const byKey = new Map(result.actions.map((action) => [action.features.key, action]));
-  const keys = new Set(result.ranking.slice(0, TRACE_TOP));
+  const keys = new Set(result.ranking.slice(0, limit));
   for (const key of [chosen, incumbentKey]) if (key && byKey.has(key)) keys.add(key);
   return [...keys].flatMap((key): UnifiedActionTrace[] => {
     const action = byKey.get(key);
@@ -230,7 +239,7 @@ export async function resolveUnifiedDecision(
     ...(preparationTarget ? { preparationTarget } : {}),
     ...(input.state.difficulty ? { difficulty: input.state.difficulty.value } : {}),
     ...(result.theta ? { theta: result.theta.map(round) } : {}),
-    top: traceActions(result, chosen, input.incumbentKey),
+    top: traceActions(result, chosen, input.incumbentKey, debugEnabled() ? result.ranking.length : TRACE_TOP),
   };
   const decision: RoutingDecision = {
     dimension: input.state.phase,

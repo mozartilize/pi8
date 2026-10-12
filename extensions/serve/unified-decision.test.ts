@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { savePreferences } from '../config.js';
@@ -85,6 +85,22 @@ describe('production selection adapter', () => {
     expect(compared[0]).toBe(top![0]);
     expect(top![0]!.maxRegret).toBeLessThanOrEqual(Math.min(...compared.map((trace) => trace.maxRegret!)));
     expect(top!.filter((trace) => trace.maxRegret === undefined).every((trace) => trace.evidenceGaps.length > 0)).toBe(true);
+  });
+
+  it('lists every ranked action in the record under debug and only the best twelve otherwise', async () => {
+    const models = ['a', 'b', 'c', 'd', 'e', 'f'].map((id) => model(id));
+    const traced = async () => {
+      const result = await resolveUnifiedDecision(input(models), noPreparation);
+      if (result.kind !== 'decision') throw new Error('Expected a decision');
+      return { top: result.decision.unified!.top!, ranked: result.decision.unified!.ranked };
+    };
+    const quiet = await traced();
+    expect(quiet.ranked).toBeGreaterThan(12);
+    expect(quiet.top).toHaveLength(12);
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ debug: true }));
+    const verbose = await traced();
+    expect(verbose.top).toHaveLength(verbose.ranked);
+    expect(verbose.top.map((trace) => trace.rank)).toEqual(Array.from({ length: verbose.ranked }, (_, index) => index + 1));
   });
 
   it('preserves an owned thinking minimum but permits an explicit lower effort at a new boundary', async () => {

@@ -444,7 +444,7 @@ export interface UnifiedDecisionMeta {
   difficulty?: number;
   /** Weights of a central fallback, in feature order. */
   theta?: number[];
-  /** Best-ranked actions, the chosen action and the incumbent, with their numbers. */
+  /** Best-ranked actions (all of them in debug), the chosen action and the incumbent, with their numbers. */
   top?: UnifiedActionTrace[];
 }
 
