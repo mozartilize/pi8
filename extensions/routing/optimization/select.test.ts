@@ -11,6 +11,8 @@ import { greedyBoxSimplexMax } from '../../test-support/lp-oracle.js';
 import { enumerateEffectiveActions } from '../features/actions.js';
 import type { ActionFeatureVector } from '../features/schema.js';
 import type { DecisionStateV1 } from '../features/state.js';
+import { AssignmentLedger } from '../policy/assignment-transaction.js';
+import type { WorkPhaseState } from '../policy/work-phase.js';
 import { preferenceProfileDigest, validatePreferences, type UserRoutingPreferencesV1 } from '../preferences/schema.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import { compileDomainArtifact, thetaBaseDomain, type DomainArtifact } from './domain.js';
@@ -118,6 +120,59 @@ class GatedLp implements LPAdapter {
   }
   async close() {}
 }
+
+describe('assignment permission snapshots before feature evaluation', () => {
+  const ledger = () => new AssignmentLedger({
+    workItemId: 'W', branchId: 'branch', session: 1, profile: 1,
+    profileDigest: 'p', authorization: 0, context: 1,
+  });
+  const failedWork: WorkPhaseState = {
+    intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0,
+    workItemId: 'W', excludedExecutors: ['c/cheap:high'],
+  };
+  const keys = candidates.map((candidate) => candidate.action.key);
+
+  it('removes implementation failures before regret comparison, but retains them for planning and other work', async () => {
+    const assignment = ledger();
+    const empty = validatePreferences({ version: 1 });
+    const run = async (phase: 'implement' | 'plan') => {
+      assignment.authorize(phase, keys, failedWork);
+      const plan = assignment.plan([]);
+      return selectByRegret({ ...decisionState, phase }, candidates, rows, empty, portsWith(() => undefined), {
+        allowedActors: plan.allowedActors, expectedProfileDigest: empty.digest, decisionDeadlineMs: 5_000,
+        isSnapshotCurrent: () => assignment.isCurrent(plan),
+      });
+    };
+    const implementation = await run('implement') as UnifiedDecision;
+    expect(implementation.chosen).toBe('s/strong:high');
+    expect(implementation.ranking).toEqual(['s/strong:high']);
+    expect(implementation.actions.map((action) => action.action.key)).toEqual(['s/strong:high']);
+    expect(implementation.maxRegret!.get('s/strong:high')).toBe(0);
+    expect((await run('plan') as UnifiedDecision).ranking.sort()).toEqual([...keys].sort());
+    assignment.bump({ workItemId: 'other' });
+    expect((await run('implement') as UnifiedDecision).ranking.sort()).toEqual([...keys].sort());
+  });
+
+  it('keeps unauthorized actions out of a central fallback and the evidence tail', async () => {
+    const preferences = snapshot(OPERATOR);
+    const result = await selectByRegret(decisionState, candidates, rows, preferences, portsWith(() => undefined), {
+      allowedActors: ['s/strong:high'], expectedProfileDigest: preferences.digest, decisionDeadlineMs: 5_000,
+    }) as UnifiedDecision;
+    expect(result.solver).toBe('fallback-central');
+    expect(result.ranking).toEqual(['s/strong:high']);
+    expect(result.actions.map((action) => action.action.key)).toEqual(['s/strong:high']);
+    expect(result.insufficientEvidence).toEqual([]);
+  });
+
+  it('an empty permission list means no feasible action, not unrestricted permission', async () => {
+    const preferences = validatePreferences({ version: 1 });
+    const result = await selectByRegret(decisionState, candidates, rows, preferences, portsWith(() => undefined), {
+      allowedActors: [], expectedProfileDigest: preferences.digest, decisionDeadlineMs: 5_000,
+    });
+    expect(result).toMatchObject({ solver: 'no-feasible-action', ranking: [], actions: [] });
+    expect((result as UnifiedDecision).chosen).toBeUndefined();
+  });
+});
 
 describe('selectByRegret result paths', () => {
   it('runs exact regret on ThetaBase for an empty profile', async () => {

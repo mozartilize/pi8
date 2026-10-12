@@ -93,6 +93,8 @@ export interface SelectorPorts {
 
 export interface SelectControls {
   signal?: AbortSignal;
+  /** Permission snapshot for this work item, phase and assignment. Not a quality threshold. */
+  allowedActors?: readonly string[];
   /** Digest of the profile snapshot the caller planned with. */
   expectedProfileDigest: string;
   /** Total budget: queue, domain lookup, LP and verification. */
@@ -178,7 +180,10 @@ export async function selectByRegret(
   if (preferences.digest !== controls.expectedProfileDigest) return finish({ kind: 'stale' });
   if (controls.isSnapshotCurrent && !controls.isSnapshotCurrent()) return finish({ kind: 'stale' });
 
-  const actions = candidates.map((candidate) => candidateFeatures(state, candidate.model, candidate.action, rows));
+  const allowed = controls.allowedActors === undefined ? undefined : new Set(controls.allowedActors);
+  const actions = candidates
+    .filter((candidate) => !allowed || allowed.has(candidate.action.key))
+    .map((candidate) => candidateFeatures(state, candidate.model, candidate.action, rows));
   // A model without evidence for the required axes stays callable but is not compared.
   const withEvidence = actions.filter((features) => features.evidenceGaps.length === 0);
   const allInsufficient = actions.length > 0 && withEvidence.length === 0;

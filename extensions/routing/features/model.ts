@@ -22,12 +22,13 @@ import {
   normalizeKnowledge,
   normalizeResearch,
   normalizeTerminalBench,
+  relevanceScale,
   type TaskRelevance,
-} from './mapping-v1.js';
+} from './mapping.js';
 import { FEATURE_MAPPING_VERSION, type AxisProvenance, type FeatureEvidence, type FeatureName } from './schema.js';
 import type { DecisionStateV1 } from './state.js';
 
-/** Intelligence Index versions whose scale `feature-v1` normalizes. Others give no evidence. */
+/** Intelligence Index versions whose scale the feature mapping normalizes. Others give no evidence. */
 export const INTELLIGENCE_INDEX_VERSIONS: readonly string[] = ['4.3'];
 
 const majorMinor = (version: string | undefined): string | undefined =>
@@ -104,12 +105,21 @@ const evidenceCode = (observations: readonly AxisObservation[]): FeatureEvidence
     : observations.some((o) => o.normalized !== undefined) ? 'source-estimated'
       : 'missing';
 
-/** Task relevances from the phase and explicitly observed open decisions. */
-export function taskRelevance(state: Pick<DecisionStateV1, 'phase' | 'openDecisions'>): TaskRelevance {
+/**
+ * Task relevances from the phase, explicitly observed open decisions and the
+ * task difficulty. Unknown difficulty keeps the full phase relevance.
+ */
+export function taskRelevance(state: Pick<DecisionStateV1, 'phase' | 'openDecisions' | 'difficulty'>): TaskRelevance {
   const base = PHASE_RELEVANCE[state.phase];
   const openDecisions = state.openDecisions !== undefined && state.openDecisions > 0;
-  return { ...base, reasoning: openDecisions ? Math.max(base.reasoning, OPEN_DECISIONS_REASONING) : base.reasoning };
+  const reasoning = openDecisions ? Math.max(base.reasoning, OPEN_DECISIONS_REASONING) : base.reasoning;
+  const scale = state.difficulty ? relevanceScale(state.difficulty.value) : 1;
+  return { reasoning: reasoning * scale, agentic: base.agentic * scale, research: base.research * scale };
 }
+
+/** Evidence detail of the task difficulty. */
+export const difficultyDetail = (state: Pick<DecisionStateV1, 'difficulty'>): string =>
+  state.difficulty ? `difficulty:${state.difficulty.source}:${state.difficulty.value.toFixed(3)}` : 'difficulty:unknown';
 
 /**
  * Axes this decision requires evidence for that the row lacks: the phase's
@@ -155,14 +165,15 @@ export function capabilityFeatures(row: BenchModel | undefined, state: DecisionS
     }
     : feature('inputFit', combine(relevantInputs.map((o) => [componentInterval(o), 1 / relevantInputs.length])), relevantInputs);
 
+  const difficulty = difficultyDetail(state);
   return [
     feature('reasoningFit', scale(componentInterval(intelligence), relevance.reasoning), [intelligence],
-      state.openDecisions === undefined ? ['openDecisions:unknown'] : [`openDecisions:${state.openDecisions}`]),
-    feature('agenticFit', scale(componentInterval(terminalBench), relevance.agentic), [terminalBench]),
+      [state.openDecisions === undefined ? 'openDecisions:unknown' : `openDecisions:${state.openDecisions}`, difficulty]),
+    feature('agenticFit', scale(componentInterval(terminalBench), relevance.agentic), [terminalBench], [difficulty]),
     feature('researchFit', scale(combine([
       [componentInterval(research), RESEARCH_SHARE],
       [componentInterval(knowledge), KNOWLEDGE_SHARE],
-    ]), relevance.research), [research, knowledge]),
+    ]), relevance.research), [research, knowledge], [difficulty]),
     input,
   ];
 }

@@ -7,8 +7,8 @@ import type { BenchModel, ProvenanceAxis } from '../../types.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import type { EffectiveAction } from './actions.js';
 import { costFeature, effortDemandScale, predictSpend, timeFeature, type PredictedSpendV1 } from './economics.js';
-import { clamp01 } from './mapping-v1.js';
-import { capabilityFeatures, evidenceGaps, rowAtServedEffort, type Interval } from './model.js';
+import { clamp01, costSensitivity, sensitiveDesirability } from './mapping.js';
+import { capabilityFeatures, difficultyDetail, evidenceGaps, rowAtServedEffort, type Interval } from './model.js';
 import { FEATURE_INDEX, FEATURE_MAPPING_VERSION, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName } from './schema.js';
 import { sessionFeatures } from './session.js';
 import type { DecisionStateV1 } from './state.js';
@@ -41,12 +41,20 @@ export function candidateFeatures(
   }
   const demand = effortDemandScale(rows, action);
   const spend = predictSpend(state, action, model.cost, effortSharesCache(model), demand);
+  // A known difficulty scales how much cost and time differences matter.
+  const sensitivity = state.difficulty ? costSensitivity(state.difficulty.value) : 1;
+  const sensitive = (interval: Interval): Interval => ({
+    center: sensitiveDesirability(interval.center, sensitivity),
+    lower: sensitiveDesirability(interval.lower, sensitivity),
+    upper: sensitiveDesirability(interval.upper, sensitivity),
+  });
+  const withDifficulty = (entry: FeatureEvidence): FeatureEvidence => ({ ...entry, details: [...(entry.details ?? []), difficultyDetail(state)] });
   const cost = costFeature(spend, demand);
-  intervals.set('costDesirability', cost.interval);
-  evidence.push(cost.evidence);
+  intervals.set('costDesirability', sensitive(cost.interval));
+  evidence.push(withDifficulty(cost.evidence));
   const time = timeFeature(row, demand);
-  intervals.set('timeDesirability', time.interval);
-  evidence.push(time.evidence);
+  intervals.set('timeDesirability', sensitive(time.interval));
+  evidence.push(withDifficulty(time.evidence));
   const session = sessionFeatures(state, action);
   const exact = (value: number): Interval => ({ center: value, lower: value, upper: value });
   intervals.set('continuity', exact(session.continuity));

@@ -1,5 +1,5 @@
 /**
- * feature-v1 contracts (testing plan N1, N2, N3, N5 and the cache matrix).
+ * Feature mapping contracts (testing plan N1, N2, N3, N5 and the cache matrix).
  * Expected values are hand calculations from the frozen mapping table; the
  * benchmark rows pass through the real adapter, matcher and store merge.
  */
@@ -146,7 +146,7 @@ describe('N2: axis provenance through the real pipeline', () => {
     const p = featuresOf(state(), P, pHigh, rows);
     expectTriple(feature(p, 'reasoningFit'), [0.372, 0.372, 0.372]);
     expectTriple(feature(p, 'agenticFit'), [0.5, 0, 1]);
-    expect(p.evidence.find((e) => e.feature === 'agenticFit')).toMatchObject({ code: 'missing', details: ['agenticCoding:regression-bridge'] });
+    expect(p.evidence.find((e) => e.feature === 'agenticFit')).toMatchObject({ code: 'missing', details: ['agenticCoding:regression-bridge', 'difficulty:unknown'] });
     expectTriple(feature(featuresOf(state(), Q, qHigh, rows), 'agenticFit'), [0.45, 0.45, 0.45]);
   });
 
@@ -466,5 +466,77 @@ describe('output demand scales with AA output-equivalent tokens per task', () =>
       benchRow('high', 1.6), benchRow('max', 4.8),
     ];
     expect(at('max', noise).spend.tokens.output).toBeCloseTo(1024 * 12, 9);
+  });
+});
+
+describe('task difficulty', () => {
+  const model = registryModel('p', 'xmodel');
+  const action = enumerateEffectiveActions(model).find((a) => a.effort === 'high')!;
+  const rows: BenchModel[] = [{
+    registryId: 'p/xmodel', benchSlug: 'xmodel', active: true, effort: 'high', source: 'aa',
+    quality: { intelligence: 62, agenticCoding: 40, research: 0.8 },
+    axisProvenance: { intelligence: 'measured', agenticCoding: 'measured', research: 'measured' },
+    outputSpeedTps: 100,
+  }];
+  const at = (value?: number, phase: DecisionStateV1['phase'] = 'implement') =>
+    featuresOf(state({ phase, ...(value === undefined ? {} : { difficulty: { value, source: 'execution-rubric' } }) }), model, action, rows);
+  const unknown = at();
+
+  it('unknown difficulty keeps full phase relevance and full cost sensitivity', () => {
+    // Implement: reasoning 0.6 x 0.62, agentic 1 x 0.40.
+    expectTriple(feature(unknown, 'reasoningFit'), [0.372, 0.372, 0.372]);
+    expectTriple(feature(unknown, 'agenticFit'), [0.4, 0.4, 0.4]);
+    const usd = 10_000 / 1e6 + 1024 * 4 / 1e6;
+    expect(feature(unknown, 'costDesirability')[0]).toBeCloseTo(1 - Math.log(1 + usd / 0.05) / Math.log(41), 9);
+    expect(unknown.evidence.find((e) => e.feature === 'reasoningFit')!.details).toContain('difficulty:unknown');
+  });
+
+  it('D = 1 keeps full relevance and shrinks cost and time differences to a quarter', () => {
+    const hard = at(1);
+    expectTriple(feature(hard, 'reasoningFit'), [0.372, 0.372, 0.372]);
+    for (const name of ['costDesirability', 'timeDesirability'] as const) {
+      const base = feature(unknown, name);
+      expectTriple(feature(hard, name), base.map((value) => 1 - 0.25 * (1 - value)) as [number, number, number]);
+    }
+  });
+
+  it('D = 0 scales capability relevance to 0.3 and keeps cost and time', () => {
+    const easy = at(0);
+    expectTriple(feature(easy, 'reasoningFit'), [0.1116, 0.1116, 0.1116]);
+    expectTriple(feature(easy, 'agenticFit'), [0.12, 0.12, 0.12]);
+    for (const name of ['costDesirability', 'timeDesirability'] as const) {
+      expectTriple(feature(easy, name), feature(unknown, name) as [number, number, number]);
+    }
+  });
+
+  it('a harder task never lowers capability relevance or raises cost sensitivity', () => {
+    let previous = at(0);
+    for (const value of [0.1, 0.25, 0.5, 0.75, 0.9, 1]) {
+      const next = at(value);
+      for (const name of ['reasoningFit', 'agenticFit', 'researchFit'] as const) {
+        expect(feature(next, name)[0]).toBeGreaterThanOrEqual(feature(previous, name)[0] - EPS);
+      }
+      for (const name of ['costDesirability', 'timeDesirability'] as const) {
+        // Closer to 1 means a smaller difference from the cheapest or fastest action.
+        expect(feature(next, name)[0]).toBeGreaterThanOrEqual(feature(previous, name)[0] - EPS);
+      }
+      previous = next;
+    }
+  });
+
+  it('keeps every interval ordered, the unknown price included', () => {
+    const unpriced = registryModel('p', 'xmodel', { cost: undefined });
+    for (const value of [0, 0.5, 1]) {
+      const vector = candidateFeatures(state({ difficulty: { value, source: 'reasoning-rubric' } }), unpriced, action, rows).features;
+      vector.values.forEach((center, j) => {
+        expect(vector.lower[j]!).toBeLessThanOrEqual(center + EPS);
+        expect(center).toBeLessThanOrEqual(vector.upper[j]! + EPS);
+      });
+    }
+  });
+
+  it('records the difficulty and its source in the evidence', () => {
+    const details = at(0.5).evidence.find((e) => e.feature === 'costDesirability')!.details;
+    expect(details).toContain('difficulty:execution-rubric:0.500');
   });
 });

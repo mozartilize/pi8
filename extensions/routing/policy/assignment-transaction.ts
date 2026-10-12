@@ -23,7 +23,13 @@
  * their persisted state behind it; tests drive it directly.
  */
 import type { UnifiedDecision, SelectionResult } from '../optimization/select.js';
-import { settleBoundary, type ActualServeReceipt, type BoundaryAuthorizationV1 } from './boundary-authorization.js';
+import type { Dimension } from '../../types.js';
+import {
+  actorAllowedForBoundary, createBoundaryAuthorization, settleBoundary,
+  type ActualServeReceipt, type BoundaryAuthorizationV1,
+} from './boundary-authorization.js';
+import { isExcludedExecutor } from './execution-contract.js';
+import type { WorkPhaseState } from './work-phase.js';
 
 export interface AssignmentRevisions {
   workItemId: string;
@@ -44,6 +50,8 @@ export interface PlannedTransition {
 
 export interface TurnPlan {
   revisions: AssignmentRevisions;
+  /** Filter the candidate pool by these keys before selection, when present. */
+  allowedActors?: readonly string[];
   pendingTransitions: readonly PlannedTransition[];
   /** Recovery claim this plan may use; read only. */
   recoveryClaimId?: string;
@@ -87,21 +95,54 @@ export class AssignmentLedger {
   }
 
   plan(pendingTransitions: readonly PlannedTransition[], recoveryClaimId?: string): TurnPlan {
-    return { revisions: { ...this.revisions }, pendingTransitions: [...pendingTransitions], ...(recoveryClaimId ? { recoveryClaimId } : {}) };
+    return {
+      revisions: { ...this.revisions }, pendingTransitions: [...pendingTransitions],
+      ...(this.boundary ? { allowedActors: Object.freeze(this.boundary.allowedActors.filter((key) => this.canAssign(key))) } : {}),
+      ...(recoveryClaimId ? { recoveryClaimId } : {}),
+    };
   }
 
   isCurrent(plan: Pick<TurnPlan, 'revisions'>): boolean {
     return sameRevisions(plan.revisions, this.revisions);
   }
 
+  /** Create permissions for one work item, phase and assignment. No scoring. */
+  authorize(phase: Dimension, availableActors: readonly string[], workState?: WorkPhaseState): BoundaryAuthorizationV1 {
+    this.bump({ authorization: this.revisions.authorization + 1 });
+    const { workItemId, branchId, session, authorization: revision } = this.revisions;
+    // Contract failures apply to implementation only, across the model's efforts.
+    const exclusions = workState?.workItemId === workItemId
+      ? availableActors.filter((key) => isExcludedExecutor(workState, key))
+        .map((model) => ({ workItemId, phase: 'implement' as const, model }))
+      : [];
+    const boundaryId = JSON.stringify([workItemId, branchId, phase, session]);
+    this.boundary = createBoundaryAuthorization({
+      boundaryId, workItemId, phase, assignmentId: JSON.stringify([boundaryId, revision]), revision,
+    }, availableActors, exclusions);
+    return this.boundary;
+  }
+
   /** Record a revision change that the host caused or observed. */
   bump(patch: Partial<AssignmentRevisions>): void {
-    this.revisions = { ...this.revisions, ...patch };
+    const previous = this.revisions;
+    this.revisions = { ...previous, ...patch };
+    if (this.boundary && (previous.workItemId !== this.revisions.workItemId
+      || previous.branchId !== this.revisions.branchId || previous.session !== this.revisions.session
+      || previous.authorization !== this.revisions.authorization)) {
+      this.boundary = { ...this.boundary, state: 'expired' };
+    }
+  }
+
+  /** Hosts without a boundary keep their ordinary assignment behavior. */
+  canAssign(target: string): boolean {
+    return !this.boundary || (this.boundary.workItemId === this.revisions.workItemId
+      && this.boundary.revision === this.revisions.authorization
+      && actorAllowedForBoundary(this.boundary, target));
   }
 
   /** Atomic: check live revisions, apply deferred transitions once, reserve once. */
   commitAndReserve(plan: TurnPlan, target: string, signal?: AbortSignal): Reservation | undefined {
-    if (signal?.aborted || !this.isCurrent(plan)) return undefined;
+    if (signal?.aborted || !this.isCurrent(plan) || !this.canAssign(target)) return undefined;
     if (plan.recoveryClaimId && this.recovery.get(plan.recoveryClaimId) !== 'eligible') return undefined;
     this.applied.push(...plan.pendingTransitions);
     const reservation: Reservation = {
@@ -123,7 +164,7 @@ export class AssignmentLedger {
   dispatch(reservationId: string, start: (receipt: DispatchReceipt) => void, signal?: AbortSignal): DispatchReceipt | undefined {
     const reservation = this.reservations.get(reservationId);
     if (!reservation || reservation.state !== 'reserved') return undefined;
-    if (signal?.aborted || !sameRevisions(reservation.revisions, this.revisions)) {
+    if (signal?.aborted || !sameRevisions(reservation.revisions, this.revisions) || !this.canAssign(reservation.target)) {
       reservation.state = 'released';
       return undefined;
     }
@@ -149,11 +190,11 @@ export class AssignmentLedger {
 
   /** Settle ownership from an actual-serve receipt; nothing else settles it. */
   settle(receipt: ActualServeReceipt): boolean {
-    if (!this.boundary) return false;
+    if (!this.boundary || !this.canAssign(receipt.actualServed)) return false;
     const next = settleBoundary(this.boundary, receipt);
     if (next === this.boundary) return false;
     this.boundary = next;
-    this.releasePending = false;
+    if (next.phase === 'implement') this.releasePending = false;
     return true;
   }
 }
@@ -243,7 +284,8 @@ export async function routeAssignment(host: AssignmentHost, signal: AbortSignal,
     if (signal.aborted || result.kind === 'cancelled') return done({ kind: 'cancelled' });
     if (result.kind === 'stale' || !host.ledger.isCurrent(plan)) continue;
     if (result.solver === 'no-feasible-action' || !result.chosen) return done({ kind: 'no-target', decision: result });
-    const targets = [...new Set([result.chosen, ...result.ranking])];
+    const targets = [...new Set([result.chosen, ...result.ranking])].filter((target) => host.ledger.canAssign(target));
+    if (targets.length === 0) return done({ kind: 'no-target', decision: result });
 
     rankingLoop: for (;;) {
       for (const target of targets) {

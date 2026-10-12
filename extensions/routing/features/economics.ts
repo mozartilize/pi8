@@ -28,7 +28,7 @@ import {
   costDesirability,
   latencyProxySeconds,
   timeDesirability,
-} from './mapping-v1.js';
+} from './mapping.js';
 import type { Interval } from './model.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 import type { DecisionStateV1 } from './state.js';

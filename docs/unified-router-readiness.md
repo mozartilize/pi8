@@ -10,6 +10,8 @@ The following modules have executable offline tests:
 
 - Effective-action enumeration and per-axis benchmark provenance.
 - Candidate features, cache accounting and AA output-equivalent demand scaling.
+- Task difficulty from the handoff or plan rubric and router measurements
+  (`feature-v2`): it scales capability relevance and cost sensitivity continuously.
 - Preference validation, scenarios, domain identity and exact regret selection.
 - Transactional assignment, preparation fallback through the retained ranking,
   recovery consumption and single-use dispatch.
@@ -25,6 +27,34 @@ Two policy decisions are settled:
 These modules currently have controlled-port tests, not complete Pi integration
 coverage. `/router-preferences` and its optional setup notice are not implemented.
 Preference storage and notice-state helpers exist.
+
+## Work-item and phase permissions
+
+`allowedActors` is the callable action pool for one work item, phase and
+assignment. It is not a second capability assessment. Task difficulty,
+benchmark quality, price and preferences affect selection only.
+
+The unified assignment host calls `AssignmentLedger.authorize(phase, keys,
+workState)` with the effective action keys that pass availability and other
+hard restrictions. An implementation failure excludes that model at all its
+efforts only for the same work item and implementation phase. The model can
+still compete in planning and review. A different work item does not inherit
+that exclusion. A quota restriction removes the model from the callable input
+pool in every phase while the restriction applies.
+
+The host passes `plan.allowedActors` to `selectByRegret` in its controls. The
+selector filters before feature extraction and regret comparison. Reservation,
+dispatch and preparation fallback check the same permissions. An empty list
+means no permitted action, not unrestricted access.
+
+A change of work item, branch, session generation or authorization revision
+expires the permission snapshot. Each new authorization has a new assignment
+identity. Actual-serve receipts must match the work item, phase, boundary,
+assignment and revision. A failed attempt, stale receipt or unauthorized model
+cannot settle the boundary or release a pending contract.
+
+This path has controlled-host tests. The production provider cutover remains
+separate; these tests do not establish that production uses these permissions.
 
 ## Conditions before runtime migration
 

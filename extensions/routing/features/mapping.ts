@@ -1,5 +1,5 @@
 /**
- * Runtime feature mapping v1: the single source of feature transforms,
+ * Runtime feature mapping (`FEATURE_MAPPING_VERSION`): the single source of feature transforms,
  * missing-value intervals, central representatives and task relevances.
  *
  * These values are authored policy, not calibrated measurements. A change to
@@ -120,6 +120,41 @@ export const PHASE_RELEVANCE: Readonly<Record<Dimension, TaskRelevance>> = {
 
 /** Reasoning relevance when open decisions are explicitly observed (> 0). */
 export const OPEN_DECISIONS_REASONING = 0.9;
+
+// ─── Task difficulty ─────────────────────────────────────────────────
+
+/**
+ * Task difficulty D in [0, 1] comes from the accepted handoff or plan: the
+ * requester's rubric and the facts the router measures (see difficulty.ts).
+ * It changes two things continuously, with no level steps:
+ *
+ * - Capability relevance is multiplied by `relevanceScale(D)`. An easy task
+ *   needs less capability, so a cheaper model can win.
+ * - Cost and time differences are multiplied by `costSensitivity(D)`. A hard
+ *   task makes price and speed matter less than capability.
+ *
+ * Unknown difficulty applies neither: capability keeps its full phase
+ * relevance and cost keeps its full sensitivity. Missing information is never
+ * read as an easy task.
+ */
+/** Capability relevance multiplier at D = 0. */
+export const DIFFICULTY_RELEVANCE_MIN = 0.3;
+/** Cost and time sensitivity at D = 1. */
+export const DIFFICULTY_COST_SENSITIVITY_MIN = 0.25;
+
+export const relevanceScale = (difficulty: number): number =>
+  DIFFICULTY_RELEVANCE_MIN + (1 - DIFFICULTY_RELEVANCE_MIN) * clamp01(difficulty);
+
+export const costSensitivity = (difficulty: number): number =>
+  1 - (1 - DIFFICULTY_COST_SENSITIVITY_MIN) * clamp01(difficulty);
+
+/**
+ * A cost or time desirability value at sensitivity `s`: the difference from
+ * the best value (1) shrinks by `s`. The transform is increasing, so the
+ * interval order holds.
+ */
+export const sensitiveDesirability = (value: number, sensitivity: number): number =>
+  1 - sensitivity * (1 - value);
 
 // ─── Evidence required to compete ────────────────────────────────────
 

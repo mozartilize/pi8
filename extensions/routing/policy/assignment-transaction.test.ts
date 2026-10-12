@@ -15,6 +15,7 @@ import {
   type TurnPlan,
 } from './assignment-transaction.js';
 import { authorizedFallbacks, settleBoundary, type BoundaryAuthorizationV1 } from './boundary-authorization.js';
+import type { WorkPhaseState } from './work-phase.js';
 
 const REVISIONS: AssignmentRevisions = {
   workItemId: 'W', branchId: 'b1', session: 1, profile: 1, profileDigest: 'd1', authorization: 3, context: 1,
@@ -180,7 +181,7 @@ describe('H2: single-use reservation and final dispatch check', () => {
     const ledger = new AssignmentLedger(REVISIONS);
     ledger.boundary = auth();
     ledger.releasePending = true;
-    const reservation = ledger.commitAndReserve(ledger.plan([]), 'B:high')!;
+    const reservation = ledger.commitAndReserve(ledger.plan([]), 'b/B:high')!;
     const controller = new AbortController();
     controller.abort();
     expect(ledger.dispatch(reservation.id, () => {}, controller.signal)).toBeUndefined();
@@ -196,7 +197,7 @@ const auth = (patch: Partial<BoundaryAuthorizationV1> = {}): BoundaryAuthorizati
 
 describe('H4: settlement needs a current actual-serve receipt from an authorized actor', () => {
   const receipt = (actualServed: string, patch: Partial<Parameters<typeof settleBoundary>[1] & object> = {}) =>
-    ({ boundaryId: 'bd', assignmentId: 'as1', revision: 3, actualServed, answered: true, ...patch });
+    ({ boundaryId: 'bd', workItemId: 'W', phase: 'implement' as const, assignmentId: 'as1', revision: 3, actualServed, answered: true, ...patch });
 
   it('an authorized fallback that actually serves settles; an answerless attempt does not', () => {
     expect(settleBoundary(auth(), receipt('a/A:high', { answered: false })).state).toBe('pending');
@@ -214,6 +215,108 @@ describe('H4: settlement needs a current actual-serve receipt from an authorized
     const excluded = auth({ excludedModels: ['a/A'] });
     expect(authorizedFallbacks(excluded, ['c/C:high', 'a/A:high', 'b/B:high'])).toEqual(['b/B:high']);
     expect(settleBoundary(excluded, receipt('a/A:high')).state).toBe('pending');
+  });
+
+  it('rejects a receipt from another work item or phase', () => {
+    expect(settleBoundary(auth(), receipt('a/A:high', { workItemId: 'other' })).state).toBe('pending');
+    expect(settleBoundary(auth(), receipt('a/A:high', { phase: 'review' })).state).toBe('pending');
+  });
+
+  it('rejects an unauthorized reservation before any assignment write', () => {
+    const ledger = new AssignmentLedger(REVISIONS);
+    ledger.boundary = auth();
+    expect(ledger.commitAndReserve(ledger.plan([{ kind: 'enter-phase', value: 'implement' }]), 'c/C:high')).toBeUndefined();
+    expect(ledger.applied).toEqual([]);
+    expect(ledger.reservations.size).toBe(0);
+  });
+
+  it('checks permission again before dispatch', () => {
+    const ledger = new AssignmentLedger(REVISIONS);
+    ledger.boundary = auth();
+    const reservation = ledger.commitAndReserve(ledger.plan([]), 'a/A:high')!;
+    ledger.boundary = auth({ excludedModels: ['a/A'] });
+    const start = () => { throw new Error('must not dispatch'); };
+    expect(ledger.dispatch(reservation.id, start)).toBeUndefined();
+    expect(reservation.state).toBe('released');
+  });
+
+  it.each([
+    { workItemId: 'other' }, { branchId: 'other' }, { session: 2 }, { authorization: 4 },
+  ])('cannot settle an old receipt after the scope changes: %j', (patch) => {
+    const ledger = new AssignmentLedger(REVISIONS);
+    ledger.boundary = auth();
+    ledger.releasePending = true;
+    ledger.bump(patch);
+    expect(ledger.settle(receipt('a/A:high'))).toBe(false);
+    expect(ledger.releasePending).toBe(true);
+  });
+
+  it('keeps implementation exclusions out of other phases and work items', () => {
+    const ledger = new AssignmentLedger(REVISIONS);
+    const actors = ['a/A:low', 'a/A:high', 'b/B:high'];
+    const state: WorkPhaseState = {
+      intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0,
+      workItemId: 'W', excludedExecutors: ['a/A:high'],
+    };
+    const implementation = ledger.authorize('implement', actors, state);
+    expect(implementation.allowedActors).toEqual(['b/B:high']);
+    expect(ledger.plan([]).allowedActors).toEqual(['b/B:high']);
+    for (const phase of ['plan', 'review', 'gather'] as const) {
+      expect(ledger.authorize(phase, actors, state).allowedActors).toEqual(actors);
+    }
+    ledger.bump({ workItemId: 'other' });
+    expect(ledger.authorize('implement', actors, state).allowedActors).toEqual(actors);
+  });
+
+  it('a new phase invalidates an old reservation and serve receipt', () => {
+    const ledger = new AssignmentLedger(REVISIONS);
+    const auth = ledger.authorize('implement', ['b/B:high']);
+    const plan = ledger.plan([]);
+    const reservation = ledger.commitAndReserve(plan, 'b/B:high')!;
+    ledger.authorize('review', ['b/B:high']);
+    expect(ledger.isCurrent(plan)).toBe(false);
+    expect(ledger.dispatch(reservation.id, () => { throw new Error('must not dispatch'); })).toBeUndefined();
+    expect(ledger.settle({ ...auth, actualServed: 'b/B:high', answered: true })).toBe(false);
+    expect(ledger.boundary!.phase).toBe('review');
+    expect(ledger.boundary!.state).toBe('pending');
+  });
+
+  it('a replacement assignment for the same phase rejects the old receipt', () => {
+    const ledger = new AssignmentLedger(REVISIONS);
+    const first = ledger.authorize('implement', ['b/B:high']);
+    const second = ledger.authorize('implement', ['b/B:high']);
+    expect(second.assignmentId).not.toBe(first.assignmentId);
+    expect(ledger.settle({ ...first, actualServed: 'b/B:high', answered: true })).toBe(false);
+    expect(ledger.settle({ ...second, actualServed: 'b/B:high', answered: true })).toBe(true);
+  });
+
+  it('prepares only permitted fallback targets even if selection returns another target', async () => {
+    const host = new FakeHost();
+    host.promptTokens = 10_000;
+    host.ledger.authorize('implement', ['B']);
+    host.select = async () => decision('A', ['A', 'B']);
+    const prepared: string[] = [];
+    host.prepareHook = (key) => { prepared.push(key); return { kind: 'ready' }; };
+    expect(await routeAssignment(host, new AbortController().signal)).toMatchObject({ kind: 'reserved', target: 'B' });
+    expect(prepared).toEqual(['B']);
+  });
+
+  it('an empty permitted pool starts no preparation or assignment', async () => {
+    const host = new FakeHost();
+    host.ledger.authorize('implement', []);
+    expect(await routeAssignment(host, new AbortController().signal)).toMatchObject({ kind: 'no-target' });
+    expect(host.compactions).toBe(0);
+    expect(host.ledger.applied).toEqual([]);
+    expect(host.ledger.reservations.size).toBe(0);
+    expect(host.ledger.boundary!.state).toBe('pending');
+  });
+
+  it('a review receipt does not release a pending implementation contract', () => {
+    const ledger = new AssignmentLedger(REVISIONS);
+    const auth = ledger.authorize('review', ['b/B:high']);
+    ledger.releasePending = true;
+    expect(ledger.settle({ ...auth, actualServed: 'b/B:high', answered: true })).toBe(true);
+    expect(ledger.releasePending).toBe(true);
   });
 
   it('only the ledger settle path releases the contract', () => {

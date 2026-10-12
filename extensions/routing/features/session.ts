@@ -7,7 +7,7 @@
  * was attributed to; it never moves to another effort or work item. The
  * recovery features describe recovery options, not observed success.
  */
-import { CONTINUITY, FRICTION } from './mapping-v1.js';
+import { CONTINUITY, FRICTION } from './mapping.js';
 import { effortRank, type EffectiveAction } from './actions.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 import type { DecisionStateV1, ServedIdentity } from './state.js';

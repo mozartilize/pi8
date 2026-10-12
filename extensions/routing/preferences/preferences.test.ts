@@ -30,7 +30,7 @@ const FROZEN_V1: Record<string, { usd: [number, number]; A: number[]; B: number[
   afterRework: { usd: [0.1, 0.1], A: [0.6, 0.6, 0.3, 0.55, 0.704163, 0.6, 0.78, 1, 1, 0], B: [0.6, 0.6, 0.3, 0.55, 0.704163, 0.6, 0.48, 1, 0, 1] },
 };
 
-/** The frozen price transform, written out independently of mapping-v1.ts. */
+/** The frozen price transform, written out independently of mapping.ts. */
 const transform = (usd: number) => Math.min(1, Math.max(0, 1 - Math.log(1 + usd / 0.05) / Math.log(1 + 2 / 0.05)));
 
 describe('frozen v1 scenarios', () => {
