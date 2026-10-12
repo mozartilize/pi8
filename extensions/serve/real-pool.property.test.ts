@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type { BenchModel, Candidate, Dimension } from '../types.js';
@@ -20,6 +21,9 @@ import { expandModelCandidates } from './provider.js';
 const fixture = JSON.parse(readFileSync(join(__dirname, '../../fixtures/real-pool.json'), 'utf8')) as {
   registry: RegistryModelInfo[];
   benchmarks: BenchModel[];
+  indexVersion: string;
+  registryDigest: string;
+  benchmarkDigest: string;
 };
 const drops = effortDropsPerStep(fixture.benchmarks);
 const rowsByModel = new Map<string, BenchModel[]>();
@@ -45,6 +49,20 @@ const decisions = DIMENSIONS.map((dimension) => ({
 }));
 
 describe('real candidate pool', () => {
+  it('records both frozen halves and benchmark provenance', () => {
+    const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    expect(digest(fixture.registry)).toBe(fixture.registryDigest);
+    expect(digest(fixture.benchmarks)).toBe(fixture.benchmarkDigest);
+    expect(fixture.indexVersion).toBeTruthy();
+    expect(fixture.benchmarks.filter((row) => row.active && !row.axisProvenance)).toEqual([]);
+  });
+
+  it('contains only public registry metadata, not credentials or endpoint settings', () => {
+    const allowed = new Set(['provider', 'id', 'api', 'contextWindow', 'maxTokens', 'reasoning', 'input', 'cost', 'thinkingLevelMap', 'compat']);
+    expect(fixture.registry.flatMap((model) => Object.keys(model).filter((key) => !allowed.has(key)))).toEqual([]);
+    expect(fixture.registry.flatMap((model) => Object.keys(model.compat ?? {}).filter((key) => key !== 'supportsMidConvoEffort'))).toEqual([]);
+  });
+
   it('has a candidate for every catalog model', () => {
     const models = new Set(candidates.map((c) => c.registryId));
     expect([...registryById.keys()].filter((id) => !models.has(id))).toEqual([]);

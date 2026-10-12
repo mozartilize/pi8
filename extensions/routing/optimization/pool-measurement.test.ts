@@ -6,7 +6,7 @@
  * a report for the production budget decision, not a pass/fail gate on
  * timing.
  */
-import { appendFileSync, copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -47,23 +47,28 @@ async function loadLiveSource(): Promise<PoolSource | undefined> {
   const scratch = mkdtempSync(join(tmpdir(), 'pi8-pool-'));
   const modelsStorePath = join(scratch, 'models-store.json');
   if (existsSync(join(agentDir, 'models-store.json'))) copyFileSync(join(agentDir, 'models-store.json'), modelsStorePath);
-  const runtime = await ModelRuntime.create({
-    authPath: join(agentDir, 'auth.json'), modelsStorePath, refreshOnCreate: false, allowModelNetwork: false,
-  } as Parameters<typeof ModelRuntime.create>[0]);
-  const registry = [...await runtime.getAvailable()] as unknown as RegistryModelInfo[];
-  const store = JSON.parse(readFileSync(storePath, 'utf8')) as { models: BenchModel[]; indexVersion?: string };
-  const configPath = join(agentDir, 'pi8', 'config.json');
-  const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) as { models?: string[]; blacklist?: string[] } : {};
-  return { name: 'live local registry + store', registry, rows: store.models, indexVersion: store.indexVersion, models: config.models, blacklist: config.blacklist };
+  try {
+    const runtime = await ModelRuntime.create({
+      authPath: join(agentDir, 'auth.json'), modelsStorePath, refreshOnCreate: false, allowModelNetwork: false,
+    } as Parameters<typeof ModelRuntime.create>[0]);
+    const registry = [...await runtime.getAvailable()] as unknown as RegistryModelInfo[];
+    const store = JSON.parse(readFileSync(storePath, 'utf8')) as { models: BenchModel[]; indexVersion?: string };
+    const configPath = join(agentDir, 'pi8', 'config.json');
+    const config = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) as { models?: string[]; blacklist?: string[] } : {};
+    return { name: 'live local registry + store', registry, rows: store.models, indexVersion: store.indexVersion, models: config.models, blacklist: config.blacklist };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 describe.skipIf(!ENABLED)('pool measurement', () => {
   it('reports N, pair counts, exact latency and spike-budget fallback rate', async () => {
-    const fixture = JSON.parse(readFileSync(new URL('../../../fixtures/real-pool.json', import.meta.url), 'utf8')) as { registry: RegistryModelInfo[]; benchmarks: BenchModel[] };
-    const sources: PoolSource[] = [{ name: 'fixtures/real-pool.json', registry: fixture.registry, rows: fixture.benchmarks, indexVersion: '4.3' }];
+    const fixture = JSON.parse(readFileSync(new URL('../../../fixtures/real-pool.json', import.meta.url), 'utf8')) as { registry: RegistryModelInfo[]; benchmarks: BenchModel[]; indexVersion: string };
+    const sources: PoolSource[] = [{ name: 'fixtures/real-pool.json', registry: fixture.registry, rows: fixture.benchmarks, indexVersion: fixture.indexVersion }];
     try {
       const live = await loadLiveSource();
       if (live) sources.push(live);
+      else console.log('Live source unavailable. The production budget gate remains unmeasured.');
     } catch (error) {
       console.log(`live source unavailable: ${(error as Error).message}`);
     }
@@ -80,10 +85,11 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
     const reportPath = process.env.PI8_POOL_REPORT ?? join(tmpdir(), 'pi8-pool-report.txt');
     writeFileSync(reportPath, '');
     const log = (line: string) => { lines.push(line); appendFileSync(reportPath, `${line}\n`); };
+    log('Exploratory offline measurements. These samples do not approve production limits.');
     log(`domain compile (operator profile, cold worker): ${coldCompileMs.toFixed(1)} ms`);
     try {
       for (const source of sources) {
-        log(`\n## ${source.name}: registry ${source.registry.length}, bench rows ${source.rows.length}`);
+        log(`\n## ${source.name}: registry ${source.registry.length}, bench rows ${source.rows.length}, index ${source.indexVersion ?? 'unknown'}`);
         for (const needsVision of [false, true]) {
           const pool = guardedPool(source, needsVision);
           const measured = pool.filter(({ action }) => source.rows.some((row) => row.active && row.registryId === action.registryId && row.effort === action.effort)).length;
@@ -93,6 +99,14 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
             const times: number[] = [];
             let exact = 0;
             let fallback = 0;
+            // Each row uses the actual selector controls. Uncapped timing alone
+            // cannot establish a timeout or pair-cap fallback rate.
+            const budgets = [
+              { label: 'spike-200ms-cap4096', deadlineMs: 200, pairCap: 4096 },
+              { label: '200ms-uncapped', deadlineMs: 200, pairCap: undefined },
+              { label: '500ms-uncapped', deadlineMs: 500, pairCap: undefined },
+              { label: '1000ms-uncapped', deadlineMs: 1000, pairCap: undefined },
+            ].map((budget) => ({ ...budget, exact: 0, total: 0, reasons: new Map<string, number>(), times: [] as number[] }));
             for (const phase of PHASES) {
               const state: DecisionStateV1 = {
                 phase, estimatedContextTokens: phase === 'gather' ? 80_000 : 30_000, needsVision, boundary: 'ordinary',
@@ -116,10 +130,30 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
                   log(`  ${label} ${phase}: compared ${result.actions.length - result.insufficientEvidence.length}/${result.actions.length} (${result.insufficientEvidence.length} without required evidence, last in ranking); ${result.solver}; top ${result.ranking.slice(0, 3).map(describe).join(' | ')}`);
                 }
               }
+              for (const budget of budgets) {
+                for (let run = 0; run < 3; run++) {
+                  const start = performance.now();
+                  const result = await selectByRegret(state, pool, source.rows, prefs, { lp, domains: cache }, {
+                    expectedProfileDigest: preferenceProfileDigest(profile),
+                    decisionDeadlineMs: budget.deadlineMs, pairCap: budget.pairCap,
+                  });
+                  budget.times.push(performance.now() - start);
+                  budget.total++;
+                  if (result.kind === 'decision' && result.solver === 'exact') budget.exact++;
+                  else {
+                    const reason = result.kind === 'decision' ? result.solverFallbackReason ?? result.solver : result.kind;
+                    budget.reasons.set(reason, (budget.reasons.get(reason) ?? 0) + 1);
+                  }
+                }
+              }
             }
             times.sort((a, b) => a - b);
             const withinSpike = times.filter((t) => t <= SPIKE_SOLVER_BUDGET.deadlineMs).length;
             log(`  profile=${label}: exact ${exact}/${exact + fallback}; warm uncapped latency P50 ${percentile(times, 0.5).toFixed(1)} ms, P95 ${percentile(times, 0.95).toFixed(1)} ms, P99 ${percentile(times, 0.99).toFixed(1)} ms; within ${SPIKE_SOLVER_BUDGET.deadlineMs} ms: ${withinSpike}/${times.length}`);
+            for (const budget of budgets) {
+              budget.times.sort((a, b) => a - b);
+              log(`  profile=${label} budget=${budget.label}: actual exact ${budget.exact}/${budget.total}, reasons=${JSON.stringify(Object.fromEntries(budget.reasons))}; P50 ${percentile(budget.times, 0.5).toFixed(1)} ms, P95 ${percentile(budget.times, 0.95).toFixed(1)} ms, P99 ${percentile(budget.times, 0.99).toFixed(1)} ms`);
+            }
           }
         }
       }

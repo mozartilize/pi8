@@ -37,6 +37,7 @@
     "test": "vitest run",
     "test:candidate-policy": "PI8_POLICY_VERSION=cheapest-sufficient vitest run extensions",
     "measure:pool": "PI8_POOL_MEASURE=1 timeout 1800 vitest run extensions/routing/optimization/pool-measurement.test.ts",
+    "freeze:pool": "node scripts/freeze-real-pool.mjs",
     "replay:local": "PI8_LOCAL_REPLAY=1 timeout 900 vitest run extensions/serve/context-replay.test.ts",
     "check": "npm run tsc && npm test"
   },
