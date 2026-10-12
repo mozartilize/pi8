@@ -3127,6 +3127,67 @@ describe('unified pre-output recovery integration', () => {
   });
 });
 
+describe('reservation of every provider request', () => {
+  async function twoModels(credentials?: Record<string, ResolvedRequestAuth | Error>) {
+    const ids = ['alpha/first', 'beta/second'];
+    return setupProviderTest({ dir: temp.path, credentials,
+      models: ids.map((id) => registryModel(id, { cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } })),
+      benchmarks: ids.map((registryId) => ({ registryId, benchSlug: registryId, active: true, source: 'aa',
+        quality: { intelligence: 50, coding: 50, agenticCoding: 50, research: 0.8 },
+      })),
+    });
+  }
+  const request = { messages: [{ role: 'user', content: 'examine this request' }] } as Context;
+
+  it('starts no request when the preference profile changed during authentication', async () => {
+    const credentials: Record<string, ResolvedRequestAuth | Error> = {};
+    for (const id of ['alpha/first', 'beta/second']) {
+      Object.defineProperty(credentials, id, { get() {
+        savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+        return { ok: true, apiKey: 'k', headers: {} };
+      } });
+    }
+    const h = await twoModels(credentials);
+    h.scriptReply([{ type: 'text_delta', delta: 'answer' }, { type: 'done' }]);
+    await h.serve(request);
+    expect(h.streamedModels()).toEqual([]);
+    expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([]);
+    expect(h.outStream.events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('pending');
+  });
+
+  it.each(['profile', 'assignment'] as const)('starts no fallback request when the %s changed during the first attempt', async (change) => {
+    const h = await twoModels();
+    h.scriptReply(() => {
+      if (change === 'profile') savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+      else {
+        const state = h.session.getWorkPhaseState()!;
+        h.session.commitWorkPhaseState({ ...state, boundaryAuthorization: { ...state.boundaryAuthorization!,
+          assignmentId: 'another', revision: state.boundaryAuthorization!.revision + 1 } });
+      }
+      return asStream([{ type: 'error', error: { errorMessage: 'Provider finish_reason: error' } }]);
+    });
+    await h.serve(request);
+    expect(h.streamedModels()).toHaveLength(1);
+    expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([]);
+    expect(h.outStream.events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).not.toBe('served');
+  });
+
+  it('still falls back to the other authorized action when nothing changed', async () => {
+    const h = await twoModels();
+    let calls = 0;
+    h.scriptReply(() => asStream(++calls === 1
+      ? [{ type: 'error', error: { errorMessage: 'Provider finish_reason: error' } }]
+      : [{ type: 'text_delta', delta: 'answer' }, { type: 'done' }]));
+    await h.serve(request);
+    expect(h.streamedModels()).toHaveLength(2);
+    expect(new Set(h.streamedModels()).size).toBe(2);
+    expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([{ type: 'text_delta', delta: 'answer' }]);
+    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('served');
+  });
+});
+
 describe('trajectory capability escalation', () => {
   it('permits higher effort on the requesting model after recovery', async () => {
     const harness = await setupProviderTest({

@@ -44,7 +44,7 @@ import { priceTokens } from './baseline.js';
 import { randomUUID } from 'node:crypto';
 import { overrideAction } from '../routing/features/actions.js';
 import { decidePreOutputIntervention } from '../routing/policy/pre-output-intervention.js';
-import type { PreOutputAdapter } from './unified-recovery.js';
+import type { UnifiedDispatch } from './unified-dispatch.js';
 
 const MAX_FAILURES_PER_PROVIDER = 3;
 /** Same-model retries for a transient provider error (overload/5xx/network). */
@@ -177,8 +177,8 @@ export interface DelegationOptions {
   extensionContext: ExtensionContext | undefined;
   /** Live routable actions for dispatch and accounting. */
   candidates?: Candidate[];
-  /** On-demand selection and single-use reservation of a pre-output recovery. */
-  preOutput?: PreOutputAdapter;
+  /** Single-use reservation of every provider request, and on-demand recovery before output. */
+  dispatch?: UnifiedDispatch;
   /** When true, show a TUI notification on a model pick/switch (config.prompt). */
   notifyOnRoute?: boolean;
   /** Confirm a fallback before any provider request. */
@@ -718,7 +718,7 @@ class AttemptController {
       if (severePreOutput) this.severePreOutputSeen = true;
       // A held thinking event permits one comparison before consumer output.
       if (severePreOutput && !this.interventionChecked
-        && this.ctx.opts.preOutput) {
+        && this.ctx.opts.dispatch?.recovery) {
         this.interventionChecked = true;
         return { kind: 'trajectory' };
       }
@@ -942,7 +942,7 @@ async function runCandidateAttempt(
             attemptAbort.signal.throwIfAborted();
             let authorized = false;
             try {
-              authorized = ctx.stillCurrent() && (!ctx.opts.preOutput || ctx.opts.preOutput.dispatch(actionKey, attemptAbort.signal));
+              authorized = ctx.stillCurrent() && (!ctx.opts.dispatch || ctx.opts.dispatch.dispatch(actionKey, attemptAbort.signal));
             } catch {
               // An authorization error cannot start an unverified request.
             }
@@ -983,9 +983,9 @@ async function runCandidateAttempt(
         }
         const disposition = controller.accept(step.value);
         if (disposition.kind === 'continue') continue;
-        if (disposition.kind === 'trajectory' && ctx.opts.preOutput) {
+        if (disposition.kind === 'trajectory' && ctx.opts.dispatch?.recovery) {
           try {
-            const adapter = ctx.opts.preOutput;
+            const adapter = ctx.opts.dispatch;
             const attemptId = randomUUID();
             const epoch = () => ({ ...adapter.epoch(), attemptId, outputRevision: controller.meaningfulOutputReceived || controller.committedToStream ? 1 : 0 });
             const result = await decidePreOutputIntervention({
@@ -1057,7 +1057,7 @@ async function runCandidateAttempt(
         error: message.slice(0, 120),
       });
     }
-    if (dispatchCancelled) return { kind: 'aborted', message: 'Dispatch authorization expired.' };
+    if (dispatchCancelled) return { kind: 'aborted', message: 'The routing state changed before the request started. Send the request again.' };
     const settled = settleAttempt(failure, {
       requestReady,
       userAborted: callerSignal?.aborted === true,
@@ -1081,7 +1081,7 @@ async function runCandidateAttempt(
       committedToStream: controller.committedToStream,
     });
     controller.commitUsage(requestReady, failure === undefined, timing, failure ? attemptFailureInfo(failure, callerSignal?.aborted === true) : undefined);
-    ctx.opts.preOutput?.release(actionKey);
+    ctx.opts.dispatch?.release(actionKey);
     callerSignal?.removeEventListener('abort', forwardAbort);
     if (!attemptAbort.signal.aborted) attemptAbort.abort();
     if (iterator) closeIterator(iterator);
@@ -1209,7 +1209,7 @@ export async function runDelegationLoop(
   const deadProviders = new Set<string>();
   const strikes = new Map<string, number>();
   const tried = new Set<string>();
-  const reachable = (source: string): string[] => (opts.preOutput?.reachable(source) ?? []).filter((key) => {
+  const reachable = (source: string): string[] => (opts.dispatch?.reachable(source) ?? []).filter((key) => {
     const parsed = parseCandidateKey(key);
     return parsed.provider !== ROUTER_PROVIDER_ID && !deadProviders.has(parsed.provider)
       && !session.getBlacklistedModels().has(key) && !session.getBlacklistedProviders().has(parsed.provider)

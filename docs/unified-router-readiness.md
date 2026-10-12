@@ -9,9 +9,12 @@ Empty preferences use the default coefficient domain.
 
 In-provider pre-output recovery awaits the shared selector while the attempt is held.
 The final output check, abort and reservation run in one synchronous step, and the
-provider request starts only after the reservation is revalidated. Automatic subagent integration is disabled and excluded from the cutover;
+provider request starts only after the reservation is revalidated. Every provider
+request, fallbacks and retries included, starts through its own single-use
+reservation, checked against the session, work item, branch, preference profile,
+authorization and context revisions that scoring recorded. Automatic subagent integration is disabled and excluded from the cutover;
 its inactive implementation files remain. Tests cover the disconnected hooks,
-not child selection. The preference command, full transactional reservation,
+not child selection. The preference command,
 legacy state migration and production Pi host exit checks remain incomplete. This is
 not a complete production release.
 
@@ -75,8 +78,9 @@ Executor strikes and exclusions of a work item are recorded on the session branc
 as `executor-penalty` events. `/tree`, return to a recorded branch, and resume
 restore them; a branch that lacks the event does not have them. They only grow.
 Authorization snapshots and reservations stay in memory and expire when the
-entry leaves the branch. Complete single-use reservation checks remain release
-conditions.
+entry leaves the branch. A reservation is never shared between requests. A change of
+any revision, or of the assignment, stops the next request of the turn with an
+error that asks for the request again; the turn does not select again.
 
 ## Conditions before runtime migration
 
@@ -159,7 +163,7 @@ Fixture-only measurements do not satisfy that condition.
 ## Verification of the provider integration
 
 - `npm run tsc`: passed, including eval compilation.
-- `timeout 300 npx vitest run`: 113 files passed and 2 skipped. 1877 tests passed
+- `timeout 300 npx vitest run`: 113 files passed and 2 skipped. 1893 tests passed
   and 3 skipped.
 - Six production selection adapter tests cover effort enumeration, thinking
   minimums, smaller-window retention, scoped exclusions, stale profiles and
