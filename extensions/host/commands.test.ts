@@ -776,6 +776,24 @@ describe('command fail-open boundary', () => {
     expect(messages.some((m) => /router-sync.*sync failed/i.test(m))).toBe(true);
   });
 
+  it('compiles the preference domain after a sync, and a compile failure does not fail the sync', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+    vi.spyOn(await import('../bench/sync.js'), 'syncBenchmarks').mockResolvedValue([{ ok: true } as never]);
+    const decision = await import('../serve/unified-decision.js');
+    const prepare = vi.spyOn(decision, 'prepareSelectorDomain').mockResolvedValue('ready');
+
+    await handlers.get('router-sync')!('key', ctx);
+    expect(prepare).toHaveBeenCalledTimes(1);
+
+    prepare.mockRejectedValueOnce(new Error('worker failed'));
+    await expect(handlers.get('router-sync')!('key', ctx)).resolves.toBeUndefined();
+    prepare.mockResolvedValueOnce('failed');
+    await handlers.get('router-sync')!('key', ctx);
+    expect(messages.some((m) => /did not compile/.test(m))).toBe(true);
+  });
+
   it('reports a synchronous saveStore failure instead of throwing', async () => {
     const { pi, handlers } = fakePi();
     registerCommands(pi);

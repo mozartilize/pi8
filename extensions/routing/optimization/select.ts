@@ -105,6 +105,12 @@ export interface SelectControls {
   pairCap?: number;
 }
 
+/** Keeps compiled artifacts between processes. A read result is not trusted. */
+export interface DomainStore {
+  read(identity: string): DomainArtifact | undefined;
+  write(artifact: DomainArtifact): void;
+}
+
 /**
  * Compiles domain artifacts on request and keeps them by identity. The
  * artifact is one immutable object, so the domain and its representative are
@@ -115,10 +121,22 @@ export class DomainCache implements DomainLookup {
   private readonly errors = new Set<string>();
   private readonly inFlight = new Map<string, Promise<DomainArtifact | undefined>>();
 
-  constructor(private readonly lp: LPAdapter) {}
+  private readonly probed = new Set<string>();
+
+  constructor(private readonly lp: LPAdapter, private readonly store?: DomainStore) {}
 
   lookup(identity: string): DomainArtifact | undefined {
-    return this.ready.get(identity);
+    const known = this.ready.get(identity);
+    if (known || !this.store || this.probed.has(identity)) return known;
+    // One read per identity: a stored artifact is checked by the selector, not here.
+    this.probed.add(identity);
+    try {
+      const stored = this.store.read(identity);
+      if (stored) this.ready.set(identity, stored);
+      return stored;
+    } catch {
+      return undefined;
+    }
   }
 
   failed(identity: string): boolean {
@@ -139,6 +157,7 @@ export class DomainCache implements DomainLookup {
       .then((artifact) => {
         this.ready.set(identity, artifact);
         this.errors.delete(identity);
+        try { this.store?.write(artifact); } catch { /* a missing store only costs the next process a compile */ }
         return artifact;
       })
       .catch(() => {

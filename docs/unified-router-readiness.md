@@ -5,7 +5,7 @@
 The production provider uses the unified selector for model and effort selection.
 It creates work-item and phase permissions before comparison, checks them before
 dispatch, and settles pending handoffs and contract releases after actual serve.
-Empty preferences use the default coefficient domain.
+Empty preferences use the default coefficient domain. A preference domain compiles on `/router-sync` and on first use; the compile is stored in `domain-artifacts.json` beside `config.json`. The first selection of a later process reads it, and the selector checks it against the live profile. Without a stored compile, the first selection of a process uses central weights and reports `domain-not-ready`.
 
 In-provider pre-output recovery awaits the shared selector while the attempt is held.
 The final output check, abort and reservation run in one synchronous step, and the

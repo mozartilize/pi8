@@ -14,6 +14,7 @@ import { saveApiKey, loadConfig, getConfigPath, saveBlacklist, saveSemi } from '
 import { checkPlaywright } from '../adapters/artificial-analysis-site.js';
 import { buildModelFilter } from '../routing/policy/allowlist.js';
 import { syncBenchmarks, syncSummary } from '../bench/sync.js';
+import { prepareSelectorDomain } from '../serve/unified-decision.js';
 import { ROLE_DIMENSIONS, ROUTER_PROVIDER_ID } from '../types.js';
 import { activeModels, checkBenchmarkStore, isStale, loadStore, addAlias, saveStore } from '../bench/store.js';
 import { CALIBRATED_INDEX_VERSION, indexVersionWarning } from '../routing/score/scorer.js';
@@ -243,6 +244,13 @@ async function handleSyncCommand(
     syncSummary(results),
     !results.every((r) => r.ok) ? 'error' : results.some((r) => r.warning) ? 'warning' : 'info',
   );
+  // The compile is stored, so the first selection of the next process applies the preferences.
+  try {
+    const preparation = await prepareSelectorDomain();
+    if (preparation === 'failed') ctx.ui.notify('Preference domain did not compile. The first selection of a process ignores your preferences.', 'warning');
+  } catch {
+    // A compile failure must not fail the sync.
+  }
 }
 
 async function handleStatusCommand(

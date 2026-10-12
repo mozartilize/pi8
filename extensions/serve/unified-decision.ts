@@ -28,19 +28,22 @@ import {
   type SelectorPorts,
   type UnifiedDecision,
 } from '../routing/optimization/select.js';
-import { validatePreferences, type ValidatedPreferences } from '../routing/preferences/schema.js';
+import { hasSubstantiveAnswers, validatePreferences, type ValidatedPreferences } from '../routing/preferences/schema.js';
 import { buildCandidate, candidateKey, holdsPrompt, type RegistryModelInfo } from '../routing/score/scorer.js';
 import { loadPreferenceSnapshot } from '../config.js';
+import { fileDomainStore } from './domain-artifact-store.js';
 import { FEATURE_NAMES } from '../routing/features/schema.js';
 import type { BenchModel, Candidate, DecisionCause, RoutingDecision, UnifiedActionTrace, UnifiedDecisionMeta } from '../types.js';
 
 let ports: SelectorPorts | undefined;
+let domainCache: DomainCache | undefined;
 
 /** One LP worker and domain cache per process; both start on first use. */
 function selectorPorts(): SelectorPorts {
   if (!ports) {
     const lp = new WorkerLpAdapter();
-    ports = { lp, domains: new DomainCache(lp) };
+    domainCache = new DomainCache(lp, fileDomainStore);
+    ports = { lp, domains: domainCache };
   }
   return ports;
 }
@@ -52,7 +55,23 @@ function selectorPorts(): SelectorPorts {
 export async function closeSelectorPorts(): Promise<void> {
   const current = ports;
   ports = undefined;
+  domainCache = undefined;
   if (current?.lp instanceof WorkerLpAdapter) await current.lp.close();
+}
+
+export type DomainPreparation = 'ready' | 'not-needed' | 'failed';
+
+/**
+ * Compiles the domain of the current preferences and stores it, so the first
+ * selection of the next process applies them. A profile with no substantive
+ * answer needs no compile.
+ */
+export async function prepareSelectorDomain(): Promise<DomainPreparation> {
+  const { profile, status } = readPreferences();
+  if (status === 'invalid' || status === 'unsupported-version' || !profile || !hasSubstantiveAnswers(profile)) return 'not-needed';
+  selectorPorts();
+  const artifact = await domainCache!.compile(profile);
+  return artifact ? 'ready' : 'failed';
 }
 
 /** A config that cannot be read applies no preferences; it never blocks a turn. */

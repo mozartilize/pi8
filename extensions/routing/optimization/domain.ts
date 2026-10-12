@@ -256,6 +256,22 @@ export function thetaBaseArtifact(profile: UserRoutingPreferencesV1): DomainArti
 }
 
 /** True when the artifact is ready, matches the profile identity and digest, and its representative is in its domain. */
+/**
+ * Rebuilds an artifact from parsed JSON. JSON turns an unbounded column bound
+ * into `null`. The result is not trusted: `artifactMatches` checks it against
+ * the live profile and the polytope before use.
+ */
+export function reviveDomainArtifact(raw: unknown): DomainArtifact | undefined {
+  const value = raw as DomainArtifact | undefined;
+  const polytope = value?.domain?.polytope;
+  if (value?.status !== 'ready' || !polytope || !Array.isArray(polytope.colLower) || !Array.isArray(polytope.colUpper)) return undefined;
+  const open = (bounds: readonly (number | null | undefined)[]) => bounds.map((bound) => bound ?? undefined);
+  return Object.freeze({
+    ...value,
+    domain: { ...value.domain, polytope: { ...polytope, colLower: open(polytope.colLower), colUpper: open(polytope.colUpper) } },
+  });
+}
+
 export function artifactMatches(artifact: DomainArtifact | undefined, profile: UserRoutingPreferencesV1, expectedProfileDigest: string): artifact is DomainArtifact {
   return artifact?.status === 'ready'
     && artifact.identity === domainIdentity(profile)

@@ -8,7 +8,7 @@ import { registryModel } from '../test-support/router-fixtures.js';
 import { benchStoreJson } from '../test-support/provider-harness.js';
 import { WorkerLpAdapter } from '../routing/optimization/lp.js';
 import { buildCandidate, type RegistryModelInfo } from '../routing/score/scorer.js';
-import { resolveUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
+import { closeSelectorPorts, prepareSelectorDomain, resolveUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
 
 const lp = new WorkerLpAdapter();
 afterAll(() => lp.close());
@@ -156,5 +156,37 @@ describe('production selection adapter', () => {
     const signal = AbortSignal.abort();
     expect(await resolveUnifiedDecision({ ...input(), signal }, noPreparation)).toEqual({ kind: 'cancelled' });
     expect(await resolveUnifiedDecision({ ...input(), isCurrent: () => false }, noPreparation)).toEqual({ kind: 'stale' });
+  });
+
+  describe('preference domain compiled before the first selection', () => {
+    const OPERATOR = {
+      version: 1 as const, settledImplementation: 'lower_cost' as const, openDesignDecisions: 'higher_reasoning_capability' as const,
+      handoffWarmCache: 'switch_for_capability' as const, researchTasks: 'higher_research_capability' as const, afterRework: 'switch_model' as const,
+    };
+    const firstSelection = async () => {
+      const result = await resolveUnifiedDecision({ ...input(), ports: undefined }, noPreparation);
+      if (result.kind !== 'decision') throw new Error('Expected a decision');
+      return result.decision.unified!;
+    };
+    // A new process has an empty in-memory cache; only the file store carries over.
+    afterEach(() => closeSelectorPorts());
+
+    it('applies the preferences in the first selection of a process that follows the compile', async () => {
+      savePreferences(OPERATOR);
+      expect(await prepareSelectorDomain()).toBe('ready');
+      await closeSelectorPorts();
+      expect(await firstSelection()).toMatchObject({ solver: 'exact', domainStatus: 'ready', constraintsEnforced: true });
+    });
+
+    it('does not apply the preferences in the first selection when nothing compiled them', async () => {
+      savePreferences(OPERATOR);
+      expect(await firstSelection()).toMatchObject({ solver: 'fallback-central', domainStatus: 'domain-not-ready', constraintsEnforced: false });
+    });
+
+    it('needs no compile for an empty profile or an unsupported version', async () => {
+      expect(await prepareSelectorDomain()).toBe('not-needed');
+      savePreferences({ version: 99 } as never);
+      expect(await prepareSelectorDomain()).toBe('not-needed');
+    });
   });
 });
