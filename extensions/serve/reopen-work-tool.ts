@@ -234,7 +234,10 @@ export function submitReopenWork(
   const served = lastServed ? servedKey(lastServed) : undefined;
   if (!state || !last || !served || !lastServed || last.intentKey !== state.intentKey) return reject(undefined, undefined, 'no-task');
   const status = state.contextStatus;
-  if (status === 'acquiring' || status === 'clarification-only') return reject(state, served, 'collecting-context');
+  // Reopening the completed item is the declaration that ends collecting context after it.
+  if (status === 'clarification-only' || (status === 'acquiring' && !state.priorCompletion)) {
+    return reject(state, served, 'collecting-context');
+  }
   if (status === 'ready-pending') return reject(state, served, 'already-handed-off');
   const deliverable = member(DELIVERABLES, params?.deliverable);
   if (!deliverable) return reject(state, served, 'missing-deliverable');

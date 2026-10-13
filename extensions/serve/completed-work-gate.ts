@@ -17,6 +17,11 @@ export function completedWorkNote(state: WorkPhaseState): string {
       'Do not change files or start a subagent before that boundary.' + workChoiceNote(state);
 }
 
+/** Added to the gathering note of an entry after completed work. */
+export const COMPLETED_WORK_GATHER_NOTE =
+  'The previous work item in this conversation is complete. ' +
+  'For more changes to that item, call reopen_work instead of hand_off_context.';
+
 /**
  * User-requested work defines completion; optional suggestions never extend it.
  * The entry keeps these bytes after complete_work succeeds, so the cached

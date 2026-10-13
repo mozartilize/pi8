@@ -95,13 +95,14 @@ export function acquisitionRestricted(state: WorkPhaseState | undefined): boolea
 /**
  * Whether a call may run in the restricted phase. Clarification allows no
  * tool; collecting context allows the trusted readers, the question tool, the
- * handoff itself, and `routing_context`, which only describes work. A pending
- * boundary also allows `reopen_work`, so that tool can refuse a second reopen.
+ * handoff itself, and `routing_context`, which only describes work. Collecting
+ * context and a pending boundary also allow `reopen_work`: the tool itself
+ * refuses an entry without completed work and a second reopen.
  */
 export function acquisitionAllows(status: ContextStatus | undefined, toolName: string): boolean {
   if (status === 'clarification-only') return false;
   // The boundary is already pending. Let the tool refuse a second reopen itself.
-  if (status === 'ready-pending' && toolName === REOPEN_WORK_TOOL) return true;
+  if ((status === 'ready-pending' || status === 'acquiring') && toolName === REOPEN_WORK_TOOL) return true;
   return ACQUISITION_READ_TOOLS.includes(toolName)
     || toolName === QUESTION_TOOL
     || toolName === CONTEXT_HANDOFF_TOOL

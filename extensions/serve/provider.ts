@@ -117,7 +117,7 @@ import {
 import { applyNotePlans, messageAnchor, planRequestNote, type NotePlan } from './request-notes.js';
 import { planToolsNote } from './router-tools-note.js';
 import { completedIncumbent, incumbentWorkItem } from '../routing/policy/work-completion.js';
-import { activeWorkNote, completedWorkNote } from './completed-work-gate.js';
+import { activeWorkNote, COMPLETED_WORK_GATHER_NOTE, completedWorkNote } from './completed-work-gate.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -363,15 +363,25 @@ function measureTurnInput(context: Context, config: AutoRouterConfig) {
   return { turnInput, systemPrompt, needsVision, estContextTokens };
 }
 
-/** The handoff owns the task type; without an incumbent, start by gathering. */
+/**
+ * The incumbent that serves a new entry at its task type. A model whose work
+ * item is complete holds no task type: the entry gathers, and that model is
+ * only a candidate with its cache and continuity.
+ */
+function servingIncumbent(session: RouterSession) {
+  return completedIncumbent(session.context.getLedger()) ? undefined : session.context.getIncumbent();
+}
+
+/** The handoff owns the task type; without a serving incumbent, start by gathering. */
 function resolveBaseIntent(turnInput: ReturnType<typeof getTurnClassificationInput>, session: RouterSession) {
   const cachedIntent = session.getCachedIntent();
   const cacheHit = cachedIntent?.key === turnInput.key;
+  const incumbent = servingIncumbent(session);
   return {
     cacheHit,
     cachedIntent,
-    baseDimension: cacheHit ? cachedIntent.dimension : session.context.getIncumbent()?.dimension ?? 'gather',
-    baseCause: cacheHit ? cachedIntent.cause : session.context.getIncumbent() ? 'incumbent' as DecisionCause : 'investigation' as DecisionCause,
+    baseDimension: cacheHit ? cachedIntent.dimension : incumbent?.dimension ?? 'gather',
+    baseCause: cacheHit ? cachedIntent.cause : incumbent ? 'incumbent' as DecisionCause : 'investigation' as DecisionCause,
   };
 }
 
@@ -535,7 +545,7 @@ function advanceWorkPhase(args: {
       ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
       ...(priorWork ? { priorWork } : {}),
     };
-    if (args.session.context.getIncumbent()) workPhaseState = { ...workPhaseState, incumbentServes: true };
+    if (servingIncumbent(args.session)) workPhaseState = { ...workPhaseState, incumbentServes: true };
     const completed = completedIncumbent(args.session.context.getLedger());
     if (completed) workPhaseState = { ...workPhaseState, priorCompletion: { workItemId: completed.workItem.id } };
     if (args.pendingIdentity) workPhaseState = { ...workPhaseState, pendingIdentity: args.pendingIdentity };
@@ -1270,7 +1280,7 @@ async function delegateRouterTurn(args: {
     : entry && (session.context.getLedger().activeWorkItemId || entry.completion) ? activeWorkNote : undefined;
   const instruction = !entry ? undefined
     : clarifying ? CLARIFICATION_NOTE
-    : acquiring ? gatheringNote(entry)
+    : acquiring ? gatheringNote(entry) + (entry.priorCompletion ? ` ${COMPLETED_WORK_GATHER_NOTE}` : '')
     : workNote;
   const delegatedContext = withEntryNotes(session, context, intentKey, entry ? instruction : undefined, !!entry);
   // The one clarification request: tools stay defined, so a history with

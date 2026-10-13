@@ -104,7 +104,8 @@ describe('restricted tools', () => {
     expect(acquisitionAllows('acquiring', 'routing_context')).toBe(true);
     expect(acquisitionAllows('clarification-only', 'read')).toBe(false);
     expect(acquisitionAllows('clarification-only', 'hand_off_context')).toBe(false);
-    expect(acquisitionAllows('acquiring', 'reopen_work')).toBe(false);
+    // reopen_work refuses an entry without completed work itself.
+    expect(acquisitionAllows('acquiring', 'reopen_work')).toBe(true);
     expect(acquisitionAllows('ready-pending', 'reopen_work')).toBe(true);
   });
 

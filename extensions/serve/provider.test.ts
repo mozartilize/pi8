@@ -2314,19 +2314,19 @@ describe('context acquisition', () => {
           expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, harness.session)?.block).toBe(true);
         });
 
-        it('answers about done work on the incumbent without reopening or sending extra acquisition requests', async () => {
+        it('gathers the entry after completed work, with the done item\'s model only a candidate', async () => {
           const { session, workItemId } = await completed();
           const count = harness.streamedModels().length;
           const decision = await session.routeTurn('explain the migration tradeoffs');
-          expect(decision?.chosen).toBe('beta/strong');
+          // A completed item holds no task type: the entry gathers at the context-collection targets.
+          expect(decision).toMatchObject({ dimension: 'gather', cause: 'investigation' });
           expect(harness.streamedModels()).toHaveLength(count + 1);
-          expect(harness.session.getWorkPhaseState()).toMatchObject({ priorCompletion: { workItemId } });
-          expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
+          expect(harness.session.getWorkPhaseState()).toMatchObject({ priorCompletion: { workItemId }, contextStatus: 'acquiring' });
+          expect(harness.session.getWorkPhaseState()?.incumbentServes).toBeUndefined();
           expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
           expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
           const user = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
-          expect(JSON.stringify(user.content)).toContain(workItemId);
-          expect(JSON.stringify(user.content)).toContain('answer it directly');
+          expect(JSON.stringify(user.content)).toContain('call reopen_work instead of hand_off_context');
           expect(JSON.stringify(session.piContext)).not.toContain('Router:');
           expect(gateCompletedWorkToolCall({ toolName: 'edit', input: {} }, harness.session)?.block).toBe(true);
         });
@@ -2356,11 +2356,13 @@ describe('context acquisition', () => {
           expect(harness.session.context.getIncumbent()?.workItemId).toBe(ledger.activeWorkItemId);
         });
 
-        it('keeps completed ownership and the completed-work gate after a fallback answers', async () => {
+        it('keeps completed ownership and the completed-work gate after another model gathers', async () => {
           const { session, workItemId } = await completed();
           await session.routeTurn('explain what the migration does', { failModels: ['beta/strong'] });
+          expect(harness.session.getLastServed()?.registryId).not.toBe('beta/strong');
+          // A model that only collected context does not take the completed item.
           const incumbent = harness.session.context.getIncumbent()!;
-          expect(incumbent.registryId).not.toBe('beta/strong');
+          expect(incumbent.registryId).toBe('beta/strong');
           expect(incumbent.workItemId).toBe(workItemId);
           await session.routeTurn('make another change to it');
           expect(harness.session.getWorkPhaseState()?.priorCompletion).toEqual({ workItemId });

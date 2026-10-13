@@ -142,9 +142,18 @@ describe('reopen_work', () => {
     expect(unread.context.getLedger().activeWorkItemId).toBeUndefined();
   });
 
+  it('reopens the prior completed item while the entry after it collects context', () => {
+    const session = doneSession({ contextStatus: 'acquiring', contextRequests: 1 });
+    expect(submitReopenWork(SHAPE, AUTO, session).accepted).toBe(true);
+    expect(session.context.getLedger().activeWorkItemId).toBe('w_1');
+    expect(session.getWorkPhaseState()).toMatchObject({ contextStatus: 'ready-pending', workItemId: 'w_1' });
+    expect(session.getWorkPhaseState()?.priorCompletion).toBeUndefined();
+  });
+
   it.each([
-    ['collecting context', { contextStatus: 'acquiring' as const }],
+    ['collecting context without completed work', { contextStatus: 'acquiring' as const, priorCompletion: undefined }],
     ['a handoff waiting for its next step', { contextStatus: 'ready-pending' as const }],
+    ['asking the user', { contextStatus: 'clarification-only' as const }],
   ])('refuses while %s', (_label, over) => {
     const session = doneSession(over);
     expect(submitReopenWork(SHAPE, AUTO, session).accepted).toBe(false);
