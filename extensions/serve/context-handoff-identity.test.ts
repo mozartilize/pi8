@@ -228,6 +228,37 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(harness.session.context.getLedger().items.size).toBe(3);
   });
 
+  it.each([
+    { workItemId: 'NEW_WORK_ITEM' },
+    { workItemId: 'existing-work' },
+    { topicId: 'NEW_TOPIC' },
+    { topicTitle: 'Export' },
+    { workItemTitle: 'Exporter' },
+    { workItemId: 'NONE', topicId: 'NEW_TOPIC' },
+  ])('rejects answer identity $workItemId $topicId $topicTitle $workItemTitle without consuming a refusal', async (identity) => {
+    await entry('find the source handlers');
+    const before = harness.session.getWorkPhaseState();
+    const result = await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', ...identity });
+    expect(result.accepted).toBe(false);
+    expect(result.text).toContain('outcome "ready"');
+    expect(harness.session.getWorkPhaseState()).toBe(before);
+    expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+    expect(harness.session.getWorkPhaseState()?.contextDenials).toBe(before?.contextDenials);
+    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+    expect((await handoff({ ...READY, deliverable: 'gather', workItemId: 'NEW_WORK_ITEM',
+      topicTitle: 'Handlers', workItemTitle: 'Find handlers' })).accepted).toBe(true);
+    expect(harness.session.context.getLedger().items.size).toBe(1);
+  });
+
+  it.each([undefined, 'NONE'])('accepts a gather answer with workItemId %s without creating work', async (workItemId) => {
+    await entry('explain the supplied result');
+    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', workItemId })).accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()?.contextAnswer).toBe('gather');
+    expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+  });
+
   it('declares a lightweight answer without selecting or creating work', async () => {
     await entry('hello');
     expect((await handoff({ ...READY, workItemId: 'NONE' })).accepted).toBe(false);

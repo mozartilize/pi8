@@ -92,15 +92,21 @@ describe('handoff boundary', () => {
 });
 
 describe('restricted tools', () => {
-  it('allows only exact trusted readers, the question tool, the handoff, and routing_context', () => {
+  it('allows context tools while collecting and restricts execution starts', () => {
     for (const tool of ['read', 'grep', 'find', 'ls', 'fffind', 'ffgrep', 'tilth_read', 'tilth_search', 'ask_user_question', 'hand_off_context']) {
       expect(acquisitionAllows('acquiring', tool), tool).toBe(true);
       expect(acquisitionAllows('ready-pending', tool), tool).toBe(true);
       expect(acquisitionAllows('clarification-only', tool), tool).toBe(false);
     }
-    for (const tool of ['edit', 'write', 'bash', 'ctx_execute', 'ctx_execute_file', 'subagent', 'commit_execution', 'read_file', 'mcp', 'fffind_write', 'mcp__ffgrep']) {
+    for (const tool of ['edit', 'write', 'subagent', 'commit_execution']) {
       expect(acquisitionAllows('acquiring', tool)).toBe(false);
     }
+    for (const tool of ['bash', 'ctx_execute', 'ctx_execute_file', 'extension_control', 'extension_inspect', 'read_file', 'mcp', 'web_search']) {
+      expect(acquisitionAllows('acquiring', tool)).toBe(true);
+      expect(acquisitionAllows('ready-pending', tool)).toBe(false);
+      expect(acquisitionAllows('clarification-only', tool)).toBe(false);
+    }
+    expect(acquisitionAllows('acquiring', 'bash', { command: 'echo x > file' })).toBe(false);
     expect(acquisitionAllows('acquiring', 'routing_context')).toBe(true);
     expect(acquisitionAllows('clarification-only', 'read')).toBe(false);
     expect(acquisitionAllows('clarification-only', 'hand_off_context')).toBe(false);

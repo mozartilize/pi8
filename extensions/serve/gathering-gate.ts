@@ -11,10 +11,8 @@ import { appendContextHandoffSignal, type ContextHandoffSignal } from '../host/d
 import { servedKey } from '../host/ui.js';
 import { EXECUTION_CONTRACT_TOOL } from '../routing/policy/execution-contract.js';
 import {
-  ACQUISITION_READ_TOOLS,
   ACQUISITION_REQUEST_LIMIT,
   CONTEXT_HANDOFF_TOOL,
-  QUESTION_TOOL,
   acquisitionAllows,
   acquisitionRestricted,
   countDenial,
@@ -114,7 +112,7 @@ export async function observeContextRead(
 type RequestReason = Exclude<ContextReason, 'reasoning-prep'>;
 
 const OWED_NOTES: Record<RequestReason, string> = {
-  'identity-unresolved': 'choose which work this request belongs to, or start new work.',
+  'identity-unresolved': 'for outcome "ready", choose which work this request belongs to, or start new work.',
   'referenced-artifact': 'this request rests on files it references; read them in full.',
   'carried-open-context': 'an earlier request of this work left context to collect; collect it before the change.',
 };
@@ -125,8 +123,6 @@ function owedNote(state: WorkPhaseState): string {
   if (reason) return OWED_NOTES[reason];
   return state.deliverable === 'review' ? 'this request needs a review.' : 'this request needs a plan.';
 }
-
-const ALLOWED_TOOLS = [...ACQUISITION_READ_TOOLS, QUESTION_TOOL].join(', ');
 
 /**
  * The router's standing instruction to an entry collecting context. It
@@ -144,14 +140,17 @@ export function workChoiceNote(state: WorkPhaseState): string {
     })),
     legacy: pending.legacy.slice(0, 5).map((item) => ({ workItemId: item.id, excerpt: item.excerpt.slice(0, 240) })),
   })}. For outcome "ready", choose an offered workItemId, or NEW_WORK_ITEM with a short workItemTitle. ` +
-    'For a new topic use topicId NEW_TOPIC and a short topicTitle; for an existing topic use its offered topicId. ' +
-    'Do not infer identity from the active item alone.' : '';
+    'For outcome "ready", use topicId NEW_TOPIC and a short topicTitle for a new topic. ' +
+    'For an existing topic, use its offered topicId. Do not infer identity from the active item alone. ' +
+    'For outcome "answer", omit work and topic fields. You may use workItemId "NONE".' : '';
 }
 
 /** Byte-identical across the entry's collect invocations. */
 export function gatheringNote(state: WorkPhaseState): string {
-  return `Router: ${owedNote(state)}${workChoiceNote(state)} Until you call ${CONTEXT_HANDOFF_TOOL}, only these tools run: ${ALLOWED_TOOLS}, ` +
-    `and routing_context updates; other calls are refused. When you have what the next step needs, call ` +
+  return `Router: ${owedNote(state)}${workChoiceNote(state)} While collecting context, use the available tools to collect evidence. ` +
+    'Follow the applicable skill instructions. Do not change the product or start implementation before an accepted boundary. ' +
+    'Recognized mutations, execution plans, and subagents are refused in this phase. ' +
+    'Mutation detection is best-effort, not a sandbox. When you have what the next step needs, call ' +
     `${CONTEXT_HANDOFF_TOOL} with outcome "ready", deliverable, complexity, and scope. When the answer needs an investigation, ` +
     'for example the cause of a bug, hand off with deliverable "gather". To answer from the context you collected, without a plan, review, change, or investigation, ' +
     'call it with outcome "answer", deliverable "gather" or "lightweight", complexity, and scope before giving a text answer. If the request is unclear or what it rests on cannot be read, ' +
@@ -209,7 +208,7 @@ export function remindContextHandoff(
  * API forces a tool call; a refused call returns the rules as its error. The
  * phase holds for a pinned model too. A refused mutation or subagent spawn
  * while acquiring counts against the entry (see countDenial); a refused
- * reader, shell, or unknown tool does not. A refusal while a ready handoff
+ * control call does not. A refusal while a ready handoff
  * waits for its next step is never counted. When the router cannot check a
  * call during the phase, the call is refused: an unchecked call could be a
  * change.
@@ -222,7 +221,7 @@ export function gateContextToolCall(
   try {
     const state = currentEntry(session);
     restricted = acquisitionRestricted(state);
-    if (!state || !restricted || acquisitionAllows(state.contextStatus, event.toolName)) {
+    if (!state || !restricted || acquisitionAllows(state.contextStatus, event.toolName, event.input)) {
       return undefined;
     }
     const lastServed = session.getLastServed();
@@ -249,7 +248,7 @@ export function gateContextToolCall(
     return {
       block: true,
       reason: `Router: this call was not made: ${tool} does not run while collecting context. ` +
-        'Use an allowed read or search tool to collect the missing evidence. ' +
+        'Use tools to collect evidence without changing the product. ' +
         'Do not hand off only to run a refused tool. ' + gatheringNote(state).slice('Router: '.length),
     };
   } catch {

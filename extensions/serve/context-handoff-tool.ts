@@ -61,6 +61,7 @@ const DESCRIPTION =
   'For an implementation, rate only the remaining work that your evidence supports. ' +
   'When the answer needs an investigation, for example the cause of a bug, call it with outcome "ready" and deliverable "gather". ' +
   'Use outcome "answer" only when the context you collected already gives the answer. ' +
+  'For outcome "answer", omit work and topic fields. You may use workItemId "NONE". ' +
   'Use facts.decisions to name unresolved choices. Use facts.unknowns to identify missing evidence. ' +
   'Call it with outcome "needs-user" when the request is ' +
   'unclear or what it rests on cannot be read, with the question to ask. The router picks the next model. Do not ' +
@@ -123,6 +124,9 @@ const REJECTIONS = {
   'artifact-not-read': 'Context not handed off: the request rests on files not read in full as they are now. Read every ' +
     'line of each file. Reads in parts count when together they show every line. Then call it again:',
   'no-next-step': 'Context not handed off: hand off to implement, review, or plan. Hand off to gather only while collecting context. Call it again with one of those, or continue.',
+  'answer-work-identity': 'Context not handed off: outcome "answer" does not select work. ' +
+    'For an investigation, use outcome "ready", deliverable "gather", findings, question, and work identity. ' +
+    'To answer directly, use outcome "answer" without work or topic fields. You may use workItemId "NONE".',
   'missing-work-choice': 'Context not handed off: choose a listed workItemId, NEW_WORK_ITEM, or NONE for a lightweight side question.',
   'invalid-work-choice': 'Context not handed off: the work and topic ids must be from this entry’s offered choices. Choose again.',
   'missing-work-title': 'Context not handed off: give a short workItemTitle for NEW_WORK_ITEM.',
@@ -317,6 +321,10 @@ export function submitContextHandoff(
   if (params?.outcome === 'answer') {
     if (!opened.acquiring) return reject(session, 'not-acquiring', state, served);
     if (reported !== 'gather' && reported !== 'lightweight') return reject(session, 'no-next-step', state, served);
+    if ((params.workItemId !== undefined && params.workItemId !== 'NONE')
+      || params.topicId !== undefined || params.topicTitle !== undefined || params.workItemTitle !== undefined) {
+      return reject(session, 'answer-work-identity', state, served);
+    }
     const complexity = member(COMPLEXITIES, params.complexity);
     const scope = member(SCOPES, params.scope);
     if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);

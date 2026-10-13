@@ -1910,8 +1910,9 @@ describe('context acquisition', () => {
       difficulty: { alternatives, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 },
     });
     async function submitPrepared(params: Record<string, unknown>) {
-      const complete = { workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC', topicTitle: 'Work',
-        workItemTitle: 'Requested work', ...params };
+      const complete = params.outcome === 'ready'
+        ? { workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC', topicTitle: 'Work', workItemTitle: 'Requested work', ...params }
+        : params;
       const facts = await prepareHandoffFacts(complete, routerCtx, harness.session,
         async () => ({ stdout: '', stderr: '', code: 0 }) as never);
       return submitContextHandoff(complete, routerCtx, harness.session, facts);
@@ -1929,7 +1930,7 @@ describe('context acquisition', () => {
       const session = await newSession();
       const first = await session.routeTurn('investigate the flaky test');
       expect(first?.dimension).toBe('gather');
-      expect((await submitPrepared({ ...handoff(1), outcome: 'answer', deliverable: 'gather' })).accepted).toBe(true);
+      expect((await submitPrepared({ outcome: 'answer', deliverable: 'gather', complexity: 'routine', scope: 'bounded' })).accepted).toBe(true);
       expect(harness.session.context.getLedger().items.size).toBe(0);
       expect(harness.session.context.getIncumbent()).toBeUndefined();
       expect(harness.session.getWorkPhaseState()?.contextAnswer).toBe('gather');
@@ -1943,13 +1944,15 @@ describe('context acquisition', () => {
       expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
       expect(trace()?.features).toMatchObject({ reasoningFit: 0.4, researchFit: 0.5 });
       expect(trace()?.capabilityShortfall).toBe(0);
-      expect((await submitPrepared({ ...handoff(1), outcome: 'answer', deliverable: 'gather' })).accepted).toBe(true);
+      expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBe('collecting-context');
+      expect((await submitPrepared({ outcome: 'answer', deliverable: 'gather', complexity: 'routine', scope: 'bounded' })).accepted).toBe(true);
       // The entry stays restricted to read tools, but writing the answer is the gather deliverable.
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
       expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
       expect(trace()?.features.reasoningFit).toBe(0);
       expect(trace()?.features.researchFit).toBe(1);
       expect(trace()?.capabilityShortfall).toBeCloseTo(7 / 3, 5);
+      expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBe('direct-answer');
     });
 
     it.each([[1, 'alpha/cheap'], [5, 'beta/strong']] as const)(

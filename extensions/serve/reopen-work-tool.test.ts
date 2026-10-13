@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { appendWorkLifecycleSignal } from '../host/decisionlog.js';
 import { CONVERSATION_EVIDENCE } from '../routing/policy/context-acquisition.js';
+import { phaseDifficulty } from '../routing/features/difficulty.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { REOPEN_WORK_TOOL } from '../routing/policy/work-completion.js';
 import { routingDecision } from '../test-support/router-fixtures.js';
@@ -14,7 +15,12 @@ import { prepareReopenFacts, registerReopenWorkTool, submitReopenWork, type Reop
 vi.mock('../host/decisionlog.js', () => ({ appendWorkLifecycleSignal: vi.fn() }));
 
 const AUTO = { model: { provider: 'router', id: 'auto' }, cwd: process.cwd() } as unknown as ExtensionContext;
-const SHAPE: ReopenWorkParams = { deliverable: 'implement', complexity: 'routine', scope: 'bounded' };
+// Each deliverable reads only its own rating: difficulty for gather, plan, or review, remainingWork for implement.
+const SHAPE: ReopenWorkParams = {
+  deliverable: 'implement', complexity: 'routine', scope: 'bounded',
+  difficulty: { alternatives: 2, stakes: 2, spread: 2, knowledge: 2, uncertainty: 2 },
+  remainingWork: { openDecisions: 2, spread: 2, verification: 2, knowledge: 2, coupling: 2 },
+};
 
 function doneSession(over: Partial<WorkPhaseState> = {}, incumbentWorkItem = true): RouterSession {
   const session = new RouterSession();
@@ -104,6 +110,16 @@ describe('reopen_work', () => {
     expect(session.getWorkPhaseState()?.contract).toBeUndefined();
   });
 
+  it.each(['gather', 'plan'] as const)('preserves distinct demand axes when reopening %s', (deliverable) => {
+    const session = doneSession();
+    const difficulty = { alternatives: 4, stakes: 1, spread: 1, knowledge: 3, uncertainty: 2 };
+    expect(submitReopenWork({ ...SHAPE, deliverable, difficulty }, AUTO, session).accepted).toBe(true);
+    expect(session.getWorkPhaseState()?.reasoningHandoff).toMatchObject({ pending: true, target: deliverable, rubric: difficulty });
+    expect(phaseDifficulty(session.getWorkPhaseState(), deliverable)).toEqual({
+      value: 0.75, axes: { reasoning: 0.75, agentic: 0.25, research: 0.5 }, source: 'reasoning-rubric',
+    });
+  });
+
   it('values a reopened implementation on the execution rubric', () => {
     const session = doneSession({ priorCompletion: undefined, completion: { workItemId: 'w_1', status: 'done' }, contextStatus: 'served' });
     const remainingWork = { openDecisions: 3, spread: 2, verification: 2, knowledge: 2, coupling: 2 };
@@ -112,12 +128,32 @@ describe('reopen_work', () => {
     expect(handoff).toMatchObject({ pending: true, target: 'implement', rubric: remainingWork });
   });
 
-  it('leaves the rubric undefined when a reopened implementation scores no criterion', () => {
-    const session = doneSession({ priorCompletion: undefined, completion: { workItemId: 'w_1', status: 'done' }, contextStatus: 'served' });
-    expect(submitReopenWork({ ...SHAPE, deliverable: 'implement' }, AUTO, session).accepted).toBe(true);
-    const handoff = session.getWorkPhaseState()?.reasoningHandoff;
-    expect(handoff).toMatchObject({ pending: true, target: 'implement' });
-    expect(handoff).not.toHaveProperty('rubric');
+  it.each([
+    ['implement without remainingWork', { deliverable: 'implement', remainingWork: undefined }],
+    ['implement with only a reasoning rating', { deliverable: 'implement', remainingWork: undefined, difficulty: SHAPE.difficulty }],
+    ['gather without difficulty', { deliverable: 'gather', difficulty: undefined }],
+    ['review with only an execution rating', { deliverable: 'review', difficulty: undefined }],
+    ['plan with no valid criterion', { deliverable: 'plan', difficulty: { alternatives: 0, stakes: 6, spread: 2.5 } }],
+  ])('refuses a reopen for %s and changes nothing', (_label, over) => {
+    const session = doneSession();
+    const persisted: unknown[] = [];
+    session.context.bindPersistence((event) => persisted.push(event));
+    const before = session.getWorkPhaseState();
+    const result = submitReopenWork({ ...SHAPE, ...over }, AUTO, session);
+    expect(result).toMatchObject({ accepted: false, text: expect.stringContaining('rate the work left') });
+    expect(persisted).toEqual([]);
+    expect(session.context.getLedger().items.get('w_1')?.status).toBe('done');
+    expect(session.getWorkPhaseState()).toBe(before);
+    expect(vi.mocked(appendWorkLifecycleSignal).mock.calls[0]![0]).toMatchObject({ action: 'reopen-reject', rejectReason: 'missing-rubric' });
+    // The corrected call is accepted.
+    expect(submitReopenWork({ ...SHAPE, deliverable: over.deliverable }, AUTO, session).accepted).toBe(true);
+  });
+
+  it('keeps a partly scored rubric and fills each unscored criterion with the highest given level', () => {
+    const session = doneSession();
+    expect(submitReopenWork({ ...SHAPE, remainingWork: { openDecisions: 1, coupling: 4 } }, AUTO, session).accepted).toBe(true);
+    expect(session.getWorkPhaseState()?.reasoningHandoff?.rubric)
+      .toEqual({ openDecisions: 1, spread: 4, verification: 4, knowledge: 4, coupling: 4 });
   });
 
   it('refuses a stale entry or an unread referenced file without reopening', async () => {

@@ -83,7 +83,7 @@ describe('gathering gate refusal accounting', () => {
     expect(result.text).toBe(`Context not handed off: the request rests on files not read in full as they are now: src/queue.ts. ${CLARIFICATION_TEXT}`);
   });
 
-  it.each(['fffind', 'ffgrep'])('allows %s without a refusal or phase transition', (toolName) => {
+  it.each(['fffind', 'ffgrep', 'extension_control', 'extension_inspect', 'ctx_execute', 'ctx_execute_file', 'mcp', 'read_file', 'web_search'])('allows %s without a refusal or phase transition', (toolName) => {
     const session = acquiringSession();
     const before = session.getWorkPhaseState();
     expect(gateContextToolCall({ toolName, input: { pattern: 'retryDelayMs', path: 'src/' } }, session)).toBeUndefined();
@@ -91,26 +91,32 @@ describe('gathering gate refusal accounting', () => {
     expect(vi.mocked(appendContextHandoffSignal)).not.toHaveBeenCalled();
   });
 
-  it.each(['bash', 'read_file', 'ctx_execute_file'])('directs a refused %s call to permitted readers before a handoff', (toolName) => {
+  it.each(['commit_execution', 'subagent'])('refuses %s before a handoff', (toolName) => {
     const session = acquiringSession();
     const refusal = gateContextToolCall({ toolName, input: { command: 'rg retryDelayMs' } }, session);
     expect(refusal?.block).toBe(true);
     expect(refusal?.reason).toContain(`${toolName} does not run while collecting context.`);
-    expect(refusal?.reason).toContain('Use an allowed read or search tool to collect the missing evidence.');
+    expect(refusal?.reason).toContain('Use tools to collect evidence without changing the product.');
     expect(refusal?.reason).toContain('Do not hand off only to run a refused tool.');
-    expect(refusal?.reason).toContain('fffind, ffgrep');
+    expect(refusal?.reason).toContain('Follow the applicable skill instructions.');
     expect(refusal?.reason).not.toContain('the next step can run it');
-    expect(session.getWorkPhaseState()?.contextDenials).toBe(0);
+    expect(session.getWorkPhaseState()?.contextDenials).toBe(toolName === 'subagent' ? 1 : 0);
     expect(vi.mocked(appendContextHandoffSignal).mock.calls.at(-1)?.[0]).toMatchObject({
       action: 'deny', deniedTool: toolName,
     });
   });
 
-  it('refuses a shell call without spending the mutation refusal budget', () => {
+  it('allows a shell read without spending the mutation refusal budget', () => {
     const session = acquiringSession();
-    expect(gateContextToolCall({ toolName: 'bash', input: { command: 'pwd' } }, session)?.block).toBe(true);
+    expect(gateContextToolCall({ toolName: 'bash', input: { command: 'pwd' } }, session)).toBeUndefined();
     expect(session.getWorkPhaseState()?.contextDenials).toBe(0);
     expect(gateContextToolCall({ toolName: 'read', input: { path: 'file.ts' } }, session)).toBeUndefined();
+  });
+
+  it.each(['echo changed > src/a.ts', 'rm src/a.ts', 'git reset --hard'])('blocks recognized shell mutation: %s', (command) => {
+    const session = acquiringSession();
+    expect(gateContextToolCall({ toolName: 'bash', input: { command } }, session)?.block).toBe(true);
+    expect(session.getWorkPhaseState()?.contextDenials).toBe(1);
   });
 
   it('does not count refusals while the accepted handoff awaits its next invocation', () => {

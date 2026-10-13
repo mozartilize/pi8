@@ -72,6 +72,21 @@ describe('decision log', () => {
     expect(entry.baselineCost).toBe(2.0);
   });
 
+  it('persists a missing-demand code without inventing a difficulty', () => {
+    const unified: NonNullable<RoutingDecision['unified']> = {
+      solver: 'exact', domainStatus: 'ready', constraintsEnforced: true,
+      profileDigest: 'profile', featureSchemaDigest: 'schema',
+      ranked: 1, insufficientEvidence: 0, holdingPrompt: 1,
+      difficultyMissingReason: 'direct-answer',
+    };
+    appendDecision({ ...DECISION, unified }, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
+    appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
+    const records = readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(records[0].unified.difficultyMissingReason).toBe('direct-answer');
+    expect(records[0].unified).not.toHaveProperty('difficulty');
+    expect(records[1]).not.toHaveProperty('unified');
+  });
+
   it('round-trips trajectory friction and incomplete spend', () => {
     const decision: RoutingDecision = {
       ...DECISION,

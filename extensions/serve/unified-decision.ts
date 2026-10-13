@@ -188,6 +188,20 @@ function reasonText(result: UnifiedDecision, chosen: string, preparationTarget: 
   return preparationTarget ? `${head}; ${preparationTarget} waits for compaction, ${chosen} holds the prompt` : head;
 }
 
+/** Classify absent demand without inferring it from an earlier entry's log join key. */
+function difficultyMissingReason(input: UnifiedTurnInput): UnifiedDecisionMeta['difficultyMissingReason'] {
+  if (input.state.contextAcquisition) return 'collecting-context';
+  const work = input.workState;
+  if (work?.contextAnswer) return 'direct-answer';
+  const contract = work?.contract;
+  if (input.state.phase === 'implement' && contract && !contract.rubric
+    && (contract.status === 'active' || contract.status === 'executed')) return 'no-rubric';
+  if (work?.reasoningHandoff) {
+    return work.reasoningHandoff.target === input.state.phase ? 'no-rubric' : 'phase-mismatch';
+  }
+  return work?.incumbentServes ? 'continuation' : 'no-handoff';
+}
+
 export async function resolveUnifiedDecision(
   input: UnifiedTurnInput,
   planPreparation: (ranking: readonly string[], chosen: string, candidates: ReadonlyMap<string, Candidate>) => string | undefined,
@@ -234,7 +248,9 @@ export async function resolveUnifiedDecision(
     insufficientEvidence: result.insufficientEvidence.length,
     holdingPrompt: chain.length,
     ...(preparationTarget ? { preparationTarget } : {}),
-    ...(input.state.difficulty ? { difficulty: input.state.difficulty.value, difficultyAxes: input.state.difficulty.axes } : {}),
+    ...(input.state.difficulty
+      ? { difficulty: input.state.difficulty.value, difficultyAxes: input.state.difficulty.axes }
+      : { difficultyMissingReason: difficultyMissingReason(input) }),
     ...(result.theta ? { theta: result.theta.map(round) } : {}),
     top: traceActions(result, chosen, input.incumbentKey, isDebugEnabled() ? result.ranking.length : TRACE_TOP),
   };

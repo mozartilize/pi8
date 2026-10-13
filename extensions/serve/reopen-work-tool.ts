@@ -36,8 +36,8 @@ const DESCRIPTION = [
   'The router knows that work item. Do not give an id, a title, or a topic.',
   'Call hand_off_context instead when the request is different work.',
   'Give the task type, the complexity, and the scope of this request.',
-  'For a plan or a review, also give difficulty.',
-  'For an implementation, rate only the remaining work that your evidence supports.',
+  'For gather, plan, or review, give difficulty: the reasoning left, rated per criterion.',
+  'For an implementation, give remainingWork: rate only the remaining work that your evidence supports.',
   'Each rating is 1 (easiest) to 5 (hardest).',
   'Read every file this request refers to, as the file is now, before you call this tool.',
   'After this tool accepts, make no changes until the next step starts.',
@@ -55,8 +55,8 @@ function reopenWorkParameters() {
     deliverable: oneOf(DELIVERABLES, 'The task type of this request: gather, plan, implement, or review.'),
     complexity: oneOf(COMPLEXITIES, 'How hard this request is.'),
     scope: oneOf(SCOPES, 'bounded: the change is local. open-ended: the size is not known yet.'),
-    difficulty: Type.Optional(difficultyParameter('For a plan or a review: the reasoning left, rated per criterion.')),
-    remainingWork: Type.Optional(remainingWorkParameter('For an implementation: the work left, rated per criterion.')),
+    difficulty: Type.Optional(difficultyParameter('Required for gather, plan, or review: the reasoning left, rated per criterion.')),
+    remainingWork: Type.Optional(remainingWorkParameter('Required for an implementation: the work left, rated per criterion.')),
   });
 }
 
@@ -65,6 +65,8 @@ const REJECTIONS = {
   'no-task': 'Work not reopened: no routed request is in progress. Continue.',
   'missing-deliverable': 'Work not reopened: name the task type (gather, plan, implement, or review). Call it again with it.',
   'missing-task-shape': 'Work not reopened: give complexity and scope. Call it again with both.',
+  'missing-rubric': 'Work not reopened: rate the work left. For gather, plan, or review, give difficulty. ' +
+    'For an implementation, give remainingWork. Rate each criterion from 1 to 5. Call it again with the rating.',
   'no-completed-work': 'Work not reopened: this request has no completed work item to continue. Call hand_off_context to choose work.',
   'missing': 'Work not reopened: the completed work item is not on this branch.',
   'superseded': 'Work not reopened: superseded work stays closed. Call hand_off_context for different work.',
@@ -253,6 +255,10 @@ export function submitReopenWork(
     return reject(state, served, 'artifact-not-read', ` ${facts.unmet.join(', ')}.`);
   }
 
+  // Require a current rating before changing the completed item's state.
+  const rubric = declaredRubric(deliverable, params);
+  if (!rubric) return reject(state, served, 'missing-rubric');
+
   const item = target.item;
   const sourceEntryId = session.context.getEntrySource() ?? state.intentKey;
   const recorded = session.context.appendCommit([
@@ -265,12 +271,7 @@ export function submitReopenWork(
 
   const continued = withContinuedPenalties(state, item.id, 'reopen');
   const closed = closeContractEntry(continued, served);
-  let reasoning;
-  if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement') {
-    // Without a rubric the demand of the next step is unknown, and the selector uses its highest capability targets.
-    const rubric = declaredRubric(deliverable, params);
-    reasoning = { requester: served, target: deliverable, ...(rubric ? { rubric } : {}), evidence: CONVERSATION_EVIDENCE };
-  }
+  const reasoning = { requester: served, target: deliverable, rubric, evidence: CONVERSATION_EVIDENCE };
   const resolution: EntryResolution = {
     sourceEntryId,
     topicId: item.topic.id,
@@ -281,7 +282,7 @@ export function submitReopenWork(
     resolver: 'context-handoff',
   };
   const next = acceptContextHandoff(openForRepick(closed), {
-    deliverable, key: handoffKey(params), ...(reasoning ? { reasoning } : {}),
+    deliverable, key: handoffKey(params), reasoning,
   });
   session.commitWorkPhaseState({
     ...next,

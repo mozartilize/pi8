@@ -1687,7 +1687,7 @@ describe('mutation observation hooks', () => {
     expect(defaultRouterSession.getWorkPhaseState()?.contractReminded).toBeUndefined();
   });
 
-  it('refuses every call outside the allowed tools until the handoff, and ends acquisition at the second refusal', async () => {
+  it('permits context tools, refuses mutations, and ends acquisition at the second refusal', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
     const toolResult = handlers.get('tool_result')!;
@@ -1704,15 +1704,16 @@ describe('mutation observation hooks', () => {
     expect(stopped?.block).toBe(true);
     expect(stopped?.reason).toContain('needs a review');
     expect(stopped?.reason).toContain('hand_off_context');
-    // A runner and a read-only shell are refused and do not count; a write in
-    // the same invocation already used the one counted refusal.
-    expect(await call('ctx_execute_file', { path: 'src/a.ts', code: 'print(1)' })).toMatchObject({ block: true });
-    expect(await call('bash', { command: 'rg foo' })).toMatchObject({ block: true });
+    // Context tools do not spend the mutation refusal budget.
+    expect(await call('ctx_execute_file', { path: 'src/a.ts', code: 'print(1)' })).toBeUndefined();
+    expect(await call('extension_control', { name: 'review-start' })).toBeUndefined();
+    expect(await call('extension_inspect', {})).toBeUndefined();
+    expect(await call('bash', { command: 'rg foo' })).toBeUndefined();
     expect(defaultRouterSession.getWorkPhaseState()).toMatchObject({ contextDenials: 1, contextStatus: 'acquiring' });
     expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
 
     defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, providerInvocation: 2 });
-    expect(await call('bash', { command: 'rg bar' })).toMatchObject({ block: true });
+    expect(await call('bash', { command: 'rg bar' })).toBeUndefined();
     expect(defaultRouterSession.getWorkPhaseState()).toMatchObject({ contextDenials: 1, contextStatus: 'acquiring' });
     defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, providerInvocation: 3 });
     expect((await call('edit'))?.reason).toContain('Reply to the user now');

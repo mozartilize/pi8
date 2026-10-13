@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { savePreferences } from '../config.js';
 import type { BenchModel } from '../types.js';
+import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { registryModel } from '../test-support/router-fixtures.js';
 import { benchStoreJson } from '../test-support/provider-harness.js';
 import { WorkerLpAdapter } from '../routing/optimization/lp.js';
@@ -92,6 +93,46 @@ describe('production selection adapter', () => {
     const firstTier = compared.filter((trace) => trace.capabilityShortfall === compared[0]!.capabilityShortfall);
     expect(top![0]!.maxRegret).toBeLessThanOrEqual(Math.min(...firstTier.map((trace) => trace.maxRegret!)));
     expect(top!.filter((trace) => trace.maxRegret === undefined).every((trace) => trace.evidenceGaps.length > 0)).toBe(true);
+  });
+
+  it.each([
+    { reason: 'collecting-context', collecting: true, work: { incumbentServes: true } },
+    { reason: 'direct-answer', work: { contextAnswer: 'gather', contextStatus: 'acquiring' } },
+    { reason: 'no-rubric', work: { reasoningHandoff: { target: 'gather' } } },
+    { reason: 'phase-mismatch', work: { reasoningHandoff: { target: 'plan' } } },
+    { reason: 'continuation', work: { incumbentServes: true } },
+    { reason: 'no-handoff', work: { previousHandoffId: 'previous', contextStatus: 'clarification-only' } },
+    { reason: 'no-handoff', work: undefined },
+  ])('records missing demand as $reason for $work', async ({ reason, collecting, work }) => {
+    const turn = input();
+    turn.state.phase = 'gather';
+    turn.state.contextAcquisition = collecting;
+    turn.authorizationScope.phase = 'gather';
+    turn.workState = work ? { intentKey: 'entry-a', providerInvocation: 1, observedMutationTools: 0, ...work } as WorkPhaseState : undefined;
+    const result = await resolveUnifiedDecision(turn, noPreparation);
+    if (result.kind !== 'decision') throw new Error('Expected a decision');
+    expect(result.decision.unified).toHaveProperty('difficultyMissingReason', reason);
+    expect(result.decision.unified).not.toHaveProperty('difficulty');
+  });
+
+  it.each(['active', 'executed'] as const)('records an unscored %s implementation contract before a prior plan handoff', async (status) => {
+    const turn = input();
+    turn.workState = {
+      intentKey: 'entry-a', providerInvocation: 1, observedMutationTools: 0,
+      contract: { status }, reasoningHandoff: { target: 'plan' },
+    } as WorkPhaseState;
+    const result = await resolveUnifiedDecision(turn, noPreparation);
+    if (result.kind !== 'decision') throw new Error('Expected a decision');
+    expect(result.decision.unified).toHaveProperty('difficultyMissingReason', 'no-rubric');
+  });
+
+  it('records declared zero demand without a missing-demand reason', async () => {
+    const turn = input();
+    turn.state.difficulty = { value: 0, source: 'reasoning-rubric' };
+    const result = await resolveUnifiedDecision(turn, noPreparation);
+    if (result.kind !== 'decision') throw new Error('Expected a decision');
+    expect(result.decision.unified).toHaveProperty('difficulty', 0);
+    expect(result.decision.unified).not.toHaveProperty('difficultyMissingReason');
   });
 
   it('lists every ranked action in the record under debug and only the best twelve otherwise', async () => {

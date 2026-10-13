@@ -427,6 +427,8 @@ export interface UnifiedDecisionMeta {
   /** Maximum declared axis demand. Absent means unknown; targets use demand 1. */
   difficulty?: number;
   difficultyAxes?: { reasoning: number; agentic: number; research: number };
+  /** Why demand is absent. An absent code in an older record is not evidence of a cause. */
+  difficultyMissingReason?: 'collecting-context' | 'direct-answer' | 'no-rubric' | 'phase-mismatch' | 'continuation' | 'no-handoff';
   /** Weights of a central fallback, in feature order. */
   theta?: number[];
   /** Best-ranked actions (all of them in debug), the chosen action and the incumbent, with their numbers. */

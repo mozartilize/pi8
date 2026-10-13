@@ -1,5 +1,5 @@
 /**
- * Collecting context: the read-only phase before an entry's deliverable.
+ * Collecting context: the preparation phase before an entry's deliverable.
  *
  * An entry owes context when no work item can be chosen for it yet, when its
  * plan or review needs preparation, when its request rests on a referenced
@@ -7,7 +7,7 @@
  * It starts as
  * collecting context, routed as `gather` (a missed-handoff recovery entry is
  * routed at its deliverable instead). Until `hand_off_context` is accepted,
- * only trusted read, search, and list tools run. The model hands off with
+ * tools may collect evidence. Recognized mutations are refused. The model hands off with
  * outcome `ready` and its findings, or `needs-user` and its question; the
  * router, not the model, decides the next phase and its minimum. A ready
  * boundary to a plan or review releases the incumbent minimums once: the
@@ -24,6 +24,8 @@ import { CONTEXT_DELIVERABLES } from '../context/resolve.js';
 import type { ContextReason } from '../context/types.js';
 import type { WorkPhaseState } from './work-phase.js';
 import { REOPEN_WORK_TOOL } from './work-completion.js';
+import { EXECUTION_CONTRACT_TOOL } from './execution-contract.js';
+import { isMutationCall } from './mutation-detector.js';
 
 export const CONTEXT_HANDOFF_TOOL = 'hand_off_context';
 
@@ -40,10 +42,8 @@ export const ACQUISITION_REQUEST_LIMIT = 32;
 export const ACQUISITION_DENIAL_LIMIT = 2;
 
 /**
- * Tools that run during acquisition, by exact registered name. Each is a
- * trusted read, search, or list implementation, or a control tool; no name
- * pattern, description, or model claim adds to it. A code runner stays out
- * even when a call says it only inspects a file: its effects are unknowable.
+ * Readers permitted while an accepted boundary waits for the next model.
+ * This list does not restrict tools while collecting context.
  */
 export const ACQUISITION_READ_TOOLS: readonly string[] = [
   'read', 'grep', 'find', 'ls', 'fffind', 'ffgrep',
@@ -54,7 +54,7 @@ export const QUESTION_TOOL = 'ask_user_question';
 const ROUTING_CONTEXT_TOOL = 'routing_context';
 
 export type ContextStatus =
-  /** Owed context is being gathered with read-only tools. */
+  /** Owed context is being gathered before implementation. */
   | 'acquiring'
   /** Acquisition ended without a ready handoff: the entry may only ask the user. */
   | 'clarification-only'
@@ -93,16 +93,18 @@ export function acquisitionRestricted(state: WorkPhaseState | undefined): boolea
 }
 
 /**
- * Whether a call may run in the restricted phase. Clarification allows no
- * tool; collecting context allows the trusted readers, the question tool, the
- * handoff itself, and `routing_context`, which only describes work. Collecting
- * context and a pending boundary also allow `reopen_work`: the tool itself
- * refuses an entry without completed work and a second reopen.
+ * Collecting context blocks recognized mutations and execution starts.
+ * shortcut: opaque runners and third-party tools can hide writes; use a host
+ * sandbox when enforced read-only execution is required.
  */
-export function acquisitionAllows(status: ContextStatus | undefined, toolName: string): boolean {
+export function acquisitionAllows(status: ContextStatus | undefined, toolName: string, input?: unknown): boolean {
   if (status === 'clarification-only') return false;
+  if (status === 'acquiring') {
+    return toolName !== EXECUTION_CONTRACT_TOOL && toolName !== 'subagent'
+      && !isMutationCall(toolName, input);
+  }
   // The boundary is already pending. Let the tool refuse a second reopen itself.
-  if ((status === 'ready-pending' || status === 'acquiring') && toolName === REOPEN_WORK_TOOL) return true;
+  if (status === 'ready-pending' && toolName === REOPEN_WORK_TOOL) return true;
   return ACQUISITION_READ_TOOLS.includes(toolName)
     || toolName === QUESTION_TOOL
     || toolName === CONTEXT_HANDOFF_TOOL
