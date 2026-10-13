@@ -101,6 +101,9 @@ describe('gathering gate refusal accounting', () => {
     expect(refusal?.reason).toContain('fffind, ffgrep');
     expect(refusal?.reason).not.toContain('the next step can run it');
     expect(session.getWorkPhaseState()?.contextDenials).toBe(0);
+    expect(vi.mocked(appendContextHandoffSignal).mock.calls.at(-1)?.[0]).toMatchObject({
+      action: 'deny', deniedTool: toolName,
+    });
   });
 
   it('refuses a shell call without spending the mutation refusal budget', () => {

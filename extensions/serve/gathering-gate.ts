@@ -227,7 +227,8 @@ export function gateContextToolCall(
     }
     const lastServed = session.getLastServed();
     const served = lastServed ? servedKey(lastServed) : 'unknown/unknown';
-    logContextHandoff(state, served, 'deny');
+    // The tool name is a code. Arguments stay out of the decision log.
+    logContextHandoff(state, served, 'deny', { deniedTool: event.toolName.slice(0, 64) });
     if (state.contextStatus === 'ready-pending') {
       return {
         block: true,

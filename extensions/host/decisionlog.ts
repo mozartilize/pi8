@@ -121,6 +121,8 @@ export interface DecisionLogEntry {
     action: ContextHandoffSignal['action'];
     /** Router-authored reject code, never the findings. */
     rejectReason?: string;
+    /** Tool name of a refused call. Set only on `deny`. No arguments. */
+    deniedTool?: string;
     handoff?: ReasoningHandoffMeta;
     deliverable?: Dimension;
     /** Why the entry owed context, as categories. */
@@ -265,6 +267,8 @@ export interface ContextHandoffSignal {
     | 'accept' | 'answer' | 'reject' | 'reminder' | 'deny' | 'needs-user' | 'budget-exhausted'
     | 'served' | 'phase-end' | 'no-handoff';
   rejectReason?: string;
+  /** Tool name of a refused call. Set only on `deny`. No arguments. */
+  deniedTool?: string;
   handoff?: ReasoningHandoffMeta;
   deliverable?: Dimension;
   contextReasons?: ContextReason[];
@@ -299,6 +303,7 @@ export function appendContextHandoffSignal(
       investigationHandoff: {
         action: signal.action,
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
+        ...(signal.deniedTool ? { deniedTool: signal.deniedTool } : {}),
         ...(signal.handoff ? { handoff: signal.handoff } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
         ...(signal.contextReasons?.length ? { contextReasons: signal.contextReasons } : {}),
