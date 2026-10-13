@@ -6,7 +6,6 @@
  *
  * No I/O. No registry access. Testable with fixture tables.
  */
-import { createHash } from 'node:crypto';
 import { identityKey } from '../../bench/matcher.js';
 import type {
   CapabilityBand,
@@ -21,7 +20,6 @@ import type {
 } from '../../types.js';
 import { DEFAULT_DIMENSION_WEIGHTS, DEFAULT_SWITCH_MARGIN } from '../../constants.js';
 import { renderScoredReason, type ScoredReason } from './decision-reason.js';
-import type { PolicyVersion } from '../policy/policy-version.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
@@ -84,18 +82,17 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 
 /**
  * Ranking axis: the measurement a candidate's quality credit is read from.
- * The development comparator uses Intelligence at every requirement.
- * Production implementation uses the requirement-selected axis, with coding
- * as a ranking-only fallback. Missing required measurements remain unknown.
+ * Implementation uses the requirement-selected axis, with coding as a
+ * ranking-only fallback. Missing required measurements remain unknown.
  */
-function rankingAxis(dim: Dimension, requirement?: number, version: PolicyVersion = 'legacy'): 'agenticIndex' | 'agenticCoding' | 'intelligence' {
-  if (version === 'cheapest-sufficient' || dim !== 'implement') return 'intelligence';
+function rankingAxis(dim: Dimension, requirement?: number): 'agenticIndex' | 'agenticCoding' | 'intelligence' {
+  if (dim !== 'implement') return 'intelligence';
   return requirement != null && requirement < 0.45 ? 'agenticIndex' : 'agenticCoding';
 }
 
-function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension, requirement?: number, version: PolicyVersion = 'legacy'): number | undefined {
-  const measured = b.quality[rankingAxis(dim, requirement, version)];
-  return version === 'legacy' && dim === 'implement' ? measured ?? b.quality.coding : measured;
+function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension, requirement?: number): number | undefined {
+  const measured = b.quality[rankingAxis(dim, requirement)];
+  return dim === 'implement' ? measured ?? b.quality.coding : measured;
 }
 
 /**
@@ -104,8 +101,8 @@ function qualityForDimension(b: NonNullable<Candidate['bench']>, dim: Dimension,
  * routing policy can compare an incumbent against a fresh pick without
  * duplicating the per-dimension axis mapping.
  */
-export function capabilityForDimension(c: Candidate, dim: Dimension, version: PolicyVersion = 'legacy'): number | undefined {
-  const value = c.bench ? qualityForDimension(c.bench, dim, undefined, version) : undefined;
+export function capabilityForDimension(c: Candidate, dim: Dimension): number | undefined {
+  const value = c.bench ? qualityForDimension(c.bench, dim) : undefined;
   return value != null && Number.isFinite(value) ? value : undefined;
 }
 
@@ -155,27 +152,6 @@ export const AXIS_REFERENCE: Readonly<Record<Exclude<QualityAxis, 'knowledge'>, 
 export const CALIBRATED_INDEX_VERSION = '4.3';
 
 /**
- * Development comparator parameters. Independent outcomes must validate sufficiency before activation.
- * The implement minimum is 65% of the Intelligence reference (37.4). A fixed model at
- * Intelligence 38 completed 9 of 10 repository bug fixes from a full bug report. No model below
- * that level has a measured result on the same tasks.
- */
-const COMPARATOR_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
-  ...CAPABILITY_MINIMUMS,
-  implement: { intelligence: 0.65 * AXIS_REFERENCE.intelligence },
-};
-const COMPARATOR_DIGEST = createHash('sha256').update(JSON.stringify({
-  version: 'intelligence-comparator-v1',
-  metricVersion: CALIBRATED_INDEX_VERSION,
-  fixedMinimums: COMPARATOR_MINIMUMS,
-  references: AXIS_REFERENCE,
-  mapping: 'clamped-requirement-times-reference;knowledge-fixed',
-  comparisonAxis: 'intelligence',
-  componentRules: [],
-  inputMinimums: { contextTokens: 64_000, longContext: 0.30, visionReasoning: 0.30 },
-})).digest('hex');
-
-/**
  * A warning when the synced index version is not the calibrated version.
  * A new version can change evaluations and scales, but the user chose to
  * keep routing: the warning asks for a recalibration and does not block.
@@ -195,8 +171,8 @@ export const FRONTIER_REQUIREMENT = 0.85;
  * share of an axis reference among them. The Omniscience minimum is not a
  * share of a reference, so it does not count.
  */
-export function defaultRequirement(dimension: Dimension, version: PolicyVersion = 'legacy'): number {
-  const fixed = (version === 'cheapest-sufficient' ? COMPARATOR_MINIMUMS : CAPABILITY_MINIMUMS)[dimension];
+export function defaultRequirement(dimension: Dimension): number {
+  const fixed = CAPABILITY_MINIMUMS[dimension];
   const shares = (Object.keys(fixed) as QualityAxis[])
     .filter((axis): axis is Exclude<QualityAxis, 'knowledge'> => axis !== 'knowledge')
     .map((axis) => fixed[axis]! / AXIS_REFERENCE[axis]);
@@ -210,12 +186,12 @@ export function defaultRequirement(dimension: Dimension, version: PolicyVersion 
  * zero is where wrong answers start to outnumber right ones, not a level of
  * strength.
  */
-function minimumsFor(dimension: Dimension, requirement?: number, version: PolicyVersion = 'legacy'): Minimums {
-  const fixed = (version === 'cheapest-sufficient' ? COMPARATOR_MINIMUMS : CAPABILITY_MINIMUMS)[dimension];
+function minimumsFor(dimension: Dimension, requirement?: number): Minimums {
+  const fixed = CAPABILITY_MINIMUMS[dimension];
   if (requirement == null) return fixed;
   // An explicit requirement below 0.45 selects the AA Agentic Index.
   // Default and higher requirements keep Terminal-Bench 4.0.
-  if (rankingAxis(dimension, requirement, version) === 'agenticIndex') {
+  if (rankingAxis(dimension, requirement) === 'agenticIndex') {
     return { agenticIndex: clamp(requirement, 0, 1) * AXIS_REFERENCE.agenticIndex };
   }
   return Object.fromEntries(
@@ -276,21 +252,6 @@ function eligibilityOf(quality: BenchModel['quality'] | undefined, minimums: Min
     else if (value < minimum) return { tier: 2, excludedReason: `below-${axis}-minimum` };
   }
   return unmeasured ? { tier: 1, excludedReason: 'unknown-quality' } : { tier: 0 };
-}
-
-/**
- * True when the candidate's measured quality is below a minimum of the task
- * type at `requirement`. A missing or estimated measurement is not below:
- * unknown quality never counts as weak.
- */
-export function measuredBelowRequirement(
-  c: Candidate,
-  dimension: Dimension,
-  requirement: number,
-  version: PolicyVersion = 'legacy',
-): boolean {
-  if (c.bench == null || c.bench.qualityEstimated === true) return false;
-  return eligibilityOf(c.bench.quality, minimumsFor(dimension, requirement, version)).tier === 2;
 }
 
 // ─── Cost estimation helpers ─────────────────────────────────────────
@@ -431,8 +392,6 @@ export function logUtilities(
 
 export interface ScoreOpts {
   estimatedContextTokens: number;
-  /** One captured policy for scoring and recovery. Absent selects production semantics. */
-  policyVersion?: PolicyVersion;
   /** Required vector captured at the decision boundary, including input-shape minimums. */
   requiredMinimums?: Minimums;
   benchmarkIndexVersion?: string;
@@ -463,8 +422,7 @@ export interface ScoreOpts {
   protocolPenalties?: ReadonlyMap<string, number>;
   /**
    * Put each candidate without a known price behind every candidate of its capability tier that has
-   * one. The candidate policy sets it: a price-only ranking must not give an unknown price the place
-   * of the dearest known price.
+   * one. A price-only ranking must not give an unknown price the place of the dearest known price.
    */
   unknownPriceLast?: boolean;
 }
@@ -490,7 +448,7 @@ export function scoreCandidate(
   let qualityNorm = 0;
   let qualityAvailable = false;
   if (c.bench) {
-    const q = qualityForDimension(c.bench, dimension, opts.handoffMinimum, opts.policyVersion);
+      const q = qualityForDimension(c.bench, dimension, opts.handoffMinimum);
     if (q != null) {
       qualityNorm = clamp(q / 100, 0, 1);
       qualityAvailable = true;
@@ -528,35 +486,12 @@ export function scoreCandidate(
   return { ...c, score: qScore + cScore + sScore, qualityComponent: qScore, costComponent: cScore, speedComponent: sScore, switched };
 }
 
-// ─── pickEscalation ───────────────────────────────────────────────────
-
 /**
- * Whether a candidate is a valid route-up destination from the source attempt.
- * Same model ids may change provider, but only a strictly higher effort is a
- * stronger destination; different model ids remain eligible as alternatives.
- */
-export function isValidEscalationCandidate(candidate: string, fromModel: string): boolean {
-  if (candidate === fromModel) return false;
-  const source = parseCandidateKey(fromModel);
-  const destination = parseCandidateKey(candidate);
-  // Different model ids are valid alternatives regardless of effort; this
-  // policy is specifically about never replaying the same model at an equal
-  // or lower effort through another provider.
-  if (destination.id !== source.id) return true;
-  // Same-model comparisons require measured effort on both sides. Missing
-  // effort cannot prove a strict increase, so fail closed.
-  if (source.effort == null || destination.effort == null) return false;
-  return MODEL_THINKING_LEVELS.indexOf(destination.effort) > MODEL_THINKING_LEVELS.indexOf(source.effort);
-}
-
-/**
- * Resolve the struggling source's own candidate row from a live routable set.
- *
- * The served identity carries the effective effort (`provider/id:medium`) even
- * when the benchmark row that measured it is unsuffixed, so an exact key match
- * would silently lose the source's measured quality — and a comparison against
- * an unknown source cannot prove an upgrade. Match on the base `provider/id`
- * and prefer the exact effort variant when the set actually holds one.
+ * Resolve a served or submitter identity against a live candidate set.
+ * The identity may carry effective effort (`provider/id:medium`) even when
+ * the measured row is unsuffixed. Match the base `provider/id` and prefer
+ * the exact effort variant. A different effort variant is a different
+ * measurement and cannot stand in for the source.
  */
 export function findSourceCandidate(
   candidates: readonly Candidate[],
@@ -571,105 +506,28 @@ export function findSourceCandidate(
     const sameEffort = sameBase.find((c) => c.effort === parsed.effort);
     if (sameEffort) return sameEffort;
   }
-  // Served identity carries effective effort (`provider/id:medium`) even when
-  // the measured row is unsuffixed. A different effort variant is a different
-  // measurement and cannot stand in for the source.
   return sameBase.find((c) => c.effort == null);
 }
 
 export interface StrongerCompareOpts {
-  policyVersion?: PolicyVersion;
   /** Explicit user/session thinking request, when it outranks labelled effort. */
   userReasoning?: ThinkingLevel;
   userReasoningOverride?: boolean;
-  /** Pool used to resolve a sibling row at the effort that will actually serve. */
-  candidates?: readonly Candidate[];
 }
 
 /**
  * Effort the candidate will actually serve after the model's support map
- * and an explicit user override. Same walk as delegation's attempt
- * resolution: labelled efforts go through `levelFrom`, so a stronger-hop
- * proof cannot use a labelled effort that will never be sent.
+ * and an explicit user override. Labelled efforts go through `levelFrom`,
+ * so a labelled effort that the model cannot send is not treated as served.
  */
 export function servedEffort(
   candidate: Pick<Candidate, 'effort' | 'reasoning' | 'thinkingLevelMap'>,
-  opts?: Pick<StrongerCompareOpts, 'userReasoning' | 'userReasoningOverride'>,
+  opts?: StrongerCompareOpts,
 ): ModelThinkingLevel | undefined {
   if (candidate.effort != null && !opts?.userReasoningOverride) {
     return levelFrom(candidate.effort, candidate);
   }
   return resolveThinkingLevel(candidate, opts?.userReasoning);
-}
-
-function destServingKey(
-  dest: Candidate,
-  opts?: StrongerCompareOpts,
-): string {
-  const effort = servedEffort(dest, opts);
-  if (effort == null) {
-    // A reasoning model that cannot serve its labelled effort must not
-    // look like a higher-effort hop. Non-reasoning labelled rows keep
-    // their identity: effort there is the bench measurement, not a
-    // thinking level the stream will send.
-    return dest.reasoning ? dest.registryId : candidateKey(dest);
-  }
-  if (dest.effort === effort) return candidateKey(dest);
-  return `${dest.registryId}:${effort}`;
-}
-
-function destAtServedEffort(
-  dest: Candidate,
-  opts?: StrongerCompareOpts,
-): Candidate | undefined {
-  const effort = servedEffort(dest, opts);
-  if (effort == null) {
-    if (dest.effort == null || !dest.reasoning) return dest;
-    return undefined;
-  }
-  if (dest.effort === effort) return dest;
-  const sibling = opts?.candidates?.find(
-    (candidate) => candidate.registryId === dest.registryId && candidate.effort === effort,
-  );
-  if (sibling) return sibling;
-  // An unsuffixed row describes the model's served mode; a labelled row
-  // at a different effort cannot stand in for the attempt that will run.
-  return dest.effort == null ? dest : undefined;
-}
-
-/**
- * Whether dest is a strictly stronger serving pick than the struggling source.
- * Same model at higher effort counts. A different model must have measured
- * quality above the source on this dimension — unknown or estimated quality on
- * either side cannot prove an upgrade, so an unresolvable source fails closed.
- * Destination quality is the row for the effort that will actually serve,
- * not the labelled candidate effort.
- */
-export function isStrictlyStrongerCandidate(
-  dest: Candidate,
-  fromModel: string,
-  dim: Dimension,
-  source?: Candidate,
-  opts?: StrongerCompareOpts,
-): boolean {
-  const destKey = destServingKey(dest, opts);
-  if (!isValidEscalationCandidate(destKey, fromModel)) return false;
-  const sourceParsed = parseCandidateKey(fromModel);
-  const destParsed = parseCandidateKey(destKey);
-  // Same model, and the guard above already proved a strictly higher effort.
-  // More reasoning effort on the same weights is itself the capability
-  // escalation, so this deliberately needs no benchmark comparison — the
-  // effort ladder is the evidence. Unmeasured efforts would otherwise be
-  // unreachable as destinations even when the model plainly supports them.
-  if (destParsed.id === sourceParsed.id) return true;
-  const measured = destAtServedEffort(dest, opts);
-  if (!measured) return false;
-  const destQuality = capabilityForDimension(measured, dim, opts?.policyVersion);
-  if (destQuality == null || measured.bench?.qualityEstimated === true) return false;
-  if (!source || source.bench?.qualityEstimated === true) return false;
-  const sourceQuality = capabilityForDimension(source, dim, opts?.policyVersion);
-  if (sourceQuality == null) return false;
-  return destQuality > sourceQuality;
 }
 
 /** Band whose executor minimum covers `requirement`; `frontier` keeps the submitter. */
@@ -678,124 +536,6 @@ export function bandForRequirement(requirement: number): CapabilityBand {
   if (requirement < 0.70) return 'standard';
   if (requirement < FRONTIER_REQUIREMENT) return 'strong';
   return 'frontier';
-}
-
-const BAND_ORDER: readonly CapabilityBand[] = ['economy', 'standard', 'strong', 'frontier'];
-
-/**
- * The band that a candidate's measured capability covers on the dimension's
- * axis, or undefined when the candidate has no measurement on that axis.
- */
-function candidateBand(candidate: Candidate, dimension: Dimension): CapabilityBand | undefined {
-  const quality = candidate.bench?.quality;
-  if (!quality) return undefined;
-  if (dimension === 'implement') {
-    if (quality.agenticCoding !== undefined) return bandForRequirement(quality.agenticCoding / AXIS_REFERENCE.agenticCoding);
-    if (quality.coding !== undefined) return bandForRequirement(quality.coding / AXIS_REFERENCE.coding);
-    return undefined;
-  }
-  return quality.intelligence === undefined ? undefined : bandForRequirement(quality.intelligence / AXIS_REFERENCE.intelligence);
-}
-
-/**
- * The stronger candidates in the lowest band above the source's band. A
- * struggle asks for the next step up, not for the strongest model: the
- * strongest model costs the most and is rarely needed. Without a band above
- * the source, or without a measured source band, all stronger candidates
- * stay. A candidate without a measured band (for example a higher effort of
- * the same model) counts as the source's band.
- */
-function nextBandCandidates(stronger: Candidate[], source: Candidate | undefined, dimension: Dimension): Candidate[] {
-  const sourceBand = source ? candidateBand(source, dimension) : undefined;
-  if (!sourceBand) return stronger;
-  const sourceRank = BAND_ORDER.indexOf(sourceBand);
-  const ranked = stronger.map((candidate) => ({ candidate, rank: BAND_ORDER.indexOf(candidateBand(candidate, dimension) ?? sourceBand) }));
-  const above = ranked.filter((entry) => entry.rank > sourceRank);
-  if (above.length === 0) return stronger;
-  const next = Math.min(...above.map((entry) => entry.rank));
-  return above.filter((entry) => entry.rank === next).map((entry) => entry.candidate);
-}
-
-/**
- * Price decides, with no credit for quality above the capability minimums. The cache credit and
- * the protocol penalty still apply, bounded, and time and the key break ties.
- */
-export const ECONOMICS_FIRST_WEIGHTS: ScoreWeights = { quality: 0, cost: 1, speed: 0 };
-
-/** An escalation target is already stronger, so among targets the price decides. */
-const ESCALATION_WEIGHTS: ScoreWeights = ECONOMICS_FIRST_WEIGHTS;
-
-/**
- * Pure same-dimension capability escalation: given the model that just
- * served the turn, pick a different candidate. This is intentionally narrow —
- * it reuses `pickBest` for context/vision guards and scoring so the behavior
- * cannot drift from the normal path. `weights` defaults to quality only.
- */
-export function pickEscalation(
-  candidates: Candidate[],
-  dimension: Dimension,
-  fromModel: string,
-  opts: ScoreOpts = { estimatedContextTokens: 0 },
-  weights: ScoreWeights = { quality: 1, cost: 0, speed: 0 },
-): RoutingDecision | undefined {
-  // Model route-up must increase capability, not merely change transport.
-  const alternatives = candidates.filter((c) => isValidEscalationCandidate(candidateKey(c), fromModel));
-  if (alternatives.length === 0) return undefined;
-
-  const decision = pickBest(alternatives, dimension, weights, opts);
-  return {
-    ...decision,
-    cause: 'capability-escalation',
-    reason: `${decision.reason} [stronger than ${fromModel}]`,
-  };
-}
-
-/**
- * Shared escalation target selection for both the between-turn repick and the
- * pre-output in-delegation hop. Apply context/vision guards, keep only the
- * strictly-stronger reachable candidates, then pick the cheapest candidate in
- * the next band above the source (`nextBandCandidates`). The higher bands
- * follow in the fallback chain, cheapest first. Both surfaces must land on the same target for the same
- * struggle, so selection lives here and cannot diverge: one scans the remaining
- * unattempted chain, the other the full routable set, but neither re-implements
- * "which stronger model". Returns `undefined` when nothing strictly stronger is
- * reachable — the caller owns the no-target policy (keep serving, never route
- * down on the struggle alone).
- */
-export function escalationChain(
-  candidates: readonly Candidate[],
-  dimension: Dimension,
-  fromModel: string,
-  opts: ScoreOpts,
-  compareOpts: StrongerCompareOpts,
-  version: PolicyVersion = 'legacy',
-): RoutingDecision | undefined {
-  // `candidates` is the target pool (the pre-output hop passes only the
-  // reachable, unattempted tail, which excludes the struggling source). The
-  // source and any served-effort siblings must resolve against the full pool,
-  // so prefer `compareOpts.candidates`; the between-turn caller passes the full
-  // routable set as `candidates` and leaves `compareOpts.candidates` unset, so
-  // the fallback keeps that path unchanged.
-  const sourcePool = compareOpts.candidates ?? candidates;
-  const source = findSourceCandidate(sourcePool, fromModel);
-  const strongerOpts: StrongerCompareOpts = { ...compareOpts, candidates: sourcePool, policyVersion: version };
-  const eligible = applyCandidateGuards([...candidates], opts);
-  const stronger = eligible.filter((candidate) =>
-    isStrictlyStrongerCandidate(candidate, fromModel, dimension, source, strongerOpts),
-  );
-  if (stronger.length === 0) return undefined;
-  // Required-vector tiers precede price across the full proven-stronger set.
-  // Unknown and insufficient candidates remain available for recovery.
-  if (version === 'cheapest-sufficient') {
-    const all = pickEscalation(stronger, dimension, fromModel, { ...opts, policyVersion: version, unknownPriceLast: true }, ESCALATION_WEIGHTS);
-    return all && all.chosen !== '' ? all : undefined;
-  }
-  const next = nextBandCandidates(stronger, source, dimension);
-  const picked = pickEscalation(next, dimension, fromModel, opts, ESCALATION_WEIGHTS);
-  if (!picked || picked.chosen === '') return undefined;
-  const higher = stronger.filter((candidate) => !next.includes(candidate));
-  const rest = higher.length > 0 ? pickEscalation(higher, dimension, fromModel, opts, ESCALATION_WEIGHTS) : undefined;
-  return rest ? { ...picked, fallbackChain: [...picked.fallbackChain, ...rest.fallbackChain] } : picked;
 }
 
 // ─── pickBest steps ───────────────────────────────────────────────────
@@ -889,7 +629,7 @@ function scoreWithinTiers(
   // economic components — cost, speed, and the cache credit — decide;
   // otherwise a quality-heavy task weighting would pick the strongest model
   // whatever the minimum says. The ceiling uses the selected ranking axis.
-  const axis = rankingAxis(dimension, opts.handoffMinimum, opts.policyVersion);
+    const axis = rankingAxis(dimension, opts.handoffMinimum);
   const qualityCeiling = opts.handoffMinimum != null
     ? clamp(clamp(opts.handoffMinimum, 0, 1) * AXIS_REFERENCE[axis] / 100, 0, 1) * weights.quality
     : undefined;
@@ -1019,7 +759,7 @@ export function pickBest(
 ): RoutingDecision {
   const filtered = applyCandidateGuards(candidates, opts);
   const minimums: Minimums = opts.requiredMinimums ?? {
-    ...minimumsFor(dimension, opts.handoffMinimum, opts.policyVersion),
+    ...minimumsFor(dimension, opts.handoffMinimum),
     // Below these conservative correctness minimums, the model has measured
     // weak ability on the input shape. Missing measurements remain unknown.
     ...(opts.estimatedContextTokens >= 64_000 ? { longContext: 0.30 } : {}),
@@ -1056,19 +796,7 @@ export function pickBest(
     const penalty = isNonNegativeFinite(raw) ? Math.min(raw, opts.switchMargin ?? DEFAULT_SWITCH_MARGIN) : 0;
     if (penalty > 0) { candidate.protocolPenalty = penalty; candidate.score -= penalty; }
   }
-  const decision = assembleDecision(scored, dimension, eligibility, costBasis, speedBasis, opts.unknownPriceLast === true);
-  if (opts.policyVersion === 'cheapest-sufficient') {
-    decision.policyVersion = opts.policyVersion;
-    decision.capabilityEvidence = {
-      policyDigest: COMPARATOR_DIGEST,
-      comparisonAxis: 'intelligence',
-      metricVersion: CALIBRATED_INDEX_VERSION,
-      minimums: { ...minimums },
-      ...(opts.benchmarkIndexVersion ? { benchmarkIndexVersion: opts.benchmarkIndexVersion } : {}),
-      ...(opts.benchmarkSnapshotDigest ? { benchmarkSnapshotDigest: opts.benchmarkSnapshotDigest } : {}),
-    };
-  }
-  return decision;
+  return assembleDecision(scored, dimension, eligibility, costBasis, speedBasis, opts.unknownPriceLast === true);
 }
 
 const THINKING_LEVELS: ModelThinkingLevel[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];

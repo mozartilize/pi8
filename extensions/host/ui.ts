@@ -11,6 +11,8 @@ import type {
   ExecutionContractMeta,
   QualityExclusionReason,
   RoutingDecision,
+  UnifiedActionTrace,
+  UnifiedDecisionMeta,
   WorkContextMeta,
 } from '../types.js';
 import { activeWorkItem, ledgerTopics, type TopicLedger } from '../routing/context/ledger.js';
@@ -126,6 +128,7 @@ export function formatDecisionDetail(
     `  thinking:   ${served?.thinkingLevel ?? 'off'}`,
     `  cause:      ${CAUSE_LABELS[decision.cause] ?? decision.cause}`,
     `  reason:     ${decision.reason}`,
+    ...unifiedLines(decision.unified),
     ...(decision.mutationObserved && decision.dimension !== 'implement' ? ['  phase:      editing'] : []),
     ...workContextLines(decision.workContext),
     ...routingNotes(decision, served),
@@ -221,6 +224,55 @@ function contractLines(contract: ExecutionContractMeta): string[] {
     lines.push(`  excluded:   ${contract.excludedExecutors.join(', ')} (failed two plans)`);
   }
   return lines;
+}
+
+function rankingMethod(unified: UnifiedDecisionMeta): string {
+  return unified.solver === 'exact'
+    ? 'minimax regret'
+    : unified.solver === 'fallback-central'
+      ? `central weights (${unified.solverFallbackReason ?? 'fallback'})`
+      : unified.solver;
+}
+
+/** How the last selection applied the saved preference profile. */
+export function preferenceBinding(unified: UnifiedDecisionMeta): string {
+  if (!unified.constraintsEnforced) {
+    const reason = unified.solverFallbackReason ?? unified.domainStatus;
+    return reason ? `not applied (${reason})` : 'not applied';
+  }
+  if (unified.domainMode === 'min-slack') {
+    return unified.totalSlack !== undefined ? `softened (slack ${unified.totalSlack})` : 'softened';
+  }
+  if (unified.domainMode === 'base') return 'none';
+  return 'applied';
+}
+
+export function formatUnifiedSummary(unified: UnifiedDecisionMeta): string {
+  return `${rankingMethod(unified)}, ${unified.ranked} actions; binding ${preferenceBinding(unified)}`;
+}
+
+function traceLine(label: string, action: UnifiedActionTrace): string {
+  const parts = [action.key];
+  if (action.capabilityShortfall !== undefined) parts.push(`shortfall ${action.capabilityShortfall}`);
+  if (action.maxRegret !== undefined) parts.push(`regret ${action.maxRegret}`);
+  else if (action.centralScore !== undefined) parts.push(`score ${action.centralScore}`);
+  if (action.costUsd?.central !== undefined) parts.push(`$${action.costUsd.central}`);
+  return `  ${`${label}:`.padEnd(11)} ${parts.join('  ')}`;
+}
+
+function unifiedLines(unified: UnifiedDecisionMeta | undefined): string[] {
+  if (!unified) return [];
+  const chosen = unified.top?.find((action) => action.rank === 1);
+  const next = unified.top?.find((action) => action.rank === 2);
+  const features = chosen
+    ? Object.entries(chosen.features).map(([name, value]) => `${name} ${value}`).join(', ')
+    : undefined;
+  return [
+    `  ranking:    ${formatUnifiedSummary(unified)}`,
+    `  solver:     ${unified.solver}${unified.solverFallbackReason ? ` (${unified.solverFallbackReason})` : ''}`,
+    ...(next ? [traceLine('next', next)] : []),
+    ...(features ? [`  features:   ${features}`] : []),
+  ];
 }
 
 function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined): string[] {

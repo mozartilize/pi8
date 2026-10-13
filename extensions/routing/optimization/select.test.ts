@@ -182,9 +182,9 @@ describe('selectByRegret result paths', () => {
     const profile = { version: 1 } as UserRoutingPreferencesV1;
     const result = await selectByRegret(decisionState, candidates, rows, snapshot(profile), portsWith(() => undefined),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000 });
-    expect(result).toMatchObject({ kind: 'decision', solver: 'exact', domainStatus: 'ready', constraintsEnforced: true });
-    if (result.kind !== 'decision') throw new Error('unreachable');
-    expect(new Set(result.ranking)).toEqual(new Set(['c/cheap:high', 's/strong:high']));
+      expect(result).toMatchObject({ kind: 'decision', solver: 'exact', domainStatus: 'ready', constraintsEnforced: true, domainMode: 'base' });
+      if (result.kind !== 'decision') throw new Error('unreachable');
+      expect(new Set(result.ranking)).toEqual(new Set(['c/cheap:high', 's/strong:high']));
   });
 
   it('uses no LP for a profile without constraints: the closed form is exact', async () => {
@@ -211,13 +211,16 @@ describe('selectByRegret result paths', () => {
 
   it('uses a matching compiled artifact for exact selection', async () => {
     const cache = new DomainCache(lp);
-    await cache.compile(OPERATOR);
+    const artifact = await cache.compile(OPERATOR);
     const result = await selectByRegret(decisionState, candidates, rows, snapshot(OPERATOR), { lp, domains: cache },
       { expectedProfileDigest: preferenceProfileDigest(OPERATOR), decisionDeadlineMs: 5_000 });
-    expect(result).toMatchObject({ kind: 'decision', solver: 'exact', constraintsEnforced: true });
+    expect(result).toMatchObject({
+      kind: 'decision', solver: 'exact', constraintsEnforced: true,
+      domainMode: artifact!.domain.mode,
+    });
   });
 
-  it('requests a compile and returns domain-not-ready before the compile ends', async () => {
+    it('requests a compile and returns domain-not-ready before the compile ends', async () => {
     const cache = new DomainCache(lp);
     const result = await selectByRegret(decisionState, candidates, rows, snapshot(OTHER), { lp, domains: cache },
       { expectedProfileDigest: preferenceProfileDigest(OTHER), decisionDeadlineMs: 5_000 });

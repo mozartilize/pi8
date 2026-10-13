@@ -225,6 +225,8 @@ export async function resolveUnifiedDecision(
     ...(result.solverFallbackReason ? { solverFallbackReason: result.solverFallbackReason } : {}),
     domainStatus: result.domainStatus,
     constraintsEnforced: result.constraintsEnforced,
+    ...(result.domainMode ? { domainMode: result.domainMode } : {}),
+    ...(result.totalSlack !== undefined ? { totalSlack: result.totalSlack } : {}),
     profileDigest: result.profileDigest,
     ...(result.compiledDomainIdentity ? { compiledDomainIdentity: result.compiledDomainIdentity } : {}),
     featureSchemaDigest: result.featureSchemaDigest,

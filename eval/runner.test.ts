@@ -30,14 +30,12 @@ describe('pi command line', () => {
     expect(piInvocation({ task, arm: auto }, '/repo').env).toBeUndefined();
   });
 
-  it('names the candidate policy in the environment of the cheapest-sufficient selector arm, and rejects another selector', () => {
-    const candidate: EvaluationArm = { id: 'c', policy: { kind: 'shadow-selector', selectorVersion: 'cheapest-sufficient' }, continuation: 'normal-policy' };
-    const invocation = piInvocation({ task, arm: candidate }, '/repo');
-    expect(invocation.args).toEqual(['-ne', '--session-dir', '/out/sessions', '-e', '/repo', '--model', 'router/auto', '-p', 'Write made.txt']);
-    expect(invocation.env).toEqual({ PI8_POLICY_VERSION: 'cheapest-sufficient' });
-    const other: EvaluationArm = { id: 'o', policy: { kind: 'shadow-selector', selectorVersion: 'other-selector' }, continuation: 'normal-policy' };
-    expect(() => piInvocation({ task, arm: other }, '/repo')).toThrow(/does not run/);
-  });
+    it('rejects every shadow-selector arm, including the archived cheapest-sufficient name', () => {
+      const candidate: EvaluationArm = { id: 'c', policy: { kind: 'shadow-selector', selectorVersion: 'cheapest-sufficient' }, continuation: 'normal-policy' };
+      const other: EvaluationArm = { id: 'o', policy: { kind: 'shadow-selector', selectorVersion: 'other-selector' }, continuation: 'normal-policy' };
+      expect(() => piInvocation({ task, arm: candidate }, '/repo')).toThrow(/does not run the shadow-selector policy/);
+      expect(() => piInvocation({ task, arm: other }, '/repo')).toThrow(/does not run the shadow-selector policy/);
+    });
 
   it('keeps the user extensions and removes each excluded tool in a host directory run', () => {
     const auto: EvaluationArm = { id: 'a', policy: { kind: 'current-auto' }, continuation: 'normal-policy' };

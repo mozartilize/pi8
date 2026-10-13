@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clearRouterStatus, formatStatus, formatDecisionDetail, formatWorkContext, servedKey } from './ui.js';
+import { clearRouterStatus, formatStatus, formatDecisionDetail, formatWorkContext, servedKey, preferenceBinding } from './ui.js';
 import { emptyLedger, foldEvents } from '../routing/context/ledger.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import { candidateKey } from '../routing/score/scorer.js';
@@ -162,6 +162,72 @@ describe('formatDecisionDetail', () => {
     expect(lines).toContain('top pick:   opencode-go/kimi-k2.7-code');
     expect(lines).toContain('top pick failed');
     expect(lines).not.toContain('$0.5000');
+  });
+
+  it('explains the ranking, next action, and feature values of a unified decision', () => {
+    const lines = formatDecisionDetail({
+      ...decision,
+      unified: {
+        solver: 'exact',
+        domainStatus: 'ready',
+        constraintsEnforced: true,
+        profileDigest: 'p',
+        featureSchemaDigest: 'f',
+        ranked: 3,
+        insufficientEvidence: 0,
+        holdingPrompt: 2,
+        top: [
+          {
+            key: 'beta/cheap:low',
+            rank: 1,
+            capabilityShortfall: 0,
+            maxRegret: 0.12,
+            features: { costDesirability: 0.66, reasoningFit: 1 },
+            evidenceGaps: [],
+          },
+          {
+            key: 'alpha/strong:low',
+            rank: 2,
+            capabilityShortfall: 0,
+            maxRegret: 0.15,
+            features: { costDesirability: 0.4, reasoningFit: 1 },
+            evidenceGaps: [],
+            costUsd: { central: 0.006 },
+          },
+        ],
+      },
+    }, {
+      registryId: 'beta/cheap',
+      thinkingLevel: 'low',
+      viaFallback: false,
+      accumulatedCost: 0,
+    }).join('\n');
+    expect(lines).toContain('ranking:    minimax regret, 3 actions; binding applied');
+    expect(lines).toContain('solver:     exact');
+    expect(lines).toContain('next:       alpha/strong:low  shortfall 0  regret 0.15  $0.006');
+    expect(lines).toContain('features:   costDesirability 0.66, reasoningFit 1');
+  });
+
+  it('names applied, none, softened, and fallback-inoperative preference binding', () => {
+    const base = {
+      solver: 'exact' as const,
+      domainStatus: 'ready',
+      constraintsEnforced: true,
+      profileDigest: 'p',
+      featureSchemaDigest: 'f',
+      ranked: 2,
+      insufficientEvidence: 0,
+      holdingPrompt: 2,
+    };
+    expect(preferenceBinding({ ...base, domainMode: 'hard' })).toBe('applied');
+    expect(preferenceBinding({ ...base, domainMode: 'base' })).toBe('none');
+    expect(preferenceBinding({ ...base, domainMode: 'min-slack', totalSlack: 1 })).toBe('softened (slack 1)');
+    expect(preferenceBinding({
+      ...base,
+      solver: 'fallback-central',
+      solverFallbackReason: 'timeout',
+      constraintsEnforced: false,
+    })).toBe('not applied (timeout)');
   });
 
   it('reports the effective thinking level', () => {

@@ -7,7 +7,6 @@
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { POLICY_VERSION_ENV } from '../extensions/routing/policy/policy-version.ts';
 import { copyTreeSafely, digestDirectory } from './fs-util.ts';
 import { policyDigest } from './recipe.ts';
 import { readRawUsage, type PriceSnapshotSource } from './spend.ts';
@@ -73,8 +72,9 @@ export interface PiInvocation {
 }
 
 /**
- * The `pi` command line for one arm. A router arm loads the extension. The `cheapest-sufficient` selector
- * arm also names the candidate policy in the environment. A fixed candidate does not load the extension.
+ * The `pi` command line for one arm. A router arm loads the extension. A
+ * fixed candidate does not. A shadow-selector arm is archived: launching it
+ * would measure the current router under a discarded policy name.
  * With `userExtensions`, Pi loads the user's own settings and packages, which already name the router,
  * so the command line names no extension.
  */
@@ -84,20 +84,15 @@ export function piInvocation(input: Pick<AgentRunInput, 'task' | 'arm'>, repoRoo
   if (options.excludeTools?.length) base.push('--exclude-tools', options.excludeTools.join(','));
   let model: string;
   const extensions: string[] = [];
-  let env: Record<string, string> | undefined;
   if (policy.kind === 'current-auto') {
     model = 'router/auto';
     if (!options.userExtensions) extensions.push('-e', repoRoot);
-  } else if (policy.kind === 'shadow-selector' && policy.selectorVersion === 'cheapest-sufficient') {
-    model = 'router/auto';
-    if (!options.userExtensions) extensions.push('-e', repoRoot);
-    env = { [POLICY_VERSION_ENV]: policy.selectorVersion };
   } else if (policy.kind === 'fixed-candidate') {
     model = policy.candidateKey;
   } else {
     throw new Error(`the whole-task runner does not run the ${policy.kind} policy`);
   }
-  return { command: 'pi', args: [...base, ...extensions, '--model', model, '-p', input.task.userRequest], ...(env ? { env } : {}) };
+  return { command: 'pi', args: [...base, ...extensions, '--model', model, '-p', input.task.userRequest] };
 }
 
 export interface PiAgentRunnerOptions {

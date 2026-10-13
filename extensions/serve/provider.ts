@@ -77,7 +77,6 @@ import { enumerateEffectiveActions, effortRank, overrideAction } from '../routin
 import { actorAllowedForBoundary, createBoundaryAuthorization, settleBoundary as settleAuthorization, type BoundaryAuthorizationV1 } from '../routing/policy/boundary-authorization.js';
 import { makeTerminalErrorEvent } from './error-event.js';
 import { POLICY_PASSIVE_CAUSES, scoredIncumbentKey } from '../routing/policy/routing-policy.js';
-import { evaluationPolicyVersion } from '../routing/policy/policy-version.js';
 import {
   penaltiesOf,
   withBranchPenalties,
@@ -647,7 +646,6 @@ function noRoutableCandidates(session: RouterSession): RouterTurnOutcome {
 }
 
 interface PreparedTurn {
-  policyVersion: ReturnType<typeof evaluationPolicyVersion>;
   benchmarkIndexVersion?: string;
   benchmarkSnapshotDigest?: string;
   /** The store that `candidates` and `benchmarkSnapshotDigest` describe. Later expansion reads this store, never the file. */
@@ -731,11 +729,8 @@ async function prepareRouterTurn(args: {
       ? undefined
       : pendingStruggle;
 
-  const policyVersion = evaluationPolicyVersion();
-  const store = loadStore();
-  const benchmarkSnapshotDigest = policyVersion === 'cheapest-sufficient'
-    ? createHash('sha256').update(JSON.stringify(store ?? null)).digest('hex')
-    : undefined;
+    const store = loadStore();
+    const benchmarkSnapshotDigest = createHash('sha256').update(JSON.stringify(store ?? null)).digest('hex');
   const candidates = buildRoutableCandidates({
     store,
     regModels: regModels as unknown[],
@@ -749,10 +744,9 @@ async function prepareRouterTurn(args: {
 
   return {
     kind: 'ready',
-    prepared: {
-      policyVersion,
-      benchmarkIndexVersion: store?.indexVersion,
-      benchmarkSnapshotDigest,
+      prepared: {
+        benchmarkIndexVersion: store?.indexVersion,
+        benchmarkSnapshotDigest,
       store,
       cacheHead: { identity: promptHeadIdentity(context), tokens: estimateTokenCount((extractSystemPrompt(context) ?? '') + JSON.stringify(context.tools ?? [])) },
       registry,

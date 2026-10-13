@@ -408,6 +408,10 @@ export interface UnifiedDecisionMeta {
   domainStatus: string;
   /** False when preference answers exist but were not applied. */
   constraintsEnforced: boolean;
+  /** Weight-domain mode that ordered this pick. Absent when no artifact was applied. */
+  domainMode?: 'base' | 'hard' | 'min-slack';
+  /** Minimum total slack when the domain used uniform slack. */
+  totalSlack?: number;
   profileDigest: string;
   compiledDomainIdentity?: string;
   benchmarkSnapshotDigest?: string;

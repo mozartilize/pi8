@@ -81,7 +81,7 @@ if (tasks.length === 0) throw new Error('the task selection is empty');
 const baseline = arg('--baseline');
 const candidatePolicy = arg('--candidate-policy');
 const budgetUsd = Number(arg('--limit-usd') ?? 0);
-if (candidatePolicy && candidatePolicy !== 'cheapest-sufficient') throw new Error(`unknown candidate policy: ${candidatePolicy}`);
+  if (candidatePolicy) throw new Error('shadow-selector arms are rejected');
 // arms[0] is the candidate and arms[1] the current policy of the report.
 const arms = dry
   ? [

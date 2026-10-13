@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { registerCommands } from './commands.js';
-import { loadConfig, getConfigPath } from '../config.js';
+import { loadConfig, getConfigPath, savePreferences } from '../config.js';
 import { getProviderState } from '../serve/provider.js';
 import { defaultBlacklistState } from '../serve/blacklist.js';
 import {
@@ -635,9 +635,39 @@ describe('/router-report', () => {
     expect(msg).toContain('Routed spend: $0.3000 across 2/2 priced turns');
     expect(msg).toContain('Baseline spend (alpha/strong): $3.0000');
     expect(msg).toContain('Saved: $2.7000 (90.0%)');
-    expect(msg).toContain('implement   1');
-    expect(msg).toContain('gather      1');
-  });
+      expect(msg).toContain('implement   1');
+      expect(msg).toContain('gather      1');
+    });
+
+    it('names the last ranking without changing spend totals', async () => {
+      const { pi, handlers } = fakePi();
+      registerCommands(pi);
+      const { ctx, messages } = fakeCtx();
+      appendDecision({
+        dimension: 'implement',
+        chosen: 'beta/cheap',
+        reason: 'scored',
+        cause: 'heuristic',
+        fallbackChain: ['beta/cheap'],
+        baseline: { registryId: 'alpha/strong', source: 'auto' },
+        spend: { routedCost: 0.2, baselineCost: 2.0 },
+        unified: {
+          solver: 'fallback-central',
+          solverFallbackReason: 'timeout',
+          domainStatus: 'ready',
+          constraintsEnforced: false,
+          profileDigest: 'p',
+          featureSchemaDigest: 'f',
+          ranked: 4,
+          insufficientEvidence: 0,
+          holdingPrompt: 4,
+        },
+      }, { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.2 });
+      await handlers.get('router-report')!('', ctx);
+      const msg = messages.at(-1) ?? '';
+      expect(msg).toContain('Routed spend: $0.2000 across 1/1 priced turns');
+      expect(msg).toContain('Last ranking: central weights (timeout), 4 actions; binding not applied (timeout)');
+    });
 
   it('names incomplete usage so missing spend is not presented as complete savings', async () => {
     const { pi, handlers } = fakePi();
@@ -823,3 +853,64 @@ describe('command fail-open boundary', () => {
     await expect(handlers.get('router-why')!('', ctx)).resolves.toBeUndefined();
   });
 });
+
+describe('/router-preferences', () => {
+  it('shows unset fields and no binding when the profile is empty', async () => {
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+    await handlers.get('router-preferences')!('show', ctx);
+    const msg = messages.at(-1) ?? '';
+    expect(msg).toContain('Preferences version 1');
+    expect(msg).toContain('settledImplementation: (unset)');
+    expect(msg).toContain('Binding: none');
+  });
+
+  it('names a saved answer and that no decision has applied it yet', async () => {
+    savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+    const { pi, handlers } = fakePi();
+    registerCommands(pi);
+    const { ctx, messages } = fakeCtx();
+    await handlers.get('router-preferences')!('', ctx);
+    const msg = messages.at(-1) ?? '';
+    expect(msg).toContain('settledImplementation: lower_cost');
+    expect(msg).toContain('Binding: saved, no decision yet');
+  });
+
+    it('rejects an unknown action', async () => {
+      const { pi, handlers } = fakePi();
+      registerCommands(pi);
+      const { ctx, messages } = fakeCtx();
+      await handlers.get('router-preferences')!('start', ctx);
+      expect(messages.at(-1)).toContain('Usage: /router-preferences show');
+    });
+
+    it('names a softened last ranking when the domain used slack', async () => {
+      savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+      const session = new RouterSession();
+      session.setLastDecision({
+        dimension: 'implement',
+        chosen: 'beta/cheap',
+        reason: 'scored',
+        cause: 'heuristic',
+        fallbackChain: ['beta/cheap'],
+        unified: {
+          solver: 'exact',
+          domainStatus: 'ready',
+          constraintsEnforced: true,
+          domainMode: 'min-slack',
+          totalSlack: 1,
+          profileDigest: 'p',
+          featureSchemaDigest: 'f',
+          ranked: 2,
+          insufficientEvidence: 0,
+          holdingPrompt: 2,
+        },
+      });
+      const { pi, handlers } = fakePi();
+      registerCommands(pi, session);
+      const { ctx, messages } = fakeCtx();
+      await handlers.get('router-preferences')!('show', ctx);
+      expect(messages.at(-1)).toContain('Binding: softened (slack 1)');
+    });
+  });

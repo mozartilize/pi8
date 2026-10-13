@@ -10,7 +10,7 @@ import {
 import type { Model } from '@earendil-works/pi-ai';
 import { resolveManualModel } from '../serve/manual-model.js';
 
-import { saveApiKey, loadConfig, getConfigPath, saveBlacklist, saveSemi } from '../config.js';
+import { saveApiKey, loadConfig, getConfigPath, saveBlacklist, saveSemi, loadPreferenceSnapshot } from '../config.js';
 import { checkPlaywright } from '../adapters/artificial-analysis-site.js';
 import { buildModelFilter } from '../routing/policy/allowlist.js';
 import { syncBenchmarks, syncSummary } from '../bench/sync.js';
@@ -22,7 +22,8 @@ import {
   getProviderState,
   buildSubagentProviderAuthFilter,
 } from '../serve/provider.js';
-import { formatDecisionDetail, formatWorkContext } from './ui.js';
+import { formatDecisionDetail, formatUnifiedSummary, formatWorkContext, preferenceBinding } from './ui.js';
+import { CORE_PREFERENCE_KEYS, hasSubstantiveAnswers } from '../routing/preferences/schema.js';
 import {
   SUBAGENT_ROUTING_ENABLED,
   computeRoleModels,
@@ -371,6 +372,47 @@ async function handleWhyCommand(
   ctx.ui.notify(lines.join('\n'), lastDecision ? 'info' : 'warning');
 }
 
+async function handlePreferencesCommand(
+  args: string,
+  ctx: ExtensionCommandContext,
+  session: RouterSession,
+): Promise<void> {
+    const tokens = args.trim().split(/\s+/).filter(Boolean);
+    const action = tokens[0] ?? 'show';
+    const details = tokens.includes('--details');
+    if (action !== 'show' && action !== '--details') {
+      ctx.ui.notify('Usage: /router-preferences show [--details]', 'error');
+      return;
+    }
+    const snapshot = loadPreferenceSnapshot();
+    const last = getProviderState(session).lastDecision?.unified;
+    const lines: string[] = [];
+    if (snapshot.status !== 'valid' || !snapshot.profile) {
+      lines.push(`Preferences: ${snapshot.status}`);
+      lines.push(...snapshot.diagnostics.map((line) => `  ${line}`));
+    } else {
+      lines.push('Preferences version 1');
+      for (const key of CORE_PREFERENCE_KEYS) {
+        lines.push(`  ${key}: ${snapshot.profile[key] ?? '(unset)'}`);
+      }
+        lines.push(hasSubstantiveAnswers(snapshot.profile)
+          ? last ? `Binding: ${preferenceBinding(last)}`
+            : 'Binding: saved, no decision yet'
+          : 'Binding: none');
+    }
+    if (last) {
+      lines.push(`Last ranking: ${formatUnifiedSummary(last)}`);
+      if (details && last.top) {
+        for (const action of last.top.slice(0, 8)) {
+          const regret = action.maxRegret !== undefined ? ` regret ${action.maxRegret}` : '';
+          const shortfall = action.capabilityShortfall !== undefined ? ` shortfall ${action.capabilityShortfall}` : '';
+          lines.push(`  ${action.rank}. ${action.key}${shortfall}${regret}`);
+        }
+      }
+    }
+    ctx.ui.notify(lines.join('\n'), snapshot.status === 'valid' ? 'info' : 'warning');
+  }
+
 async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> {
   const all = readRecentEntries(Number.MAX_SAFE_INTEGER);
   const decisions = all.filter((e) => e.kind === undefined || e.kind === 'decision');
@@ -409,10 +451,11 @@ async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> 
       childPriced++;
     }
   }
-  routedTotal += childRouted;
-  baselineTotal += childBaseline;
+    routedTotal += childRouted;
+    baselineTotal += childBaseline;
+    const lastUnified = [...decisions].reverse().find((entry) => entry.unified)?.unified;
 
-  const saved = baselineTotal - routedTotal;
+    const saved = baselineTotal - routedTotal;
   const pctSaved = baselineTotal > 0 ? (saved / baselineTotal) * 100 : 0;
   const lines = [
     `Routed spend: $${routedTotal.toFixed(4)} across ${priced}/${decisions.length} priced turns`,
@@ -421,11 +464,12 @@ async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> 
       : []),
     `Baseline spend (${firstBaseline ?? 'n/a'}${baselineDrift ? ', baseline changed mid-session' : ''}): $${baselineTotal.toFixed(4)}`,
     `Saved: $${saved.toFixed(4)} (${pctSaved.toFixed(1)}%)`,
-    ...(incompleteTurns > 0
-      ? [`${incompleteTurns} turn(s) have incomplete usage — routed spend is a lower bound, not complete savings.`]
-      : []),
-    '',
-    'Turns by task type:',
+      ...(incompleteTurns > 0
+        ? [`${incompleteTurns} turn(s) have incomplete usage — routed spend is a lower bound, not complete savings.`]
+        : []),
+      ...(lastUnified ? [`Last ranking: ${formatUnifiedSummary(lastUnified)}`] : []),
+      '',
+      'Turns by task type:',
     ...[...byDimension.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([dim, n]) => `  ${dim.padEnd(11)} ${n}`),
@@ -816,10 +860,15 @@ export function registerCommands(
     handler: safeCommand('/router-why', (_args, ctx) => handleWhyCommand(ctx, session)),
   });
 
-  pi.registerCommand('router-report', {
-    description: 'Show routed vs baseline spend, percent saved, and turns by task type for this session',
-    handler: safeCommand('/router-report', (_args, ctx) => handleReportCommand(ctx)),
-  });
+    pi.registerCommand('router-report', {
+      description: 'Show routed vs baseline spend, percent saved, and turns by task type for this session',
+      handler: safeCommand('/router-report', (_args, ctx) => handleReportCommand(ctx)),
+    });
+
+    pi.registerCommand('router-preferences', {
+      description: 'Show saved routing preferences and whether the last decision applied them',
+      handler: safeCommand('/router-preferences', (args, ctx) => handlePreferencesCommand(args, ctx, session)),
+    });
 
   pi.registerCommand('router-fix', {
     description: 'Manually fix a benchmark-to-registry alias: /router-fix <bench-slug> <provider/id>',

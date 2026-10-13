@@ -27,7 +27,7 @@ import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition
 import { contractMeta } from '../routing/policy/execution-contract.js';
 import type { FactsLog } from '../routing/policy/change-facts.js';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
-import { candidatePolicyRun, registryModel } from '../test-support/router-fixtures.js';
+import { registryModel } from '../test-support/router-fixtures.js';
 
 afterEach(() => { vi.unstubAllEnvs(); });
 import { SessionTree } from '../test-support/session-tree.js';
@@ -2500,10 +2500,8 @@ describe('context acquisition', () => {
       });
     });
 
-    describe.each(['legacy', 'cheapest-sufficient'] as const)('a settled plan under the %s policy', (version) => {
-      beforeEach(() => { vi.stubEnv('PI8_POLICY_VERSION', version); });
-      afterEach(() => { vi.unstubAllEnvs(); });
-      // The same closed plan must be released by either measured submitter.
+      describe('a settled plan', () => {
+        // The same closed plan must be released by either measured submitter.
       const settledPlan = { ...smallPlan, remainingWork: { openDecisions: 3, spread: 3, verification: 3, knowledge: 3, coupling: 3 } };
       // Different benchmark quality cannot change a closed plan's release permission.
       beforeEach(async () => {
@@ -2556,7 +2554,7 @@ describe('context acquisition', () => {
       expect(harness.getProviderState().lastDecision?.mutationObserved).toBe(true);
     });
 
-    it.skipIf(candidatePolicyRun)('hands a small accepted plan to a cheaper executor on the next invocation', async () => {
+      it('hands a small accepted plan to a cheaper executor on the next invocation', async () => {
       const session = await planned();
       expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
       const executing = await session.routeTurnAgainWithSameUserEntry();
@@ -2568,11 +2566,8 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
     });
 
-    describe('under the candidate policy', () => {
-      beforeEach(() => { vi.stubEnv('PI8_POLICY_VERSION', 'cheapest-sufficient'); });
-      afterEach(() => { vi.unstubAllEnvs(); });
-
-      it.each([false, true])('excludes an executor regardless of replacement measurement: estimated=%s', async (estimated) => {
+      describe('executor replacement', () => {
+        it.each([false, true])('excludes an executor regardless of replacement measurement: estimated=%s', async (estimated) => {
         const session = await planned();
         const { loadStore, saveStore } = await import('../bench/store.js');
         const store = loadStore()!;
@@ -2785,7 +2780,7 @@ describe('context acquisition', () => {
       expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
     });
 
-    it.skipIf(candidatePolicyRun)('lets an executor break a plan once, then routes later plans to a stronger model', async () => {
+    it('lets an executor break a plan once, then routes later plans to a stronger model', async () => {
       const session = await planned();
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
@@ -2808,7 +2803,7 @@ describe('context acquisition', () => {
       expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
     });
 
-    it.skipIf(candidatePolicyRun)('releases a plan when an excluded executor is no longer in the pool', async () => {
+    it('releases a plan when an excluded executor is no longer in the pool', async () => {
       const session = await planned();
       const state = harness.session.getWorkPhaseState()!;
       harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });

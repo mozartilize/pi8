@@ -57,6 +57,10 @@ export interface UnifiedDecision {
   domainStatus: DomainStatus;
   /** False when user answers exist but were not applied. */
   constraintsEnforced: boolean;
+  /** Weight-domain mode that ordered this pick. Absent when no artifact was applied. */
+  domainMode?: DomainArtifact['domain']['mode'];
+  /** Minimum total slack when the domain used uniform slack. */
+  totalSlack?: number;
   /** Absent only for `no-feasible-action`. */
   chosen?: string;
   /**
@@ -240,18 +244,26 @@ export async function selectByRegret(
     allInsufficient,
   };
 
+  const domainBinding = (compiled: DomainArtifact | undefined): Pick<UnifiedDecision, 'domainMode' | 'totalSlack'> => {
+    if (!compiled) return {};
+    return {
+      domainMode: compiled.domain.mode,
+      ...(compiled.domain.mode === 'min-slack' ? { totalSlack: compiled.domain.totalSlack } : {}),
+    };
+  };
   const central = (
     reason: SolverFallbackReason,
     domainStatus: DomainStatus,
     theta: readonly number[],
     constraintsEnforced: boolean,
-    compiledDomainIdentity?: string,
+    compiled?: DomainArtifact,
   ): UnifiedDecision => {
     const ranking = centralRanking(tiers, theta);
     const chosen = ranking[0];
     return {
       ...base, solver: 'fallback-central', solverFallbackReason: reason, domainStatus, constraintsEnforced,
-      chosen, ranking: withTail(ranking, theta), theta, ...(compiledDomainIdentity ? { compiledDomainIdentity } : {}),
+      chosen, ranking: withTail(ranking, theta), theta,
+      ...(compiled ? { compiledDomainIdentity: compiled.identity, ...domainBinding(compiled) } : {}),
     };
   };
 
@@ -282,6 +294,7 @@ export async function selectByRegret(
     return finish({
       ...base, solver: 'no-feasible-action', domainStatus: notReady?.status ?? 'ready',
       constraintsEnforced: artifact !== undefined, ranking: [],
+      ...domainBinding(artifact),
     });
   }
   if (!artifact) {
@@ -290,7 +303,7 @@ export async function selectByRegret(
   }
   const enforced = true;
   if (controls.pairCap !== undefined && compared.length * (compared.length - 1) > controls.pairCap) {
-    return finish(central('spike-pair-cap', 'ready', artifact.thetaRepresentative, enforced, artifact.identity));
+    return finish(central('spike-pair-cap', 'ready', artifact.thetaRepresentative, enforced, artifact));
   }
   try {
     const ranking: string[] = [];
@@ -303,10 +316,11 @@ export async function selectByRegret(
     if (controls.signal?.aborted) return { kind: 'cancelled' };
     return finish({
       ...base, solver: 'exact', domainStatus: 'ready', constraintsEnforced: enforced,
-      chosen: ranking[0], ranking: withTail(ranking, artifact.thetaRepresentative), maxRegret, compiledDomainIdentity: artifact.identity,
+      chosen: ranking[0], ranking: withTail(ranking, artifact.thetaRepresentative), maxRegret,
+      compiledDomainIdentity: artifact.identity, ...domainBinding(artifact),
     });
   } catch (error) {
     if (error instanceof LpCancelledError || controls.signal?.aborted) return { kind: 'cancelled' };
-    return finish(central(classifySolverFailure(error), 'ready', artifact.thetaRepresentative, enforced, artifact.identity));
+    return finish(central(classifySolverFailure(error), 'ready', artifact.thetaRepresentative, enforced, artifact));
   }
 }
