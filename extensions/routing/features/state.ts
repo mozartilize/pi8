@@ -61,6 +61,12 @@ export interface DecisionStateV1 {
   /** Difficulty of the accepted handoff or plan; undefined when no rubric was declared. */
   difficulty?: TaskDifficulty;
   estimatedContextTokens: number;
+  /**
+   * Billed prompt tokens per estimated token, by `provider/id`. A provider's
+   * tokenizer and request overhead differ from the estimate. An absent model
+   * has the scale 1.
+   */
+  promptTokenScales?: ReadonlyMap<string, number>;
   needsVision: boolean;
   boundary: DecisionBoundary;
   /** Served identity at an ordinary boundary; absent when there is no incumbent. */

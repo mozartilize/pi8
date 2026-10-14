@@ -380,6 +380,18 @@ describe('cache-aware cost', () => {
     expect(usd(cacheState({ isSubagentSpawn: true }), anthropic, aHigh).tokens.cacheRead).toBe(0);
   });
 
+  it('bills the prompt and its warm prefix in the tokens of the action model', () => {
+    const scaled = cacheState({ promptTokenScales: new Map([['a/claude', 1.8]]) });
+    const cold = usd({ ...scaled, cache: undefined }, anthropic, aHigh);
+    expect(cold.tokens).toEqual({ cacheRead: 0, cacheWrite: 180_000, uncachedInput: 0, output: 1024 });
+    expect(cold.centralUSD).toBeCloseTo(180_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
+    expect(usd(scaled, anthropic, aHigh).tokens.cacheRead).toBe(180_000);
+    // A model without a scale bills the estimate; its warm entry keeps estimate units.
+    expect(usd(scaled, openai, oHigh).tokens).toEqual({ cacheRead: 40_000, cacheWrite: 0, uncachedInput: 60_000, output: 1024 });
+    const openaiScaled = cacheState({ promptTokenScales: new Map([['o/gpt', 1.5]]) });
+    expect(usd(openaiScaled, openai, oHigh).tokens).toEqual({ cacheRead: 60_000, cacheWrite: 0, uncachedInput: 90_000, output: 1024 });
+  });
+
   it('widens only the lower cost bound when the cache-read price is missing', () => {
     const noRead = registryModel('o', 'gpt', { cost: { input: 2, output: 8 } });
     const spend = usd(cacheState(), noRead, oHigh);

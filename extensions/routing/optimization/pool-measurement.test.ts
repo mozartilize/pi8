@@ -17,7 +17,9 @@ import { enumerateEffectiveActions } from '../features/actions.js';
 import type { DecisionStateV1 } from '../features/state.js';
 import { preferenceProfileDigest, validatePreferences, type UserRoutingPreferencesV1 } from '../preferences/schema.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
+import { domainIdentity, thetaBaseDomain } from './domain.js';
 import { WorkerLpAdapter } from './lp.js';
+import { solveMinimaxRegret } from './regret.js';
 import { DomainCache, SPIKE_SOLVER_BUDGET, selectByRegret, type SelectionCandidate } from './select.js';
 
 const ENABLED = process.env.PI8_POOL_MEASURE === '1';
@@ -127,7 +129,10 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
                     const exactQuality = [0, 1, 2].filter((j) => action.lower[j] === action.upper[j]).length;
                     return `${key} MR=${result.maxRegret?.get(key)?.toFixed(4) ?? '-'} exactQualityAxes=${exactQuality}/3`;
                   };
-                  log(`  ${label} ${phase}: compared ${result.actions.length - result.insufficientEvidence.length}/${result.actions.length} (${result.insufficientEvidence.length} without required evidence, last in ranking); ${result.solver}; top ${result.ranking.slice(0, 3).map(describe).join(' | ')}`);
+                  // The selector compares the whole pool; LP solves are counted on the same pool and domain.
+                  const domain = label === 'empty' ? thetaBaseDomain() : cache.lookup(domainIdentity(profile))?.domain;
+                  const solves = domain ? (await solveMinimaxRegret(result.actions.map((a) => ({ features: a.features })), domain, lp)).lpSolves : undefined;
+                  log(`  ${label} ${phase}: pool ${result.actions.length} (${result.insufficientEvidence.length} without required evidence, compared in the same pool); LP solves ${solves ?? '-'}; ${result.solver}; top ${result.ranking.slice(0, 3).map(describe).join(' | ')}`);
                 }
               }
               for (const budget of budgets) {

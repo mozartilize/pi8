@@ -84,15 +84,15 @@ describe('production selection adapter', () => {
     expect(top![0]!.key).toBe(result.decision.chosen);
     expect(top!.some((trace) => trace.key === 'test/two:high')).toBe(true);
     for (const trace of top!) expect(Object.keys(trace.features)).toHaveLength(10);
-    // An action without evidence is ranked last and was not compared by regret.
-    const compared = top!.filter((trace) => trace.maxRegret !== undefined);
-    expect(compared.length).toBeGreaterThan(0);
-    expect(compared[0]).toBe(top![0]);
-    expect(compared.map((trace) => trace.capabilityShortfall)).toEqual([0, 0.5]);
-    expect(result.decision.unified).toMatchObject({ difficulty: 1, difficultyAxes: { reasoning: 0.5, agentic: 1, research: 0 } });
-    const firstTier = compared.filter((trace) => trace.capabilityShortfall === compared[0]!.capabilityShortfall);
-    expect(top![0]!.maxRegret).toBeLessThanOrEqual(Math.min(...firstTier.map((trace) => trace.maxRegret!)));
-    expect(top!.filter((trace) => trace.maxRegret === undefined).every((trace) => trace.evidenceGaps.length > 0)).toBe(true);
+    expect(result.decision.unified).toMatchObject({
+      solver: 'exact', regretScope: 'pool', difficulty: 1, difficultyAxes: { reasoning: 0.5, agentic: 1, research: 0 },
+    });
+    // Exact regret covers every ranked action, including actions without required evidence.
+    expect(top!.every((trace) => trace.maxRegret !== undefined)).toBe(true);
+    expect(top!.some((trace) => trace.evidenceGaps.length > 0)).toBe(true);
+    expect(top![0]!.maxRegret).toBe(Math.min(...top!.map((trace) => trace.maxRegret!)));
+    const regrets = top!.map((trace) => trace.maxRegret!);
+    expect(regrets).toEqual([...regrets].sort((a, b) => a - b));
   });
 
   it.each([

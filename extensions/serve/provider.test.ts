@@ -460,6 +460,53 @@ describe('benchmark data prerequisite', () => {
   });
 });
 
+describe('prompt size estimate', () => {
+  it('counts the system message sections and tool declarations that Pi sends', async () => {
+    // Each part alone fits a 30k window; together (about 30k tokens, plus the fit margin) they do not.
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      models: [REGISTRY_MODELS[0]!, { ...REGISTRY_MODELS[1]!, contextWindow: 30_000 }],
+    });
+    harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await harness.serve({
+      messages: [
+        {
+          role: 'system', content: '', timestamp: 0,
+          sections: { rules: 'x'.repeat(60_000) },
+          toolsAdded: [{ name: 'lookup', description: 'y'.repeat(60_000), parameters: { type: 'object', properties: {} } }],
+        },
+        { role: 'user', content: 'hi', timestamp: 1 },
+      ],
+    } as unknown as Context);
+    const decision = harness.getProviderState().lastDecision;
+    expect(decision?.fallbackChain.length).toBeGreaterThan(0);
+    expect(decision?.fallbackChain.some((key) => key.startsWith('beta/second'))).toBe(false);
+  });
+
+  it('calibrates the prompt tokens of the served model from its billed usage', async () => {
+    const harness = await setupProviderTest({ dir: temp.path });
+    const reply = () => harness.scriptReply([
+      { type: 'text_delta', delta: 'ok' },
+      { type: 'done', message: { usage: { input: 20_000, output: 20, cacheRead: 0, cost: { total: 0 } } } },
+    ]);
+    const context = { messages: [{ role: 'user', content: 'review this text '.repeat(2_500), timestamp: 1 }] } as unknown as Context;
+    reply();
+    await harness.serve(context);
+    const served = harness.getProviderState().lastServed!.registryId;
+    const { loadPromptTokenScales } = await import('./prompt-token-scale.js');
+    const scale = loadPromptTokenScales().get(served)?.scale;
+    // About 10k estimated tokens billed as 20k.
+    expect(scale).toBeGreaterThan(1.7);
+    expect(scale).toBeLessThan(2.3);
+
+    harness.resetEventStream();
+    reply();
+    await harness.serve(context);
+    const trace = harness.getProviderState().lastDecision?.unified?.top?.find((action) => action.key.startsWith(served));
+    expect(trace?.promptTokenScale).toBeCloseTo(scale!, 4);
+  });
+});
+
 describe('advertised router limits', () => {
   it('advertises the served model window and output limit before the turn ends', async () => {
     const registered = vi.fn();
@@ -1955,20 +2002,37 @@ describe('context acquisition', () => {
       expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBe('direct-answer');
     });
 
-    it.each([[1, 'alpha/cheap'], [5, 'beta/strong']] as const)(
-      'routes an investigation handoff with reasoning level %i to the model its rubric requires',
-      async (level, investigator) => {
+    it('scores the clarification request after needs-user as collecting context, not as the deliverable', async () => {
+      const session = await newSession();
+      await session.routeTurn('investigate the flaky test');
+      expect((await submitPrepared({ outcome: 'needs-user', question: 'Which test is flaky?', reason: 'ambiguous-request' })).accepted).toBe(true);
+      expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+      expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
+      const unified = harness.getProviderState().lastDecision?.unified;
+      expect(unified?.difficultyMissingReason).toBe('collecting-context');
+      // The collecting-context mapping: one research value for every action, the lower reasoning target.
+      expect(unified?.top?.find((t) => t.key === 'alpha/cheap')?.features).toMatchObject({ reasoningFit: 0.4, researchFit: 0.5 });
+    });
+
+    it.each([1, 5] as const)(
+      'scores an investigation handoff with reasoning level %i at the rubric demand',
+      async (level) => {
         const session = await newSession();
         await session.routeTurn('investigate the flaky test');
         const rubric = { alternatives: level, stakes: level, spread: level, knowledge: level, uncertainty: level };
         expect((await submitPrepared({ ...handoff(level, 'gather'), difficulty: rubric })).accepted).toBe(true);
         expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toMatchObject({ target: 'gather', rubric });
         const investigating = await session.routeTurnAgainWithSameUserEntry();
-        expect(investigating).toMatchObject({ dimension: 'gather', cause: 'investigation-handoff', chosen: investigator });
-        expect(investigating?.reasoningHandoff).toMatchObject({ target: 'gather', pending: false, owner: investigator });
+        expect(investigating).toMatchObject({ dimension: 'gather', cause: 'investigation-handoff' });
+        expect(investigating?.reasoningHandoff).toMatchObject({ target: 'gather', pending: false, owner: investigating?.chosen });
         // The investigator is scored with the rubric's demand, not the collecting-context target.
-        expect(harness.getProviderState().lastDecision?.unified).toMatchObject({ difficulty: level === 1 ? 0 : 1 });
-        expect(harness.getProviderState().lastDecision?.unified?.top?.find((t) => t.key === 'alpha/cheap')?.features.researchFit).toBe(1);
+        const unified = harness.getProviderState().lastDecision?.unified;
+        expect(unified).toMatchObject({ difficulty: level === 1 ? 0 : 1, regretScope: 'pool' });
+        const cheap = unified?.top?.find((t) => t.key === 'alpha/cheap');
+        expect(cheap?.features.researchFit).toBe(1);
+        // Intelligence 20 meets the lowest reasoning target and misses the highest by more than the fit scale.
+        if (level === 1) expect(cheap?.features.reasoningFit).toBeGreaterThan(0);
+        else expect(cheap?.features.reasoningFit).toBe(0);
       },
     );
 

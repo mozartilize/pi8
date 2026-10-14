@@ -14,6 +14,9 @@ import { modelEventEntry, modelEventSession } from '../host/decisionlog.js';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  normalizeContext,
   type Api,
   type Model,
   type AssistantMessageEventStream,
@@ -67,6 +70,7 @@ import {
   defaultRouterSession,
   defaultRuntimeBindings,
 } from './router-session-state.js';
+import { promptTokenScaleMap, recordAttemptPromptTokens } from './prompt-token-scale.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop, type DelegationOptions } from './delegation.js';
 import { readPreferences, resolveUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
@@ -232,8 +236,10 @@ function hasImageAttachment(messages: readonly Message[] | undefined): boolean {
   return countImageBlocks(messages) > 0;
 }
 
+/** Text of the conversation messages. System messages are part of the prompt head, not the conversation. */
 function allMessagesText(messages: readonly Message[] | undefined): string {
   return (messages ?? [])
+    .filter((m) => (m.role as string) !== 'system')
     .map((m) => {
       if (typeof m.content === 'string') return m.content;
       if (Array.isArray(m.content)) return m.content.map(textFromBlock).join('\n');
@@ -242,21 +248,15 @@ function allMessagesText(messages: readonly Message[] | undefined): string {
     .join('\n');
 }
 
-function extractSystemPrompt(context: Context): string | undefined {
-  // Pi delivers the system prompt in the dedicated `Context.systemPrompt`
-  // field, not as a system-role message. Scan messages only as a defensive
-  // fallback in case a caller inlines it there instead.
-  if (typeof context.systemPrompt === 'string' && context.systemPrompt) {
-    return context.systemPrompt;
-  }
-  for (const msg of context.messages ?? []) {
-    if ((msg.role as string) !== 'system') continue;
-    if (typeof msg.content === 'string') return msg.content;
-    if (Array.isArray(msg.content)) {
-      return msg.content.map(textFromBlock).filter(Boolean).join('\n');
-    }
-  }
-  return undefined;
+/**
+ * The current system prompt and tool declarations. Pi carries them in system
+ * messages (base content, named sections, tool additions and removals) or in
+ * the `systemPrompt` and `tools` shorthand; Pi's replay helpers resolve both.
+ */
+function promptHead(context: Context): { systemPrompt: string; toolsText: string } {
+  const { messages } = normalizeContext(context);
+  const tools = getCurrentTools(messages).map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+  return { systemPrompt: getCurrentSystemPrompt(messages), toolsText: tools.length > 0 ? JSON.stringify(tools) : '' };
 }
 
 // ─── Candidate expansion ───────────────────────────────────────────────
@@ -341,26 +341,23 @@ export function expandModelCandidates(
 // ─── Turn-callback stages ────────────────────────────────────────────
 
 /** Hash of what precedes the conversation in every request: system prompt and tool list. */
-function promptHeadIdentity(context: Context): string {
-  const hash = createHash('sha256');
-  hash.update(extractSystemPrompt(context) ?? '');
-  for (const tool of context.tools ?? []) hash.update(`\0${tool.name}\0${tool.description}\0${JSON.stringify(tool.parameters)}`);
-  return hash.digest('hex');
+function promptHeadIdentity(head: ReturnType<typeof promptHead>): string {
+  return createHash('sha256').update(head.systemPrompt).update('\0').update(head.toolsText).digest('hex');
 }
+
+/** Estimated tokens of the prompt head. */
+const promptHeadTokens = (head: ReturnType<typeof promptHead>): number =>
+  estimateTokenCount(`${head.systemPrompt}\n${head.toolsText}`);
 
 function measureTurnInput(context: Context, config: AutoRouterConfig) {
   const turnInput = getTurnClassificationInput(context.messages, { syntheticPrefixes: config.syntheticPrefixes });
-  const systemPrompt = extractSystemPrompt(context);
+  const head = promptHead(context);
   const needsVision = hasImageAttachment(context.messages);
-  // Pi delivers the system prompt in `context.systemPrompt`, not as a
-  // message, so include it in the token estimate that feeds
-  // context-pressure detection — otherwise a large system prompt
-  // (tool snippets, skills, guidelines) is silently uncounted.
-  const fullText =
-    (systemPrompt ? systemPrompt + '\n' : '') + allMessagesText(context.messages);
+  // Every request sends the system prompt and tool declarations before the
+  // conversation, so they count toward the window, the price and the cache.
   const imageChars = countImageBlocks(context.messages) * ESTIMATED_IMAGE_CHARS;
-  const estContextTokens = estimateTokenCount(fullText) + Math.ceil(imageChars / 4);
-  return { turnInput, systemPrompt, needsVision, estContextTokens };
+  const estContextTokens = promptHeadTokens(head) + estimateTokenCount(allMessagesText(context.messages)) + Math.ceil(imageChars / 4);
+  return { turnInput, head, needsVision, estContextTokens };
 }
 
 /**
@@ -721,7 +718,7 @@ async function prepareRouterTurn(args: {
 
   const config = loadConfig();
   const measured = measureTurnInput(context, config);
-  session.noteRequest(measured.estContextTokens, promptHeadIdentity(context));
+  session.noteRequest(measured.estContextTokens, promptHeadIdentity(measured.head));
   const intent = resolveBaseIntent(measured.turnInput, session);
 
   session.bindTrajectoryIntent(measured.turnInput.key);
@@ -758,7 +755,7 @@ async function prepareRouterTurn(args: {
         benchmarkIndexVersion: store?.indexVersion,
         benchmarkSnapshotDigest,
       store,
-      cacheHead: { identity: promptHeadIdentity(context), tokens: estimateTokenCount((extractSystemPrompt(context) ?? '') + JSON.stringify(context.tools ?? [])) },
+      cacheHead: { identity: promptHeadIdentity(measured.head), tokens: promptHeadTokens(measured.head) },
       registry,
       extensionContext,
       agentLoopRequest,
@@ -987,15 +984,21 @@ async function scoreRouterTurn(args: {
   const rework = trajectoryEscalation ? identity(trajectoryEscalation.fromModel) : undefined;
   // Without a work item, the entry scopes friction evidence.
   const workItemId = session.getWorkPhaseState()?.workItemId ?? turnInput.key;
+  const registryModels = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
+  const promptTokenScales = promptTokenScaleMap(registryModels);
   const state: DecisionStateV1 = {
     phase: routedDimension,
     // A declared direct answer ends collecting context: writing a gather answer is the deliverable.
+    // The one clarification request is still collecting context: it only asks the user for what
+    // is missing, without tools, so the deliverable's demand does not apply to it.
     contextAcquisition: routedDimension === 'gather' && phase.cause === 'investigation'
-      && entry?.contextStatus === 'acquiring' && entry.contextAnswer === undefined,
+      && ((entry?.contextStatus === 'acquiring' && entry.contextAnswer === undefined)
+        || entry?.contextStatus === 'clarification-only'),
     workItemId,
     difficulty: phaseDifficulty(entry, routedDimension),
     openDecisions: entry?.changeFacts?.declared?.decisions?.length,
     estimatedContextTokens: estContextTokens,
+    ...(promptTokenScales.size > 0 ? { promptTokenScales } : {}),
     needsVision,
     boundary: rework ? 'rework' : 'ordinary',
     ...(rework ? { rework: { failed: rework, workItemId } } : {}),
@@ -1030,7 +1033,6 @@ async function scoreRouterTurn(args: {
   const ownershipPool = heldOwner
     ? routableCandidates.filter((candidate) => candidate.registryId === identity(heldOwner).registryId)
     : routableCandidates;
-  const registryModels = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
   const sameOrLowerRecovery = (key: string): boolean => {
     const actor = identity(key);
     return rework !== undefined && actor.registryId === rework.registryId
@@ -1294,7 +1296,14 @@ async function delegateRouterTurn(args: {
     ...(acquiring ? {
       onRequest: () => countAcquisitionRequest(session, intentKey),
     } : {}),
-    onAttemptUsage: (event) => appendAttemptUsage(event, intentKey),
+    onAttemptUsage: (event) => {
+      appendAttemptUsage(event, intentKey);
+      // An image block has no stable character estimate, so it does not measure the tokenizer.
+      if (!prepared.measured.needsVision) {
+        const model = registryModels.find((m) => m.provider === event.provider && m.id === event.modelId);
+        recordAttemptPromptTokens(event, prepared.measured.estContextTokens, model?.api);
+      }
+    },
     candidates: routableCandidates,
     reasoning: explicitThinking ?? resolvedReasoning,
     userReasoningOverride: explicitThinking != null || (!inheritedReasoning && requestedReasoning != null),

@@ -155,7 +155,13 @@ const TRACE_TOP = 12;
 const round = (value: number): number => Math.round(value * 1e5) / 1e5;
 
 /** The first `limit` ranked actions, the chosen action and the incumbent, with the numbers that ordered them. */
-function traceActions(result: UnifiedDecision, chosen: string, incumbentKey: string | undefined, limit: number): UnifiedActionTrace[] {
+function traceActions(
+  result: UnifiedDecision,
+  chosen: string,
+  incumbentKey: string | undefined,
+  limit: number,
+  scales: ReadonlyMap<string, number> | undefined,
+): UnifiedActionTrace[] {
   const byKey = new Map(result.actions.map((action) => [action.features.key, action]));
   const keys = new Set(result.ranking.slice(0, limit));
   for (const key of [chosen, incumbentKey]) if (key && byKey.has(key)) keys.add(key);
@@ -175,6 +181,7 @@ function traceActions(result: UnifiedDecision, chosen: string, incumbentKey: str
       ...(centralUSD !== undefined ? {
         costUsd: { central: round(centralUSD), ...(minUSD !== undefined ? { min: round(minUSD) } : {}), ...(maxUSD !== undefined ? { max: round(maxUSD) } : {}) },
       } : {}),
+      ...(scales?.has(action.action.registryId) ? { promptTokenScale: round(scales.get(action.action.registryId)!) } : {}),
       evidenceGaps: [...action.evidenceGaps],
     }];
   }).sort((a, b) => a.rank - b.rank);
@@ -184,7 +191,7 @@ function reasonText(result: UnifiedDecision, chosen: string, preparationTarget: 
   const method = result.solver === 'exact'
     ? 'minimax regret'
     : `central weights (${result.solverFallbackReason ?? 'fallback'})`;
-  const head = `ranked by capability shortfall, then ${method}, among ${result.ranking.length} actions`;
+  const head = `ranked by ${method} among ${result.ranking.length} actions`;
   return preparationTarget ? `${head}; ${preparationTarget} waits for compaction, ${chosen} holds the prompt` : head;
 }
 
@@ -244,6 +251,7 @@ export async function resolveUnifiedDecision(
     profileDigest: result.profileDigest,
     ...(result.compiledDomainIdentity ? { compiledDomainIdentity: result.compiledDomainIdentity } : {}),
     featureSchemaDigest: result.featureSchemaDigest,
+    ...(result.solver === 'exact' ? { regretScope: 'pool' as const } : {}),
     ranked: result.ranking.length,
     insufficientEvidence: result.insufficientEvidence.length,
     holdingPrompt: chain.length,
@@ -252,7 +260,8 @@ export async function resolveUnifiedDecision(
       ? { difficulty: input.state.difficulty.value, difficultyAxes: input.state.difficulty.axes }
       : { difficultyMissingReason: difficultyMissingReason(input) }),
     ...(result.theta ? { theta: result.theta.map(round) } : {}),
-    top: traceActions(result, chosen, input.incumbentKey, isDebugEnabled() ? result.ranking.length : TRACE_TOP),
+    top: traceActions(result, chosen, input.incumbentKey,
+      isDebugEnabled() ? result.ranking.length : TRACE_TOP, input.state.promptTokenScales),
   };
   const decision: RoutingDecision = {
     dimension: input.state.phase,

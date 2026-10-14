@@ -117,10 +117,20 @@ export interface PredictedSpendV1 {
 
 const usable = (value: number | undefined): value is number => value !== undefined && Number.isFinite(value) && value >= 0;
 
+/** Billed prompt tokens per estimated token for the action's model. */
+export const promptTokenScale = (state: DecisionStateV1, registryId: string): number =>
+  state.promptTokenScales?.get(registryId) ?? 1;
+
+/** Prompt tokens the action's model bills for the estimated context. */
+const billedPromptTokens = (state: DecisionStateV1, action: EffectiveAction): number =>
+  Math.max(0, state.estimatedContextTokens) * promptTokenScale(state, action.registryId);
+
 /**
- * Warm prefix tokens the action may reuse. The incumbent action keeps the
- * whole prefix; so does another effort of the incumbent model when effort
- * changes keep its cache. Other actions keep only their own warm entry.
+ * Warm prefix tokens the action may reuse, in the tokens its model bills.
+ * The incumbent action keeps the whole prefix; so does another effort of the
+ * incumbent model when effort changes keep its cache. Other actions keep only
+ * their own warm entry. Warm entries are estimates, so they take the same
+ * scale as the prompt.
  */
 export function usableWarmPrefix(
   state: DecisionStateV1,
@@ -128,7 +138,7 @@ export function usableWarmPrefix(
   effortSharesCache: boolean,
 ): number {
   const cache = state.cache;
-  const input = Math.max(0, state.estimatedContextTokens);
+  const input = billedPromptTokens(state, action);
   if (state.isSubagentSpawn || !cache || cache.source === 'none') return 0;
   if (state.promptIdentity === undefined || cache.promptIdentity !== state.promptIdentity) return 0;
   if (state.nowMs - cache.observedAtMs > cache.ttlMs) return 0;
@@ -136,7 +146,8 @@ export function usableWarmPrefix(
   const incumbentRegistryId = incumbent && `${incumbent.provider}/${incumbent.id}`;
   if (action.key === cache.incumbentKey) return input;
   if (effortSharesCache && incumbentRegistryId === action.registryId) return input;
-  return Math.min(input, Math.max(0, cache.warmPrefixTokens.get(action.key) ?? 0));
+  const warm = Math.max(0, cache.warmPrefixTokens.get(action.key) ?? 0) * promptTokenScale(state, action.registryId);
+  return Math.min(input, warm);
 }
 
 const perToken = (pricePer1M: number): number => pricePer1M / 1_000_000;
@@ -149,7 +160,7 @@ export function predictSpend(
   demand: DemandScale = UNKNOWN_DEMAND,
 ): PredictedSpendV1 {
   const outputCentral = OUTPUT_TOKENS_CENTRAL * demand.scale;
-  const input = Math.max(0, state.estimatedContextTokens);
+  const input = billedPromptTokens(state, action);
   const warm = usableWarmPrefix(state, action, effortSharesCache);
   const writeBilled = usable(pricing?.cacheWrite) && pricing!.cacheWrite! > 0;
   const tokens: SpendBuckets = {

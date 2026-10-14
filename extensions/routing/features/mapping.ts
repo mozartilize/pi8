@@ -160,14 +160,14 @@ export const CAPABILITY_SHORTFALL: Readonly<Record<keyof TaskRelevance, number>>
 export const capabilityFit = (quality: number, target: number, axis: keyof TaskRelevance): number =>
   clamp01(1 - Math.max(0, target - quality) / CAPABILITY_SHORTFALL[axis]);
 
-// ─── Evidence required to compete ────────────────────────────────────
+// ─── Required evidence (diagnostic) ──────────────────────────────────
 
 /**
- * Quality axes a model must have evidence for to be compared in a phase: the
- * axes this phase relies on most. Evidence means a measured value or a
+ * Quality axes whose evidence a decision reports for each model: the axes
+ * this phase relies on most. Evidence means a measured value or a
  * same-metric, same-model, same-effort source estimate. A model without it
- * stays callable and stays in the fallback chain after every model with
- * evidence, but it is not compared by regret.
+ * is reported in the decision's evidence gaps and still competes in the same
+ * pool, with the full uncertainty interval for the missing quality.
  * `lightweight` relies on no single axis. Collecting context requires
  * Intelligence instead of the gather deliverable's Research evidence.
  */

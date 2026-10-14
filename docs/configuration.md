@@ -8,7 +8,7 @@ The default file is `~/.pi/agent/pi8/config.json`. The file is optional. Absent 
 
 Use valid JSON. Do not add comments or trailing commas to the file.
 
-`PI8_DIR` changes the storage directory for configuration, benchmarks, and global model history.
+`PI8_DIR` changes the storage directory for configuration, benchmarks, global model history, and prompt-token scales.
 
 ## Minimal configuration
 
@@ -45,7 +45,7 @@ The parser ignores invalid values or uses the relevant default. An invalid JSON 
 
 Do not depend on this recovery for configuration validation. Check your edits before use.
 
-The configuration controls preferences, not capability minimums. Changing weights cannot move a measured weak candidate into the preferred capability tier.
+The configuration controls preferences, not capability minimums. In the legacy scorer, changing weights cannot move a measured weak candidate into the preferred capability tier. Automatic main-turn selection has no capability tiers; see [Routing](routing.md#one-comparison-pool).
 
 ## Model patterns
 

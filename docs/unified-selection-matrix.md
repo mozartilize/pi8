@@ -2,20 +2,19 @@
 
 Tài liệu mô tả code hiện tại với `feature-v4` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
 
-**Điểm quan trọng:** đây không phải một phép cộng tất cả yếu tố rồi chọn model. Thứ tự ưu tiên là:
+**Điểm quan trọng:** guards quyết định action nào được phép gọi. Mọi action được phép nằm trong một pool so sánh duy nhất. Thứ tự xử lý là:
 
 ```text
 Registry + allowlist + quyền gọi
   → action = provider/model/effort
   → benchmark đúng effort + state của request
-  → evidence đầy đủ trước evidence thiếu
-  → capabilityShortfall nhỏ trước lớn
-  → minimax regret trong cùng capability tier
+  → feature intervals (quality thiếu evidence → interval [0, 1])
+  → minimax regret trên toàn pool (hoặc central fallback trên cùng pool)
   → lọc theo context để tạo dispatch chain
   → reserve và gọi provider
 
 Rubric + đo file → D theo trục → capability targets → shortfall và fit
-Phase           → relevance + required evidence   → shortfall và fit
+Phase           → relevance + required evidence   → fit; shortfall và evidence gaps chỉ là diagnostics
 Giá + cache + output demand                       → cost/time features
 Incumbent + friction + rework                     → session features
 Preferences + scenarios + weight bounds           → miền trọng số Θ
@@ -29,28 +28,28 @@ Feature intervals + Θ                            → minimax regret
 | Availability, allowlist, blacklist, quota exclusions | Host và config | Pool model được phép | Có: loại khỏi pool | Không có weight |
 | Manual pin, effort override, minimum thinking level | State của host | Tập action hợp lệ | Có: giới hạn model/effort | Không có weight |
 | `allowedActors` | Snapshot quyền gọi | Tập action được phép | Có: lọc trước feature extraction; `[]` nghĩa là không được gọi action nào | Không có weight |
-| `phase` | Declaration được chấp nhận/state hiện tại | Relevance và required evidence | Có: evidence gate; trục relevance = 0 không đóng góp shortfall | Có: nhân capability fit |
-| Rubric 1–5 | Handoff hoặc execution plan được chấp nhận | Ba axis demands `D_R`, `D_A`, `D_H` | Có: quyết định mục tiêu năng lực | Có: quyết định capability fit |
-| Số file, thư mục, dòng, fix commits | Router đo trên targets | Phần cộng vào `D_A` | Có, qua mục tiêu agentic | Có, qua agentic fit |
-| Benchmark + provenance | Store, đúng model và effort | Quality intervals | Có: evidence gate và capabilityShortfall | Có: ba capability features, inputFit |
+| `phase` | Declaration được chấp nhận/state hiện tại | Relevance và required evidence | Không: required evidence chỉ là diagnostic | Có: nhân capability fit |
+| Rubric 1–5 | Handoff hoặc execution plan được chấp nhận | Ba axis demands `D_R`, `D_A`, `D_H` | Không: chỉ đặt targets | Có: quyết định capability fit |
+| Số file, thư mục, dòng, fix commits | Router đo trên targets | Phần cộng vào `D_A` | Không | Có, qua agentic fit |
+| Benchmark + provenance | Store, đúng model và effort | Quality intervals | Không: evidence gaps và capabilityShortfall chỉ là diagnostics | Có: ba capability features, inputFit |
 | Context tokens, vision input | Request hiện tại | Input relevance; predicted input cost | Có: context ảnh hưởng dispatch; evidence cho input shape | Có: inputFit và cost |
-| Registry token prices | `model.cost` | Predicted USD interval | Không thay đổi tier | Có: costDesirability |
-| Benchmark cost/task và output price | Benchmark đúng model | Output-demand scale | Không thay đổi tier | Có: cost và time |
-| Cache evidence | Prefix identity, age, warm tokens | Cached input buckets | Không thay đổi tier | Có: cost; không cộng một cache bonus riêng |
-| Output speed | Benchmark output tokens/s | Latency proxy | Không thay đổi tier | Có: timeDesirability |
-| Incumbent | Exact provider/model | Continuity | Không thay đổi tier | Có: continuity; cũng dùng khi phá hòa |
-| Friction | Exact model/effort/work item | Friction avoidance | Không thay đổi tier | Có: frictionAvoidance |
-| Attributed rework | Failed model/effort | Hai recovery features | Không thay đổi tier | Có: effortRecoveryFit, modelSwitchRecoveryFit |
-| Preferences | Năm câu trả lời trong config | Các bất đẳng thức trên θ | Không thay đổi capability targets/tier | Có: giới hạn miền trọng số Θ |
+| Registry token prices | `model.cost` | Predicted USD interval | Không | Có: costDesirability |
+| Benchmark cost/task và output price | Benchmark đúng model | Output-demand scale | Không | Có: cost và time |
+| Cache evidence | Prefix identity, age, warm tokens | Cached input buckets | Không | Có: cost; không cộng một cache bonus riêng |
+| Output speed | Benchmark output tokens/s | Latency proxy | Không | Có: timeDesirability |
+| Incumbent | Exact provider/model | Continuity | Không | Có: continuity; cũng dùng khi phá hòa |
+| Friction | Exact model/effort/work item | Friction avoidance | Không | Có: frictionAvoidance |
+| Attributed rework | Failed model/effort | Hai recovery features | Không | Có: effortRecoveryFit, modelSwitchRecoveryFit |
+| Preferences | Năm câu trả lời trong config | Các bất đẳng thức trên θ | Không thay đổi capability targets | Có: giới hạn miền trọng số Θ |
 | Deadline, cancellation, snapshot validity | Selector controls | Exact/fallback/stale/cancelled | Có thể ngăn dispatch | Không phải preference hay weight |
 
-**Preferences không được phép bù cho capabilityShortfall lớn hơn.** Evidence gate được áp dụng trước capability tier. Một action thiếu required evidence vẫn đứng sau nhóm có evidence, dù shortfall lạc quan của nó bằng 0.
+**Không có capability tier và không có evidence tail.** Mọi action được phép cạnh tranh trong cùng một pool. Capability chỉ đi vào so sánh qua capability features; preferences quyết định mức đánh đổi giữa capability fit, giá, tốc độ và continuity. `capabilityShortfall` và `evidenceGaps` chỉ là diagnostics: không lọc, không gom nhóm, không xếp hạng và không phá hòa.
 
 ## 2. Ma trận phase
 
 Ký hiệu `R`, `A`, `H` lần lượt là relevance của reasoning, agentic và research. Đây là hệ số của feature, **không phải** các weight θ trong §5.
 
-| Phase | R | A | H | Required benchmark evidence | Trục có thể đóng góp shortfall |
+| Phase | R | A | H | Required benchmark evidence (diagnostic) | Trục có thể đóng góp shortfall (diagnostic) |
 |---|---:|---:|---:|---|---|
 | lightweight | 0.15 | 0 | 0.10 | Không có trục bắt buộc | Reasoning, research |
 | gather | 0.40 | 0 | 1.00 | Research | Reasoning, research |
@@ -135,9 +134,8 @@ Hai phép tính dùng cùng target nhưng có vai trò khác nhau:
 |---|---|---|
 | Fit của một trục | `clamp(1 − max(0, target − q)/w, 0, 1)` | Điểm năng lực đưa vào feature vector |
 | Capability feature | `relevance × fit` | Điểm được nhân với θ trong regret |
-| Shortfall của một trục | Relevance = 0 → 0; khác 0 → `max(0, (target − upperQuality)/w)` | Xếp capability tier; không nhân độ lớn relevance |
-| Shortfall của action | max(shortfall reasoning, agentic, research) | Nhỏ hơn đứng trước; không clamp ở 1 |
-| Capability tier key | Làm tròn shortfall đến 1e−9 | Gom các action có cùng mức thiếu |
+| Shortfall của một trục | Relevance = 0 → 0; khác 0 → `max(0, (target − upperQuality)/w)` | Diagnostic; không nhân độ lớn relevance |
+| Shortfall của action | max(shortfall reasoning, agentic, research) | Diagnostic trong log; không clamp ở 1; không xếp hạng |
 
 Shortfall dùng **upperQuality**, không dùng central hoặc lower quality. Với quality chưa chắc chắn, upper có thể bằng 1 nên không chứng minh được thiếu năng lực. Deficit bằng 0 không phải bằng chứng chắc chắn model đủ năng lực.
 
@@ -147,7 +145,7 @@ Nguồn: [difficulty.ts](../extensions/routing/features/difficulty.ts), [model.t
 
 Quality luôn đọc từ active benchmark row đúng registryId và served effort. Không lấy chất lượng effort khác để thay thế. Intelligence chỉ được coi là evidence khi index version major.minor là `4.3`.
 
-| Provenance của quality | Center trước fit | Lower | Upper | Có required evidence? |
+| Provenance của quality | Center trước fit | Lower | Upper | Có required evidence? (diagnostic) |
 |---|---|---:|---:|---|
 | measured, value hợp lệ | Quality chuẩn hóa | = center | = center | Có |
 | source-estimated, value hợp lệ | Quality chuẩn hóa | 0 | 1 | Có |
@@ -159,10 +157,10 @@ Fit được áp dụng lên cả center/lower/upper. Vì vậy central capabili
 
 | Tình huống pool | Xử lý |
 |---|---|
-| Có action đủ required evidence | Chỉ nhóm đó được so bằng regret; nhóm thiếu evidence ở cuối |
-| Không action nào đủ required evidence | So tất cả; log `allInsufficient = true` |
-| Action thiếu evidence ở cuối | Xếp theo shortfall rồi central weights trong mỗi tier; không có maxRegret |
-| Nhóm đầy evidence nhưng shortfall khác nhau | Xếp tier trước; regret không so chéo tier |
+| Có action thiếu required evidence | Vẫn so trong cùng pool; quality thiếu dùng interval [0, 1]; có maxRegret; liệt kê trong `insufficientEvidence` |
+| Không action nào đủ required evidence | So tất cả như thường; log `allInsufficient = true` |
+| Shortfall khác nhau | Không ảnh hưởng thứ tự; regret so chéo toàn pool |
+| Missing và source-estimated với cùng bounds | Exact MR bằng nhau; central fallback có thể khác vì center khác |
 
 ## 5. Ma trận 10 features và weights
 
@@ -328,25 +326,25 @@ Nguồn: [scenarios.ts](../extensions/routing/preferences/scenarios.ts), [fit.ts
 
 ## 8. Ma trận regret và fallback
 
-Trong **một capability tier**, với action a và đối thủ b:
+Trên **toàn bộ pool được phép**, với action a và đối thủ b:
 
 ```text
 U(a, θ)  = θ · featureVector(a)
 PR(a,b)  = max[θ thuộc Θ] θ · (upperFeatures(b) − lowerFeatures(a))
 PR(a,a)  = 0
-MR(a)    = max[b trong cùng tier] max(0, PR(a,b))
-chosen   = action có MR nhỏ nhất trong tier đầu tiên
+MR(a)    = max[b trong pool] max(0, PR(a,b))
+chosen   = action có MR nhỏ nhất
 ```
 
 Ý nghĩa: chọn action có mức thua thiệt lớn nhất nhỏ nhất, khi weights và feature values nằm trong miền uncertainty được phép. Không phải chọn action có weighted average lớn nhất.
 
 | Quy tắc/tham số | Giá trị | Hiệu ứng |
 |---|---|---|
-| Primary ranking | Evidence group → shortfall tier → MR | Giá không thắng qua evidence/tier |
+| Primary ranking | MR trên toàn pool | Shortfall và evidence gaps không ảnh hưởng thứ tự |
 | Tie MR | Chênh ≤1e−7 coi là hòa | Higher continuity → lower known USD → canonical key |
 | USD tie tolerance | 1e−12 | Known price đứng trước unknown khi cần phá hòa |
-| Self-pair | PR(a,a)=0 | Tier có một action có MR=0, dù feature uncertain |
-| Regret giữa các tiers | Không so trực tiếp | MR=0 ở tier xấu không thắng MR>0 ở tier tốt |
+| Self-pair | PR(a,a)=0 | Pool có một action có MR=0, dù feature uncertain |
+| `regretScope: pool` | Có trong exact decision metadata | MR so được giữa mọi ranked action; record không có trường này có thể chứa MR chỉ so được giữa các action cùng shortfall |
 | Base domain | Closed-form box + simplex maximum | Exact, không cần LP solve |
 | Constrained domain | LP cho pair objectives | Mỗi pair có thể có θ tối ưu khác nhau |
 | LP_CHUNK | 16 objectives | Batching; không đổi công thức |
@@ -356,8 +354,8 @@ chosen   = action có MR nhỏ nhất trong tier đầu tiên
 | Production deadline | 500 ms | Shared deadline cho selection; LP timeout → central fallback |
 | Production pair cap | Không có | Không tự bỏ candidates theo số pair |
 | Spike-only budget | 200 ms; pairCap 4,096 | Tham số measurement/test, không phải production policy |
-| Spike pair count | n×(n−1) của toàn compared group | Vượt cap → central fallback |
-| Central fallback | max `θrep·centerFeatures` trong từng tier | Không phải exact regret; vẫn giữ tier order |
+| Spike pair count | n×(n−1) của toàn pool | Vượt cap → central fallback |
+| Central fallback | max `θrep·centerFeatures` trên cùng pool | Không phải exact regret; không có tier order |
 | Artifact missing/invalid | Central với THETA0 | constraintsEnforced=false |
 | Cancellation/snapshot stale | cancelled ưu tiên hơn stale | Không dispatch một lựa chọn cũ |
 
@@ -374,7 +372,7 @@ Nguồn: [select.ts](../extensions/routing/optimization/select.ts), [regret.ts](
 | Enumerate actions | Các efforts Pi hỗ trợ: off, minimal, low, medium, high, xhigh, max; không yêu cầu phải có benchmark |
 | Effort aliases | Các levels gửi cùng provider value gom thành một action |
 | Effort override | Pi clamp rồi chọn alias group tương ứng |
-| Full ranking | Giữ toàn bộ legal actions, gồm tiers yếu và evidence thiếu |
+| Full ranking | Giữ toàn bộ legal actions, gồm action có shortfall và action thiếu evidence |
 | Dispatch chain | Chỉ action có context window chứa prompt hiện tại; mỗi provider/model chỉ giữ effort đứng đầu còn phù hợp |
 | Better action không chứa prompt | Giữ trong ranking để context preparation có thể yêu cầu compaction |
 | Provider fallback | Advance chain nếu failure xảy ra trước output có thể nhìn thấy; khác solver fallback |
@@ -382,7 +380,7 @@ Nguồn: [select.ts](../extensions/routing/optimization/select.ts), [regret.ts](
 
 Vision filter trong adapter giữ các model hỗ trợ image nếu pool có model như vậy. Filter này khác vision benchmark evidence và inputFit.
 
-Debug ghi mọi ranked action. Không debug ghi top 12 cộng chosen/incumbent nếu cần. Trace numbers làm tròn 1e−5, nên đọc tier/regret từ log cần lưu ý precision. Trường `theta` có ở central fallback; exact selection không có một vector θ cố định để log.
+Debug ghi mọi ranked action. Không debug ghi top 12 cộng chosen/incumbent nếu cần. Trace numbers làm tròn 1e−5, nên đọc regret từ log cần lưu ý precision. Trường `theta` có ở central fallback; exact selection không có một vector θ cố định để log.
 
 Nguồn: [actions.ts](../extensions/routing/features/actions.ts), [unified-decision.ts](../extensions/serve/unified-decision.ts).
 
@@ -395,7 +393,7 @@ phase = gather, đang thu thập context read-only, chưa khai báo answer
 reasoning target = 0.20 (D vẫn ghi là unknown)
 researchFit = 0.5 cho mọi action, không có research shortfall
 required evidence = Intelligence
-→ nhiều action cùng tier; cost và preferences quyết định trong tier
+→ reasoning fit dễ đạt; cost và preferences thường quyết định
 ```
 
 ### Câu trả lời gather, D chưa biết
@@ -404,11 +402,11 @@ required evidence = Intelligence
 phase = gather, sau khi khai báo answer
 relevance = reasoning 0.4, agentic 0, research 1
 D unknown → targets = reasoning 0.55, agentic 0.60, research 0.65
-agentic relevance = 0 → bỏ agentic shortfall
-→ chia tiers trước khi xét cost weight hay preferences
+agentic relevance = 0 → agentic không đóng góp feature hay shortfall
+→ action thiếu target có fit thấp hơn; miền Θ quyết định mức đánh đổi với cost
 ```
 
-Tăng cost weight không thể khiến một action rẻ thắng một action thuộc tier tốt hơn. Đổi relevance reasoning từ 0.4 xuống 0.1 cũng không giảm target hay shortfall của reasoning. Chỉ đặt relevance = 0 mới bỏ trục đó khỏi shortfall.
+Miền Θ cost-oriented có thể khiến một action rẻ, thiếu nhẹ reasoning target, thắng một action đắt đạt target. Miền Θ capability-oriented có thể đảo ngược kết quả đó. Đổi relevance reasoning từ 0.4 xuống 0.1 không giảm target; nó giảm độ lớn của reasoning feature.
 
 ### Implement có axes {0.50, 0.65, 0.50}
 
@@ -419,7 +417,7 @@ Tăng cost weight không thể khiến một action rẻ thắng một action th
 | Benchmark tương đương | Intelligence 37.5 | Terminal-Bench 39.35% | Combined research 0.45 |
 | Phase relevance | 0.6 | 1 | 0.15 |
 
-D summary là 0.65 nhưng reasoning target không dùng D=0.65. Các trục dùng D riêng. Nếu một số action đạt mọi target, chỉ những action có deficit 0 cạnh tranh để thắng; cost, cache, continuity và preference phân biệt chúng trong regret.
+D summary là 0.65 nhưng reasoning target không dùng D=0.65. Các trục dùng D riêng. Mọi action cạnh tranh trong regret; action đạt target có full fit, còn cost, cache, continuity và preferences quyết định mức đánh đổi với action thiếu target.
 
 ## 11. Những tham số không nối trực tiếp vào regret
 
@@ -438,12 +436,12 @@ D summary là 0.65 nhưng reasoning target không dùng D=0.65. Các trục dùn
 Đọc theo thứ tự này, không bắt đầu bằng weight vector:
 
 1. `ranked`, `holdingPrompt`, permissions: action nào còn được gọi?
-2. `evidenceGaps`, `insufficientEvidence`: action nào được so bằng regret?
+2. `evidenceGaps`, `insufficientEvidence`: action nào có quality interval rộng vì thiếu evidence? (diagnostic, không loại action)
 3. `difficultyAxes`, phase và target mapping: đang yêu cầu năng lực gì?
-4. `capabilityShortfall`: candidates có cùng tier không?
+4. `capabilityShortfall`: action thiếu target bao xa? (diagnostic, không xếp hạng)
 5. `solver`, `domainStatus`, `constraintsEnforced`: preferences đã được áp chưa?
-6. `maxRegret`: chỉ so candidates cùng tier; hoặc `centralScore` nếu fallback.
-7. `costUsd`, features, continuity và cache evidence: vì sao khác nhau trong tier?
+6. `maxRegret` khi có `regretScope: pool`: so được giữa mọi action; hoặc `centralScore` nếu fallback.
+7. `costUsd`, features, continuity và cache evidence: vì sao các action khác nhau?
 8. `served`, provider failure và fallback rank: model nào thực sự phục vụ?
 
 Xem thêm [Routing](routing.md) và [Glossary](glossary.md).

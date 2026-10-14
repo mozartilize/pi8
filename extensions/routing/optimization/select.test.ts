@@ -1,13 +1,13 @@
 /**
- * Selector contracts (testing plan N4, N6, N2 central fallback): regret
- * direction and self-pair exclusion against an independent oracle, artifact
- * identity validation against an adversarial domain lookup, and a correct
- * label on every result path.
+ * Selector contracts: regret direction and self-pair exclusion against an
+ * independent oracle, artifact identity validation against an adversarial
+ * domain lookup, a correct label on every result path, and one comparison
+ * pool in which capability shortfall and evidence gaps are diagnostics only.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { BenchModel } from '../../types.js';
-import { greedyBoxSimplexMax } from '../../test-support/lp-oracle.js';
+import { greedyBoxSimplexMax, oracleSolve } from '../../test-support/lp-oracle.js';
 import { enumerateEffectiveActions } from '../features/actions.js';
 import type { ActionFeatureVector } from '../features/schema.js';
 import type { DecisionStateV1 } from '../features/state.js';
@@ -15,8 +15,8 @@ import { AssignmentLedger } from '../policy/assignment-transaction.js';
 import type { WorkPhaseState } from '../policy/work-phase.js';
 import { preferenceProfileDigest, validatePreferences, type UserRoutingPreferencesV1 } from '../preferences/schema.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
-import { compileDomainArtifact, thetaBaseDomain, type DomainArtifact } from './domain.js';
-import { WorkerLpAdapter, type LPAdapter, type LpRequest, type LpResult } from './lp.js';
+import { compileDomainArtifact, thetaBaseDomain, type DomainArtifact, type WeightDomain } from './domain.js';
+import { WorkerLpAdapter, type LPAdapter, type LpRequest, type LpResult, type Polytope } from './lp.js';
 import { centralChoice, solveMinimaxRegret, sortByKey } from './regret.js';
 import { DomainCache, selectByRegret, type SelectionCandidate, type SelectorPorts, type UnifiedDecision } from './select.js';
 import { THETA0, THETA_BOUNDS } from './weights.js';
@@ -71,6 +71,53 @@ describe('N4: regret direction and independent oracle', () => {
   });
 });
 
+describe('analytic solver fixtures: preferences, not capability priority, order actions', () => {
+  // Feature order: reasoning, agentic, research, input, cost, time, continuity, friction, effortRecovery, modelSwitchRecovery.
+  const COST_ORIENTED = [0.05, 0.20, 0.10, 0, 0.55, 0.10, 0, 0, 0, 0];
+  const CAPABILITY_ORIENTED = [0.45, 0.20, 0.17, 0, 0.08, 0.10, 0, 0, 0, 0];
+  const pointDomain = (theta: readonly number[]): WeightDomain => {
+    const polytope: Polytope = { numCols: 10, colLower: [...theta], colUpper: [...theta], rows: [{ coeffs: new Array(10).fill(1), lower: 1, upper: 1 }] };
+    return { mode: 'hard', polytope, constraints: [], totalSlack: 0 };
+  };
+  const vector = (key: string, reasoning: number, cost: number) =>
+    exactVector(key, [reasoning, 0, 0, 0, cost, 0, 0, 0, 0, 0]);
+
+  it('uses point domains that sum to one inside ThetaBase', () => {
+    for (const theta of [COST_ORIENTED, CAPABILITY_ORIENTED]) {
+      expect(theta.reduce((sum, value) => sum + value, 0)).toBeCloseTo(1, 12);
+      theta.forEach((value, j) => {
+        expect(value).toBeGreaterThanOrEqual(THETA_BOUNDS[j]![0]);
+        expect(value).toBeLessThanOrEqual(THETA_BOUNDS[j]![1]);
+      });
+    }
+  });
+
+  it('reverses the winner when only the preference point changes', async () => {
+    // A: reasoning 1.0, cost 0.2. B: reasoning 0.9, cost 0.3.
+    // U(A) - U(B) = 0.05 * 0.1 - 0.55 * 0.1 = -0.05 (cost-oriented), 0.45 * 0.1 - 0.08 * 0.1 = +0.037 (capability-oriented).
+    const actions = [{ features: vector('A', 1.0, 0.2) }, { features: vector('B', 0.9, 0.3) }];
+    const cost = await solveMinimaxRegret(actions, pointDomain(COST_ORIENTED), lp);
+    expect(cost.chosen).toBe('B');
+    expect(cost.maxRegret.get('B')).toBeCloseTo(0, 9);
+    expect(cost.maxRegret.get('A')).toBeCloseTo(0.05, 9);
+    const capability = await solveMinimaxRegret(actions, pointDomain(CAPABILITY_ORIENTED), lp);
+    expect(capability.chosen).toBe('A');
+    expect(capability.maxRegret.get('A')).toBeCloseTo(0, 9);
+    expect(capability.maxRegret.get('B')).toBeCloseTo(0.037, 9);
+  });
+
+  it('a reasoning advantage of 1e-6 cannot outweigh a cost desirability gap of 1/3 anywhere in ThetaBase', async () => {
+    // Cost desirability is logarithmic over six decades: $1 gives 1/6 and $0.01 gives 1/2.
+    // The cheaper action gains at least 0.08 / 3 from cost and loses at most 0.45e-6 on reasoning.
+    const strong = vector('strong', 0.6 + 1e-6, 1 / 6);
+    const cheaper = vector('cheaper', 0.6, 1 / 2);
+    const result = await solveMinimaxRegret([{ features: strong }, { features: cheaper }], thetaBaseDomain(), lp);
+    expect(result.chosen).toBe('cheaper');
+    expect(result.maxRegret.get('cheaper')).toBe(0);
+    expect(result.maxRegret.get('strong')).toBeCloseTo(0.55 / 3, 9);
+  });
+});
+
 // ─── selectByRegret on real candidates ───────────────────────────────
 
 const model = (provider: string, id: string, cost: RegistryModelInfo['cost']): RegistryModelInfo => ({
@@ -92,7 +139,7 @@ const decisionState: DecisionStateV1 = {
   friction: [], nowMs: 0, isSubagentSpawn: false, benchmarkIndexVersion: '4.3',
 };
 
-/** Both candidates meet these targets, so solver-path tests exercise an actual within-tier comparison. */
+/** Both candidates meet these targets, so solver-path tests compare two actions with zero shortfall. */
 const solverState: DecisionStateV1 = { ...decisionState, difficulty: { value: 0, source: 'execution-rubric' } };
 
 const snapshot = (profile: UserRoutingPreferencesV1) => validatePreferences(profile);
@@ -156,7 +203,7 @@ describe('assignment permission snapshots before feature evaluation', () => {
     expect((await run('implement') as UnifiedDecision).ranking.sort()).toEqual([...keys].sort());
   });
 
-  it('keeps unauthorized actions out of a central fallback and the evidence tail', async () => {
+  it('keeps unauthorized actions out of a central fallback and its diagnostics', async () => {
     const preferences = snapshot(OPERATOR);
     const result = await selectByRegret(decisionState, candidates, rows, preferences, portsWith(() => undefined), {
       allowedActors: ['s/strong:high'], expectedProfileDigest: preferences.digest, decisionDeadlineMs: 5_000,
@@ -312,114 +359,212 @@ describe('selectByRegret result paths', () => {
     const pAgentic = result.actions.find((a) => a.action.registryId === 'p/pmodel')!.features.values[1];
     expect(pAgentic).toBeCloseTo(0.5 * 0.25, 12);
     expect(result.chosen).toBe('p/pmodel:high');
-    // Implement relies on Terminal-Bench: a regression value is no evidence, so P is not compared.
+    // Implement relies on Terminal-Bench: a regression value is no evidence. P keeps the
+    // missing interval on that axis and still competes with an exact regret.
     const implement = await run('implement');
     if (implement.kind !== 'decision') throw new Error('expected a decision');
+    expect(implement.solver).toBe('exact');
     expect(implement.insufficientEvidence).toEqual(['p/pmodel:high']);
-    expect(implement.chosen).toBe('q/qmodel:high');
-    expect(implement.ranking).toEqual(['q/qmodel:high', 'p/pmodel:high']);
+    expect(implement.allInsufficient).toBe(false);
+    const pImplement = implement.actions.find((a) => a.action.registryId === 'p/pmodel')!.features;
+    expect([pImplement.lower[1], pImplement.upper[1]]).toEqual([0, 1]);
+    expect([...implement.maxRegret!.keys()].sort()).toEqual(['p/pmodel:high', 'q/qmodel:high']);
   });
 });
 
-describe('evidence guard: a model without required evidence is not compared', () => {
-  // A strong and expensive, B moderate and cheaper, U has no benchmark row and is cheap.
-  const A = model('a', 'strong', { input: 8, output: 40, cacheRead: 0.8 });
-  const B = model('b', 'middle', { input: 2, output: 10, cacheRead: 0.2 });
-  const U = model('u', 'unmeasured', { input: 0.1, output: 0.4, cacheRead: 0.01 });
-  const guardRows = [benchRow('a/strong', 70, 55), benchRow('b/middle', 45, 30)];
-  const pick = (models: RegistryModelInfo[]): SelectionCandidate[] => models.map((m) => ({ model: m, action: enumerateEffectiveActions(m)[0]! }));
-  const empty = { version: 1 } as UserRoutingPreferencesV1;
-  const run = (models: RegistryModelInfo[], patch: Partial<DecisionStateV1> = {}, adapter: LPAdapter = lp) =>
-    selectByRegret({ ...decisionState, ...patch }, pick(models), guardRows, snapshot(empty), portsWith(() => undefined, adapter),
-      { expectedProfileDigest: preferenceProfileDigest(empty), decisionDeadlineMs: 5_000 });
+/** Max regret of each action against the others, from the independent tableau oracle over `domain`. */
+function oracleRegrets(actions: readonly ActionFeatureVector[], domain: WeightDomain): Map<string, number> {
+  return new Map(actions.map((a) => [a.key, Math.max(0, ...actions.filter((b) => b !== a).map((b) => {
+    const objective = new Array<number>(domain.polytope.numCols).fill(0);
+    b.upper.forEach((upper, j) => { objective[j] = upper - a.lower[j]!; });
+    return oracleSolve(domain.polytope, objective, 'max').value!;
+  }))]));
+}
 
-  it('does not change the winner among measured models, and ranks the unmeasured model last', async () => {
-    const without = await run([A, B]);
-    const withU = await run([A, B, U]);
-    if (without.kind !== 'decision' || withU.kind !== 'decision') throw new Error('expected decisions');
-    expect(withU.chosen).toBe(without.chosen);
-    expect(withU.ranking.slice(0, 2)).toEqual(without.ranking);
-    expect(withU.ranking.at(-1)).toBe('u/unmeasured:high');
-    expect(withU.insufficientEvidence).toEqual(['u/unmeasured:high']);
-    expect(withU.allInsufficient).toBe(false);
-    // Regret values of the compared actions match the pool without U.
-    expect(withU.maxRegret?.has('u/unmeasured:high')).toBe(false);
-    for (const [key, value] of without.maxRegret!) expect(withU.maxRegret!.get(key)!).toBeCloseTo(value, 9);
-    // The unmeasured model stays a legal action with its features.
-    expect(withU.actions.map((a) => a.features.key)).toContain('u/unmeasured:high');
+/** Central ranking by `theta . values`, computed without the production helper. */
+const centralOrder = (actions: readonly ActionFeatureVector[], theta: readonly number[]): string[] =>
+  actions.map((a) => ({ key: a.key, utility: a.values.reduce((sum, value, j) => sum + value * theta[j]!, 0) }))
+    .sort((a, b) => b.utility - a.utility).map((a) => a.key);
+
+const COST_PROFILE: UserRoutingPreferencesV1 = {
+  version: 1, settledImplementation: 'lower_cost', openDesignDecisions: 'lower_cost',
+  handoffWarmCache: 'keep_warm_incumbent', researchTasks: 'lower_cost', afterRework: 'increase_effort',
+};
+const CAPABILITY_PROFILE: UserRoutingPreferencesV1 = {
+  version: 1, settledImplementation: 'higher_coding_capability', openDesignDecisions: 'higher_reasoning_capability',
+  handoffWarmCache: 'switch_for_capability', researchTasks: 'higher_research_capability', afterRework: 'switch_model',
+};
+const BROKEN_LP: LPAdapter = { solve: async () => { throw new Error('no solver'); }, close: async () => {} };
+const pick = (models: RegistryModelInfo[]): SelectionCandidate[] => models.map((m) => ({ model: m, action: enumerateEffectiveActions(m)[0]! }));
+
+describe('missing evidence is an uncertainty interval, not a ranking tail', () => {
+  // A strong and expensive, B moderate and cheaper, U has no benchmark row and is cheapest.
+  const A = model('a', 'strong', { input: 5, output: 25, cacheRead: 0.5 });
+  const B = model('b', 'middle', { input: 0.2, output: 0.8, cacheRead: 0.02 });
+  const U = model('u', 'unmeasured', { input: 0.01, output: 0.04, cacheRead: 0.001 });
+  const guardRows = [benchRow('a/strong', 70, 55), benchRow('b/middle', 55, 50)];
+  const empty = { version: 1 } as UserRoutingPreferencesV1;
+  let costArtifact: DomainArtifact;
+  beforeAll(async () => { costArtifact = await compileDomainArtifact(COST_PROFILE, lp); });
+  const costRun = (models: RegistryModelInfo[], bench: BenchModel[], adapter: LPAdapter = lp, ready = true) => {
+    const prefs = snapshot(COST_PROFILE);
+    return selectByRegret(decisionState, pick(models), bench, prefs, portsWith(() => (ready ? costArtifact : undefined), adapter),
+      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000 });
+  };
+
+  it('a cheap unmeasured model wins under a cost-oriented domain, with an exact regret against the whole pool', async () => {
+    const result = await costRun([A, B, U], guardRows);
+    if (result.kind !== 'decision') throw new Error('expected a decision');
+    expect(result.solver).toBe('exact');
+    expect(result.chosen).toBe('u/unmeasured:high');
+    expect(result.insufficientEvidence).toEqual(['u/unmeasured:high']);
+    const expected = oracleRegrets(result.actions.map((a) => a.features), costArtifact.domain);
+    expect(result.maxRegret!.size).toBe(3);
+    for (const [key, value] of expected) expect(result.maxRegret!.get(key)!).toBeCloseTo(value, 6);
+    expect(Math.min(...expected.values())).toBeCloseTo(expected.get('u/unmeasured:high')!, 9);
   });
 
-  it('keeps the unmeasured model last on the fallback paths too', async () => {
-    const broken: LPAdapter = { solve: async () => { throw new Error('no solver'); }, close: async () => {} };
-    const profile = OPERATOR;
-    const result = await selectByRegret(solverState, pick([A, B, U]), guardRows, snapshot(profile), readyPorts(broken),
-      { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 5_000 });
+  it.each(['solver-failure', 'domain-not-ready'] as const)('central fallback ranks the unmeasured model by its utility, not last (%s)', async (path) => {
+    const result = await costRun([A, B, U], guardRows, path === 'solver-failure' ? BROKEN_LP : lp, path === 'solver-failure');
     if (result.kind !== 'decision') throw new Error('expected a decision');
     expect(result.solver).toBe('fallback-central');
-    expect(result.ranking.at(-1)).toBe('u/unmeasured:high');
-    expect(result.chosen).not.toBe('u/unmeasured:high');
+    const expected = centralOrder(result.actions.map((a) => a.features), result.theta!);
+    expect(result.ranking).toEqual(expected);
+    expect(expected[0]).toBe('u/unmeasured:high');
   });
 
-  it('compares the unmeasured model when no model has the evidence, and says so', async () => {
-    const result = await run([U, model('v', 'also-unmeasured', { input: 1, output: 2 })]);
+  it('missing and source-estimated quality with equal bounds have equal exact regret', async () => {
+    const missing: BenchModel = { ...benchRow('u/unmeasured', 50, 0), quality: { intelligence: 50 }, axisProvenance: { intelligence: 'measured' } };
+    const estimated: BenchModel = { ...benchRow('u/unmeasured', 50, 45), axisProvenance: { intelligence: 'measured', agenticCoding: 'source-estimated' } };
+    const prefs = snapshot(empty);
+    const run = (row: BenchModel) => selectByRegret(decisionState, pick([A, B, U]), [...guardRows, row], prefs, portsWith(() => undefined),
+      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000 });
+    const [withMissing, withEstimated] = await Promise.all([run(missing), run(estimated)]);
+    if (withMissing.kind !== 'decision' || withEstimated.kind !== 'decision') throw new Error('expected decisions');
+    const bounds = (result: UnifiedDecision) => result.actions.find((a) => a.action.registryId === 'u/unmeasured')!.features;
+    expect(bounds(withMissing).lower).toEqual(bounds(withEstimated).lower);
+    expect(bounds(withMissing).upper).toEqual(bounds(withEstimated).upper);
+    expect(withMissing.insufficientEvidence).toEqual(['u/unmeasured:high']);
+    expect(withEstimated.insufficientEvidence).toEqual([]);
+    expect(withMissing.maxRegret!.size).toBe(3);
+    for (const [key, value] of withEstimated.maxRegret!) expect(withMissing.maxRegret!.get(key)!).toBeCloseTo(value, 9);
+  });
+
+  it('reports every action as lacking evidence when no model has it, and compares them all', async () => {
+    const prefs = snapshot(empty);
+    const result = await selectByRegret(decisionState, pick([U, model('v', 'also-unmeasured', { input: 1, output: 2 })]), guardRows, prefs, portsWith(() => undefined),
+      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000 });
     if (result.kind !== 'decision') throw new Error('expected a decision');
     expect(result.allInsufficient).toBe(true);
-    expect(result.insufficientEvidence).toEqual([]);
-    expect(result.ranking).toHaveLength(2);
+    expect(result.insufficientEvidence).toEqual(['u/unmeasured:high', 'v/also-unmeasured:high']);
+    expect(result.maxRegret!.size).toBe(2);
     expect(result.chosen).toBeDefined();
   });
 
-  it('the requirement follows the phase: lightweight needs no axis, so U competes there', async () => {
-    const result = await run([A, B, U], { phase: 'lightweight' });
+  it('the requirement follows the phase: lightweight needs no axis, so U has no evidence gap', async () => {
+    const prefs = snapshot(empty);
+    const result = await selectByRegret({ ...decisionState, phase: 'lightweight' }, pick([A, B, U]), guardRows, prefs, portsWith(() => undefined),
+      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000 });
     if (result.kind !== 'decision') throw new Error('expected a decision');
     expect(result.insufficientEvidence).toEqual([]);
     expect(result.maxRegret?.has('u/unmeasured:high')).toBe(true);
   });
 
-  it('counts only compared actions against the spike pair cap', async () => {
-    const result = await selectByRegret(decisionState, pick([A, B, U]), guardRows, snapshot(empty), portsWith(() => undefined),
-      { expectedProfileDigest: preferenceProfileDigest(empty), decisionDeadlineMs: 5_000, pairCap: 2 });
-    // Two compared actions make 2 ordered pairs: within the cap, so no capped fallback.
-    expect(result).toMatchObject({ kind: 'decision', solver: 'exact' });
+  it('counts every pool action against the spike pair cap', async () => {
+    const prefs = snapshot(empty);
+    const result = await selectByRegret(decisionState, pick([A, B, U]), guardRows, prefs, portsWith(() => undefined),
+      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000, pairCap: 2 });
+    // Three actions make 6 ordered pairs: above the cap of 2.
+    expect(result).toMatchObject({ kind: 'decision', solver: 'fallback-central', solverFallbackReason: 'spike-pair-cap' });
   });
 });
 
-describe('capability targets before price and preferences', () => {
-  const costProfile: UserRoutingPreferencesV1 = {
-    version: 1, settledImplementation: 'lower_cost', openDesignDecisions: 'lower_cost',
-    handoffWarmCache: 'keep_warm_incumbent', researchTasks: 'lower_cost', afterRework: 'increase_effort',
-  };
+describe('capability shortfall is a diagnostic, not a priority', () => {
   const free = { ...cheap, cost: { input: 0, output: 0 } };
-  const pool = [free, strong].map((m) => ({ model: m, action: enumerateEffectiveActions(m)[0]! }));
-  const prefs = snapshot(costProfile);
+  const pool = pick([free, strong]);
+  const prefs = snapshot(COST_PROFILE);
   let costArtifact: DomainArtifact;
-  beforeAll(async () => { costArtifact = await compileDomainArtifact(costProfile, lp); });
-  const run = (bench: BenchModel[], fallback: 'exact' | 'not-ready' | 'cap' = 'exact') =>
-    selectByRegret(decisionState, pool, bench, prefs, portsWith(() => fallback === 'not-ready' ? undefined : costArtifact),
-      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000, ...(fallback === 'cap' ? { pairCap: 0 } : {}) });
+  let capabilityArtifact: DomainArtifact;
+  beforeAll(async () => {
+    costArtifact = await compileDomainArtifact(COST_PROFILE, lp);
+    capabilityArtifact = await compileDomainArtifact(CAPABILITY_PROFILE, lp);
+  });
+  type Path = 'exact' | 'domain-not-ready' | 'pair-cap' | 'solver-failure';
+  const run = (bench: BenchModel[], path: Path = 'exact') =>
+    selectByRegret(decisionState, pool, bench, prefs,
+      portsWith(() => (path === 'domain-not-ready' ? undefined : costArtifact), path === 'solver-failure' ? BROKEN_LP : lp),
+      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000, ...(path === 'pair-cap' ? { pairCap: 0 } : {}) });
 
-  it.each(['exact', 'not-ready', 'cap'] as const)('a free model just below the target cannot beat a model that meets it (%s)', async (mode) => {
-    const result = await run([benchRow('c/cheap', 54.99, 65), benchRow('s/strong', 55, 60)], mode);
-    expect(result).toMatchObject({ chosen: 's/strong:high', ranking: ['s/strong:high', 'c/cheap:high'], solver: mode === 'exact' ? 'exact' : 'fallback-central' });
+  it.each(['exact', 'domain-not-ready', 'pair-cap', 'solver-failure'] as const)('a free model just below the reasoning target beats a costlier model that meets it (%s)', async (path) => {
+    const result = await run([benchRow('c/cheap', 54.99, 65), benchRow('s/strong', 55, 60)], path);
     if (result.kind !== 'decision') throw new Error('expected decision');
+    expect(result.solver).toBe(path === 'exact' ? 'exact' : 'fallback-central');
     expect(result.actions.find((a) => a.action.registryId === 's/strong')!.capabilityShortfall).toBeCloseTo(0);
     expect(result.actions.find((a) => a.action.registryId === 'c/cheap')!.capabilityShortfall).toBeGreaterThan(0);
+    const features = result.actions.map((a) => a.features);
+    if (path === 'exact') {
+      const expected = oracleRegrets(features, costArtifact.domain);
+      for (const [key, value] of expected) expect(result.maxRegret!.get(key)!).toBeCloseTo(value, 6);
+    } else {
+      expect(result.ranking).toEqual(centralOrder(features, result.theta!));
+    }
+    expect(result.ranking).toEqual(['c/cheap:high', 's/strong:high']);
   });
 
-  it('prefers lower cost within the group that meets every relevant target', async () => {
+  it('prefers lower cost when both actions meet every relevant target', async () => {
     const result = await run([benchRow('c/cheap', 55, 60), benchRow('s/strong', 80, 90)]);
     expect(result).toMatchObject({ chosen: 'c/cheap:high', ranking: ['c/cheap:high', 's/strong:high'] });
   });
 
-  it('chooses the smallest deficit when both bounded capability fits are zero', async () => {
-    const result = await run([benchRow('c/cheap', 60, 0), benchRow('s/strong', 60, 20)]);
-    expect(result).toMatchObject({ chosen: 's/strong:high', ranking: ['s/strong:high', 'c/cheap:high'] });
+  it('two measured actions whose fits both clip to zero are ordered by their other features, with pool regret', async () => {
+    const empty = snapshot({ version: 1 });
+    const result = await selectByRegret(decisionState, pool, [benchRow('c/cheap', 60, 0), benchRow('s/strong', 60, 20)], empty, portsWith(() => undefined),
+      { expectedProfileDigest: empty.digest, decisionDeadlineMs: 5_000 });
     if (result.kind !== 'decision') throw new Error('expected decision');
-    expect(result.actions[0]!.capabilityShortfall).toBeCloseTo(3);
-    expect(result.actions[1]!.capabilityShortfall).toBeCloseTo(2);
+    const byKey = new Map(result.actions.map((a) => [a.action.key, a]));
+    expect(byKey.get('c/cheap:high')!.capabilityShortfall).toBeCloseTo(3);
+    expect(byKey.get('s/strong:high')!.capabilityShortfall).toBeCloseTo(2);
+    expect(byKey.get('c/cheap:high')!.features.values[1]).toBe(0);
+    expect(byKey.get('s/strong:high')!.features.values[1]).toBe(0);
+    const [c, s] = [byKey.get('c/cheap:high')!.features, byKey.get('s/strong:high')!.features];
+    const pr = (a: ActionFeatureVector, b: ActionFeatureVector) => Math.max(0, greedyBoxSimplexMax(b.upper.map((u, j) => u - a.lower[j]!), THETA_BOUNDS));
+    expect(result.maxRegret!.get('c/cheap:high')).toBeCloseTo(pr(c, s), 9);
+    expect(result.maxRegret!.get('s/strong:high')).toBeCloseTo(pr(s, c), 9);
+    expect(pr(s, c)).toBeGreaterThan(pr(c, s));
+    expect(result.chosen).toBe('c/cheap:high');
   });
 
-  it('keeps uncertain quality above measured weak quality without narrowing its interval', async () => {
+  it('a change only in a clipped shortfall changes no feature, ranking or regret', async () => {
+    // Terminal-Bench 0 and 30 both miss the highest agentic target by more than the fit scale.
+    const [low, high] = await Promise.all([0, 30].map((terminalBench) => run([benchRow('c/cheap', 60, terminalBench), benchRow('s/strong', 60, 20)])));
+    if (low!.kind !== 'decision' || high!.kind !== 'decision') throw new Error('expected decisions');
+    const shortfall = (result: UnifiedDecision) => result.actions.find((a) => a.action.key === 'c/cheap:high')!.capabilityShortfall;
+    expect(shortfall(low!)).toBeGreaterThan(2);
+    expect(shortfall(high!)).toBeLessThan(2);
+    expect(high!.actions.map((a) => a.features)).toEqual(low!.actions.map((a) => a.features));
+    expect(high!.ranking).toEqual(low!.ranking);
+    expect([...high!.maxRegret!]).toEqual([...low!.maxRegret!]);
+  });
+
+  it('the preference domain reverses the order of a cheaper model with a reasoning shortfall', async () => {
+    const bench = [benchRow('c/cheap', 45, 55), benchRow('s/strong', 70, 55)];
+    const pair = pick([cheap, strong]);
+    const select = (profile: UserRoutingPreferencesV1, artifact: DomainArtifact) => {
+      const preferences = snapshot(profile);
+      return selectByRegret(decisionState, pair, bench, preferences, portsWith(() => artifact),
+        { expectedProfileDigest: preferences.digest, decisionDeadlineMs: 5_000 });
+    };
+    const cost = await select(COST_PROFILE, costArtifact);
+    const capability = await select(CAPABILITY_PROFILE, capabilityArtifact);
+    if (cost.kind !== 'decision' || capability.kind !== 'decision') throw new Error('expected decisions');
+    expect(cost.actions.find((a) => a.action.key === 'c/cheap:high')!.capabilityShortfall)
+      .toBeGreaterThan(cost.actions.find((a) => a.action.key === 's/strong:high')!.capabilityShortfall);
+    expect([cost.solver, capability.solver]).toEqual(['exact', 'exact']);
+    expect(cost.chosen).toBe('c/cheap:high');
+    expect(capability.chosen).toBe('s/strong:high');
+  });
+
+  it('keeps uncertain quality uncertain without narrowing its interval', async () => {
     const estimated = { ...benchRow('c/cheap', 60, 0), axisProvenance: { intelligence: 'measured', agenticCoding: 'source-estimated' } } as BenchModel;
     const result = await run([estimated, benchRow('s/strong', 60, 20)]);
     expect(result).toMatchObject({ chosen: 'c/cheap:high', insufficientEvidence: [] });
@@ -427,6 +572,15 @@ describe('capability targets before price and preferences', () => {
     const uncertain = result.actions.find((a) => a.action.registryId === 'c/cheap')!;
     expect(uncertain.capabilityShortfall).toBe(0);
     expect([uncertain.features.lower[1], uncertain.features.upper[1]]).toEqual([0, 1]);
+  });
+
+  it('a wider interval never lowers the action\'s own regret', async () => {
+    const measured = benchRow('c/cheap', 60, 40);
+    const estimated = { ...measured, axisProvenance: { intelligence: 'measured', agenticCoding: 'source-estimated' } } as BenchModel;
+    const [narrow, wide] = await Promise.all([measured, estimated].map((row) => run([row, benchRow('s/strong', 60, 20)])));
+    if (narrow!.kind !== 'decision' || wide!.kind !== 'decision') throw new Error('expected decisions');
+    const own = (result: UnifiedDecision) => result.maxRegret!.get('c/cheap:high')!;
+    expect(own(wide!)).toBeGreaterThanOrEqual(own(narrow!) - 1e-9);
   });
 });
 

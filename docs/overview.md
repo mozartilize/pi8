@@ -19,7 +19,7 @@ Every model call serves the user's request.
 | [Getting started](getting-started.md) | Requirements, installation, first sync, and first routed turn |
 | [Configuration](configuration.md) | Options, defaults, model patterns, and environment variables |
 | [Command reference](commands.md) | Commands, arguments, persistence, and examples |
-| [Routing](routing.md) | Task types, capability tiers, effort, scoring, and recovery |
+| [Routing](routing.md) | Task types, capability targets, the comparison pool, effort, scoring, and recovery |
 | [Architecture](#architecture) | System boundaries, data flow, session state, and implementation map |
 | [Scoring](scoring.md) | Candidate expansion, quality references, price/speed scales, cache credit, and effort |
 | [Delegation](delegation.md) | Attempts, retries, provider exclusions, output safety, and manual/resume state |

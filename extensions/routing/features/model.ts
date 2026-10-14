@@ -124,7 +124,9 @@ export const difficultyDetail = (state: Pick<DecisionStateV1, 'difficulty'>): st
 /**
  * Axes this decision requires evidence for that the row lacks: the phase's
  * axes, vision when the input has an image, and long-context quality when the
- * estimated context reaches the long-context relevance size.
+ * estimated context reaches the long-context relevance size. The result is a
+ * diagnostic. Missing quality is already an uncertainty interval in the
+ * features, so a gap does not remove an action from the comparison.
  */
 export function evidenceGaps(row: BenchModel | undefined, state: DecisionStateV1): ProvenanceAxis[] {
   const collecting = state.phase === 'gather' && state.contextAcquisition === true;
@@ -135,7 +137,7 @@ export function evidenceGaps(row: BenchModel | undefined, state: DecisionStateV1
 }
 
 export interface CapabilityFeature {
-  /** Optimistic shortfall on the axis scale. Missing quality cannot prove a deficit. */
+  /** Diagnostic: optimistic shortfall on the axis scale. Missing quality cannot prove a deficit. */
   shortfall?: number;
   name: FeatureName;
   interval: Interval;
@@ -182,7 +184,7 @@ export function capabilityFeatures(row: BenchModel | undefined, state: DecisionS
   const demandFeature = (axis: keyof TaskRelevance, interval: Interval, observations: AxisObservation[], extra: string[] = []): CapabilityFeature => ({
     ...feature(`${axis}Fit`, fit(interval, axis), observations,
       [...extra, difficulty, `target:${axis}:${targets[axis].toFixed(3)}`]),
-    // Do not clip the deficit: when all actions miss, the nearest must still rank first.
+    // The diagnostic is not clipped, so logs show how far below the target an action is.
     shortfall: relevance[axis] === 0 ? 0 : Math.max(0, (targets[axis] - interval.upper) / CAPABILITY_SHORTFALL[axis]),
   });
   return [

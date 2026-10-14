@@ -11,9 +11,9 @@ Saved benchmark data + Pi registry
                  |
        Expand model and effort candidates
                  |
-       Apply capability tiers
+       Compute features and uncertainty intervals
                  |
-       Rank candidates within each tier
+       Rank every authorized action in one pool
                  |
        Delegate with a fallback chain
 ```
@@ -56,21 +56,29 @@ The target interpolates linearly between its endpoints. These endpoints and shor
 
 For quality `q`, target `t`, and shortfall scale `w`, capability fit is `clamp(1 − max(0, t − q) / w, 0, 1)`. Surplus capability earns no extra fit. Phase relevance multiplies this fit; demand does not change relevance or price sensitivity.
 
-## Capability tiers
+## One comparison pool
 
-First, the selector separates actions that lack evidence for required axes. Those actions remain at the end of the fallback chain. If every action lacks required evidence, all actions are compared and the decision records this condition.
+Permission and technical guards decide which actions may serve. Every action that passes them enters one comparison pool. Exact minimax regret ranks that whole pool. When exact selection is not available, a central fallback ranks the same pool with one weight vector. The decision records which method ran. Central fallback is not minimax regret.
 
-Within the compared set, the selector computes `max(0, (target − upperQuality) / shortfallScale)` for each relevant axis. The largest shortfall determines the action's capability tier. The deficit is not clipped at one. Thus two actions far below a target can still be distinguished.
+Capability enters the comparison only as features. An action below a target gets a lower capability fit. The preference weight domain decides how much that fit counts against price, speed, and continuity. Two actions whose fits on an axis both clip to zero have the same feature value on that axis, whatever their shortfalls.
 
-Smaller deficits rank first. Equal deficits form one tier. A zero deficit means the available evidence establishes no shortfall; it does not certify task success. Unknown and source-estimated quality retain their full uncertainty interval. They cannot establish a deficit from their central estimate alone. A measured failure on another axis still counts.
+Missing quality evidence is uncertainty, not a reason to rank an action last. Missing and source-estimated quality use the full `[0, 1]` interval. With equal bounds and other features, they have the same exact regret. Their central fallback scores can differ because their central values differ.
 
-Minimax regret applies preferences within each tier. Central fallback follows the same tier order. Price, speed, cache credit, and continuity cannot compensate for a larger deficit. Every tier remains in the fallback chain. Logged regret values are comparable only within a tier.
+Exact decisions record `regretScope: pool`. Their regret values are comparable across all ranked actions. A record without this marker can contain regret values that are comparable only among actions of equal shortfall.
+
+## Diagnostics
+
+The selector also computes `max(0, (target − upperQuality) / shortfallScale)` for each relevant axis and logs the largest value as `capabilityShortfall`. It also lists the actions that lack evidence for the phase's required axes. These values explain a decision. They never filter, group, rank, or break ties.
+
+A zero shortfall means the available evidence establishes no deficit; it does not certify task success. Unknown and source-estimated quality cannot establish a deficit from their central estimate alone.
 
 Axes with zero phase relevance do not contribute a shortfall. Vision and long-context evidence rules remain separate from these three targets.
 
 ## Collecting context
 
 Collecting context is not the same work as a `gather` deliverable. The host marks a decision as collecting context only when all of these are true: the routed task type is `gather`, the entry is collecting context with read-only tools, and the model has not declared a direct answer. The model's prose cannot set this mark.
+
+The one clarification request also has this mark. After `needs-user`, or when the request budget is used up, the reply only asks the user for the missing information, without tools. The deliverable's demand does not apply to that reply.
 
 While collecting context:
 
@@ -100,7 +108,9 @@ The logged scalar difficulty is the maximum of the three axis demands. Selection
 
 Predicted spend uses registry input, output, and eligible cache prices. Benchmark output demand scales the predicted output tokens at the action's effort. Cost desirability is logarithmic from $0.00001 to $10 per invocation. A known zero price is free; an unknown price is not zero.
 
-Latency is an output-token proxy, not measured task wall time. Demand changes neither the cost nor time transform. Cache estimates are not guaranteed cache hits. Preferences apply only within capability tiers.
+Prompt tokens are estimated from characters. Each provider bills its own tokens: a different tokenizer and request text that the provider adds. After each attempt with a complete usage report, the router records the billed prompt tokens (input, cache read, and cache write) divided by the estimate. Requests under 2,000 estimated tokens, requests with images, and ratios outside 0.5–4 are not recorded. The scale of a model is a moving average of these ratios (weight 0.3 for each new ratio). A model without a scale takes the mean scale of observed models with the same registry API. Predicted spend multiplies the prompt and its warm prefix by the scale. The context-window fit check uses the estimate without the scale. The scales persist in `prompt-token-scales.json` in the storage directory. Decision traces show `promptTokenScale` when it is not 1.
+
+Latency is an output-token proxy, not measured task wall time. Demand changes neither the cost nor time transform. Cache estimates are not guaranteed cache hits. Preferences set the trade-off between these features and capability fit.
 
 The offline target probe uses API catalog prices, including Anthropic prices for its bridge proxy. Production still uses the registered prices. There is no `apiCostModels` configuration.
 
@@ -136,7 +146,7 @@ See [Delegation](delegation.md) for retry counts, provider exclusions, attempt b
 
 ## Evaluation comparator
 
-`PI8_POLICY_VERSION=cheapest-sufficient` selects the retained evaluation comparator. The automatic selector uses the targets and tiers described above.
+`PI8_POLICY_VERSION=cheapest-sufficient` selects the retained evaluation comparator. The automatic selector uses the targets and the single comparison pool described above.
 
 The comparator uses Intelligence for every implementation requirement. The default minimum is `0.65 × 57.6`, or approximately 37.4.
 
@@ -150,7 +160,7 @@ Paid evaluations and production activation require separate approval.
 
 | Source | Responsibility |
 |---|---|
-| [Selector](../extensions/routing/optimization/select.ts) | Capability tiers and within-tier preferences |
+| [Selector](../extensions/routing/optimization/select.ts) | One-pool minimax regret and its central fallback |
 | [Feature mapping](../extensions/routing/features/mapping.ts) | Absolute targets, shortfall scales, and feature transforms |
 | [Difficulty](../extensions/routing/features/difficulty.ts) | Axis demands from accepted declarations |
 | [Work phase](../extensions/routing/policy/work-phase.ts) | Final-step requirements and handoff minimums |

@@ -1,7 +1,10 @@
 /**
  * The single automatic ranking API of the unified router.
- * Capability shortfall orders tiers before preferences. Regret and central
- * fallback compare actions only within a tier. Every tier stays in the chain.
+ * Every authorized action enters one comparison pool. Exact minimax regret,
+ * or its labeled central fallback, ranks that whole pool. Capability
+ * shortfall and evidence gaps are diagnostics: they never filter, group,
+ * rank or break ties. Capability and uncertainty enter only as features and
+ * their intervals.
  *
  * Inputs are legal actions only: hard guards (pins, availability,
  * blacklists, ownership, impossible modality) run before this call and are
@@ -63,16 +66,16 @@ export interface UnifiedDecision {
   totalSlack?: number;
   /** Absent only for `no-feasible-action`. */
   chosen?: string;
-  /**
-   * Every legal action, best first. Operational fallback keeps all of them.
-   * Actions without evidence for the phase's required axes come last.
-   */
+  /** Every legal action, best first. Operational fallback keeps all of them. */
   ranking: string[];
-  /** Actions in the ranking tail for lack of evidence. They were not compared by regret. */
+  /**
+   * Diagnostic: actions without evidence for a required quality axis. They
+   * compete in the same pool; their missing quality is an uncertainty interval.
+   */
   insufficientEvidence: string[];
-  /** True when no action had the required evidence, so all were compared. */
+  /** Diagnostic: true when no action had evidence for every required axis. */
   allInsufficient: boolean;
-  /** Regret within each capability tier; values from different tiers are not comparable. */
+  /** Exact max regret of every action against the whole pool. Absent for a central fallback. */
   maxRegret?: ReadonlyMap<string, number>;
   /** Weight vector of a central fallback. */
   theta?: readonly number[];
@@ -182,21 +185,6 @@ const toSelectable = (features: ActionFeatures): SelectableAction => ({
   ...(features.spend.priceKnown ? { centralUsd: features.spend.centralUSD } : {}),
 });
 
-/** Equal deficits form one tier. Rounding removes floating-point noise, not meaningful shortfalls. */
-function capabilityTiers(actions: readonly ActionFeatures[]): SelectableAction[][] {
-  const groups = new Map<number, SelectableAction[]>();
-  for (const action of actions) {
-    const deficit = Math.round(action.capabilityShortfall * 1e9) / 1e9;
-    const group = groups.get(deficit) ?? [];
-    group.push(toSelectable(action));
-    groups.set(deficit, group);
-  }
-  return [...groups].sort(([a], [b]) => a - b).map(([, group]) => group);
-}
-
-const centralRanking = (tiers: readonly SelectableAction[][], theta: readonly number[]): string[] =>
-  tiers.flatMap((tier) => centralChoice(tier, theta).ranking);
-
 function classifySolverFailure(error: unknown): SolverFallbackReason {
   if (error instanceof LpTimeoutError) return 'timeout';
   if (error instanceof LpVerificationError) return 'numerical';
@@ -225,16 +213,10 @@ export async function selectByRegret(
   const actions = candidates
     .filter((candidate) => !allowed || allowed.has(candidate.action.key))
     .map((candidate) => candidateFeatures(state, candidate.model, candidate.action, rows));
-  // A model without evidence for the required axes stays callable but is not compared.
-  const withEvidence = actions.filter((features) => features.evidenceGaps.length === 0);
-  const allInsufficient = actions.length > 0 && withEvidence.length === 0;
-  const compared = allInsufficient ? actions : withEvidence;
-  const tail = allInsufficient ? [] : actions.filter((features) => features.evidenceGaps.length > 0);
-  const tiers = capabilityTiers(compared);
-  const tailTiers = capabilityTiers(tail);
-  const insufficientEvidence = tail.map((features) => features.features.key).sort();
-  const withTail = (ranking: readonly string[], theta: readonly number[]): string[] =>
-    [...ranking, ...centralRanking(tailTiers, theta)];
+  const pool = actions.map(toSelectable);
+  const insufficientEvidence = actions.filter((features) => features.evidenceGaps.length > 0)
+    .map((features) => features.features.key).sort();
+  const allInsufficient = actions.length > 0 && insufficientEvidence.length === actions.length;
   const base = {
     kind: 'decision' as const,
     profileDigest: preferences.digest,
@@ -258,11 +240,10 @@ export async function selectByRegret(
     constraintsEnforced: boolean,
     compiled?: DomainArtifact,
   ): UnifiedDecision => {
-    const ranking = centralRanking(tiers, theta);
-    const chosen = ranking[0];
+    const { chosen, ranking } = centralChoice(pool, theta);
     return {
       ...base, solver: 'fallback-central', solverFallbackReason: reason, domainStatus, constraintsEnforced,
-      chosen, ranking: withTail(ranking, theta), theta,
+      chosen, ranking, theta,
       ...(compiled ? { compiledDomainIdentity: compiled.identity, ...domainBinding(compiled) } : {}),
     };
   };
@@ -302,21 +283,15 @@ export async function selectByRegret(
     return finish(central(notReady!.reason, notReady!.status, THETA0, false));
   }
   const enforced = true;
-  if (controls.pairCap !== undefined && compared.length * (compared.length - 1) > controls.pairCap) {
+  if (controls.pairCap !== undefined && pool.length * (pool.length - 1) > controls.pairCap) {
     return finish(central('spike-pair-cap', 'ready', artifact.thetaRepresentative, enforced, artifact));
   }
   try {
-    const ranking: string[] = [];
-    const maxRegret = new Map<string, number>();
-    for (const tier of tiers) {
-      const exact = await solveMinimaxRegret(tier, artifact.domain, ports.lp, { signal: controls.signal, deadlineAt });
-      ranking.push(...exact.ranking);
-      for (const [key, regret] of exact.maxRegret) maxRegret.set(key, regret);
-    }
+    const exact = await solveMinimaxRegret(pool, artifact.domain, ports.lp, { signal: controls.signal, deadlineAt });
     if (controls.signal?.aborted) return { kind: 'cancelled' };
     return finish({
       ...base, solver: 'exact', domainStatus: 'ready', constraintsEnforced: enforced,
-      chosen: ranking[0], ranking: withTail(ranking, artifact.thetaRepresentative), maxRegret,
+      chosen: exact.chosen, ranking: [...exact.ranking], maxRegret: exact.maxRegret,
       compiledDomainIdentity: artifact.identity, ...domainBinding(artifact),
     });
   } catch (error) {

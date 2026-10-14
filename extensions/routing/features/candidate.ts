@@ -17,9 +17,12 @@ export interface ActionFeatures {
   action: EffectiveAction;
   features: ActionFeatureVector;
   spend: PredictedSpendV1;
-  /** Required quality axes without evidence; empty when the action can be compared. */
+  /** Diagnostic: required quality axes without evidence. Never filters or orders actions. */
   evidenceGaps: ProvenanceAxis[];
-  /** Largest relevant-axis shortfall. Zero means no deficit is established by the evidence. */
+  /**
+   * Diagnostic: largest relevant-axis shortfall. Zero means the evidence
+   * establishes no deficit. Never filters, groups or orders actions.
+   */
   capabilityShortfall: number;
 }
 

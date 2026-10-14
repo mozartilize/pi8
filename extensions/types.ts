@@ -387,9 +387,13 @@ export interface UnifiedActionTrace {
   key: string;
   /** Position in the full ranking, starting at 1. */
   rank: number;
-  /** Capability tier key: smaller deficits rank before larger deficits. */
+  /** Diagnostic: largest relevant-axis shortfall. It does not order actions. */
   capabilityShortfall?: number;
-  /** Exact max regret within the capability tier; absent for a central fallback. */
+  /**
+   * Exact max regret; absent for a central fallback. With `regretScope: 'pool'`
+   * the value is against the whole pool. A record without that marker can hold
+   * values that are comparable only among actions of equal shortfall.
+   */
   maxRegret?: number;
   /** Dot product of the fallback weights and the central features; absent for an exact decision. */
   centralScore?: number;
@@ -397,6 +401,8 @@ export interface UnifiedActionTrace {
   features: Record<string, number>;
   /** Predicted spend in USD; absent when the price is unknown. */
   costUsd?: { central: number; min?: number; max?: number };
+  /** Billed prompt tokens per estimated token of the action's model; absent when 1. */
+  promptTokenScale?: number;
   /** Required quality axes without evidence. */
   evidenceGaps: string[];
 }
@@ -416,9 +422,11 @@ export interface UnifiedDecisionMeta {
   compiledDomainIdentity?: string;
   benchmarkSnapshotDigest?: string;
   featureSchemaDigest: string;
+  /** Present on exact decisions whose regret values compare every ranked action. */
+  regretScope?: 'pool';
   /** Legal actions in the ranking. */
   ranked: number;
-  /** Actions ranked last for lack of required evidence. */
+  /** Diagnostic: ranked actions without evidence for a required quality axis. */
   insufficientEvidence: number;
   /** Ranked actions whose window holds the current prompt. */
   holdingPrompt: number;
