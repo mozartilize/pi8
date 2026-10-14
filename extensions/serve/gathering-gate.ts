@@ -142,7 +142,7 @@ export function workChoiceNote(state: WorkPhaseState): string {
   })}. For outcome "ready", choose an offered workItemId, or NEW_WORK_ITEM with a short workItemTitle. ` +
     'For outcome "ready", use topicId NEW_TOPIC and a short topicTitle for a new topic. ' +
     'For an existing topic, use its offered topicId. Do not infer identity from the active item alone. ' +
-    'For outcome "answer", omit work and topic fields. You may use workItemId "NONE".' : '';
+    'For outcome "answer", omit topicId, topicTitle, and workItemTitle. You may use workItemId "NONE".' : '';
 }
 
 /** Byte-identical across the entry's collect invocations. */

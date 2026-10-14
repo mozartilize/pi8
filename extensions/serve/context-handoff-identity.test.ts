@@ -251,6 +251,27 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(harness.session.context.getLedger().items.size).toBe(1);
   });
 
+  it('names each identity field to remove from an answer, and ignores empty ones', async () => {
+    await entry('find the source handlers');
+    const result = await handoff({
+      ...READY, outcome: 'answer', deliverable: 'gather',
+      workItemId: 'NONE', topicId: 'NEW_TOPIC', topicTitle: 'Handlers', workItemTitle: '',
+    });
+    expect(result.accepted).toBe(false);
+    expect(result.text).toMatch(/Remove these fields: topicId, topicTitle\.$/);
+  });
+
+  it('accepts an answer whose work and topic fields are empty strings', async () => {
+    await entry('find the source handlers');
+    const result = await handoff({
+      ...READY, outcome: 'answer', deliverable: 'gather',
+      workItemId: ' ', topicId: '', topicTitle: '', workItemTitle: '',
+    });
+    expect(result.accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()?.contextAnswer).toBe('gather');
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+  });
+
   it.each([undefined, 'NONE'])('accepts a gather answer with workItemId %s without creating work', async (workItemId) => {
     await entry('explain the supplied result');
     expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', workItemId })).accepted).toBe(true);
