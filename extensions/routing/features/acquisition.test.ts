@@ -74,9 +74,10 @@ describe('capabilities while collecting context', () => {
 
   it('uses gather-deliverable targets and research evidence without the mark', () => {
     const result = at({ ...state, contextAcquisition: false });
-    expect(result.capabilityShortfall).toBeCloseTo(3.25);
+    // Research quality zero misses even the easiest target (0.25) by 1.25 shortfall units.
+    expect(result.capabilityShortfall).toBeCloseTo(1.25);
     expect(research(result)).toEqual([0, 0, 0]);
-    expect(result.features.evidence.find((e) => e.feature === 'reasoningFit')?.details).toContain('target:reasoning:0.550');
+    expect(result.features.evidence.find((e) => e.feature === 'reasoningFit')?.details).toContain('target-bounds:reasoning:0.200:0.550');
     expect(at({ ...state, contextAcquisition: false }, { ...row, quality: { intelligence: 20 } }).evidenceGaps).toEqual(['research']);
   });
 });

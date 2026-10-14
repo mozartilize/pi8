@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { capabilityFit, capabilityTarget } from './mapping.js';
+import { capabilityFit, capabilityTarget, demandInterval } from './mapping.js';
 
 describe('absolute capability targets', () => {
-  it('maps easy, middle and unknown demands independently on each benchmark scale', () => {
+  it('maps known demands independently on each benchmark scale', () => {
     expect(capabilityTarget('reasoning', 0)).toBeCloseTo(0.2);
     expect(capabilityTarget('reasoning', 0.5)).toBeCloseTo(0.375);
     expect(capabilityTarget('reasoning', 1)).toBeCloseTo(0.55);
     expect(capabilityTarget('agentic', 0.5)).toBeCloseTo(0.305);
     expect(capabilityTarget('research', 0.5)).toBeCloseTo(0.45);
     for (const axis of ['reasoning', 'agentic', 'research'] as const) {
-      expect(capabilityTarget(axis, undefined)).toEqual(capabilityTarget(axis, 1));
-      expect(capabilityTarget(axis, NaN)).toEqual(capabilityTarget(axis, 1));
+      expect(demandInterval(undefined, axis)).toEqual({ center: 0.5, lower: 0, upper: 1 });
+      expect(demandInterval({ value: NaN, source: 'reasoning-rubric' }, axis)).toEqual({ center: 0.5, lower: 0, upper: 1 });
       expect(capabilityTarget(axis, -1)).toEqual(capabilityTarget(axis, 0));
       expect(capabilityTarget(axis, 2)).toEqual(capabilityTarget(axis, 1));
     }

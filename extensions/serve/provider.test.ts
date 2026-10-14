@@ -1996,10 +1996,16 @@ describe('context acquisition', () => {
       // The entry stays restricted to read tools, but writing the answer is the gather deliverable.
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
       expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
-      expect(trace()?.features.reasoningFit).toBe(0);
+      // Routine demand centers at 0.25: target 0.2875 against quality 0.20.
+      expect(trace()?.features.reasoningFit).toBeCloseTo(1 / 6, 5);
       expect(trace()?.features.researchFit).toBe(1);
-      expect(trace()?.capabilityShortfall).toBeCloseTo(7 / 3, 5);
-      expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBe('direct-answer');
+      // The optimistic shortfall uses demand 0.125: target 0.24375.
+      expect(trace()?.capabilityShortfall).toBeCloseTo(7 / 24, 5);
+      expect(harness.getProviderState().lastDecision?.unified).toMatchObject({
+        difficulty: 0.25, difficultySource: 'declared-complexity',
+        difficultyBounds: { reasoning: { lower: 0.125, upper: 0.375 } },
+      });
+      expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBeUndefined();
     });
 
     it('scores the clarification request after needs-user as collecting context, not as the deliverable', async () => {

@@ -8,7 +8,8 @@
  * benchmark refresh changes candidate observations, never these mappings.
  * No caller may define its own normalization, default or relevance.
  */
-import type { Dimension, ProvenanceAxis } from '../../types.js';
+import type { ComplexityBand, Dimension, ProvenanceAxis } from '../../types.js';
+import type { DemandInterval, TaskDifficulty } from './state.js';
 
 export const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -142,11 +143,29 @@ export const ACQUISITION_REASONING_TARGET = 0.20;
 /** Research does not distinguish actions while collecting context. */
 export const ACQUISITION_RESEARCH_VALUE = 0.5;
 
-/** Unknown deliverable demand uses the highest target without claiming that it was measured. */
-export function capabilityTarget(axis: keyof TaskRelevance, difficulty: number | undefined): number {
+/** Complexity bands span half a rubric step on each side, clipped to [0, 1]. These are policy bounds, not confidence intervals. */
+export const COMPLEXITY_DEMAND: Readonly<Record<ComplexityBand, Readonly<DemandInterval>>> = {
+  trivial: { center: 0, lower: 0, upper: 0.125 },
+  routine: { center: 0.25, lower: 0.125, upper: 0.375 },
+  moderate: { center: 0.5, lower: 0.375, upper: 0.625 },
+  hard: { center: 0.75, lower: 0.625, upper: 0.875 },
+  frontier: { center: 1, lower: 0.875, upper: 1 },
+};
+
+/** Unknown demand retains the whole range. A valid declaration supplies an axis-specific bound. */
+export function demandInterval(difficulty: TaskDifficulty | undefined, axis: keyof TaskRelevance): DemandInterval {
+  const value = difficulty?.axes?.[axis] ?? difficulty?.value;
+  const bounds = difficulty?.bounds?.[axis];
+  if (value === undefined || !Number.isFinite(value)
+    || (bounds && (!Number.isFinite(bounds.lower) || !Number.isFinite(bounds.upper)
+      || bounds.lower > value || bounds.upper < value))) return { center: 0.5, lower: 0, upper: 1 };
+  return { center: clamp01(value), lower: clamp01(bounds?.lower ?? value), upper: clamp01(bounds?.upper ?? value) };
+}
+
+/** Target of one known demand value. Unknown demand is represented by `demandInterval`. */
+export function capabilityTarget(axis: keyof TaskRelevance, difficulty: number): number {
   const [easy, hard] = CAPABILITY_TARGETS[axis];
-  const demand = difficulty === undefined || !Number.isFinite(difficulty) ? 1 : clamp01(difficulty);
-  return easy + (hard - easy) * demand;
+  return easy + (hard - easy) * clamp01(difficulty);
 }
 
 /** A fixed shortfall spans the fit scale; raising the target must not divide away capability differences. */

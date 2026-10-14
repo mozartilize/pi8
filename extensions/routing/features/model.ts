@@ -24,6 +24,7 @@ import {
   normalizeTerminalBench,
   capabilityFit,
   capabilityTarget,
+  demandInterval,
   CAPABILITY_SHORTFALL,
   ACQUISITION_REASONING_TARGET,
   ACQUISITION_RESEARCH_VALUE,
@@ -172,20 +173,26 @@ export function capabilityFeatures(row: BenchModel | undefined, state: DecisionS
     : feature('inputFit', combine(relevantInputs.map((o) => [componentInterval(o), 1 / relevantInputs.length])), relevantInputs);
 
   const difficulty = difficultyDetail(state);
-  const target = (axis: keyof TaskRelevance): number =>
-    collecting && axis === 'reasoning' ? ACQUISITION_REASONING_TARGET
-      : capabilityTarget(axis, state.difficulty?.axes?.[axis] ?? state.difficulty?.value);
-  const targets: TaskRelevance = { reasoning: target('reasoning'), agentic: target('agentic'), research: target('research') };
+  const target = (axis: keyof TaskRelevance): Interval => {
+    if (collecting && axis === 'reasoning') return {
+      center: ACQUISITION_REASONING_TARGET, lower: ACQUISITION_REASONING_TARGET, upper: ACQUISITION_REASONING_TARGET,
+    };
+    const demand = demandInterval(state.difficulty, axis);
+    return { center: capabilityTarget(axis, demand.center), lower: capabilityTarget(axis, demand.lower), upper: capabilityTarget(axis, demand.upper) };
+  };
+  const targets = { reasoning: target('reasoning'), agentic: target('agentic'), research: target('research') };
+  // Fit increases with quality and decreases with demand. Cross the bounds accordingly.
   const fit = (interval: Interval, axis: keyof TaskRelevance): Interval => scale({
-    center: capabilityFit(interval.center, targets[axis], axis),
-    lower: capabilityFit(interval.lower, targets[axis], axis),
-    upper: capabilityFit(interval.upper, targets[axis], axis),
+    center: capabilityFit(interval.center, targets[axis].center, axis),
+    lower: capabilityFit(interval.lower, targets[axis].upper, axis),
+    upper: capabilityFit(interval.upper, targets[axis].lower, axis),
   }, relevance[axis]);
   const demandFeature = (axis: keyof TaskRelevance, interval: Interval, observations: AxisObservation[], extra: string[] = []): CapabilityFeature => ({
     ...feature(`${axis}Fit`, fit(interval, axis), observations,
-      [...extra, difficulty, `target:${axis}:${targets[axis].toFixed(3)}`]),
-    // The diagnostic is not clipped, so logs show how far below the target an action is.
-    shortfall: relevance[axis] === 0 ? 0 : Math.max(0, (targets[axis] - interval.upper) / CAPABILITY_SHORTFALL[axis]),
+      [...extra, difficulty, `target:${axis}:${targets[axis].center.toFixed(3)}`,
+        `target-bounds:${axis}:${targets[axis].lower.toFixed(3)}:${targets[axis].upper.toFixed(3)}`]),
+    // The optimistic diagnostic uses the easiest supported target and is not clipped.
+    shortfall: relevance[axis] === 0 ? 0 : Math.max(0, (targets[axis].lower - interval.upper) / CAPABILITY_SHORTFALL[axis]),
   });
   return [
     demandFeature('reasoning', componentInterval(intelligence), [intelligence],

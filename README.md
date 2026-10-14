@@ -58,7 +58,7 @@ The Intelligence normalization uses Artificial Analysis Intelligence Index versi
      planner reviews ──→ new plan → rework (a strike)
 ```
 
-Automatic selection uses separate reasoning, agentic coding, and research targets. Unknown demand uses the highest targets. Collecting context, before a handoff or a declared answer, uses its own lower reasoning target and does not compare research quality. A target sets capability fit; it is not a minimum. Every authorized action competes in one pool, and your preferences set the trade-off between capability fit, price, speed, and continuity. Missing benchmark evidence widens an action's uncertainty instead of ranking it last. See [capability targets](docs/routing.md#capability-targets) and [one comparison pool](docs/routing.md#one-comparison-pool).
+Automatic selection uses separate reasoning, agentic coding, and research targets. Declared complexity bounds demand when no rubric is available. Demand without either declaration spans the full range; it is not treated as a measured hardest task. Collecting context, before a handoff or a declared answer, uses its own lower reasoning target and does not compare research quality. A target sets capability fit; it is not a minimum. Every authorized action competes in one pool, and your preferences set the trade-off between capability fit, price, speed, and continuity. Missing benchmark evidence widens an action's uncertainty instead of ranking it last. See [capability targets](docs/routing.md#capability-targets) and [one comparison pool](docs/routing.md#one-comparison-pool).
 
 ## Commands
 

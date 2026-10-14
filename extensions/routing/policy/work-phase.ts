@@ -1,4 +1,4 @@
-import type { Dimension, ReasoningHandoffMeta } from '../../types.js';
+import type { ComplexityBand, Dimension, ReasoningEvidence, ReasoningHandoffMeta, ReasoningRubric, TaskScope } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
 import type { ContextReason, EntryResolution, ExecutorPenalties } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
@@ -51,6 +51,8 @@ export interface WorkPhaseState {
   contextStatus?: ContextStatus;
   /** A gathering model declared the type of its direct answer; it remains in gathering. */
   contextAnswer?: 'gather' | 'lightweight';
+  /** Direct-answer demand belongs to this entry and creates no handoff or work identity. */
+  contextAnswerDemand?: { complexity: ComplexityBand; scope: TaskScope; rubric?: ReasoningRubric; evidence: ReasoningEvidence };
   /** An incumbent was serving when this entry arrived: it serves the entry, which collects no context. */
   incumbentServes?: boolean;
   /** Bounded choice set while this entry's work identity is not yet known. */

@@ -33,6 +33,8 @@ const registryModel = (provider: string, id: string, extra: Partial<RegistryMode
 
 const state = (patch: Partial<DecisionStateV1> = {}): DecisionStateV1 => ({
   phase: 'implement',
+  // Provenance tests hold demand fixed to isolate benchmark uncertainty.
+  difficulty: { value: 1, source: 'execution-rubric' },
   estimatedContextTokens: 10_000,
   needsVision: false,
   boundary: 'ordinary',
@@ -146,7 +148,7 @@ describe('N2: axis provenance through the real pipeline', () => {
     const p = featuresOf(state(), P, pHigh, rows);
     expectTriple(feature(p, 'reasoningFit'), [0.6, 0.6, 0.6]);
     expectTriple(feature(p, 'agenticFit'), [0.5, 0, 1]);
-    expect(p.evidence.find((e) => e.feature === 'agenticFit')).toMatchObject({ code: 'missing', details: ['agenticCoding:regression-bridge', 'difficulty:unknown', 'target:agentic:0.600'] });
+    expect(p.evidence.find((e) => e.feature === 'agenticFit')).toMatchObject({ code: 'missing', details: ['agenticCoding:regression-bridge', 'difficulty:execution-rubric:1.000', 'target:agentic:0.600', 'target-bounds:agentic:0.600:0.600'] });
     expectTriple(feature(featuresOf(state(), Q, qHigh, rows), 'agenticFit'), [0.25, 0.25, 0.25]);
   });
 
@@ -492,13 +494,13 @@ describe('task difficulty', () => {
     outputSpeedTps: 100,
   }];
   const at = (value?: number, phase: DecisionStateV1['phase'] = 'implement') =>
-    featuresOf(state({ phase, ...(value === undefined ? {} : { difficulty: { value, source: 'execution-rubric' } }) }), model, action, rows);
+    featuresOf(state({ phase, difficulty: value === undefined ? undefined : { value, source: 'execution-rubric' } }), model, action, rows);
   const unknown = at();
 
-  it('unknown demand uses the hardest targets but remains unknown in evidence', () => {
-    expect(unknown.values).toEqual(at(1).values);
+  it('unknown demand spans easy through hard targets without claiming a measurement', () => {
+    expect(unknown.values).toEqual(at(0.5).values);
     expectTriple(feature(unknown, 'reasoningFit'), [0.6, 0.6, 0.6]);
-    expectTriple(feature(unknown, 'agenticFit'), [0, 0, 0]);
+    expectTriple(feature(unknown, 'agenticFit'), [1, 0, 1]);
     expect(unknown.evidence.find((e) => e.feature === 'reasoningFit')!.details).toContain('difficulty:unknown');
   });
 
@@ -528,6 +530,22 @@ describe('task difficulty', () => {
     expect(feature(mixed, 'reasoningFit')).toEqual(feature(at(1), 'reasoningFit'));
     expect(feature(mixed, 'agenticFit')).toEqual(feature(at(0), 'agenticFit'));
     expect(mixed.evidence.find((e) => e.feature === 'researchFit')!.details).toContain('target:research:0.450');
+  });
+
+  it('crosses quality and demand bounds instead of treating demand as a point', () => {
+    const s = state({ phase: 'gather', difficulty: {
+      value: 0.5, source: 'declared-complexity', axes: { reasoning: 0.5, agentic: 0, research: 0.25 },
+      bounds: { reasoning: { lower: 0.25, upper: 0.75 }, agentic: { lower: 0, upper: 0 }, research: { lower: 0.125, upper: 0.375 } },
+    } });
+    const measured = [{ ...rows[0]!, quality: { intelligence: 40, research: 0.4, knowledge: -20 },
+      axisProvenance: { intelligence: 'measured', research: 'measured', knowledge: 'measured' } as const }];
+    const vector = featuresOf(s, model, action, measured);
+    // Reasoning targets [0.2875, 0.375, 0.4625], quality 0.4, relevance 0.4.
+    expectTriple(feature(vector, 'reasoningFit'), [0.4, 7 / 30, 0.4]);
+    // Combined research quality 0.4 meets even the upper target 0.4.
+    expectTriple(feature(vector, 'researchFit'), [1, 1, 1]);
+    const estimated = [{ ...measured[0]!, axisProvenance: { ...measured[0]!.axisProvenance, intelligence: 'source-estimated' as const } }];
+    expectTriple(feature(featuresOf(s, model, action, estimated), 'reasoningFit'), [0.4, 0, 0.4]);
   });
 
   it('keeps every interval ordered, the unknown price included', () => {

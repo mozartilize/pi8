@@ -42,7 +42,7 @@ See [Work lifecycle](work-lifecycle.md) for the declaration tools and execution 
 
 ## Capability targets
 
-Each relevant axis has a demand `D` in [0, 1]. Zero means easy. One means extremely hard or unresolved requirements. Unknown demand uses the target for one, but remains unknown in the evidence.
+Each relevant axis has a demand `D` in [0, 1]. Zero means easy. One means extremely hard or unresolved requirements. A rubric gives an axis-specific demand. Declared complexity gives an interval when no rubric is available. With neither declaration, demand spans `[0, 1]`, with central value 0.5; that value is not a measurement.
 
 Targets use absolute benchmark scales. They do not depend on which models are in the pool.
 
@@ -56,6 +56,8 @@ The target interpolates linearly between its endpoints. These endpoints and shor
 
 For quality `q`, target `t`, and shortfall scale `w`, capability fit is `clamp(1 − max(0, t − q) / w, 0, 1)`. Surplus capability earns no extra fit. Phase relevance multiplies this fit; demand does not change relevance or price sensitivity.
 
+The lower fit uses lower quality and upper demand. The upper fit uses upper quality and lower demand. The central fit uses both central values. Exact minimax regret uses `upperFit(competitor) − lowerFit(candidate)` over the preference weight domain. These independent intervals form a conservative envelope; they do not claim that each action faces a different task. A full unknown-demand interval can still favor stronger models. A supported upper bound removes demands above that bound from the comparison.
+
 ## One comparison pool
 
 Permission and technical guards decide which actions may serve. Every action that passes them enters one comparison pool. Exact minimax regret ranks that whole pool. When exact selection is not available, a central fallback ranks the same pool with one weight vector. The decision records which method ran. Central fallback is not minimax regret.
@@ -68,7 +70,7 @@ Exact decisions record `regretScope: pool`. Their regret values are comparable a
 
 ## Diagnostics
 
-The selector also computes `max(0, (target − upperQuality) / shortfallScale)` for each relevant axis and logs the largest value as `capabilityShortfall`. It also lists the actions that lack evidence for the phase's required axes. These values explain a decision. They never filter, group, rank, or break ties.
+The selector also computes `max(0, (lowerTarget − upperQuality) / shortfallScale)` for each relevant axis and logs the largest value as `capabilityShortfall`. It also lists the actions that lack evidence for the phase's required axes. These values explain a decision. They never filter, group, rank, or break ties.
 
 A zero shortfall means the available evidence establishes no deficit; it does not certify task success. Unknown and source-estimated quality cannot establish a deficit from their central estimate alone.
 
@@ -89,7 +91,7 @@ While collecting context:
 
 The mark ends at an accepted handoff or a declared direct answer. A `gather` answer, and every plan, review, or implementation phase, uses the targets above. The 0.20 target is authored policy. It is not a measured minimum for the quality of collected context.
 
-An investigation is not collecting context. When the answer needs one, for example the cause of a bug, the collecting model hands off with outcome `ready`, deliverable `gather`, and a reasoning rubric. The router then selects the investigator with the rubric's demand, as for a plan or review. A handoff without a rubric leaves the demand unknown, so the highest targets apply. Only an entry that is collecting context can hand off to `gather`.
+An investigation is not collecting context. When the answer needs one, for example the cause of a bug, the collecting model hands off with outcome `ready`, deliverable `gather`, and a reasoning rubric. The router then selects the investigator with the rubric's demand, as for a plan or review. A handoff without a rubric uses its declared complexity bounds. A direct answer retains its reasoning rubric or complexity bounds for the next gather invocation; it creates no work item or handoff. Only an entry that is collecting context can hand off to `gather`.
 
 ## Difficulty declarations
 
@@ -102,7 +104,21 @@ An accepted handoff or execution plan supplies demand only for its target phase.
 
 File measurements supplement agentic demand, capped at one. File count, directory count, existing lines, and fix commits each add at most 0.05. Their full contributions occur at five files, four directories, 4,000 lines, and five fixes. Lines contribute nothing through 250, then increase logarithmically. A failed measurement adds its maximum. Evidence that is not applicable adds nothing.
 
-The logged scalar difficulty is the maximum of the three axis demands. Selection uses the axes, not that summary. Missing rubric criteria inherit the highest supplied level. No rubric means unknown demand, not zero.
+A rubric takes precedence over complexity, including when a low complexity label conflicts with a difficult rubric. Missing rubric criteria inherit the highest supplied level. Without a rubric, complexity supplies these authored bounds on each axis:
+
+| Complexity | Lower | Central | Upper |
+|---|---:|---:|---:|
+| trivial | 0 | 0 | 0.125 |
+| routine | 0.125 | 0.25 | 0.375 |
+| moderate | 0.375 | 0.5 | 0.625 |
+| hard | 0.625 | 0.75 | 0.875 |
+| frontier | 0.875 | 1 | 1 |
+
+Each band extends half a rubric step around its central value, clipped to `[0, 1]`. These are policy bounds from a declaration, not measured confidence intervals. File measurements add to the agentic center and both bounds, capped at one. An open-ended scope keeps the agentic upper bound at one when there is no rubric. A small file set does not reduce a declared demand. Direct answers measure the union of declared files and files read in the entry, as ready handoffs do.
+
+The logged scalar difficulty is the maximum central axis demand. Selection uses the axis bounds, not that summary. Decisions record `difficultySource` and `difficultyBounds`; records with neither declaration retain a missing-demand reason and bounds `[0, 1]`. Demand does not carry into another user entry or an unrelated phase.
+
+This mapping is `feature-v5`. Its digest invalidates compiled domains from other mappings. The stored v1 preference scenarios, their feature vectors, and their cost and time anchors are unchanged; preference answers need no migration.
 
 ## Cost, speed, and cache
 

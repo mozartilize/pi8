@@ -33,7 +33,7 @@ import {
   evidenceShape,
   owedContext,
 } from '../routing/policy/context-acquisition.js';
-import { declaredRubric } from '../routing/policy/execution-difficulty.js';
+import { declaredRubric, parseReasoningRubric } from '../routing/policy/execution-difficulty.js';
 import { withContinuedPenalties, type WorkPhaseState } from '../routing/policy/work-phase.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -61,6 +61,7 @@ const DESCRIPTION =
   'For an implementation, rate only the remaining work that your evidence supports. ' +
   'When the answer needs an investigation, for example the cause of a bug, call it with outcome "ready" and deliverable "gather". ' +
   'Use outcome "answer" only when the context you collected already gives the answer. ' +
+  'For an answer, rate the reasoning left when you can support that rating. ' +
   'For outcome "answer", omit topicId, topicTitle, and workItemTitle. You may use workItemId "NONE". ' +
   'Use facts.decisions to name unresolved choices. Use facts.unknowns to identify missing evidence. ' +
   'Call it with outcome "needs-user" when the request is ' +
@@ -91,9 +92,9 @@ function contextHandoffParameters() {
     scope: Type.Optional(oneOf(SCOPES, 'Required for ready or answer: bounded or open-ended.')),
     files: Type.Optional(Type.Array(Type.String(), {
       maxItems: MAX_EVIDENCE_PATHS,
-      description: 'ready: files the next step rests on. Leave empty when the evidence is in the conversation.',
+      description: 'ready or answer: files the next step rests on. Leave empty when the evidence is in the conversation.',
     })),
-    difficulty: Type.Optional(difficultyParameter('ready, for a plan, review, or investigation (gather): the reasoning left, rated per criterion.')),
+    difficulty: Type.Optional(difficultyParameter('ready or answer, except implementation: the reasoning left, rated per criterion. Without a rubric, declared complexity bounds the demand.')),
     remainingWork: Type.Optional(remainingWorkParameter(
       'ready, for an implementation: what the next model still has to work out, rated 1 (easiest) to 5 (hardest) per criterion.',
     )),
@@ -331,8 +332,12 @@ export function submitContextHandoff(
     const complexity = member(COMPLEXITIES, params.complexity);
     const scope = member(SCOPES, params.scope);
     if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
-    // A direct answer declares its type but creates neither work nor an incumbent.
-    session.commitWorkPhaseState({ ...state, contextAnswer: reported, pendingIdentity: undefined, provisionalGrounding: undefined });
+    if (facts.selectionError) return reject(session, facts.selectionError, state, served);
+    // A direct answer preserves its demand but creates neither work nor an incumbent.
+    const rubric = parseReasoningRubric(params.difficulty);
+    session.commitWorkPhaseState({ ...state, contextAnswer: reported,
+      contextAnswerDemand: { complexity, scope, ...(rubric ? { rubric } : {}), evidence: facts.evidence ?? CONVERSATION_EVIDENCE },
+      pendingIdentity: undefined, provisionalGrounding: undefined });
     log(state, served, 'answer', { deliverable: reported });
     return { accepted: true, text: `Declared ${reported}. Answer the user directly; do not make changes.` };
   }
@@ -367,9 +372,8 @@ export function submitContextHandoff(
   let reasoning;
   if (deliverable === 'plan' || deliverable === 'review' || deliverable === 'implement' || deliverable === 'gather') {
     const evidence = facts.evidence ?? CONVERSATION_EVIDENCE;
-    // Without a rubric the demand of the next step is unknown, and the selector uses its highest capability targets.
     const rubric = declaredRubric(deliverable, params);
-    reasoning = { requester: served, target: deliverable, ...(rubric ? { rubric } : {}), evidence };
+    reasoning = { requester: served, target: deliverable, ...(rubric ? { rubric } : {}), complexity, scope, evidence };
   }
   const key = handoffKey(params);
   const plan = selection?.plan;
@@ -451,9 +455,19 @@ export async function prepareHandoffFacts(
   signal?: AbortSignal,
   tools?: readonly string[],
 ): Promise<HandoffFacts> {
-  if (params?.outcome !== 'ready') return {};
+  if (params?.outcome !== 'ready' && params?.outcome !== 'answer') return {};
   const opened = openFor(ctx, session);
   const reported = member(DIMENSIONS, params.deliverable);
+  if (params.outcome === 'answer') {
+    if ('reject' in opened || !opened.acquiring || (reported !== 'gather' && reported !== 'lightweight')) return {};
+    const generation = session.getSessionGeneration();
+    const paths = evidencePaths(declaredFiles(params, ctx.cwd), opened.state.readPaths);
+    const evidence = await measureEvidence(exec, ctx.cwd, paths, signal);
+    if (session.getSessionGeneration() !== generation || session.getWorkPhaseState()?.intentKey !== opened.state.intentKey) {
+      return { selectionError: 'stale-entry' };
+    }
+    return { evidence };
+  }
   if ('reject' in opened || !reported || !filled(params.findings) || !filled(params.question)) return {};
   const facts: HandoffFacts = {};
   const deliverable = adoptedDeliverable(reported, opened.acquiring);

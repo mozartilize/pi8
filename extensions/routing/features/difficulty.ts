@@ -2,11 +2,12 @@
  * Demand of the next phase, from its accepted rubric and measured targets.
  * Independent requirements use their maximum: easy criteria must not dilute
  * an unresolved design choice or missing evidence. File measurements add only
- * to agentic demand. No rubric means unknown, not easy.
+ * to agentic demand. Without a rubric, declared complexity supplies bounds.
+ * Without either declaration the demand remains unknown, not easy.
  */
-import type { Dimension, ExecutionRubric, HandoffRubric, MeasuredFeatures, ReasoningEvidence, ReasoningRubric } from '../../types.js';
+import type { ComplexityBand, Dimension, ExecutionRubric, HandoffRubric, MeasuredFeatures, ReasoningEvidence, ReasoningRubric, TaskScope } from '../../types.js';
 import type { WorkPhaseState } from '../policy/work-phase.js';
-import { clamp01 } from './mapping.js';
+import { clamp01, COMPLEXITY_DEMAND } from './mapping.js';
 import type { TaskDifficulty } from './state.js';
 
 const isExecutionRubric = (rubric: HandoffRubric): rubric is ExecutionRubric => 'openDecisions' in rubric;
@@ -50,15 +51,42 @@ export function reasoningDifficulty(rubric: ReasoningRubric, evidence: Reasoning
   }, 'reasoning-rubric');
 }
 
-/** Only an accepted rubric for this phase supplies its demand. */
+/** A rubric takes precedence over coarse complexity. Measurements can only increase its agentic demand. */
+function declaredDifficulty(declaration: {
+  rubric?: HandoffRubric; complexity?: ComplexityBand; scope?: TaskScope; evidence: ReasoningEvidence;
+}): TaskDifficulty | undefined {
+  const { rubric, complexity, scope, evidence } = declaration;
+  if (rubric) return isExecutionRubric(rubric) ? executionDifficulty(rubric, evidence) : reasoningDifficulty(rubric, evidence);
+  const interval = complexity && COMPLEXITY_DEMAND[complexity];
+  if (!interval) return undefined;
+  const extra = measuredDemand(evidence);
+  const agentic = {
+    center: clamp01(interval.center + extra),
+    lower: clamp01(interval.lower + extra),
+    // Open-ended scope cannot bound the amount of tool work without a rubric.
+    upper: scope === 'open-ended' ? 1 : clamp01(interval.upper + extra),
+  };
+  return {
+    ...difficulty({ reasoning: interval.center, agentic: agentic.center, research: interval.center }, 'declared-complexity'),
+    bounds: {
+      reasoning: { lower: interval.lower, upper: interval.upper },
+      agentic: { lower: agentic.lower, upper: agentic.upper },
+      research: { lower: interval.lower, upper: interval.upper },
+    },
+  };
+}
+
+/** Only declarations accepted in this entry for the routed phase supply its demand. */
 export function phaseDifficulty(state: WorkPhaseState | undefined, phase: Dimension): TaskDifficulty | undefined {
   const contract = state?.contract;
   if (phase === 'implement' && contract?.rubric && (contract.status === 'active' || contract.status === 'executed')) {
     return executionDifficulty(contract.rubric, contract.measured);
   }
   const handoff = state?.reasoningHandoff;
-  if (!handoff?.rubric || handoff.target !== phase) return undefined;
-  return isExecutionRubric(handoff.rubric)
-    ? executionDifficulty(handoff.rubric, handoff.evidence)
-    : reasoningDifficulty(handoff.rubric, handoff.evidence);
+  if (handoff) return handoff.target === phase ? declaredDifficulty(handoff) : undefined;
+  // A direct lightweight answer is still served in the gather phase.
+  if (state?.contextAnswer && state.contextAnswerDemand && phase === 'gather') {
+    return declaredDifficulty(state.contextAnswerDemand);
+  }
+  return undefined;
 }

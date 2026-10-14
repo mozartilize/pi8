@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ExecutionRubric, MeasuredFeatures, ReasoningEvidence, ReasoningRubric } from '../../types.js';
+import type { ComplexityBand, ExecutionRubric, MeasuredFeatures, ReasoningEvidence, ReasoningRubric } from '../../types.js';
+import { demandInterval } from './mapping.js';
 import type { WorkPhaseState } from '../policy/work-phase.js';
 import { executionDifficulty, phaseDifficulty, reasoningDifficulty } from './difficulty.js';
 
@@ -68,6 +69,47 @@ describe('difficulty of the routed phase', () => {
     expect(phaseDifficulty(planned, 'implement')).toBeUndefined();
     const implementation = state({ reasoningHandoff: handoff('implement', execution(1)) });
     expect(phaseDifficulty(implementation, 'implement')).toEqual({ value: 0, axes: { reasoning: 0, agentic: 0, research: 0 }, source: 'execution-rubric' });
+  });
+
+  it.each([
+    ['trivial', 0, 0, 0.125], ['routine', 0.25, 0.125, 0.375], ['moderate', 0.5, 0.375, 0.625],
+    ['hard', 0.75, 0.625, 0.875], ['frontier', 1, 0.875, 1],
+  ] as const)('bounds a rubric-free %s handoff by the declared complexity', (complexity, center, lower, upper) => {
+    const planned = state({ reasoningHandoff: { ...handoff('plan', undefined), complexity, scope: 'bounded' } });
+    const result = phaseDifficulty(planned, 'plan');
+    expect(result?.source).toBe('declared-complexity');
+    for (const axis of ['reasoning', 'agentic', 'research'] as const) {
+      expect(demandInterval(result, axis)).toEqual({ center, lower, upper });
+    }
+    expect(phaseDifficulty(planned, 'review')).toBeUndefined();
+  });
+
+  it('does not let a low complexity label override a difficult rubric', () => {
+    const planned = state({ reasoningHandoff: { ...handoff('plan', reasoning(5)), complexity: 'trivial' } });
+    expect(demandInterval(phaseDifficulty(planned, 'plan'), 'reasoning')).toEqual({ center: 1, lower: 1, upper: 1 });
+  });
+
+  it('adds measured evidence to agentic bounds without reducing other demands', () => {
+    const planned = state({ reasoningHandoff: { ...handoff('plan', undefined), complexity: 'routine',
+      evidence: { applicable: true, files: 5, directories: 4, existingLines: 4000, fixCommits: 5 },
+    } });
+    const result = phaseDifficulty(planned, 'plan');
+    expect(demandInterval(result, 'agentic')).toEqual({ center: 0.45, lower: 0.325, upper: 0.575 });
+    expect(demandInterval(result, 'research')).toEqual({ center: 0.25, lower: 0.125, upper: 0.375 });
+    const failed = phaseDifficulty(state({ reasoningHandoff: { ...planned.reasoningHandoff!,
+      evidence: { applicable: true, files: 1, directories: 1 },
+    } }), 'plan');
+    expect(demandInterval(failed, 'agentic').upper).toBeCloseTo(0.475);
+  });
+
+  it('keeps open-ended tool work unbounded without a rubric, and saturates measured additions', () => {
+    const declared = { ...handoff('plan', undefined), complexity: 'routine' as ComplexityBand, scope: 'open-ended' as const };
+    expect(demandInterval(phaseDifficulty(state({ reasoningHandoff: declared }), 'plan'), 'agentic'))
+      .toEqual({ center: 0.25, lower: 0.125, upper: 1 });
+    const frontier = { ...declared, complexity: 'frontier' as const,
+      evidence: { applicable: true, files: 10, directories: 10, existingLines: 10000, fixCommits: 10 } };
+    expect(demandInterval(phaseDifficulty(state({ reasoningHandoff: frontier }), 'plan'), 'agentic'))
+      .toEqual({ center: 1, lower: 1, upper: 1 });
   });
 
   it('uses an active plan rubric and its measurements for implementation', () => {

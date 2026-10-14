@@ -10,6 +10,7 @@ import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
 import { observeContextGrounding } from './context-grounding.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
 import { gatheringNote } from './gathering-gate.js';
+import { phaseDifficulty } from '../routing/features/difficulty.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
@@ -53,6 +54,9 @@ describe('entry-scoped work choice at the context handoff', () => {
 
   async function entry(prompt: string) {
     tree.user(prompt, Date.now() + tree.getBranch().length);
+    return serveBranch();
+  }
+  async function serveBranch() {
     const messages = tree.getBranch().filter((event) => event.type === 'message')
       .map((event) => ({ role: event.message!.role, content: event.message!.content, timestamp: event.message!.timestamp }));
     harness.resetEventStream();
@@ -278,6 +282,46 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(harness.session.getWorkPhaseState()?.contextAnswer).toBe('gather');
     expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
     expect(harness.session.context.getLedger().items.size).toBe(0);
+  });
+
+  it('preserves a direct answer rubric for the next gather invocation only', async () => {
+    await entry('explain the supplied result');
+    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', complexity: 'routine',
+      difficulty: { alternatives: 1, stakes: 1, spread: 2, knowledge: 2, uncertainty: 2 },
+    })).accepted).toBe(true);
+    const state = harness.session.getWorkPhaseState();
+    expect(phaseDifficulty(state, 'gather')).toMatchObject({
+      value: 0.25, axes: { reasoning: 0.25, agentic: 0.25, research: 0.25 }, source: 'reasoning-rubric',
+    });
+    expect(phaseDifficulty(state, 'implement')).toBeUndefined();
+    expect(state?.reasoningHandoff).toBeUndefined();
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+    await entry('explain a different result');
+    expect(phaseDifficulty(harness.session.getWorkPhaseState(), 'gather')).toBeUndefined();
+  });
+
+  it.each(['answer', 'ready'])('carries complexity bounds into selection after %s without a rubric', async (outcome) => {
+    await entry('find the source handlers');
+    expect((await handoff({ ...READY, outcome, deliverable: 'gather', complexity: 'routine',
+      ...(outcome === 'ready' ? { workItemId: 'NEW_WORK_ITEM', topicTitle: 'Handlers', workItemTitle: 'Find handlers' } : {}),
+    })).accepted).toBe(true);
+    const next = await serveBranch();
+    expect(next.unified).toMatchObject({ difficulty: 0.25, difficultySource: 'declared-complexity',
+      difficultyBounds: { reasoning: { lower: 0.125, upper: 0.375 }, agentic: { lower: 0.125, upper: 0.375 },
+        research: { lower: 0.125, upper: 0.375 } },
+    });
+    expect(next.unified?.difficultyMissingReason).toBeUndefined();
+  });
+
+  it('measures observed files for an answer even when the declaration lists none', async () => {
+    await entry('explain the supplied result');
+    harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, readPaths: ['requirements/foo.md'] });
+    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', files: [] })).accepted).toBe(true);
+    const state = harness.session.getWorkPhaseState();
+    expect(state?.contextAnswerDemand?.evidence).toMatchObject({ applicable: true, files: 1, directories: 1 });
+    const difficulty = phaseDifficulty(state, 'gather');
+    expect(difficulty?.bounds?.reasoning).toEqual({ lower: 0, upper: 0.125 });
+    expect(difficulty?.bounds?.agentic.upper).toBeGreaterThanOrEqual(0.125);
   });
 
   it('declares a lightweight answer without selecting or creating work', async () => {

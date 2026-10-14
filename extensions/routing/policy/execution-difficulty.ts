@@ -10,8 +10,8 @@
  * router, not the model, turns that description into a requirement, and adds
  * the facts it measures itself (size and history of the files involved). No
  * input can make the requirement lower than its base. A rubric with no scored
- * criterion is no rubric: the demand is unknown, and the selector uses its
- * highest capability targets. An unscored criterion in a partly scored rubric counts as the highest level
+ * criterion is no rubric: selection uses declared complexity bounds, or the
+ * unknown demand interval. An unscored criterion in a partly scored rubric counts as the highest level
  * the requester gave, and an unmeasured fact counts as harder, never easier.
  *
  * The weights are hand-set. Every accepted handoff logs its rubric, its
@@ -58,8 +58,8 @@ const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
 
 /**
  * A declared rubric, or undefined when the requester scored no criterion:
- * then the demand is unknown, and the selector uses its highest capability
- * targets. An unscored or
+ * then selection uses declared complexity bounds, or the unknown demand
+ * interval. An unscored or
  * invalid criterion in a partly scored rubric counts as the highest level the
  * requester gave, so it never lowers what was declared.
  */

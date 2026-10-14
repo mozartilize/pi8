@@ -43,12 +43,20 @@ export type DecisionBoundary =
   /** An authorized boundary after verified rework attributed to `rework.failed`. */
   | 'rework';
 
-/** Task difficulty in [0, 1] and the rubric it came from. */
+export interface DemandInterval {
+  center: number;
+  lower: number;
+  upper: number;
+}
+
+/** Task difficulty in [0, 1] and the declaration it came from. */
 export interface TaskDifficulty {
   /** Maximum axis demand, for summaries. Scalar inputs apply to every axis. */
   value: number;
   axes?: { reasoning: number; agentic: number; research: number };
-  source: 'execution-rubric' | 'reasoning-rubric';
+  /** Absent bounds mean an exact declared demand, not unknown demand. */
+  bounds?: Record<'reasoning' | 'agentic' | 'research', { lower: number; upper: number }>;
+  source: 'execution-rubric' | 'reasoning-rubric' | 'declared-complexity';
 }
 
 export interface DecisionStateV1 {
@@ -58,7 +66,7 @@ export interface DecisionStateV1 {
   workItemId?: string;
   /** Explicitly observed open decisions; undefined when not declared. */
   openDecisions?: number;
-  /** Difficulty of the accepted handoff or plan; undefined when no rubric was declared. */
+  /** Demand of the accepted declaration; undefined when neither rubric nor complexity is known. */
   difficulty?: TaskDifficulty;
   estimatedContextTokens: number;
   /**

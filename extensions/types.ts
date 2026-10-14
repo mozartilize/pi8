@@ -227,8 +227,10 @@ export interface ReasoningHandoffMeta {
   /** Served key of the model that called the tool. */
   requester: string;
   target: HandoffTarget;
-  /** The declared rubric; undefined when no criterion was scored, so the demand is unknown. */
+  /** The declared rubric; a missing rubric uses complexity bounds when declared. */
   rubric?: HandoffRubric;
+  complexity?: ComplexityBand;
+  scope?: TaskScope;
   evidence: ReasoningEvidence;
   /** The boundary still releases the incumbent: no invocation has served the phase yet. */
   pending: boolean;
@@ -432,9 +434,12 @@ export interface UnifiedDecisionMeta {
   holdingPrompt: number;
   /** Better-ranked action that waits for context preparation. */
   preparationTarget?: string;
-  /** Maximum declared axis demand. Absent means unknown; targets use demand 1. */
+  /** Maximum central axis demand. Absent means unknown, with bounds [0, 1]. */
   difficulty?: number;
   difficultyAxes?: { reasoning: number; agentic: number; research: number };
+  difficultySource?: 'execution-rubric' | 'reasoning-rubric' | 'declared-complexity';
+  /** Bounds that map to capability-fit intervals. Collection uses its fixed targets instead. */
+  difficultyBounds?: Record<'reasoning' | 'agentic' | 'research', { lower: number; upper: number }>;
   /** Why demand is absent. An absent code in an older record is not evidence of a cause. */
   difficultyMissingReason?: 'collecting-context' | 'direct-answer' | 'no-rubric' | 'phase-mismatch' | 'continuation' | 'no-handoff';
   /** Weights of a central fallback, in feature order. */

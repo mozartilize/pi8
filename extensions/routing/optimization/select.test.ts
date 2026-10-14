@@ -9,7 +9,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { BenchModel } from '../../types.js';
 import { greedyBoxSimplexMax, oracleSolve } from '../../test-support/lp-oracle.js';
 import { enumerateEffectiveActions } from '../features/actions.js';
-import type { ActionFeatureVector } from '../features/schema.js';
+import { FEATURE_INDEX, type ActionFeatureVector } from '../features/schema.js';
+import { capabilityFeatures } from '../features/model.js';
 import type { DecisionStateV1 } from '../features/state.js';
 import { AssignmentLedger } from '../policy/assignment-transaction.js';
 import type { WorkPhaseState } from '../policy/work-phase.js';
@@ -68,6 +69,47 @@ describe('N4: regret direction and independent oracle', () => {
     expect(cheaper.chosen).toBe('b');
     const unpriced = await solveMinimaxRegret([{ features: twin }, { features: same }], thetaBaseDomain(), lp);
     expect(unpriced.chosen).toBe('a');
+  });
+});
+
+describe('demand bounds in exact regret', () => {
+  it('uses the bounds, not just the center, and preserves the whole ranking', async () => {
+    const actions = (lower: number, upper: number) => [
+      { key: 'cheap', quality: 45, cost: 0.55 }, { key: 'strong', quality: 55, cost: 0.5 },
+    ].map(({ key, quality, cost }) => {
+      const s: DecisionStateV1 = {
+        phase: 'gather', estimatedContextTokens: 0, needsVision: false, boundary: 'ordinary', friction: [],
+        nowMs: 0, isSubagentSpawn: false, benchmarkIndexVersion: '4.3',
+        difficulty: { value: 0.5, source: 'declared-complexity',
+          bounds: { reasoning: { lower, upper }, agentic: { lower, upper }, research: { lower, upper } } },
+      };
+      const row: BenchModel = {
+        registryId: key, benchSlug: key, active: true, source: 'test',
+        quality: { intelligence: quality, research: 1, knowledge: 100 },
+        axisProvenance: { intelligence: 'measured', research: 'measured', knowledge: 'measured' },
+      };
+      const features = { key, values: new Array(10).fill(0), lower: new Array(10).fill(0), upper: new Array(10).fill(0), evidence: [] };
+      for (const { name, interval } of capabilityFeatures(row, s)) {
+        const j = FEATURE_INDEX[name];
+        features.values[j] = interval.center;
+        features.lower[j] = interval.lower;
+        features.upper[j] = interval.upper;
+      }
+      features.values[4] = features.lower[4] = features.upper[4] = cost;
+      return { features };
+    });
+    const narrow = actions(0.375, 0.625);
+    const wide = actions(0, 1);
+    expect(narrow.map((a) => a.features.values)).toEqual(wide.map((a) => a.features.values));
+    const bounded = await solveMinimaxRegret(narrow, thetaBaseDomain(), lp);
+    const unknown = await solveMinimaxRegret(wide, thetaBaseDomain(), lp);
+    // Both meet the bounded target, so cheaper has zero regret. At demand 1,
+    // cheap loses 4/15 reasoning fit; the adversary uses weights 0.45 and 0.08.
+    expect(bounded.ranking).toEqual(['cheap', 'strong']);
+    expect(bounded.maxRegret.get('cheap')).toBe(0);
+    expect(unknown.ranking).toEqual(['strong', 'cheap']);
+    expect(unknown.maxRegret.get('cheap')).toBeCloseTo(0.45 * 4 / 15 - 0.08 * 0.05, 9);
+    expect(unknown.maxRegret.get('strong')).toBeCloseTo(0.55 * 0.05, 9);
   });
 });
 
@@ -136,6 +178,8 @@ const rows = [benchRow('c/cheap', 35, 15), benchRow('s/strong', 70, 55)];
 const candidates: SelectionCandidate[] = [cheap, strong].map((m) => ({ model: m, action: enumerateEffectiveActions(m)[0]! }));
 const decisionState: DecisionStateV1 = {
   phase: 'implement', estimatedContextTokens: 50_000, needsVision: false, boundary: 'ordinary',
+  // The shortfall fixtures require a known hard target, independent of demand uncertainty.
+  difficulty: { value: 1, source: 'execution-rubric' },
   friction: [], nowMs: 0, isSubagentSpawn: false, benchmarkIndexVersion: '4.3',
 };
 
