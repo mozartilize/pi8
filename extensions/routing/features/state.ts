@@ -29,7 +29,7 @@ export interface CacheEvidenceV1 {
   observedAtMs: number;
   /** Identity of the prompt head the warm entries were observed for. */
   promptIdentity: string;
-  /** Action key of the incumbent; it keeps the whole conversation prefix. */
+  /** Action key of the incumbent, for shared-cache effort reuse. */
   incumbentKey?: string;
   /** Warm prefix tokens by action key. */
   warmPrefixTokens: ReadonlyMap<string, number>;

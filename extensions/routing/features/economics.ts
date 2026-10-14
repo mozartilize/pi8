@@ -127,10 +127,10 @@ const billedPromptTokens = (state: DecisionStateV1, action: EffectiveAction): nu
 
 /**
  * Warm prefix tokens the action may reuse, in the tokens its model bills.
- * The incumbent action keeps the whole prefix; so does another effort of the
- * incumbent model when effort changes keep its cache. Other actions keep only
- * their own warm entry. Warm entries are estimates, so they take the same
- * scale as the prompt.
+ * Every action, including the incumbent, reuses at most its recorded warm
+ * prefix; when effort changes keep the model's cache, an action of that model
+ * may reuse the largest warm prefix recorded for any effort of the model.
+ * Warm entries are estimates, so they take the same scale as the prompt.
  */
 export function usableWarmPrefix(
   state: DecisionStateV1,
@@ -142,11 +142,16 @@ export function usableWarmPrefix(
   if (state.isSubagentSpawn || !cache || cache.source === 'none') return 0;
   if (state.promptIdentity === undefined || cache.promptIdentity !== state.promptIdentity) return 0;
   if (state.nowMs - cache.observedAtMs > cache.ttlMs) return 0;
-  const incumbent = cache.incumbentKey === undefined ? undefined : parseCandidateKey(cache.incumbentKey);
-  const incumbentRegistryId = incumbent && `${incumbent.provider}/${incumbent.id}`;
-  if (action.key === cache.incumbentKey) return input;
-  if (effortSharesCache && incumbentRegistryId === action.registryId) return input;
-  const warm = Math.max(0, cache.warmPrefixTokens.get(action.key) ?? 0) * promptTokenScale(state, action.registryId);
+  let warmTokens = Math.max(0, cache.warmPrefixTokens.get(action.key) ?? 0);
+  if (effortSharesCache) {
+    for (const [key, tokens] of cache.warmPrefixTokens) {
+      const parsed = parseCandidateKey(key);
+      if (`${parsed.provider}/${parsed.id}` === action.registryId && tokens > warmTokens) {
+        warmTokens = tokens;
+      }
+    }
+  }
+  const warm = warmTokens * promptTokenScale(state, action.registryId);
   return Math.min(input, warm);
 }
 

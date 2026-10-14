@@ -350,15 +350,26 @@ describe('cache-aware cost', () => {
   const cacheState = (patch: Partial<DecisionStateV1> = {}) => state({
     estimatedContextTokens: 100_000,
     promptIdentity: 'head-1',
-    cache: { observedAtMs: 1_000_000, promptIdentity: 'head-1', incumbentKey: aHigh.key, warmPrefixTokens: new Map([[oHigh.key, 40_000]]), ttlMs: 300_000, source: 'session' },
+    cache: {
+      observedAtMs: 1_000_000,
+      promptIdentity: 'head-1',
+      incumbentKey: aHigh.key,
+      warmPrefixTokens: new Map([[aHigh.key, 80_000], [oHigh.key, 40_000]]),
+      ttlMs: 300_000,
+      source: 'session',
+    },
     ...patch,
   });
   const usd = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction) => candidateFeatures(s, model, action, []).spend;
 
-  it('prices the warm incumbent once at the cache-read rate and a cold write at the write rate', () => {
+  it('prices only the recorded warm prefix of the incumbent at the cache-read rate and new tokens at the write rate', () => {
     const warm = usd(cacheState(), anthropic, aHigh);
-    expect(warm.tokens).toEqual({ cacheRead: 100_000, cacheWrite: 0, uncachedInput: 0, output: 1024 });
-    expect(warm.centralUSD).toBeCloseTo(100_000 * 0.3 / 1e6 + 1024 * 15 / 1e6, 12);
+    expect(warm.tokens).toEqual({ cacheRead: 80_000, cacheWrite: 20_000, uncachedInput: 0, output: 1024 });
+    expect(warm.centralUSD).toBeCloseTo(80_000 * 0.3 / 1e6 + 20_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
+    const uncachedIncumbent = usd(cacheState({
+      cache: { observedAtMs: 1_000_000, promptIdentity: 'head-1', incumbentKey: aHigh.key, warmPrefixTokens: new Map([[oHigh.key, 40_000]]), ttlMs: 300_000, source: 'session' },
+    }), anthropic, aHigh);
+    expect(uncachedIncumbent.tokens).toEqual({ cacheRead: 0, cacheWrite: 100_000, uncachedInput: 0, output: 1024 });
     const cold = usd(cacheState({ cache: undefined }), anthropic, aHigh);
     expect(cold.tokens).toEqual({ cacheRead: 0, cacheWrite: 100_000, uncachedInput: 0, output: 1024 });
     expect(cold.centralUSD).toBeCloseTo(100_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
@@ -370,8 +381,20 @@ describe('cache-aware cost', () => {
     expect(challenger.centralUSD).toBeCloseTo(40_000 * 0.2 / 1e6 + 60_000 * 2 / 1e6 + 1024 * 8 / 1e6, 12);
   });
 
-  it('shares the prefix across efforts only when the model keeps it', () => {
-    expect(usd(cacheState(), anthropic, aLow).tokens.cacheRead).toBe(100_000);
+  it('shares the model warm prefix across efforts only when the model keeps it', () => {
+    expect(usd(cacheState(), anthropic, aLow).tokens).toEqual({ cacheRead: 80_000, cacheWrite: 20_000, uncachedInput: 0, output: 1024 });
+    // Even when another model is the incumbent, an effort-sharing model reuses the warm prefix of its own sibling effort.
+    const challengerShared = cacheState({
+      cache: {
+        observedAtMs: 1_000_000,
+        promptIdentity: 'head-1',
+        incumbentKey: oHigh.key,
+        warmPrefixTokens: new Map([[aHigh.key, 60_000], [oHigh.key, 80_000]]),
+        ttlMs: 300_000,
+        source: 'session',
+      },
+    });
+    expect(usd(challengerShared, anthropic, aLow).tokens).toEqual({ cacheRead: 60_000, cacheWrite: 40_000, uncachedInput: 0, output: 1024 });
     const noSharing = registryModel('a', 'claude', { cost: anthropic.cost });
     expect(usd(cacheState(), noSharing, aLow).tokens.cacheRead).toBe(0);
   });
@@ -387,7 +410,7 @@ describe('cache-aware cost', () => {
     const cold = usd({ ...scaled, cache: undefined }, anthropic, aHigh);
     expect(cold.tokens).toEqual({ cacheRead: 0, cacheWrite: 180_000, uncachedInput: 0, output: 1024 });
     expect(cold.centralUSD).toBeCloseTo(180_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
-    expect(usd(scaled, anthropic, aHigh).tokens.cacheRead).toBe(180_000);
+    expect(usd(scaled, anthropic, aHigh).tokens).toEqual({ cacheRead: 144_000, cacheWrite: 36_000, uncachedInput: 0, output: 1024 });
     // A model without a scale bills the estimate; its warm entry keeps estimate units.
     expect(usd(scaled, openai, oHigh).tokens).toEqual({ cacheRead: 40_000, cacheWrite: 0, uncachedInput: 60_000, output: 1024 });
     const openaiScaled = cacheState({ promptTokenScales: new Map([['o/gpt', 1.5]]) });
