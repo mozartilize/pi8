@@ -114,6 +114,7 @@ A pinned turn:
 - Restricts scoring to the pinned model.
 - Records cause `manual-override`.
 - Keeps only the selected effort variant in its fallback chain.
+- Serves when another model owns the entry. The owner's thinking minimum does not apply. A semi hold follows the same rule.
 
 Same-model retries remain available. Failure never substitutes a different model.
 
@@ -147,9 +148,11 @@ The first pin saves the current automatic decision in `resumeSnapshot`.
 
 `/router-manual resume` removes the pin and discards pin-owned pending trajectory escalation.
 
-The next routed turn serves the saved decision directly with cause `resume`. It does not classify or score the request again.
+The next routed turn serves the saved decision directly with cause `resume`. It does not rank the pool again, and its record keeps the saved ranking.
 
-The router filters the saved chain against currently routable candidates. If none remain, ordinary selection resumes.
+The saved decision applies only when these values are unchanged: the benchmark snapshot, the preference profile, the feature mapping, the task type, and the work item. Without a saved work item, the saved decision applies only to the same user entry.
+
+The router keeps the saved chain actions that are legal for this invocation and hold the prompt. Each restored invocation gets a new authorization. Contract ownership still applies. The pinned model that served last does not own the work. If a check fails or no saved action remains, ordinary selection resumes, and the saved decision is discarded.
 
 `resumeIntentKey` limits the saved decision to one user entry. Tool-loop continuations reuse it. The next entry recomputes routing.
 

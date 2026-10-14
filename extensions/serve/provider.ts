@@ -73,7 +73,8 @@ import {
 import { promptTokenScaleMap, recordAttemptPromptTokens } from './prompt-token-scale.js';
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { runDelegationLoop, type DelegationOptions } from './delegation.js';
-import { readPreferences, resolveUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
+import { readPreferences, resolveUnifiedDecision, restoreUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
+import { FEATURE_SCHEMA_DIGEST } from '../routing/features/schema.js';
 import { createUnifiedDispatch, type RecoveryHost } from './unified-dispatch.js';
 import type { DecisionStateV1, ServedIdentity } from '../routing/features/state.js';
 import { phaseDifficulty } from '../routing/features/difficulty.js';
@@ -697,6 +698,8 @@ interface ScoredTurn {
   authorization?: BoundaryAuthorizationV1;
   unifiedInput: UnifiedTurnInput;
   recoveryCandidates: readonly Candidate[];
+  /** The decision is the saved pre-pin route, not a new ranking. */
+  restored?: boolean;
 }
 
 /** Resolve the registry, this turn's input identity, and the candidate pool. */
@@ -884,8 +887,10 @@ async function scoreRouterTurn(args: {
   pinned?: boolean;
   /** The pool names exact actions (a manual or semi pin); no other effort is legal. */
   exactActions?: boolean;
+  /** The pre-pin route to restore when it is still legal; otherwise the pool is ranked. */
+  resume?: RoutingDecision;
 }): Promise<{ kind: 'ready'; scored: ScoredTurn } | RouterTurnOutcome> {
-  const { prepared, resolved, options, session, pinned, exactActions } = args;
+  const { prepared, resolved, options, session, pinned, exactActions, resume } = args;
   const { config, measured, intent, candidates, trajectoryEscalation } = prepared;
   const { turnInput, needsVision, estContextTokens } = measured;
   const { cacheHit } = intent;
@@ -1025,10 +1030,12 @@ async function scoreRouterTurn(args: {
   };
   session.preparation.observe(turnInput.key, estContextTokens);
   const liveExclusions = session.getBlacklistedModels();
-  const continuing = !entry?.priorCompletion && !trajectoryEscalation && !pendingBoundary && !contract?.releasePending && previous
+  // The pinned model that served last does not own the work that a resume restores.
+  const continuing = !resume && !entry?.priorCompletion && !trajectoryEscalation && !pendingBoundary && !contract?.releasePending && previous
     && session.getLastDecision()?.dimension === routedDimension
     && (entry?.incumbentServes || entry?.contextStatus === 'served');
-  const heldOwner = handBack?.submitter ?? (contractActive && !contract.release ? contract.submitter
+  // A manual pin or semi hold names the exact actions, so an owner does not filter them.
+  const heldOwner = exactActions ? undefined : handBack?.submitter ?? (contractActive && !contract.release ? contract.submitter
     : continuing ? servedCandidateKey : undefined);
   const ownershipPool = heldOwner
     ? routableCandidates.filter((candidate) => candidate.registryId === identity(heldOwner).registryId)
@@ -1061,9 +1068,10 @@ async function scoreRouterTurn(args: {
     // An explicit pin is served even if it failed earlier this session.
     isExcluded: (key) => !pinned && (liveExclusions.has(key) || (recoveryAlternative && sameOrLowerRecovery(key))),
     ...(exactActions ? { exactActions: true } : {}),
-    ...(!userReasoningOverride && handBack && identity(handBack.submitter).effort
+    // The owner's thinking minimum does not apply to the effort of an exact action.
+    ...(!exactActions && !userReasoningOverride && handBack && identity(handBack.submitter).effort
       ? { minimumEffort: identity(handBack.submitter).effort }
-      : continuing && !userReasoningOverride && previous?.thinkingLevel
+      : !exactActions && continuing && !userReasoningOverride && previous?.thinkingLevel
         ? { minimumEffort: previous.thinkingLevel as ModelThinkingLevel } : {}),
     ...(userReasoningOverride && requestedReasoning && (MODEL_THINKING_LEVELS as readonly string[]).includes(requestedReasoning)
       ? { effortOverride: requestedReasoning as ModelThinkingLevel } : {}),
@@ -1075,7 +1083,8 @@ async function scoreRouterTurn(args: {
       && session.getWorkPhaseState()?.providerInvocation === entry?.providerInvocation,
 
   };
-  const outcome = await resolveUnifiedDecision(unifiedInput,
+  const restored = resume ? restoreUnifiedDecision(unifiedInput, resume) : undefined;
+  const outcome = restored ?? await resolveUnifiedDecision(unifiedInput,
     (ranking, chosen, candidates) => session.preparation.plan(ranking, chosen, candidates, estContextTokens)?.key);
   if (outcome.kind === 'cancelled') return { kind: 'terminal', reason: 'aborted', message: 'Routing was cancelled.' };
   if (outcome.kind === 'stale') return SESSION_CHANGED;
@@ -1148,6 +1157,7 @@ async function scoreRouterTurn(args: {
     authorization: outcome.authorization,
     unifiedInput,
     recoveryCandidates: handBack || (contractActive && !contract.release) ? ownershipPool : routableCandidates,
+    ...(restored ? { restored: true } : {}),
     ...(restore ? { restoredContract: restore } : {}),
     ...(pendingBoundary ? { pendingBoundary: true } : {}),
     ...(execution && contract?.releasePending ? { releasesContract: true } : {}),
@@ -1944,9 +1954,10 @@ async function runManualTurn(args: {
 }
 
 /**
- * Resume the pre-pin task when its benchmark snapshot and preferences match.
- * The selector applies live exclusions and creates a fresh authorization.
- * A changed snapshot returns to ordinary auto routing.
+ * Restore the pre-pin route when its benchmark snapshot, preferences and
+ * feature mapping match. The restored chain is checked against the legal
+ * actions of this invocation, and gets a new authorization. A saved route that
+ * fails a check returns to ordinary auto routing.
  */
 async function runResumeTurn(args: {
   prepared: PreparedTurn;
@@ -1963,6 +1974,7 @@ async function runResumeTurn(args: {
   if (!resume.unified
     || resume.unified.benchmarkSnapshotDigest !== prepared.benchmarkSnapshotDigest
     || resume.unified.profileDigest !== loadPreferenceSnapshot().digest
+    || resume.unified.featureSchemaDigest !== FEATURE_SCHEMA_DIGEST
   ) {
     session.clearPendingResume();
     return { kind: 'recompute' };
@@ -1990,11 +2002,11 @@ async function runResumeTurn(args: {
     stillCurrent: () => session.getSessionGeneration() === generation,
     ...(entryContext ? { context: entryContext } : {}),
   };
-  const selection = await scoreRouterTurn({ prepared, resolved, options, session });
+  const selection = await scoreRouterTurn({ prepared, resolved, options, session, resume });
   if (selection.kind !== 'ready') return selection;
   const scored = selection.scored;
-  scored.decision.cause = 'resume';
-  session.setLastDecision(scored.decision);
+  // A saved route that failed a check is not tried again in this entry.
+  if (!scored.restored) session.clearPendingResume();
   return delegateRouterTurn({
     prepared,
     resolved,

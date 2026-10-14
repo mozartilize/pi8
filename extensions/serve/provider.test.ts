@@ -2691,12 +2691,59 @@ describe('context acquisition', () => {
         expect(next?.cause).not.toBe('resume');
       });
 
-      it('resumes a route when the benchmark snapshot is unchanged', async () => {
+      it('serves a pin in the middle of an entry that another model owns', async () => {
         const session = await planned();
+        expect(harness.streamedModels().at(-1)).toBe('beta/strong');
+        harness.session.setManualModel('alpha/cheap');
+        const next = await session.routeTurnAgainWithSameUserEntry();
+        expect(next).toMatchObject({ cause: 'manual-override', chosen: 'alpha/cheap', fallbackChain: ['alpha/cheap'] });
+        expect(harness.streamedModels().at(-1)).toBe('alpha/cheap');
+      });
+
+      it('restores the pre-pin route instead of ranking the pool again', async () => {
+        const session = await planned();
+        // The pre-pin route was ranked before beta/strong served, so a new ranking has other continuity values.
+        const saved = structuredClone(harness.getProviderState().lastDecision!);
+        harness.session.setManualModel('alpha/cheap');
         await session.routeTurnAgainWithSameUserEntry();
-        harness.session.setManualModel('alpha/first');
+        expect(harness.streamedModels().at(-1)).toBe('alpha/cheap');
         expect(harness.session.resumeManual()).toBe(true);
-        expect((await session.routeTurnAgainWithSameUserEntry())?.cause).toBe('resume');
+        // The restore covers every invocation of the entry, and each one gets a new authorization.
+        const assignments = new Set<string>();
+        for (let invocation = 0; invocation < 2; invocation++) {
+          const next = await session.routeTurnAgainWithSameUserEntry();
+          expect(next).toMatchObject({ cause: 'resume', chosen: saved.chosen, fallbackChain: saved.fallbackChain });
+          expect(harness.getProviderState().lastDecision?.unified?.top).toEqual(saved.unified?.top);
+          expect(harness.streamedModels().at(-1)).toBe(saved.chosen);
+          const authorization = harness.session.getWorkPhaseState()?.boundaryAuthorization;
+          expect(authorization?.state).toBe('served');
+          assignments.add(authorization!.assignmentId);
+        }
+        expect(assignments.size).toBe(2);
+      });
+
+      it.each([
+        ['only an action that is no longer callable', (saved: { chosen: string; fallbackChain: string[] }) => {
+          saved.chosen = 'alpha/cheap';
+          saved.fallbackChain = ['alpha/cheap'];
+          harness.session.blacklistModel('alpha/cheap');
+        }],
+        ['another work item', (saved: { workContext?: { workItemId: string } }) => {
+          saved.workContext = { ...saved.workContext!, workItemId: 'other-work' };
+        }],
+        ['another feature mapping', (saved: { unified?: { featureSchemaDigest: string } }) => {
+          saved.unified!.featureSchemaDigest = 'other-mapping';
+        }],
+      ] as const)('ranks again when the saved route has %s', async (_, change) => {
+        const session = await planned();
+        harness.session.setManualModel('alpha/cheap');
+        // The pin keeps the decision object as its snapshot.
+        (change as (saved: unknown) => void)(harness.getProviderState().lastDecision!);
+        expect(harness.session.resumeManual()).toBe(true);
+        const next = await session.routeTurnAgainWithSameUserEntry();
+        expect(next?.cause).not.toBe('resume');
+        expect(next?.chosen).toBe('beta/strong');
+        expect(harness.streamedModels().at(-1)).toBe('beta/strong');
       });
 
       it('records selection identities and counts without task text or capability minimums', async () => {
@@ -3238,6 +3285,34 @@ describe('reservation of every provider request', () => {
     expect(new Set(h.streamedModels()).size).toBe(2);
     expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([{ type: 'text_delta', delta: 'answer' }]);
     expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('served');
+  });
+});
+
+describe('manual pin in an owned continuation', () => {
+  it('serves a pinned effort below the owner\'s thinking minimum', async () => {
+    const harness = await setupProviderTest({
+      dir: temp.path,
+      benchmarks: [
+        { registryId: 'alpha/source', benchSlug: 'source-low', active: true, effort: 'low', quality: { intelligence: 50, research: 0.7 }, source: 'test' },
+        { registryId: 'alpha/source', benchSlug: 'source-high', active: true, effort: 'high', quality: { intelligence: 80, research: 0.9 }, source: 'test' },
+      ],
+      models: [registryModel('alpha/source', {
+        reasoning: true, contextWindow: 200000,
+        thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: null },
+      })],
+    });
+    const context = { messages: [{ role: 'user', content: 'investigate the failing check' }] } as unknown as Context;
+    harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
+    harness.session.setManualModel('alpha/source:high');
+    await harness.serve(context);
+    expect(harness.session.getLastServed()?.thinkingLevel).toBe('high');
+    // The served model holds the rest of the entry at its thinking level.
+    harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, incumbentServes: true });
+    harness.session.setManualModel('alpha/source:low');
+    harness.resetEventStream();
+    await harness.serve(context);
+    expect(harness.session.getLastDecision()).toMatchObject({ cause: 'manual-override', chosen: 'alpha/source:low' });
+    expect(harness.session.getLastServed()?.thinkingLevel).toBe('low');
   });
 });
 

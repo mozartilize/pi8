@@ -34,7 +34,7 @@ import { buildCandidate, candidateKey, holdsPrompt, type RegistryModelInfo } fro
 import { loadPreferenceSnapshot } from '../config.js';
 import { isDebugEnabled } from '../host/debuglog.js';
 import { fileDomainStore } from './domain-artifact-store.js';
-import { FEATURE_NAMES } from '../routing/features/schema.js';
+import { FEATURE_NAMES, FEATURE_SCHEMA_DIGEST } from '../routing/features/schema.js';
 import type { BenchModel, Candidate, DecisionCause, RoutingDecision, UnifiedActionTrace, UnifiedDecisionMeta } from '../types.js';
 
 let ports: SelectorPorts | undefined;
@@ -210,6 +210,53 @@ function difficultyMissingReason(input: UnifiedTurnInput): UnifiedDecisionMeta['
   return work?.incumbentServes ? 'continuation' : 'no-handoff';
 }
 
+/** A new authorization for the legal actions, minus the executors that this work item excluded. */
+function authorize(input: UnifiedTurnInput, selection: readonly SelectionCandidate[]): BoundaryAuthorizationV1 {
+  return createBoundaryAuthorization(input.authorizationScope, selection.map(({ action }) => action.key),
+    input.workState?.workItemId === input.state.workItemId
+      ? selection.filter(({ action }) => isExcludedExecutor(input.workState, action.key))
+        .map(({ action }) => ({ workItemId: input.authorizationScope.workItemId, phase: 'implement' as const, model: action.key }))
+      : []);
+}
+
+/**
+ * The route that was ranked before a manual pin, without a new ranking. The
+ * saved route applies only to the same feature mapping, task type and work.
+ * Its chain keeps the saved actions that are legal now and hold the prompt.
+ * Returns undefined when one check fails or no saved action remains.
+ */
+export function restoreUnifiedDecision(input: UnifiedTurnInput, saved: RoutingDecision): {
+  kind: 'decision'; decision: RoutingDecision; candidates: Candidate[]; authorization: BoundaryAuthorizationV1;
+} | undefined {
+  if (!saved.unified || saved.unified.featureSchemaDigest !== FEATURE_SCHEMA_DIGEST
+    || saved.dimension !== input.state.phase || input.authorizationScope.phase !== input.state.phase
+    || input.authorizationScope.workItemId !== input.state.workItemId) return undefined;
+  // A saved work item must be the current one. Without one, the saved entry must be the current entry.
+  const savedWork = saved.workContext?.workItemId;
+  if (savedWork !== undefined ? savedWork !== input.state.workItemId : saved.intentKey !== input.authorizationScope.boundaryId) {
+    return undefined;
+  }
+  const { selection, candidates } = legalActions(input);
+  const authorization = authorize(input, selection);
+  const allowed = new Set(authorization.allowedActors);
+  const chain = saved.fallbackChain.filter((key) => {
+    const candidate = candidates.get(key);
+    return allowed.has(key) && candidate !== undefined && holdsPrompt(candidate.contextWindow, input.state.estimatedContextTokens);
+  });
+  const chosen = chain[0];
+  if (!chosen) return undefined;
+  const decision: RoutingDecision = {
+    dimension: saved.dimension,
+    cause: 'resume',
+    chosen,
+    reason: `restored the route ranked before the manual pin: ${saved.reason}`,
+    fallbackChain: chain,
+    unified: structuredClone(saved.unified),
+    ...(input.incumbentKey ? { switched: input.incumbentKey !== chosen } : {}),
+  };
+  return { kind: 'decision', decision, candidates: [...candidates.values()], authorization };
+}
+
 export async function resolveUnifiedDecision(
   input: UnifiedTurnInput,
   planPreparation: (ranking: readonly string[], chosen: string, candidates: ReadonlyMap<string, Candidate>) => string | undefined,
@@ -217,11 +264,7 @@ export async function resolveUnifiedDecision(
   if (input.authorizationScope.phase !== input.state.phase
     || input.authorizationScope.workItemId !== input.state.workItemId) return { kind: 'stale' };
   const { selection, candidates } = legalActions(input);
-  const authorization = createBoundaryAuthorization(input.authorizationScope, selection.map(({ action }) => action.key),
-    input.workState?.workItemId === input.state.workItemId
-      ? selection.filter(({ action }) => isExcludedExecutor(input.workState, action.key))
-        .map(({ action }) => ({ workItemId: input.authorizationScope.workItemId, phase: 'implement' as const, model: action.key }))
-      : []);
+  const authorization = authorize(input, selection);
   const preferences = readPreferences();
   const result = await selectByRegret(input.state, selection, input.rows, preferences, input.ports ?? selectorPorts(), {
     signal: input.signal,
