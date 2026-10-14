@@ -18,7 +18,7 @@ import { candidateFeatures, type ActionFeatures } from '../features/candidate.js
 import type { EffectiveAction } from '../features/actions.js';
 import type { DecisionStateV1 } from '../features/state.js';
 import { FEATURE_SCHEMA_DIGEST } from '../features/schema.js';
-import { hasSubstantiveAnswers, type UserRoutingPreferencesV1, type ValidatedPreferences } from '../preferences/schema.js';
+import { hasSubstantiveAnswers, preferenceProfileDigest, type UserRoutingPreferencesV1, type ValidatedPreferences } from '../preferences/schema.js';
 import type { BenchModel } from '../../types.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import {
@@ -160,7 +160,9 @@ export class DomainCache implements DomainLookup {
   compile(profile: UserRoutingPreferencesV1): Promise<DomainArtifact | undefined> {
     const identity = domainIdentity(profile);
     const ready = this.ready.get(identity);
-    if (ready) return Promise.resolve(ready);
+    if (ready && artifactMatches(ready, profile, preferenceProfileDigest(profile))) return Promise.resolve(ready);
+    // A rejected disk artifact must not prevent compilation or remain visible during it.
+    this.ready.delete(identity);
     const running = this.inFlight.get(identity);
     if (running) return running;
     const task = compileDomainArtifact(profile, this.lp)
