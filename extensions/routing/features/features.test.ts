@@ -339,6 +339,13 @@ describe('N5: total continuity and exact recovery attribution', () => {
     const unattributed = state({ workItemId: 'W', friction: [{ registryId: 'p/X', effort: 'high', workItemId: 'W', kind: 'unattributed' }] });
     expect(recoveryFeatures(unattributed, actions[2]!).frictionAvoidance).toBe(1);
   });
+
+  it('friction does not move to another work item, or apply without a current work item', () => {
+    const event = { registryId: 'p/X', effort: 'high' as const, workItemId: 'W', kind: 'attributed-rework' as const };
+    expect(recoveryFeatures(state({ workItemId: 'W2', friction: [event] }), actions[2]!).frictionAvoidance).toBe(1);
+    expect(recoveryFeatures(state({ friction: [event] }), actions[2]!).frictionAvoidance).toBe(1);
+    expect(recoveryFeatures(state({ workItemId: 'W', friction: [event] }), actions[2]!).frictionAvoidance).toBeLessThan(1);
+  });
 });
 
 describe('cache-aware cost', () => {

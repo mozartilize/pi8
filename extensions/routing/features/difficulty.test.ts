@@ -117,4 +117,24 @@ describe('difficulty of the routed phase', () => {
     const planned = state({ reasoningHandoff: handoff('plan', reasoning(1)), contract });
     expect(phaseDifficulty(planned, 'implement')).toMatchObject({ value: 1, source: 'execution-rubric' });
   });
+
+  it('a broken contract supplies no implementation demand', () => {
+    const contract = { status: 'broken', rubric: execution(5), measured: small } as unknown as WorkPhaseState['contract'];
+    expect(phaseDifficulty(state({ contract }), 'implement')).toBeUndefined();
+  });
+
+  it('direct-answer demand applies only to the gather phase of its entry', () => {
+    const answer = state({ contextAnswer: 'gather', contextAnswerDemand: { complexity: 'hard', scope: 'bounded', evidence: noFiles } });
+    expect(phaseDifficulty(answer, 'gather')).toMatchObject({ source: 'declared-complexity' });
+    for (const phase of ['lightweight', 'plan', 'review', 'implement'] as const) expect(phaseDifficulty(answer, phase), phase).toBeUndefined();
+    expect(phaseDifficulty(state({ contextAnswerDemand: answer.contextAnswerDemand! }), 'gather')).toBeUndefined();
+  });
+
+  it('a handoff in the entry replaces direct-answer demand, even for another phase', () => {
+    const both = state({
+      reasoningHandoff: handoff('plan', reasoning(1)),
+      contextAnswer: 'gather', contextAnswerDemand: { complexity: 'hard', scope: 'bounded', evidence: noFiles },
+    });
+    expect(phaseDifficulty(both, 'gather')).toBeUndefined();
+  });
 });
