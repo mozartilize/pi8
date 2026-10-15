@@ -27,6 +27,7 @@ import {
 } from '@earendil-works/pi-ai';
 import { getProviderEnvValue } from '@earendil-works/pi-ai/utils/provider-env';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
 
 import type { BenchModel, Candidate, Dimension, DecisionCause, AutoRouterConfig, RoutingDecision } from '../types.js';
@@ -356,8 +357,8 @@ function promptHeadIdentity(head: ReturnType<typeof promptHead>): string {
 const promptHeadTokens = (head: ReturnType<typeof promptHead>): number =>
   estimateTokenCount(`${head.systemPrompt}\n${head.toolsText}`);
 
-function measureTurnInput(context: Context, config: AutoRouterConfig) {
-  const turnInput = getTurnClassificationInput(context.messages, { syntheticPrefixes: config.syntheticPrefixes });
+function measureTurnInput(context: Context, config: AutoRouterConfig, sourceMessages?: readonly AgentMessage[]) {
+  const turnInput = getTurnClassificationInput(context.messages, { syntheticPrefixes: config.syntheticPrefixes, sourceMessages });
   const head = promptHead(context);
   const needsVision = hasImageAttachment(context.messages);
   // Every request sends the system prompt and tool declarations before the
@@ -727,7 +728,8 @@ async function prepareRouterTurn(args: {
   });
 
   const config = loadConfig();
-  const measured = measureTurnInput(context, config);
+  const sourceMessages = extensionContext?.sessionManager?.buildSessionProjection?.().messages;
+  const measured = measureTurnInput(context, config, sourceMessages);
   session.noteRequest(measured.estContextTokens, promptHeadIdentity(measured.head), cacheRetention);
   const intent = resolveBaseIntent(measured.turnInput, session);
 

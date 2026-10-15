@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '@earendil-works/pi-ai';
+import { convertToLlm, SessionManager } from '@earendil-works/pi-coding-agent';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX } from '../context/summary-markers.js';
 
 import { ROUTER_SETTLE_PREFIX, getTurnClassificationInput } from './continuation.js';
@@ -110,6 +112,143 @@ const userMessage = (text: string, timestamp: number) =>
 
 const assistantMessage = (text: string, timestamp: number) =>
   ({ role: 'assistant', content: [{ type: 'text', text }], timestamp }) as never;
+
+describe('getTurnClassificationInput — source provenance', () => {
+  it.each([
+    ['context-prune-summary', '<context-prune-summary>Tool output was summarized.</context-prune-summary>'],
+    ['pi-context', 'Compaction finished. Continue the current task.'],
+    ['integration-event', 'Unmarked integration content'],
+  ])('keeps the entry when Pi converts a %s custom message to user role', (customType, content) => {
+    const request = userMessage('find the active handlers', 1);
+    const event: AgentMessage = { role: 'custom', customType, content, display: false, timestamp: 2 };
+    const sourceMessages: AgentMessage[] = [request, event];
+    const messages = convertToLlm(sourceMessages);
+    expect(messages[1]?.role).toBe('user');
+
+    const before = getTurnClassificationInput([request]);
+    const after = getTurnClassificationInput(messages, { sourceMessages });
+    expect(after).toMatchObject({ key: before.key, promptText: before.promptText });
+    expect(after.provenanceCounts).toMatchObject({ user: 1, 'synthetic-known': 1 });
+    expect(messages).toHaveLength(2);
+  });
+
+  it('keeps genuine user text even when a custom message has the same text or timestamp', () => {
+    const event: AgentMessage = { role: 'custom', customType: 'integration', content: 'review the diff', display: false, timestamp: 2 };
+    const sourceMessages: AgentMessage[] = [userMessage('find handlers', 1), event];
+    const original = getTurnClassificationInput(convertToLlm(sourceMessages), { sourceMessages });
+    for (const [text, timestamp] of [['review the diff', 3], ['implement the fix', 2]] as const) {
+      const request = userMessage(text, timestamp);
+      const source = [...sourceMessages, request];
+      const next = getTurnClassificationInput(convertToLlm(source), { sourceMessages: source });
+      expect(next.key).not.toBe(original.key);
+      expect(next.promptText).toBe(text);
+      expect(next.provenanceCounts.user).toBe(2);
+    }
+  });
+
+  it('uses the projected content of a custom event after a context edit', () => {
+    const manager = SessionManager.inMemory();
+    manager.appendMessage({ role: 'user', content: 'find the active handlers', timestamp: 1 });
+    const eventId = manager.appendCustomMessageEntry('integration', 'unpruned output', false);
+    manager.appendContextEdit(eventId, { content: 'summarized output' });
+    const { messages: sourceMessages } = manager.buildSessionProjection();
+    const input = getTurnClassificationInput(convertToLlm(sourceMessages), { sourceMessages });
+    expect(input.promptText).toBe('find the active handlers');
+    expect(input.provenanceCounts).toMatchObject({ user: 1, 'synthetic-known': 1 });
+  });
+
+  it('keeps shell results in context without starting a user entry', () => {
+    const request = userMessage('find the active handlers', 1);
+    const sourceMessages: AgentMessage[] = [request, {
+      role: 'bashExecution', command: 'pwd', output: '/project', exitCode: 0,
+      cancelled: false, truncated: false, timestamp: 2,
+    }];
+    const input = getTurnClassificationInput(convertToLlm(sourceMessages), { sourceMessages });
+    expect(input.key).toBe(getTurnClassificationInput([request]).key);
+    expect(input.provenanceCounts).toMatchObject({ user: 1, 'synthetic-known': 1 });
+  });
+
+  it('does not classify unmarked text as synthetic without its source message', () => {
+    const event: AgentMessage = { role: 'custom', customType: 'integration', content: 'Continue work.', display: false, timestamp: 2 };
+    const messages = convertToLlm([event]);
+    expect(getTurnClassificationInput(messages, { sourceMessages: [event] }).key).toBe('none');
+    expect(getTurnClassificationInput(messages).promptText).toBe('Continue work.');
+  });
+
+  it.each([
+    { roles: ['user', 'custom'] },
+    { roles: ['custom', 'user'] },
+    { roles: ['user', 'custom', 'user', 'custom'] },
+  ] as const)('counts each colliding source occurrence once: $roles', ({ roles }) => {
+    const sourceMessages: AgentMessage[] = roles.map((role) => role === 'user'
+      ? { role, content: 'review the diff', timestamp: 2 }
+      : { role, customType: 'integration', content: 'review the diff', display: false, timestamp: 2 });
+    const requests = sourceMessages.filter((message) => message.role === 'user');
+    const expected = getTurnClassificationInput(convertToLlm(requests));
+    const input = getTurnClassificationInput(convertToLlm(sourceMessages), { sourceMessages });
+    expect(input.key).toBe(expected.key);
+    expect(input.promptText).toBe('review the diff');
+    expect(input.provenanceCounts).toMatchObject({ user: requests.length, 'synthetic-known': roles.length - requests.length });
+  });
+
+  it('does not hide a user when a colliding custom occurrence is absent from context', () => {
+    const sourceMessages: AgentMessage[] = [
+      { role: 'custom', customType: 'integration', content: 'review the diff', display: false, timestamp: 2 },
+      { role: 'user', content: 'review the diff', timestamp: 2 },
+    ];
+    const messages = convertToLlm(sourceMessages).slice(1);
+    const input = getTurnClassificationInput(messages, { sourceMessages });
+    expect(input.key).toBe(getTurnClassificationInput(messages).key);
+    expect(input.provenanceCounts.user).toBe(1);
+  });
+
+  it('keeps extra identical occurrences as possible user requests', () => {
+    const sourceMessages: AgentMessage[] = [
+      { role: 'custom', customType: 'integration', content: 'review the diff', display: false, timestamp: 2 },
+      { role: 'user', content: 'review the diff', timestamp: 2 },
+    ];
+    const messages = [...convertToLlm(sourceMessages), userMessage('review the diff', 2)];
+    const input = getTurnClassificationInput(messages, { sourceMessages });
+    expect(input.key).toBe(getTurnClassificationInput(messages).key);
+    expect(input.provenanceCounts.user).toBe(3);
+  });
+
+  it('does not match different images that accompany the same text', () => {
+    const sourceMessages: AgentMessage[] = [{
+      role: 'custom', customType: 'integration', display: false, timestamp: 2,
+      content: [{ type: 'text', text: 'review this' }, { type: 'image', mimeType: 'image/png', data: 'AAAA' }],
+    }];
+    const request: Message = {
+      role: 'user', timestamp: 2,
+      content: [{ type: 'text', text: 'review this' }, { type: 'image', mimeType: 'image/png', data: 'BBBB' }],
+    };
+    const input = getTurnClassificationInput([request], { sourceMessages });
+    expect(input.key).toBe(getTurnClassificationInput([request]).key);
+    expect(input.provenanceCounts.user).toBe(1);
+  });
+
+  it('matches reconstructed content blocks regardless of property order', () => {
+    const sourceMessages: AgentMessage[] = [
+      userMessage('find handlers', 1),
+      { role: 'custom', customType: 'integration', content: [{ type: 'text', text: 'Summary.' }], display: false, timestamp: 2 },
+    ];
+    const messages = convertToLlm(sourceMessages);
+    const expected = getTurnClassificationInput(messages, { sourceMessages });
+    messages[1] = { role: 'user', content: [{ text: 'Summary.', type: 'text' }], timestamp: 2 };
+    expect(getTurnClassificationInput(messages, { sourceMessages })).toEqual(expected);
+  });
+
+  it('does not count a timestamped system message as a user request', () => {
+    const request = userMessage('find the active handlers', 1);
+    const before = getTurnClassificationInput([request]);
+    const after = getTurnClassificationInput([
+      request,
+      { role: 'system', content: 'Updated tool declarations.', timestamp: 2 },
+    ]);
+    expect(after).toMatchObject({ key: before.key, promptText: before.promptText });
+    expect(after.provenanceCounts).toMatchObject({ user: 1, 'synthetic-known': 1 });
+  });
+});
 
 describe('getTurnClassificationInput — provenance', () => {
   it('does not treat a compaction summary as the latest user entry', () => {

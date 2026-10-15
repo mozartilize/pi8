@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import type { Api, Context, Model } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { convertToLlm, SessionManager } from '@earendil-works/pi-coding-agent';
 import { expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
 import { CONTINUE_TURN, handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
@@ -2041,6 +2042,43 @@ describe('context acquisition', () => {
         else expect(cheap?.features.reasoningFit).toBe(0);
       },
     );
+
+    it('preserves the accepted rubric and entry across projected custom events, but not a new user request', async () => {
+      const session = await newSession();
+      await session.routeTurn('find the active handlers');
+      const rubric = { alternatives: 2, stakes: 1, spread: 3, knowledge: 3, uncertainty: 4 };
+      expect((await submitPrepared({ ...handoff(4, 'gather'), difficulty: rubric })).accepted).toBe(true);
+      await session.routeTurnAgainWithSameUserEntry();
+      const before = harness.session.getCachedIntent()!;
+      const handoffState = harness.session.getWorkPhaseState()?.reasoningHandoff;
+      expect(handoffState).toMatchObject({ rubric, pending: false });
+      const bounds = harness.getProviderState().lastDecision?.unified?.difficultyBounds;
+
+      const manager = SessionManager.inMemory();
+      manager.appendMessage({ role: 'user', content: 'find the active handlers', timestamp: 1 });
+      harness.runtime.setLastExtensionContext({
+        ...harness.runtime.getLastExtensionContext()!,
+        sessionManager: manager,
+      });
+      for (const [customType, content] of [
+        ['context-prune-summary', '<context-prune-summary>Tool output was summarized.</context-prune-summary>'],
+        ['integration-reminder', 'Continue the current task.'],
+      ] as const) {
+        manager.appendCustomMessageEntry(customType, content, false);
+        session.piContext!.messages = convertToLlm(manager.buildSessionProjection().messages);
+        await session.routeTurnAgainWithSameUserEntry();
+        expect(harness.session.getCachedIntent()?.key).toBe(before.key);
+        expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toEqual(handoffState);
+        expect(harness.getProviderState().lastDecision?.unified).toMatchObject({ difficultyBounds: bounds });
+        expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBeUndefined();
+        expect(session.servedContext?.messages.some((message) => JSON.stringify(message.content).includes(content))).toBe(true);
+      }
+
+      manager.appendMessage({ role: 'user', content: 'review the other task', timestamp: 2 });
+      await session.routeTurn('review the other task');
+      expect(harness.session.getCachedIntent()?.key).not.toBe(before.key);
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
+    });
 
     it('investigates a plan request until the handoff, then records the planner as the boundary owner', async () => {
       const session = await newSession();

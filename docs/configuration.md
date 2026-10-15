@@ -35,7 +35,7 @@ This example limits automatic routing to available GitHub Copilot models. It doe
 | `switchMargin` | `0.15` | Maximum cache credit and protocol penalty. Valid range: 0 to 1. |
 | `routerContextWindow` | Dynamic | Optional positive token limit for the advertised context window. |
 | `debug` | Off | `true` uses the session debug log. A string selects a file path. |
-| `syntheticPrefixes` | `[]` | Literal prefixes for synthetic integration messages. Maximum length: 200 characters per prefix. |
+| `syntheticPrefixes` | `[]` | Literal prefixes for synthetic integration messages whose source is not available in Pi's session projection. Projected custom messages need no prefix. Maximum length: 200 characters per prefix. |
 | `dimensionWeights` | See below | Legacy main-turn and subagent quality, cost, and speed weights. |
 | `reputation` | `true` | Collect protocol counts and enable eligible history-based preferences. |
 | `reputationWeights` | Unset | Weights for `reminder` and `ignored`. Each value must be between 0 and 1. |

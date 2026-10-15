@@ -5,8 +5,8 @@
  * `convertToLlm` collapses compactionSummary, branchSummary, custom and
  * bashExecution messages into user messages. Only the two summary kinds
  * carry a stable textual marker, so only those are generically recoverable;
- * `custom` loses `customType` in conversion and is indistinguishable from a
- * human turn with the same text.
+ * `custom` loses `customType` in conversion. The turn classifier matches
+ * converted messages to Pi's source projection when that projection is available.
  *
  * The markers come from Pi's public converter, not copied formatting text.
  * Tests verify both summary kinds against independently converted messages.
@@ -48,6 +48,7 @@ export function classifyProvenance(
     const role = (message as { role?: unknown } | undefined)?.role;
     if (role === 'assistant') return 'assistant';
     if (role === 'toolResult') return 'tool-result';
+    if (role === 'system') return 'synthetic-known';
     if (role !== 'user') return 'user';
 
     const text = firstText(message);

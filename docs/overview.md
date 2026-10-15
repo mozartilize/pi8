@@ -87,7 +87,11 @@ Asynchronous results check the active session generation before writing state. A
 
 The router caches the resolved intent by user entry. Tool-loop continuations reuse it.
 
-`[pi8-settle]` reminders and configured `syntheticPrefixes` do not start another entry.
+Custom integration messages, shell execution results, system messages, and Pi summaries do not start another routing entry. They remain in model context. The router matches converted user-role messages to Pi's active session projection by timestamp and content, so context edits retain their source. These events do not end an accepted handoff or remove its rubric.
+
+Content comparison ignores object property order but preserves block order and image data. When a user message and a custom event have identical timestamps and content, the router matches each occurrence once in projection order. If context has fewer or more identical occurrences, their origin is ambiguous. The router treats them as possible user requests rather than discard a real request.
+
+`[pi8-settle]` reminders and configured `syntheticPrefixes` also do not start another entry. Prefixes cover integrations whose source is not available in the projection. Unmarked user-role messages without source evidence remain user requests.
 
 ### State boundaries
 
