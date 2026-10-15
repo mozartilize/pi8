@@ -29,14 +29,15 @@ import {
   type DomainArtifact,
 } from './domain.js';
 import { LpCancelledError, LpTimeoutError, LpVerificationError, type LPAdapter } from './lp.js';
-import { checkDomain, compileDecisionProblem, type SelectableAction } from './compile.js';
+import { checkDomain, DecisionProblemError, partitionDecisionProblem, type SelectableAction } from './compile.js';
 import { centralChoice, solveMinimaxRegret } from './minimax.js';
 import { THETA0 } from './weights.js';
 
 export type DomainStatus = 'ready' | 'domain-not-ready' | 'domain-error' | 'unsupported-version';
 export type SolverFallbackReason =
   | 'timeout' | 'spike-pair-cap' | 'numerical' | 'no-solver'
-  | 'domain-not-ready' | 'domain-error' | 'unsupported-version';
+  | 'domain-not-ready' | 'domain-error' | 'unsupported-version'
+  | 'invalid-features';
 
 /** Spike parameters for solver measurement only; not approved production limits. */
 export const SPIKE_SOLVER_BUDGET = Object.freeze({ deadlineMs: 200, pairCap: 4096 });
@@ -76,6 +77,12 @@ export interface UnifiedDecision {
   insufficientEvidence: string[];
   /** Diagnostic: true when no action had evidence for every required axis. */
   allInsufficient: boolean;
+  /**
+   * Diagnostic: actions whose feature vector is malformed or whose key is
+   * duplicated. They stay at the end of the ranking, in key order, so they
+   * remain in the fallback chain; the solver does not compare them.
+   */
+  invalidActions?: string[];
   /** Exact max regret of every action against the whole pool. Absent for a central fallback. */
   maxRegret?: ReadonlyMap<string, number>;
   /** Weight vector of a central fallback. */
@@ -216,7 +223,9 @@ export async function selectByRegret(
   const actions = candidates
     .filter((candidate) => !allowed || allowed.has(candidate.action.key))
     .map((candidate) => candidateFeatures(state, candidate.model, candidate.action, rows));
-  const problem = compileDecisionProblem(actions.map(toSelectable));
+  const { problem, invalid } = partitionDecisionProblem(actions.map(toSelectable));
+  const invalidActions = invalid.map((entry) => entry.key);
+  const withInvalid = (ranking: readonly string[]): string[] => [...ranking, ...invalidActions];
   const insufficientEvidence = actions.filter((features) => features.evidenceGaps.length > 0)
     .map((features) => features.features.key).sort();
   const allInsufficient = actions.length > 0 && insufficientEvidence.length === actions.length;
@@ -227,6 +236,7 @@ export async function selectByRegret(
     actions,
     insufficientEvidence,
     allInsufficient,
+    ...(invalidActions.length > 0 ? { invalidActions } : {}),
   };
 
   const domainBinding = (compiled: DomainArtifact | undefined): Pick<UnifiedDecision, 'domainMode' | 'totalSlack'> => {
@@ -243,10 +253,11 @@ export async function selectByRegret(
     constraintsEnforced: boolean,
     compiled?: DomainArtifact,
   ): UnifiedDecision => {
-    const { chosen, ranking } = centralChoice(problem, theta);
+    const { ranking } = centralChoice(problem, theta);
+    const full = withInvalid(ranking);
     return {
       ...base, solver: 'fallback-central', solverFallbackReason: reason, domainStatus, constraintsEnforced,
-      chosen, ranking, theta,
+      chosen: full[0], ranking: full, theta,
       ...(compiled ? { compiledDomainIdentity: compiled.identity, ...domainBinding(compiled) } : {}),
     };
   };
@@ -281,6 +292,20 @@ export async function selectByRegret(
       ...domainBinding(artifact),
     });
   }
+  if (problem.actions.length === 0) {
+    // Every action is invalid: no numbers to compare. Keep all of them in key order.
+    return finish(central('invalid-features', notReady?.status ?? 'ready', THETA0, false));
+  }
+  if (artifact) {
+    try {
+      checkDomain(problem, artifact.domain);
+    } catch (error) {
+      if (!(error instanceof DecisionProblemError)) throw error;
+      // A domain that leaves the base bounds is not applied: its representative is not trusted either.
+      artifact = undefined;
+      notReady = { reason: 'domain-error', status: 'domain-error' };
+    }
+  }
   if (!artifact) {
     // Answers exist but their constraints are not applied: THETA0 inside ThetaBase, labeled unenforced.
     return finish(central(notReady!.reason, notReady!.status, THETA0, false));
@@ -291,12 +316,11 @@ export async function selectByRegret(
     return finish(central('spike-pair-cap', 'ready', artifact.thetaRepresentative, enforced, artifact));
   }
   try {
-    checkDomain(problem, artifact.domain);
     const exact = await solveMinimaxRegret(problem, artifact.domain, ports.lp, { signal: controls.signal, deadlineAt });
     if (controls.signal?.aborted) return { kind: 'cancelled' };
     return finish({
       ...base, solver: 'exact', domainStatus: 'ready', constraintsEnforced: enforced,
-      chosen: exact.chosen, ranking: [...exact.ranking], maxRegret: exact.maxRegret,
+      chosen: exact.chosen, ranking: withInvalid(exact.ranking), maxRegret: exact.maxRegret,
       compiledDomainIdentity: artifact.identity, ...domainBinding(artifact),
     });
   } catch (error) {

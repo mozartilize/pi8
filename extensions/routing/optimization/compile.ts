@@ -47,19 +47,51 @@ function compileAction(action: SelectableAction): NumericAction {
   });
 }
 
-/** Validate and copy the actions into one immutable numerical problem. */
-export function compileDecisionProblem(actions: readonly SelectableAction[]): DecisionProblem {
-  const compiled = actions.map(compileAction).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  for (let i = 1; i < compiled.length; i++) {
-    if (compiled[i]!.id === compiled[i - 1]!.id) throw new DecisionProblemError(`duplicate action ${compiled[i]!.id}`);
+export interface InvalidAction {
+  key: string;
+  reason: string;
+}
+
+/**
+ * Validate and copy the actions into one immutable numerical problem. An
+ * action with a malformed vector, and every action whose key occurs more than
+ * once, goes to `invalid` instead of the problem: the selector keeps it in the
+ * fallback chain but does not compare its numbers.
+ */
+export function partitionDecisionProblem(actions: readonly SelectableAction[]): { problem: DecisionProblem; invalid: InvalidAction[] } {
+  const counts = new Map<string, number>();
+  for (const action of actions) counts.set(action.features.key, (counts.get(action.features.key) ?? 0) + 1);
+  const compiled: NumericAction[] = [];
+  const invalid = new Map<string, string>();
+  for (const action of actions) {
+    const key = action.features.key;
+    if (counts.get(key)! > 1) { invalid.set(key, `duplicate action ${key}`); continue; }
+    try {
+      compiled.push(compileAction(action));
+    } catch (error) {
+      if (!(error instanceof DecisionProblemError)) throw error;
+      invalid.set(key, error.message);
+    }
   }
-  return Object.freeze({
+  compiled.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const problem: DecisionProblem = Object.freeze({
     dimension: FEATURE_COUNT,
     actions: Object.freeze(compiled),
     baseBounds: THETA_BOUNDS,
     tieKeys: TIE_KEYS,
     tolerance: LP_RESIDUAL_TOLERANCE,
   });
+  return {
+    problem,
+    invalid: [...invalid].map(([key, reason]) => ({ key, reason })).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
+  };
+}
+
+/** Validate and copy the actions into one immutable numerical problem; throw on any invalid action. */
+export function compileDecisionProblem(actions: readonly SelectableAction[]): DecisionProblem {
+  const { problem, invalid } = partitionDecisionProblem(actions);
+  if (invalid.length > 0) throw new DecisionProblemError(invalid.map((entry) => entry.reason).join('; '));
+  return problem;
 }
 
 const isSimplexRow = (coeffs: readonly number[], dimension: number, lower?: number, upper?: number): boolean =>

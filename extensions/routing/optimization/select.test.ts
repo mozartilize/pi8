@@ -651,3 +651,51 @@ describe('spike pair cap discontinuity (synthetic, CPU only)', () => {
     expect(typeof capped.chosen).toBe('string');
   }, 30_000);
 });
+
+describe('invalid actions and invalid domains do not stop selection', () => {
+  const run = (pool: readonly SelectionCandidate[], ports: SelectorPorts, profile: UserRoutingPreferencesV1 = OPERATOR) => {
+    const preferences = snapshot(profile);
+    return selectByRegret(solverState, pool, rows, preferences, ports, {
+      expectedProfileDigest: preferences.digest, decisionDeadlineMs: 5_000,
+    }) as Promise<UnifiedDecision>;
+  };
+
+  it('a duplicated action stays at the end of the ranking; the other actions are solved exactly', async () => {
+    const result = await run([...candidates, candidates[0]!], readyPorts());
+    expect(result.solver).toBe('exact');
+    expect(result.invalidActions).toEqual(['c/cheap:high']);
+    expect(result.ranking).toEqual(['s/strong:high', 'c/cheap:high']);
+    expect([...result.maxRegret!.keys()]).toEqual(['s/strong:high']);
+  });
+
+  it('when every action is invalid, all of them stay in the ranking under a labeled fallback', async () => {
+    const result = await run([...candidates, ...candidates], readyPorts());
+    expect(result.solver).toBe('fallback-central');
+    expect(result.solverFallbackReason).toBe('invalid-features');
+    expect(result.constraintsEnforced).toBe(false);
+    expect(result.ranking).toEqual(['c/cheap:high', 's/strong:high']);
+    expect(result.chosen).toBe('c/cheap:high');
+  });
+
+  it('a stored domain outside the base bounds is not applied, on the exact and the pair-cap paths', async () => {
+    const polytope = operatorArtifact.domain.polytope;
+    const widened: DomainArtifact = {
+      ...operatorArtifact,
+      domain: { ...operatorArtifact.domain, polytope: { ...polytope, colUpper: polytope.colUpper.map((u) => u! + 0.5) } } as WeightDomain,
+    };
+    const ports = portsWith((identity) => (identity === widened.identity ? widened : undefined));
+    const preferences = snapshot(OPERATOR);
+    for (const pairCap of [undefined, 1]) {
+      const result = await selectByRegret(solverState, candidates, rows, preferences, ports, {
+        expectedProfileDigest: preferences.digest, decisionDeadlineMs: 5_000, ...(pairCap ? { pairCap } : {}),
+      }) as UnifiedDecision;
+      expect(result.solver, String(pairCap)).toBe('fallback-central');
+      expect(result.solverFallbackReason).toBe('domain-error');
+      expect(result.domainStatus).toBe('domain-error');
+      expect(result.constraintsEnforced).toBe(false);
+      expect(result.theta).toEqual(THETA0);
+      expect(result.compiledDomainIdentity).toBeUndefined();
+      expect(result.ranking.sort()).toEqual(candidates.map((c) => c.action.key).sort());
+    }
+  });
+});

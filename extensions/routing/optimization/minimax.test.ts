@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { FEATURE_COUNT } from '../features/schema.js';
-import { checkDomain, compileDecisionProblem, DecisionProblemError, type SelectableAction } from './compile.js';
+import { checkDomain, compileDecisionProblem, DecisionProblemError, partitionDecisionProblem, type SelectableAction } from './compile.js';
 import { thetaBaseDomain } from './domain.js';
 import { WorkerLpAdapter, type Polytope } from './lp.js';
 import { centralChoice, solveMinimaxRegret, type DecisionProblem, type NumericAction, type NumericDomain } from './minimax.js';
@@ -139,5 +139,21 @@ describe('decision compiler', () => {
     expect(() => checkDomain(compiled, { mode: 'base', polytope: { ...polytope, rows: [...polytope.rows, { coeffs: vector(1), upper: 2 }] } })).toThrow(/base domain differs/);
     const short = { numCols: 2, colLower: [0, 0], colUpper: [1, 1], rows: [] };
     expect(() => checkDomain(compiled, { mode: 'hard', polytope: short })).toThrow(/2 columns/);
+  });
+});
+
+describe('partitionDecisionProblem', () => {
+  const vector = (value = 0.5) => new Array<number>(FEATURE_COUNT).fill(value);
+  const action = (key: string, values = vector()): SelectableAction => ({
+    features: { key, values, lower: vector(0.4), upper: vector(0.6), evidence: [] },
+  });
+
+  it('moves malformed and duplicated actions to `invalid` and keeps the rest', () => {
+    const { problem, invalid } = partitionDecisionProblem([
+      action('ok'), action('nan', [...vector().slice(1), Number.NaN]), action('dup'), action('dup'),
+    ]);
+    expect(problem.actions.map((a) => a.id)).toEqual(['ok']);
+    expect(invalid.map((entry) => entry.key)).toEqual(['dup', 'nan']);
+    expect(invalid[1]!.reason).toMatch(/not finite/);
   });
 });
