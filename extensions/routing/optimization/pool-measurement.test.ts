@@ -23,7 +23,10 @@ import { validProblem } from '../../test-support/decision-problem.js';
 import type { SelectableAction } from './compile.js';
 import { solveMinimaxRegret, type NumericDomain } from './minimax.js';
 import type { LPAdapter, LpRunControls } from './lp.js';
-import { DomainCache, SPIKE_SOLVER_BUDGET, selectByRegret, type SelectionCandidate } from './select.js';
+import { DomainCache, selectByRegret, type SelectionCandidate } from './select.js';
+
+/** Spike parameters measured against the production budget; not production limits. */
+const SPIKE_SOLVER_BUDGET = { deadlineMs: 200, pairCap: 4096 } as const;
 
 const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
   solveMinimaxRegret(validProblem(actions), domain, lp, controls);
@@ -110,7 +113,7 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
             // Each row uses the actual selector controls. Uncapped timing alone
             // cannot establish a timeout or pair-cap fallback rate.
             const budgets = [
-              { label: 'spike-200ms-cap4096', deadlineMs: 200, pairCap: 4096 },
+              { label: 'spike-200ms-cap4096', ...SPIKE_SOLVER_BUDGET },
               { label: '200ms-uncapped', deadlineMs: 200, pairCap: undefined },
               { label: '500ms-uncapped', deadlineMs: 500, pairCap: undefined },
               { label: '1000ms-uncapped', deadlineMs: 1000, pairCap: undefined },

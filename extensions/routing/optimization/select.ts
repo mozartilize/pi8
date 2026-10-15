@@ -39,9 +39,6 @@ export type SolverFallbackReason =
   | 'domain-not-ready' | 'domain-error' | 'unsupported-version'
   | 'invalid-features';
 
-/** Spike parameters for solver measurement only; not approved production limits. */
-export const SPIKE_SOLVER_BUDGET = Object.freeze({ deadlineMs: 200, pairCap: 4096 });
-
 /**
  * Production selection budget: 500 ms in total, with no pair cap. Selection
  * runs before each routed request, so this deadline is the most latency it can
