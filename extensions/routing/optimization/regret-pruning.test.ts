@@ -6,18 +6,17 @@
 import fc from 'fast-check';
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { greedyBoxSimplexMax } from '../../test-support/lp-oracle.js';
 import type { ActionFeatureVector } from '../features/schema.js';
 import type { UserRoutingPreferencesV1 } from '../preferences/schema.js';
 import { compileDomainArtifact, thetaBaseDomain, type WeightDomain } from './domain.js';
 import { WorkerLpAdapter } from './lp.js';
-import { compileDecisionProblem, type SelectableAction } from './compile.js';
-import { baseDomainMax, pairObjective, solveMinimaxRegret, type NumericDomain, type RegretResult } from './minimax.js';
+import { validProblem } from '../../test-support/decision-problem.js';
+import type { SelectableAction } from './compile.js';
+import { solveMinimaxRegret, type NumericDomain, type RegretResult } from './minimax.js';
 import type { LPAdapter, LpRunControls } from './lp.js';
-import { THETA_BOUNDS } from './weights.js';
 
 const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
-  solveMinimaxRegret(compileDecisionProblem(actions), domain, lp, controls);
+  solveMinimaxRegret(validProblem(actions), domain, lp, controls);
 
 const lp = new WorkerLpAdapter();
 afterAll(() => lp.close());
@@ -28,7 +27,9 @@ async function reference(actions: readonly SelectableAction[], domain: WeightDom
   for (const a of actions) {
     const others = actions.filter((b) => b !== a);
     if (others.length === 0) continue;
-    const objectives = others.map((b) => pairObjective(a.features, b.features, domain.polytope.numCols));
+    // PR(a, b) objective: theta . (upper(b) - lower(a)), zero on slack columns.
+    const objectives = others.map((b) => Array.from({ length: domain.polytope.numCols }, (_, j) =>
+      (j < a.features.lower.length ? b.features.upper[j]! - a.features.lower[j]! : 0)));
     const results = await lp.solve({ polytope: domain.polytope, objectives, sense: 'max' });
     for (const r of results) expect(r.status).toBe('optimal');
     maxRegret.set(a.features.key, Math.max(0, ...results.map((r) => r.objective!)));
@@ -75,14 +76,6 @@ const OPERATOR: UserRoutingPreferencesV1 = {
   handoffWarmCache: 'switch_for_capability', researchTasks: 'higher_research_capability', afterRework: 'switch_model',
 };
 const CONFLICTING: UserRoutingPreferencesV1 = { version: 1, openDesignDecisions: 'lower_cost', handoffWarmCache: 'switch_for_capability', settledImplementation: 'higher_coding_capability', researchTasks: 'lower_cost' };
-
-describe('baseDomainMax', () => {
-  it('equals the independent greedy oracle', () => {
-    fc.assert(fc.property(fc.array(fc.double({ min: -1, max: 1, noNaN: true }), { minLength: 10, maxLength: 10 }), (c) => {
-      expect(baseDomainMax(c, THETA_BOUNDS)).toBeCloseTo(greedyBoxSimplexMax(c, THETA_BOUNDS), 12);
-    }));
-  });
-});
 
 describe('pruned solver equals the unpruned reference', () => {
   it('ThetaBase: same regrets and winner without any LP', async () => {

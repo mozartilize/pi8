@@ -87,13 +87,6 @@ export function partitionDecisionProblem(actions: readonly SelectableAction[]): 
   };
 }
 
-/** Validate and copy the actions into one immutable numerical problem; throw on any invalid action. */
-export function compileDecisionProblem(actions: readonly SelectableAction[]): DecisionProblem {
-  const { problem, invalid } = partitionDecisionProblem(actions);
-  if (invalid.length > 0) throw new DecisionProblemError(invalid.map((entry) => entry.reason).join('; '));
-  return problem;
-}
-
 const isSimplexRow = (coeffs: readonly number[], dimension: number, lower?: number, upper?: number): boolean =>
   lower === 1 && upper === 1 && coeffs.every((value, j) => value === (j < dimension ? 1 : 0));
 

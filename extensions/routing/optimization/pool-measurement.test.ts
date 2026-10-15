@@ -19,13 +19,14 @@ import { preferenceProfileDigest, validatePreferences, type UserRoutingPreferenc
 import type { RegistryModelInfo } from '../score/scorer.js';
 import { domainIdentity, thetaBaseDomain } from './domain.js';
 import { WorkerLpAdapter } from './lp.js';
-import { compileDecisionProblem, type SelectableAction } from './compile.js';
+import { validProblem } from '../../test-support/decision-problem.js';
+import type { SelectableAction } from './compile.js';
 import { solveMinimaxRegret, type NumericDomain } from './minimax.js';
 import type { LPAdapter, LpRunControls } from './lp.js';
 import { DomainCache, SPIKE_SOLVER_BUDGET, selectByRegret, type SelectionCandidate } from './select.js';
 
 const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
-  solveMinimaxRegret(compileDecisionProblem(actions), domain, lp, controls);
+  solveMinimaxRegret(validProblem(actions), domain, lp, controls);
 
 const ENABLED = process.env.PI8_POOL_MEASURE === '1';
 const PHASES: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];

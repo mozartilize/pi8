@@ -72,7 +72,7 @@ function compareTies(problem: DecisionProblem, a: NumericAction, b: NumericActio
 }
 
 /** Objective of PR(a,b) over the domain columns: theta part only, zero on slacks. */
-export function pairObjective(a: Pick<NumericAction, 'lower'>, b: Pick<NumericAction, 'upper'>, numCols: number): number[] {
+function pairObjective(a: Pick<NumericAction, 'lower'>, b: Pick<NumericAction, 'upper'>, numCols: number): number[] {
   const objective = new Array<number>(numCols).fill(0);
   for (let j = 0; j < a.lower.length; j++) objective[j] = b.upper[j]! - a.lower[j]!;
   return objective;
@@ -95,7 +95,7 @@ const LP_CHUNK = 16;
  * weights in descending order of `c`. Every admissible domain lies inside the
  * base bounds, so this bounds its maximum from above.
  */
-export function baseDomainMax(c: readonly number[], bounds: readonly (readonly [number, number])[]): number {
+function baseDomainMax(c: readonly number[], bounds: readonly (readonly [number, number])[]): number {
   let remaining = 1 - bounds.reduce((sum, [lower]) => sum + lower, 0);
   let value = bounds.reduce((sum, [lower], j) => sum + lower * c[j]!, 0);
   const order = c.map((coefficient, j) => [coefficient, j] as const).sort((a, b) => b[0] - a[0]);

@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { FEATURE_COUNT } from '../features/schema.js';
-import { checkDomain, compileDecisionProblem, DecisionProblemError, partitionDecisionProblem, type SelectableAction } from './compile.js';
+import { checkDomain, partitionDecisionProblem, type SelectableAction } from './compile.js';
 import { thetaBaseDomain } from './domain.js';
 import { WorkerLpAdapter, type Polytope } from './lp.js';
 import { centralChoice, solveMinimaxRegret, type DecisionProblem, type NumericAction, type NumericDomain } from './minimax.js';
@@ -101,7 +101,8 @@ describe('decision compiler', () => {
 
   it('copies, sorts and freezes the actions', () => {
     const values = vector();
-    const compiled = compileDecisionProblem([action('z', { values }), action('a', {}, 0.1)]);
+    const { problem: compiled, invalid } = partitionDecisionProblem([action('z', { values }), action('a', {}, 0.1)]);
+    expect(invalid).toEqual([]);
     values[0] = 0.55;
     expect(compiled.actions.map((a) => a.id)).toEqual(['a', 'z']);
     expect(compiled.actions[1]!.center[0]).toBe(0.5);
@@ -110,24 +111,27 @@ describe('decision compiler', () => {
     expect(compiled.actions[1]!.ties).toEqual([0.5, undefined]);
   });
 
-  it('rejects malformed actions', () => {
-    const cases: [SelectableAction[], RegExp][] = [
-      [[action('a'), action('a')], /duplicate action a/],
-      [[action('a', { values: vector().slice(1) })], /values has 9 features/],
-      [[action('a', { lower: [...vector(0.4).slice(1), Number.NaN] })], /not finite/],
-      [[action('a', { lower: vector(0.55) })], /not ordered/],
-      [[action('a', { upper: vector(1.01) })], /not ordered/],
-      [[action('a', { lower: vector(-0.01) })], /not ordered/],
-      [[action('a', {}, Number.POSITIVE_INFINITY)], /central USD/],
+  it('moves each malformed or duplicated action out of the problem, with its reason', () => {
+    const cases: [SelectableAction[], string, RegExp][] = [
+      [[action('a'), action('a')], 'a', /duplicate action a/],
+      [[action('a', { values: vector().slice(1) })], 'a', /values has 9 features/],
+      [[action('a', { lower: [...vector(0.4).slice(1), Number.NaN] })], 'a', /not finite/],
+      [[action('a', { lower: vector(0.55) })], 'a', /not ordered/],
+      [[action('a', { upper: vector(1.01) })], 'a', /not ordered/],
+      [[action('a', { lower: vector(-0.01) })], 'a', /not ordered/],
+      [[action('a', {}, Number.POSITIVE_INFINITY)], 'a', /central USD/],
     ];
-    for (const [actions, message] of cases) {
-      expect(() => compileDecisionProblem(actions)).toThrow(DecisionProblemError);
-      expect(() => compileDecisionProblem(actions)).toThrow(message);
+    for (const [actions, key, message] of cases) {
+      const { problem, invalid } = partitionDecisionProblem([...actions, action('ok')]);
+      expect(problem.actions.map((a) => a.id)).toEqual(['ok']);
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]!.key).toBe(key);
+      expect(invalid[0]!.reason).toMatch(message);
     }
   });
 
   it('accepts the authored base domain and rejects domains that break base containment', () => {
-    const compiled = compileDecisionProblem([action('a')]);
+    const compiled = partitionDecisionProblem([action('a')]).problem;
     const base = thetaBaseDomain();
     expect(() => checkDomain(compiled, base)).not.toThrow();
     const polytope = base.polytope;

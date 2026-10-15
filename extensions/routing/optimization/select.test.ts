@@ -19,13 +19,14 @@ import { preferenceProfileDigest, validatePreferences, type UserRoutingPreferenc
 import type { RegistryModelInfo } from '../score/scorer.js';
 import { compileDomainArtifact, thetaBaseDomain, type DomainArtifact, type WeightDomain } from './domain.js';
 import { WorkerLpAdapter, type LPAdapter, type LpRequest, type LpResult, type LpRunControls, type Polytope } from './lp.js';
-import { compileDecisionProblem, type SelectableAction } from './compile.js';
+import { validProblem } from '../../test-support/decision-problem.js';
+import type { SelectableAction } from './compile.js';
 import { centralChoice, solveMinimaxRegret, type NumericDomain } from './minimax.js';
 import { DomainCache, selectByRegret, type SelectionCandidate, type SelectorPorts, type UnifiedDecision } from './select.js';
 import { THETA0, THETA_BOUNDS } from './weights.js';
 
 const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
-  solveMinimaxRegret(compileDecisionProblem(actions), domain, lp, controls);
+  solveMinimaxRegret(validProblem(actions), domain, lp, controls);
 
 const lp = new WorkerLpAdapter();
 afterAll(() => lp.close());
@@ -645,7 +646,7 @@ describe('spike pair cap discontinuity (synthetic, CPU only)', () => {
     // Exact regret is unchanged by a dominated action.
     expect(withIrrelevant.chosen).toBe(exact.chosen);
     // Under the spike cap the 65-action pool would take the central path instead.
-    const capped = centralChoice(compileDecisionProblem(actions), THETA0);
+    const capped = centralChoice(validProblem(actions), THETA0);
     expect(64 * 63).toBeLessThanOrEqual(4096);
     expect(65 * 64).toBeGreaterThan(4096);
     expect(typeof capped.chosen).toBe('string');

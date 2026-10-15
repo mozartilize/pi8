@@ -18,14 +18,15 @@ import {
   thetaBasePolytope,
 } from './domain.js';
 import { WorkerLpAdapter, pointProblem, type Polytope } from './lp.js';
-import { compileDecisionProblem, type SelectableAction } from './compile.js';
+import { validProblem } from '../../test-support/decision-problem.js';
+import type { SelectableAction } from './compile.js';
 import { solveMinimaxRegret, type NumericDomain } from './minimax.js';
 import type { LPAdapter, LpRunControls } from './lp.js';
 import { THETA0 } from './weights.js';
 import { preferenceProfileDigest } from '../preferences/schema.js';
 
 const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
-  solveMinimaxRegret(compileDecisionProblem(actions), domain, lp, controls);
+  solveMinimaxRegret(validProblem(actions), domain, lp, controls);
 
 const lp = new WorkerLpAdapter();
 afterAll(() => lp.close());
