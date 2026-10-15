@@ -113,3 +113,23 @@ export interface DecisionStateV1 {
   /** AA Intelligence Index version of the benchmark snapshot. */
   benchmarkIndexVersion?: string;
 }
+
+/*
+ * Domain snapshots. Each domain reads only its own part of the decision
+ * state, so a field that a domain does not name cannot change its result.
+ * `DecisionStateV1` is the one host-side object that supplies all of them.
+ */
+
+/** Task demand: the routed phase, accepted declarations, and input size and modality. */
+export type TaskSnapshot = Readonly<Pick<DecisionStateV1,
+  'phase' | 'contextAcquisition' | 'openDecisions' | 'difficulty' | 'estimatedContextTokens' | 'needsVision'>>;
+
+/** Benchmark observations: the index version that quality and output-token evidence must match. */
+export type BenchmarkSnapshot = Readonly<Pick<DecisionStateV1, 'benchmarkIndexVersion'>>;
+
+/** Spend: prompt size, per-model token scale, and cache records of the current request. */
+export type SpendSnapshot = Readonly<Pick<DecisionStateV1,
+  'estimatedContextTokens' | 'promptTokenScales' | 'cache' | 'promptIdentity' | 'nowMs' | 'isSubagentSpawn'>>;
+
+/** Continuity and recovery: the boundary, incumbent, attributed rework and friction. */
+export type SessionSnapshot = Readonly<Pick<DecisionStateV1, 'boundary' | 'incumbent' | 'rework' | 'friction' | 'workItemId'>>;

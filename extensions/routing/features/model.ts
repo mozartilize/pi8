@@ -31,7 +31,7 @@ import {
   type TaskRelevance,
 } from './mapping.js';
 import { FEATURE_MAPPING_VERSION, type AxisProvenance, type FeatureEvidence, type FeatureName } from './schema.js';
-import type { DecisionStateV1 } from './state.js';
+import type { BenchmarkSnapshot, TaskSnapshot } from './state.js';
 
 /** Intelligence Index versions whose scale the feature mapping normalizes. Others give no evidence. */
 export const INTELLIGENCE_INDEX_VERSIONS: readonly string[] = ['4.3'];
@@ -75,7 +75,7 @@ export function rowAtServedEffort(rows: readonly BenchModel[], action: Effective
   return selectMergeRow(matching);
 }
 
-export function observeAxis(row: BenchModel | undefined, axis: ProvenanceAxis, state: Pick<DecisionStateV1, 'benchmarkIndexVersion'>): AxisObservation {
+export function observeAxis(row: BenchModel | undefined, axis: ProvenanceAxis, state: BenchmarkSnapshot): AxisObservation {
   const value = row?.quality[axis];
   const provenance = row?.axisProvenance?.[axis] ?? 'missing';
   if (value === undefined || !Number.isFinite(value)) return { axis, provenance: 'missing' };
@@ -115,7 +115,7 @@ const evidenceCode = (observations: readonly AxisObservation[]): FeatureEvidence
       : 'missing';
 
 /** Phase relevance stays independent of capability demand and price. */
-export function taskRelevance(state: Pick<DecisionStateV1, 'phase' | 'openDecisions' | 'difficulty'>): TaskRelevance {
+export function taskRelevance(state: Pick<TaskSnapshot, 'phase' | 'openDecisions' | 'difficulty'>): TaskRelevance {
   const base = PHASE_RELEVANCE[state.phase];
   const openDecisions = state.openDecisions !== undefined && state.openDecisions > 0;
   const reasoning = openDecisions ? Math.max(base.reasoning, OPEN_DECISIONS_REASONING) : base.reasoning;
@@ -123,7 +123,7 @@ export function taskRelevance(state: Pick<DecisionStateV1, 'phase' | 'openDecisi
 }
 
 /** Evidence detail of the task difficulty. */
-export const difficultyDetail = (state: Pick<DecisionStateV1, 'difficulty'>): string =>
+export const difficultyDetail = (state: Pick<TaskSnapshot, 'difficulty'>): string =>
   state.difficulty ? `difficulty:${state.difficulty.source}:${state.difficulty.value.toFixed(3)}` : 'difficulty:unknown';
 
 /**
@@ -133,7 +133,7 @@ export const difficultyDetail = (state: Pick<DecisionStateV1, 'difficulty'>): st
  * diagnostic. Missing quality is already an uncertainty interval in the
  * features, so a gap does not remove an action from the comparison.
  */
-export function evidenceGaps(row: BenchModel | undefined, state: DecisionStateV1): ProvenanceAxis[] {
+export function evidenceGaps(row: BenchModel | undefined, state: TaskSnapshot & BenchmarkSnapshot): ProvenanceAxis[] {
   const collecting = state.phase === 'gather' && state.contextAcquisition === true;
   const required = new Set<ProvenanceAxis>(collecting ? ['intelligence'] : REQUIRED_EVIDENCE_AXES[state.phase]);
   if (state.needsVision) required.add('visionReasoning');
@@ -149,7 +149,7 @@ export interface CapabilityFeature {
   evidence: FeatureEvidence;
 }
 
-export function capabilityFeatures(row: BenchModel | undefined, state: DecisionStateV1): CapabilityFeature[] {
+export function capabilityFeatures(row: BenchModel | undefined, state: TaskSnapshot & BenchmarkSnapshot): CapabilityFeature[] {
   const relevance = taskRelevance(state);
   const collecting = state.phase === 'gather' && state.contextAcquisition === true;
   const observe = (axis: ProvenanceAxis) => observeAxis(row, axis, state);

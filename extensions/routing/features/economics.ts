@@ -31,7 +31,7 @@ import {
 } from './mapping.js';
 import { isCompatibleIndexVersion, type Interval } from './model.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
-import type { DecisionStateV1 } from './state.js';
+import type { SpendSnapshot } from './state.js';
 
 export type Pricing = NonNullable<RegistryModelInfo['cost']>;
 
@@ -153,11 +153,11 @@ export interface PredictedSpendV1 {
 const usable = (value: number | undefined): value is number => value !== undefined && Number.isFinite(value) && value >= 0;
 
 /** Billed prompt tokens per estimated token for the action's model. */
-export const promptTokenScale = (state: DecisionStateV1, registryId: string): number =>
+export const promptTokenScale = (state: Pick<SpendSnapshot, 'promptTokenScales'>, registryId: string): number =>
   state.promptTokenScales?.get(registryId) ?? 1;
 
 /** Prompt tokens the action's model bills for the estimated context. */
-const billedPromptTokens = (state: DecisionStateV1, action: EffectiveAction): number =>
+const billedPromptTokens = (state: SpendSnapshot, action: EffectiveAction): number =>
   Math.max(0, state.estimatedContextTokens) * promptTokenScale(state, action.registryId);
 
 /** pi-ai keeps the cached prefix across efforts only for per-message effort. */
@@ -198,7 +198,7 @@ export type CacheEligibility =
  * so they take the same scale as the prompt.
  */
 export function usableWarmPrefix(
-  state: DecisionStateV1,
+  state: SpendSnapshot,
   action: EffectiveAction,
   model: RegistryModelInfo,
 ): { tokens: number; eligibility: CacheEligibility } {
@@ -275,7 +275,7 @@ export function requestRates(pricing: Pricing, promptTokens: number): Pricing {
 }
 
 export function predictSpend(
-  state: DecisionStateV1,
+  state: SpendSnapshot,
   action: EffectiveAction,
   model: RegistryModelInfo,
   output: OutputTokenForecast = outputTokenForecast(UNKNOWN_DEMAND),

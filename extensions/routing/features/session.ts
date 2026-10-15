@@ -10,7 +10,7 @@
 import { CONTINUITY, FRICTION } from './mapping.js';
 import { effortRank, type EffectiveAction } from './actions.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
-import type { DecisionStateV1, ServedIdentity } from './state.js';
+import type { ServedIdentity, SessionSnapshot } from './state.js';
 
 export interface SessionFeatures {
   continuity: number;
@@ -22,7 +22,7 @@ export interface SessionFeatures {
 
 const sameEffort = (a: ServedIdentity, b: Pick<EffectiveAction, 'effort'>): boolean => a.effort === b.effort;
 
-export function sessionFeatures(state: DecisionStateV1, action: EffectiveAction): SessionFeatures {
+export function sessionFeatures(state: SessionSnapshot, action: EffectiveAction): SessionFeatures {
   const evidence: FeatureEvidence[] = [];
   let continuity: number = CONTINUITY.unknown;
   let effortRecoveryFit = 0;
