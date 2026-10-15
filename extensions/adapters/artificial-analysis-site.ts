@@ -34,6 +34,32 @@ export interface AASiteModel {
   intelligenceIndexTimePerTask?: number;
   /** Terminal-Bench 4.0 pass rate in [0, 1]: agentic coding tasks in a real terminal. */
   terminalBench40?: number;
+  /** `intelligenceIndexOutputTokensPerTask.output`: weighted answer and reasoning tokens per task. */
+  outputTokensPerTask?: number;
+  /** The page has a token object, but its `output` is not a finite nonnegative number. */
+  outputTokensInvalid?: true;
+}
+
+/**
+ * The Intelligence Index version that the models page shows, from labels such
+ * as `Intelligence Index v4.3.2`. The captured payload has no version field.
+ * No label, or two different labels, gives undefined: the version is unknown.
+ */
+export function parseSiteIndexVersion(labels: readonly string[]): string | undefined {
+  const versions = new Set<string>();
+  for (const label of labels) {
+    for (const match of label.matchAll(/Intelligence Index v(\d+(?:\.\d+)*)/g)) versions.add(match[1]!);
+  }
+  return versions.size === 1 ? [...versions][0] : undefined;
+}
+
+/** Read only `.output`. Do not round, and do not convert strings. */
+function outputTokens(value: unknown): Pick<AASiteModel, 'outputTokensPerTask' | 'outputTokensInvalid'> {
+  if (value == null) return {};
+  const output = typeof value === 'object' ? (value as { output?: unknown }).output : undefined;
+  return typeof output === 'number' && Number.isFinite(output) && output >= 0
+    ? { outputTokensPerTask: output }
+    : { outputTokensInvalid: true };
 }
 
 /** The exact install command for the `playwright-core` this package resolves. */
@@ -110,6 +136,9 @@ export function parseSiteModels(raw: unknown): AASiteModel[] {
       briefcaseRubricPassRate: finite(row.briefcaseRubricPassRate),
       intelligenceIndexTimePerTask: finite(row.intelligenceIndexTimePerTask),
       terminalBench40: finite(row.terminalBench40),
+      // Optional metric: a missing or malformed value gives no output-demand
+      // evidence and does not fail the sync.
+      ...outputTokens(row.intelligenceIndexOutputTokensPerTask),
     });
   }
   const fields = ['intelligenceIndexIsEstimated', 'omniscience', 'briefcaseRubricPassRate', 'intelligenceIndexTimePerTask', 'lcr', 'mmmuPro', 'terminalBench40'] as const;
@@ -123,7 +152,7 @@ export function parseSiteModels(raw: unknown): AASiteModel[] {
   return rows;
 }
 
-export async function fetchSiteModels(): Promise<AASiteModel[]> {
+export async function fetchSiteModels(): Promise<AASiteModel[] & { indexVersion?: string }> {
   const check = await checkPlaywright();
   if (!check.ready) throw new Error(check.message);
   const { chromium } = await import('playwright-core');
@@ -166,9 +195,15 @@ export async function fetchSiteModels(): Promise<AASiteModel[]> {
         briefcaseRubricPassRate: (m.briefcaseBreakdown as { rubricPassRate?: unknown } | null | undefined)?.rubricPassRate,
         intelligenceIndexTimePerTask: m.intelligenceIndexTimePerTask,
         terminalBench40: m.terminalBench40,
+        intelligenceIndexOutputTokensPerTask: m.intelligenceIndexOutputTokensPerTask,
       })),
     );
-    return parseSiteModels(raw);
+    // The version label comes from the same page load as the payload.
+    const labels = await page.evaluate(() =>
+      [...document.body.innerText.matchAll(/Intelligence Index v\d+(?:\.\d+)*/g)].map((match) => match[0]),
+    );
+    const indexVersion = parseSiteIndexVersion(labels);
+    return Object.assign(parseSiteModels(raw), indexVersion ? { indexVersion } : {});
   } finally {
     await browser.close();
   }

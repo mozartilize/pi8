@@ -84,6 +84,17 @@ export interface BenchModel {
   costPerTask?: number;
   /** Measured wall time per Intelligence Index task in seconds; absent when unpublished. */
   timePerTaskSeconds?: number;
+  /**
+   * AA weighted output tokens (answer and reasoning) per Intelligence Index
+   * task. A benchmark observation, not a forecast of the next invocation.
+   * Absent when the models page publishes none or the value is unusable.
+   */
+  outputTokensPerTask?: number;
+  /**
+   * Provenance of `outputTokensPerTask`, separate from the quality-axis
+   * provenance. Absent when the models page has no token observation.
+   */
+  outputTokensProvenance?: OutputTokensProvenance;
   /** Prefer registry value; adapter value is fallback. */
   contextWindow?: number;
   /** Which source produced this row. */
@@ -93,6 +104,23 @@ export interface BenchModel {
 /** Quality axes that carry independent provenance. */
 export type ProvenanceAxis = 'intelligence' | 'agenticCoding' | 'research' | 'knowledge' | 'longContext' | 'visionReasoning';
 export const PROVENANCE_AXES: readonly ProvenanceAxis[] = ['intelligence', 'agenticCoding', 'research', 'knowledge', 'longContext', 'visionReasoning'];
+
+/**
+ * Status of an output-token observation:
+ * - `measured`: AA did not estimate the Intelligence Index of the row.
+ * - `source-estimated`: AA estimated the index, or the page does not say.
+ * - `unknown-effort`: the display name has no effort label the router parses.
+ * - `invalid`: the page value is not a finite nonnegative number.
+ * - `conflict`: two observations for one identity disagree.
+ */
+export type OutputTokensStatus = 'measured' | 'source-estimated' | 'unknown-effort' | 'invalid' | 'conflict';
+export const OUTPUT_TOKENS_STATUSES: readonly OutputTokensStatus[] = ['measured', 'source-estimated', 'unknown-effort', 'invalid', 'conflict'];
+
+export interface OutputTokensProvenance {
+  status: OutputTokensStatus;
+  /** Intelligence Index version that the models page shows; absent when the page shows none or more than one. */
+  indexVersion?: string;
+}
 
 export interface BenchmarkStore {
   /** AA index scale the synchronized measurements use. */

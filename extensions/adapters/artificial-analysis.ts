@@ -17,7 +17,7 @@
  * Terminal-Bench 4.0 (agentic-estimate.ts).
  */
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
-import type { BenchModel, ProvenanceAxis } from '../types.js';
+import type { BenchModel, OutputTokensProvenance, ProvenanceAxis } from '../types.js';
 import type { AxisProvenance } from '../routing/features/schema.js';
 import { agenticCodingScores } from './agentic-estimate.js';
 import { fetchSiteModels, type AASiteModel } from './artificial-analysis-site.js';
@@ -202,11 +202,46 @@ function asSlug(model: AARawModel): string | undefined {
 const joinKey = (slug: string, name: string | undefined): string =>
   `${slug}\u0000${parseEffort(name) ?? ''}`;
 
+type OutputTokensFields = Pick<BenchModel, 'outputTokensPerTask' | 'outputTokensProvenance'>;
+
+/**
+ * Output tokens per task of one API row, from every page row with the same
+ * slug and parsed effort. Two different values, or a valid and an invalid
+ * value, are a conflict: no row order selects a measurement. Only an explicit
+ * effort label ties an observation to an effort; a name without one gives
+ * `unknown-effort`, never `off`.
+ */
+function outputTokensFields(
+  pages: readonly AASiteModel[],
+  page: AASiteModel | undefined,
+  apiName: string | undefined,
+  indexVersion: string | undefined,
+): OutputTokensFields {
+  const observed = pages.filter((row) => row.outputTokensPerTask !== undefined || row.outputTokensInvalid);
+  if (observed.length === 0) return {};
+  const provenance = (status: OutputTokensProvenance['status']): OutputTokensProvenance =>
+    indexVersion ? { status, indexVersion } : { status };
+  const values = new Set(observed.map((row) => row.outputTokensInvalid ? 'invalid' : row.outputTokensPerTask));
+  if (values.size > 1) return { outputTokensProvenance: provenance('conflict') };
+  const value = observed[0]!.outputTokensPerTask;
+  if (value === undefined) return { outputTokensProvenance: provenance('invalid') };
+  const status = parseEffort(apiName) === undefined ? 'unknown-effort'
+    : page?.intelligenceIndexIsEstimated === false ? 'measured'
+    : 'source-estimated';
+  return { outputTokensPerTask: value, outputTokensProvenance: provenance(status) };
+}
+
 export function normalize(
   raw: AARawModel[],
   site: readonly AASiteModel[] = [],
+  siteIndexVersion?: string,
 ): Omit<BenchModel, 'registryId' | 'active'>[] {
   const siteByKey = new Map(site.map((row) => [joinKey(row.slug, row.name), row]));
+  const sitesByKey = new Map<string, AASiteModel[]>();
+  for (const row of site) {
+    const key = joinKey(row.slug, row.name);
+    sitesByKey.set(key, [...(sitesByKey.get(key) ?? []), row]);
+  }
   const rows = raw.filter((m) => asSlug(m));
   const agentic = agenticCodingScores(rows.map((m) => {
     const ev = m.evaluations ?? {};
@@ -267,6 +302,7 @@ export function normalize(
           m.artificial_analysis_intelligence_index_cost?.cost_per_task?.total_cost,
         ),
         timePerTaskSeconds: page?.intelligenceIndexTimePerTask,
+        ...outputTokensFields(sitesByKey.get(joinKey(slug, m.name)) ?? [], page, m.name, siteIndexVersion),
         contextWindow: asNumber(m.context_window),
         source: SOURCE,
       };
@@ -278,5 +314,5 @@ export async function fetchAndNormalize(
   config: AAConfig,
 ): Promise<Array<Omit<BenchModel, 'registryId' | 'active'>> & { indexVersion?: string }> {
   const [raw, site] = await Promise.all([fetchRaw(config), fetchSiteModels()]);
-  return Object.assign(normalize(raw, site), { indexVersion: raw.indexVersion });
+  return Object.assign(normalize(raw, site, site.indexVersion), { indexVersion: raw.indexVersion });
 }

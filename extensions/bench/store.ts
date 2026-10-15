@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 
-import { PROVENANCE_AXES, type BenchModel, type BenchmarkStore, type ExtensionContext, type ProvenanceAxis } from '../types.js';
+import { OUTPUT_TOKENS_STATUSES, PROVENANCE_AXES, type BenchModel, type OutputTokensProvenance, type BenchmarkStore, type ExtensionContext, type ProvenanceAxis } from '../types.js';
 import type { AxisProvenance } from '../routing/features/schema.js';
 import { canonicalJson } from '../routing/digest.js';
 import { CONFIG_FILE, STORE_FILE, STALE_MS, STORAGE_DIR } from '../constants.js';
@@ -93,6 +93,11 @@ const isV1Store = (value: unknown): boolean => {
 const optionalFinite = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
+const nonnegativeFinite = (value: unknown): number | undefined => {
+  const finite = optionalFinite(value);
+  return finite !== undefined && finite >= 0 ? finite : undefined;
+};
+
 function withoutUndefined<T extends Record<string, unknown>>(value: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(value).filter(([, v]) => v !== undefined),
@@ -113,6 +118,16 @@ function sanitizeAxisProvenance(value: unknown): Partial<Record<ProvenanceAxis, 
     }
   }
   return result;
+}
+
+function sanitizeOutputTokensProvenance(value: unknown): OutputTokensProvenance | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (!(OUTPUT_TOKENS_STATUSES as readonly unknown[]).includes(record.status)) return undefined;
+  const status = record.status as OutputTokensProvenance['status'];
+  return typeof record.indexVersion === 'string' && record.indexVersion
+    ? { status, indexVersion: record.indexVersion }
+    : { status };
 }
 
 function sanitizeBenchModel(value: unknown): BenchModel | undefined {
@@ -156,6 +171,8 @@ function sanitizeBenchModel(value: unknown): BenchModel | undefined {
       axisProvenance: sanitizeAxisProvenance(row.axisProvenance),
       costPerTask: optionalFinite(row.costPerTask),
       timePerTaskSeconds: optionalFinite(row.timePerTaskSeconds),
+      outputTokensPerTask: nonnegativeFinite(row.outputTokensPerTask),
+      outputTokensProvenance: sanitizeOutputTokensProvenance(row.outputTokensProvenance),
       contextWindow: optionalFinite(row.contextWindow),
     }),
   };
@@ -267,9 +284,34 @@ export function compareMergeRows(a: BenchModel, b: BenchModel): number {
   const sourceA = `${a.source}\u0000${a.benchSlug}`;
   const sourceB = `${b.source}\u0000${b.benchSlug}`;
   if (sourceA !== sourceB) return sourceA < sourceB ? -1 : 1;
-  const rowA = canonicalJson(a);
-  const rowB = canonicalJson(b);
+  const rowA = canonicalJson(withoutOutputTokens(a));
+  const rowB = canonicalJson(withoutOutputTokens(b));
   return rowA < rowB ? -1 : rowA > rowB ? 1 : 0;
+}
+
+/**
+ * Output-token fields do not rank rows: a token count must not select which
+ * quality, speed and price measurement a model uses.
+ */
+function withoutOutputTokens(row: BenchModel): Omit<BenchModel, 'outputTokensPerTask' | 'outputTokensProvenance'> {
+  const { outputTokensPerTask: _value, outputTokensProvenance: _provenance, ...rest } = row;
+  return rest;
+}
+
+/**
+ * The first row under `compareMergeRows`. When another row ties with it but
+ * has a different output-token observation, the result has a `conflict`
+ * observation: no input order selects a token measurement.
+ */
+export function selectMergeRow(rows: readonly BenchModel[]): BenchModel | undefined {
+  if (rows.length === 0) return undefined;
+  const best = rows.reduce((kept, row) => (compareMergeRows(row, kept) < 0 ? row : kept));
+  const tokens = (row: BenchModel) => canonicalJson([row.outputTokensPerTask, row.outputTokensProvenance]);
+  const conflict = rows.some((row) => compareMergeRows(row, best) === 0 && tokens(row) !== tokens(best));
+  if (!conflict) return best;
+  const { outputTokensPerTask: _value, ...rest } = best;
+  const indexVersion = best.outputTokensProvenance?.indexVersion;
+  return { ...rest, outputTokensProvenance: indexVersion ? { status: 'conflict', indexVersion } : { status: 'conflict' } };
 }
 
 /**
@@ -294,7 +336,7 @@ export const mergeActiveBenchRows = (models: BenchModel[]): BenchModel[] => {
   }
   const result: BenchModel[] = [];
   for (const [, rows] of byKey) {
-    result.push(rows.reduce((best, row) => (compareMergeRows(row, best) < 0 ? row : best)));
+    result.push(selectMergeRow(rows)!);
   }
   return result;
 };

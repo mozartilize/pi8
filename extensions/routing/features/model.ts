@@ -6,7 +6,7 @@
  * used.
  */
 import type { BenchModel, ProvenanceAxis } from '../../types.js';
-import { compareMergeRows } from '../../bench/store.js';
+import { selectMergeRow } from '../../bench/store.js';
 import type { EffectiveAction } from './actions.js';
 import {
   INPUT_NOT_RELEVANT_VALUE,
@@ -68,7 +68,7 @@ export function rowAtServedEffort(rows: readonly BenchModel[], action: Effective
   const matching = rows.filter((row) => row.active && row.registryId === action.registryId && (
     action.effort === undefined ? row.effort === undefined || row.effort === 'off' : row.effort === action.effort
   ));
-  return [...matching].sort(compareMergeRows)[0];
+  return selectMergeRow(matching);
 }
 
 export function observeAxis(row: BenchModel | undefined, axis: ProvenanceAxis, state: Pick<DecisionStateV1, 'benchmarkIndexVersion'>): AxisObservation {

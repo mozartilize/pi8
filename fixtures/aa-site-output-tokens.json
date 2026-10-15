@@ -1,0 +1,39 @@
+{
+  "page": "https://artificialanalysis.ai/models",
+  "capturedAt": "2026-10-15",
+  "versionLabels": ["Intelligence Index v4.3.2", "Intelligence Index v4.3.2"],
+  "rows": [
+    {
+      "slug": "gemini-3-5-flash",
+      "name": "Gemini 3.5 Flash (High)",
+      "intelligenceIndexIsEstimated": false,
+      "intelligenceIndexOutputTokensPerTask": { "reasoning": 36312.349377173494, "answer": 18330.42235118367, "output": 54642.77172835717 }
+    },
+    {
+      "slug": "gpt-6-sol-low",
+      "name": "GPT-6 Sol (Low)",
+      "intelligenceIndexIsEstimated": false,
+      "intelligenceIndexOutputTokensPerTask": { "reasoning": 699.6557735344724, "answer": 2673.1805322196647, "output": 3372.836305754137 }
+    },
+    {
+      "slug": "qwen3-8-27b-non-reasoning",
+      "name": "Qwen3.8 27B (Non-reasoning)",
+      "intelligenceIndexIsEstimated": false,
+      "intelligenceIndexOutputTokensPerTask": { "reasoning": 0, "answer": 29975.33372218334, "output": 29975.33372218334 }
+    },
+    {
+      "slug": "mimo-v2-5-pro",
+      "name": "MiMo-V2.5-Pro (Reasoning)",
+      "intelligenceIndexIsEstimated": false,
+      "intelligenceIndexOutputTokensPerTask": { "reasoning": 17907.43917664586, "answer": 11977.483503480798, "output": 29884.92268012666 }
+    },
+    {
+      "slug": "mercury-2",
+      "name": "Mercury 2",
+      "intelligenceIndexIsEstimated": false,
+      "intelligenceIndexOutputTokensPerTask": { "reasoning": 21638.208348551725, "answer": 4517.518628698067, "output": 26155.726977249793 }
+    },
+    { "slug": "glm-4-5v", "name": "GLM-4.5V (Non-reasoning)", "intelligenceIndexIsEstimated": true },
+    { "slug": "deepseek-v3-1-terminus-reasoning", "name": "DeepSeek V3.1 Terminus (Reasoning)", "intelligenceIndexIsEstimated": false }
+  ]
+}
