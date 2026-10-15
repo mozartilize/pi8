@@ -5,9 +5,9 @@
  */
 import type { CacheRetention, ModelPromptCache } from '@earendil-works/pi-ai';
 
-import { parseCandidateKey, type RegistryModelInfo } from '../score/scorer.js';
+import { parseCandidateKey } from '../score/scorer.js';
 import type { EffectiveAction } from './actions.js';
-import type { SpendSnapshot } from './state.js';
+import type { PriceSnapshot, SpendSnapshot } from './state.js';
 
 /** Billed prompt tokens per estimated token for the action's model. */
 export const promptTokenScale = (state: Pick<SpendSnapshot, 'promptTokenScales'>, registryId: string): number =>
@@ -18,7 +18,7 @@ export const billedPromptTokens = (state: SpendSnapshot, action: EffectiveAction
   Math.max(0, state.estimatedContextTokens) * promptTokenScale(state, action.registryId);
 
 /** pi-ai keeps the cached prefix across efforts only for per-message effort. */
-export const effortSharesCache = (model: RegistryModelInfo): boolean =>
+export const effortSharesCache = (model: Pick<PriceSnapshot, 'api' | 'compat'>): boolean =>
   model.api === 'anthropic-messages'
   && (model.compat as { supportsMidConvoEffort?: unknown } | undefined)?.supportsMidConvoEffort === true;
 
@@ -57,7 +57,7 @@ export type CacheEligibility =
 export function usableWarmPrefix(
   state: SpendSnapshot,
   action: EffectiveAction,
-  model: RegistryModelInfo,
+  model: PriceSnapshot,
 ): { tokens: number; eligibility: CacheEligibility } {
   const none = (eligibility: CacheEligibility) => ({ tokens: 0, eligibility });
   const cache = state.cache;

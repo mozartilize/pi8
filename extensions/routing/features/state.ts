@@ -6,6 +6,7 @@
 import type { CacheRetention, ModelThinkingLevel } from '@earendil-works/pi-ai';
 
 import type { Dimension } from '../../types.js';
+import type { RegistryModelInfo } from '../score/scorer.js';
 
 export interface ServedIdentity {
   /** Exact `provider/modelId`. */
@@ -120,16 +121,35 @@ export interface DecisionStateV1 {
  * `DecisionStateV1` is the one host-side object that supplies all of them.
  */
 
-/** Task demand: the routed phase, accepted declarations, and input size and modality. */
-export type TaskSnapshot = Readonly<Pick<DecisionStateV1,
-  'phase' | 'contextAcquisition' | 'openDecisions' | 'difficulty' | 'estimatedContextTokens' | 'needsVision'>>;
+/** A snapshot type: every nested property, array and map is read-only. */
+export type Immutable<T> =
+  T extends (...args: never[]) => unknown ? T
+  : T extends ReadonlyMap<infer K, infer V> ? ReadonlyMap<K, Immutable<V>>
+  : T extends readonly (infer E)[] ? readonly Immutable<E>[]
+  : T extends object ? { readonly [P in keyof T]: Immutable<T[P]> }
+  : T;
+
+/** Accepted declarations: the routed phase and what the model declared about the task. */
+export type TaskDeclarations = Immutable<Pick<DecisionStateV1, 'phase' | 'contextAcquisition' | 'openDecisions' | 'difficulty'>>;
+
+/** Measured workload: input size and modality, observed by the host, not declared. */
+export type WorkloadMeasurement = Immutable<Pick<DecisionStateV1, 'estimatedContextTokens' | 'needsVision'>>;
+
+/** Task demand reads declarations and measured workload. */
+export type TaskSnapshot = TaskDeclarations & WorkloadMeasurement;
 
 /** Benchmark observations: the index version that quality and output-token evidence must match. */
-export type BenchmarkSnapshot = Readonly<Pick<DecisionStateV1, 'benchmarkIndexVersion'>>;
+export type BenchmarkSnapshot = Immutable<Pick<DecisionStateV1, 'benchmarkIndexVersion'>>;
 
-/** Spend: prompt size, per-model token scale, and cache records of the current request. */
-export type SpendSnapshot = Readonly<Pick<DecisionStateV1,
-  'estimatedContextTokens' | 'promptTokenScales' | 'cache' | 'promptIdentity' | 'nowMs' | 'isSubagentSpawn'>>;
+/** Prompt-cache records of the current request and the time that ages them. */
+export type CacheSnapshot = Immutable<Pick<DecisionStateV1, 'cache' | 'promptIdentity' | 'nowMs' | 'isSubagentSpawn'>>;
+
+/** Spend: the measured prompt size, the per-model token scale, and the cache records. */
+export type SpendSnapshot = Pick<WorkloadMeasurement, 'estimatedContextTokens'> & CacheSnapshot
+  & Immutable<Pick<DecisionStateV1, 'promptTokenScales'>>;
+
+/** Prices and cache lifetimes of one model, as Pi's registry declares them. */
+export type PriceSnapshot = Immutable<Pick<RegistryModelInfo, 'cost' | 'promptCache' | 'api' | 'compat'>>;
 
 /** Continuity and recovery: the boundary, incumbent, attributed rework and friction. */
-export type SessionSnapshot = Readonly<Pick<DecisionStateV1, 'boundary' | 'incumbent' | 'rework' | 'friction' | 'workItemId'>>;
+export type SessionSnapshot = Immutable<Pick<DecisionStateV1, 'boundary' | 'incumbent' | 'rework' | 'friction' | 'workItemId'>>;

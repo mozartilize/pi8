@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { composeTaskDemand } from './task-demand.js';
-import type { TaskSnapshot } from './state.js';
+import type { SessionSnapshot, SpendSnapshot, TaskSnapshot } from './state.js';
 
 const task = (patch: Partial<TaskSnapshot> = {}): TaskSnapshot => ({
   phase: 'implement', estimatedContextTokens: 10_000, needsVision: false, ...patch,
@@ -45,5 +45,22 @@ describe('composeTaskDemand', () => {
     expect(both.longContext).toBe(true);
     expect(both.vision).toBe(true);
     expect(both.requiredEvidence).toEqual(expect.arrayContaining(['visionReasoning', 'longContext']));
+  });
+});
+
+describe('domain snapshots', () => {
+  it('are read-only at every depth', () => {
+    // Compile-time contract: each statement below is a type error.
+    const write = (task: TaskSnapshot, session: SessionSnapshot, spend: SpendSnapshot) => {
+      // @ts-expect-error a snapshot field is read-only
+      task.phase = 'plan';
+      // @ts-expect-error a nested declaration is read-only
+      task.difficulty!.value = 1;
+      // @ts-expect-error a snapshot array is read-only
+      session.friction.push(session.friction[0]!);
+      // @ts-expect-error a snapshot map is read-only
+      spend.cache!.warmPrefixes.set('k', []);
+    };
+    expect(typeof write).toBe('function');
   });
 });

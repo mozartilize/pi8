@@ -9,16 +9,15 @@
  */
 import type { CacheRetention } from '@earendil-works/pi-ai';
 
-import type { RegistryModelInfo } from '../score/scorer.js';
 import type { EffectiveAction } from './actions.js';
 import { billedPromptTokens, cacheTtlMs, usableWarmPrefix, type CacheEligibility } from './cache.js';
 import { PRICE_UNKNOWN_VALUE, costDesirability } from './mapping.js';
 import type { Interval } from './model.js';
 import { demandDetail, outputTokenForecast, UNKNOWN_DEMAND, usable, type OutputDemandPrior, type OutputTokenForecast } from './output-demand.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
-import type { SpendSnapshot } from './state.js';
+import type { PriceSnapshot, SpendSnapshot } from './state.js';
 
-export type Pricing = NonNullable<RegistryModelInfo['cost']>;
+export type Pricing = NonNullable<PriceSnapshot['cost']>;
 
 export interface SpendBuckets {
   uncachedInput: number;
@@ -46,7 +45,7 @@ const perToken = (pricePer1M: number): number => pricePer1M / 1_000_000;
  * twice the input price; a model writes 1h entries only when it declares a
  * `long` lifetime, else the write is a short write at the write price.
  */
-function missPricePerToken(pricing: Pricing, model: RegistryModelInfo, retention: CacheRetention): number {
+function missPricePerToken(pricing: Pricing, model: PriceSnapshot, retention: CacheRetention): number {
   const inputPrice = perToken(pricing.input!);
   if (!writeBilled(pricing, retention)) return inputPrice;
   if (retention === 'long' && cacheTtlMs(model.promptCache, 'long') !== undefined) return 2 * inputPrice;
@@ -77,7 +76,7 @@ export function requestRates(pricing: Pricing, promptTokens: number): Pricing {
 export function predictSpend(
   state: SpendSnapshot,
   action: EffectiveAction,
-  model: RegistryModelInfo,
+  model: PriceSnapshot,
   output: OutputTokenForecast = outputTokenForecast(UNKNOWN_DEMAND),
 ): PredictedSpendV1 {
   const outputCentral = output.center;

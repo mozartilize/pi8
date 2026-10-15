@@ -16,7 +16,7 @@
  */
 import { candidateFeatures, type ActionFeatures } from '../features/candidate.js';
 import type { EffectiveAction } from '../features/actions.js';
-import type { DecisionStateV1 } from '../features/state.js';
+import type { DecisionStateV1, Immutable } from '../features/state.js';
 import { FEATURE_SCHEMA_DIGEST } from '../features/schema.js';
 import { hasSubstantiveAnswers, preferenceProfileDigest, type UserRoutingPreferencesV1, type ValidatedPreferences } from '../preferences/schema.js';
 import type { BenchModel } from '../../types.js';
@@ -202,7 +202,7 @@ export async function selectByRegret(
   state: DecisionStateV1,
   candidates: readonly SelectionCandidate[],
   rows: readonly BenchModel[],
-  preferences: Pick<ValidatedPreferences, 'status' | 'profile' | 'digest'>,
+  preferences: Immutable<Pick<ValidatedPreferences, 'status' | 'profile' | 'digest'>>,
   ports: SelectorPorts,
   controls: SelectControls,
 ): Promise<SelectionResult> {

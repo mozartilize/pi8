@@ -1,6 +1,6 @@
 # Unified selection: ma trận tham số
 
-Tài liệu mô tả code hiện tại với `feature-v4` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
+Tài liệu mô tả code hiện tại với `feature-v7` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
 
 **Điểm quan trọng:** guards quyết định action nào được phép gọi. Mọi action được phép nằm trong một pool so sánh duy nhất. Thứ tự xử lý là:
 
@@ -20,6 +20,27 @@ Incumbent + friction + rework                     → session features
 Preferences + scenarios + weight bounds           → miền trọng số Θ
 Feature intervals + Θ                            → minimax regret
 ```
+
+## 0. Các phép biến đổi và module sở hữu
+
+Mỗi phép biến đổi có một module sở hữu. Module chỉ đọc snapshot của nó (`extensions/routing/features/state.ts`); snapshot là kiểu chỉ đọc ở mọi tầng. Một field không có trong snapshot không thể đổi kết quả của module.
+
+| Phép biến đổi | Module | Đầu vào | Đầu ra |
+|---|---|---|---|
+| Liệt kê action | `features/actions.ts` | Registry model | `provider/model/effort` hợp lệ |
+| Task demand | `features/task-demand.ts` | `TaskDeclarations` + `WorkloadMeasurement` | Relevance, demand intervals, targets, required evidence |
+| Capability | `features/model.ts` | Task demand + benchmark row đúng effort + `BenchmarkSnapshot` | Bốn capability features, shortfall, evidence gaps |
+| Output demand | `features/output-demand.ts` | Benchmark row đúng effort + index version | Output-demand prior và output-token forecast |
+| Cache | `features/cache.ts` | `SpendSnapshot` + `PriceSnapshot` | Warm prefix và cache eligibility |
+| Spend | `features/spend.ts` | `SpendSnapshot` + `PriceSnapshot` + output forecast | Billing buckets, USD interval, cost feature |
+| Latency | `features/latency.ts` | Output speed + output forecast | Time feature |
+| Continuity | `features/continuity.ts` | `SessionSnapshot` | Continuity feature |
+| Recovery | `features/recovery.ts` | `SessionSnapshot` | Friction avoidance và hai recovery features |
+| Feature vector | `features/candidate.ts` | `DecisionStateV1` (adapter duy nhất cấp các snapshot) | Vector 10 features có evidence |
+| Miền trọng số | `optimization/domain.ts` | Preferences đã validate + scenarios | Weight domain Θ |
+| Bài toán số | `optimization/compile.ts` | Feature vectors + policy hòa | `DecisionProblem` đã validate, action lỗi tách riêng |
+| Minimax regret | `optimization/minimax.ts` | `DecisionProblem` + Θ | Max regret, ranking |
+| Chọn action | `optimization/select.ts` | Pool được phép + preferences + controls | Decision exact, fallback có nhãn, stale hoặc cancelled |
 
 ## 1. Ma trận tổng: yếu tố nối vào bước nào?
 
@@ -424,7 +445,7 @@ D summary là 0.65 nhưng reasoning target không dùng D=0.65. Các trục dùn
 
 | Tham số/thông tin | Trạng thái trong selector hiện tại |
 |---|---|
-| Rubric requirement formulas trong policy/execution-difficulty.ts | Không phải công thức D của feature-v4; feature difficulty dùng file riêng |
+| Rubric requirement formulas trong policy/execution-difficulty.ts | Không phải công thức D của feature mapping; feature difficulty dùng file riêng |
 | Legacy capability bands/minimum tables | Không phải biến trong objective regret này |
 | Legacy dimensionWeights | Không thay thế PHASE_RELEVANCE hoặc THETA_BOUNDS trong selector này |
 | complexity/scope, facts, yêu cầu tự nhiên | Không được regret đọc trực tiếp; phải được thể hiện qua state/rubric/permissions trước selection |
