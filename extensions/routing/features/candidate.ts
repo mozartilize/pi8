@@ -9,6 +9,7 @@ import type { EffectiveAction } from './actions.js';
 import { costFeature, outputDemandPrior, outputTokenForecast, predictSpend, timeFeature, type PredictedSpendV1 } from './economics.js';
 import { clamp01 } from './mapping.js';
 import { capabilityFeatures, evidenceGaps, rowAtServedEffort, type Interval } from './model.js';
+import { composeTaskDemand } from './task-demand.js';
 import { FEATURE_INDEX, FEATURE_MAPPING_VERSION, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName } from './schema.js';
 import { sessionFeatures } from './session.js';
 import type { DecisionStateV1 } from './state.js';
@@ -36,7 +37,8 @@ export function candidateFeatures(
   const intervals = new Map<FeatureName, Interval>();
   const evidence: FeatureEvidence[] = [];
   let capabilityShortfall = 0;
-  for (const capability of capabilityFeatures(row, state)) {
+  const task = composeTaskDemand(state);
+  for (const capability of capabilityFeatures(row, task, state)) {
     capabilityShortfall = Math.max(capabilityShortfall, capability.shortfall ?? 0);
     intervals.set(capability.name, capability.interval);
     evidence.push(capability.evidence);
@@ -71,5 +73,5 @@ export function candidateFeatures(
     upper[j] = clamp01(interval.upper);
     values[j] = Math.min(upper[j]!, Math.max(lower[j]!, clamp01(interval.center)));
   }
-  return { action, features: { key: action.key, values, lower, upper, evidence }, spend, evidenceGaps: evidenceGaps(row, state), capabilityShortfall };
+  return { action, features: { key: action.key, values, lower, upper, evidence }, spend, evidenceGaps: evidenceGaps(row, task, state), capabilityShortfall };
 }

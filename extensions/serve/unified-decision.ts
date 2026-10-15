@@ -19,7 +19,7 @@ import { createBoundaryAuthorization, type BoundaryAuthorizationV1 } from '../ro
 import { isExcludedExecutor } from '../routing/policy/execution-contract.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { DecisionStateV1 } from '../routing/features/state.js';
-import { demandInterval } from '../routing/features/mapping.js';
+import { composeTaskDemand } from '../routing/features/task-demand.js';
 import { WorkerLpAdapter } from '../routing/optimization/lp.js';
 import {
   DomainCache,
@@ -303,10 +303,8 @@ export async function resolveUnifiedDecision(
     ...(input.state.difficulty
       ? { difficulty: input.state.difficulty.value, difficultyAxes: input.state.difficulty.axes, difficultySource: input.state.difficulty.source }
       : { difficultyMissingReason: difficultyMissingReason(input) }),
-    difficultyBounds: Object.fromEntries((['reasoning', 'agentic', 'research'] as const).map((axis) => {
-      const { lower, upper } = demandInterval(input.state.difficulty, axis);
-      return [axis, { lower, upper }];
-    })) as UnifiedDecisionMeta['difficultyBounds'],
+    difficultyBounds: Object.fromEntries(Object.entries(composeTaskDemand(input.state).demand)
+      .map(([axis, { lower, upper }]) => [axis, { lower, upper }])) as UnifiedDecisionMeta['difficultyBounds'],
     ...(result.theta ? { theta: result.theta.map(round) } : {}),
     top: traceActions(result, chosen, input.incumbentKey,
       isDebugEnabled() ? result.ranking.length : TRACE_TOP, input.state.promptTokenScales),

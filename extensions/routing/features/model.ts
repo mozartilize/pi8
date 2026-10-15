@@ -11,11 +11,7 @@ import type { EffectiveAction } from './actions.js';
 import {
   INPUT_NOT_RELEVANT_VALUE,
   KNOWLEDGE_SHARE,
-  LONG_CONTEXT_RELEVANCE_TOKENS,
   MISSING_REPRESENTATIVE,
-  OPEN_DECISIONS_REASONING,
-  PHASE_RELEVANCE,
-  REQUIRED_EVIDENCE_AXES,
   RESEARCH_SHARE,
   normalizeFraction,
   normalizeIntelligence,
@@ -23,15 +19,13 @@ import {
   normalizeResearch,
   normalizeTerminalBench,
   capabilityFit,
-  capabilityTarget,
-  demandInterval,
   CAPABILITY_SHORTFALL,
-  ACQUISITION_REASONING_TARGET,
   ACQUISITION_RESEARCH_VALUE,
   type TaskRelevance,
 } from './mapping.js';
 import { FEATURE_MAPPING_VERSION, type AxisProvenance, type FeatureEvidence, type FeatureName } from './schema.js';
-import type { BenchmarkSnapshot, TaskSnapshot } from './state.js';
+import type { BenchmarkSnapshot } from './state.js';
+import type { TaskDemand } from './task-demand.js';
 
 /** Intelligence Index versions whose scale the feature mapping normalizes. Others give no evidence. */
 export const INTELLIGENCE_INDEX_VERSIONS: readonly string[] = ['4.3'];
@@ -114,18 +108,6 @@ const evidenceCode = (observations: readonly AxisObservation[]): FeatureEvidence
     : observations.some((o) => o.normalized !== undefined) ? 'source-estimated'
       : 'missing';
 
-/** Phase relevance stays independent of capability demand and price. */
-export function taskRelevance(state: Pick<TaskSnapshot, 'phase' | 'openDecisions' | 'difficulty'>): TaskRelevance {
-  const base = PHASE_RELEVANCE[state.phase];
-  const openDecisions = state.openDecisions !== undefined && state.openDecisions > 0;
-  const reasoning = openDecisions ? Math.max(base.reasoning, OPEN_DECISIONS_REASONING) : base.reasoning;
-  return { reasoning, agentic: base.agentic, research: base.research };
-}
-
-/** Evidence detail of the task difficulty. */
-export const difficultyDetail = (state: Pick<TaskSnapshot, 'difficulty'>): string =>
-  state.difficulty ? `difficulty:${state.difficulty.source}:${state.difficulty.value.toFixed(3)}` : 'difficulty:unknown';
-
 /**
  * Axes this decision requires evidence for that the row lacks: the phase's
  * axes, vision when the input has an image, and long-context quality when the
@@ -133,12 +115,8 @@ export const difficultyDetail = (state: Pick<TaskSnapshot, 'difficulty'>): strin
  * diagnostic. Missing quality is already an uncertainty interval in the
  * features, so a gap does not remove an action from the comparison.
  */
-export function evidenceGaps(row: BenchModel | undefined, state: TaskSnapshot & BenchmarkSnapshot): ProvenanceAxis[] {
-  const collecting = state.phase === 'gather' && state.contextAcquisition === true;
-  const required = new Set<ProvenanceAxis>(collecting ? ['intelligence'] : REQUIRED_EVIDENCE_AXES[state.phase]);
-  if (state.needsVision) required.add('visionReasoning');
-  if (state.estimatedContextTokens >= LONG_CONTEXT_RELEVANCE_TOKENS) required.add('longContext');
-  return [...required].filter((axis) => observeAxis(row, axis, state).normalized === undefined);
+export function evidenceGaps(row: BenchModel | undefined, demand: TaskDemand, benchmark: BenchmarkSnapshot): ProvenanceAxis[] {
+  return demand.requiredEvidence.filter((axis) => observeAxis(row, axis, benchmark).normalized === undefined);
 }
 
 export interface CapabilityFeature {
@@ -149,10 +127,9 @@ export interface CapabilityFeature {
   evidence: FeatureEvidence;
 }
 
-export function capabilityFeatures(row: BenchModel | undefined, state: TaskSnapshot & BenchmarkSnapshot): CapabilityFeature[] {
-  const relevance = taskRelevance(state);
-  const collecting = state.phase === 'gather' && state.contextAcquisition === true;
-  const observe = (axis: ProvenanceAxis) => observeAxis(row, axis, state);
+export function capabilityFeatures(row: BenchModel | undefined, demand: TaskDemand, benchmark: BenchmarkSnapshot): CapabilityFeature[] {
+  const { relevance, targets, collecting } = demand;
+  const observe = (axis: ProvenanceAxis) => observeAxis(row, axis, benchmark);
   const intelligence = observe('intelligence');
   const terminalBench = observe('agenticCoding');
   const research = observe('research');
@@ -166,8 +143,7 @@ export function capabilityFeatures(row: BenchModel | undefined, state: TaskSnaps
     evidence: { feature: name, code: evidenceCode(observations), mapping: FEATURE_MAPPING_VERSION, details: [...observations.map(detail), ...extra] },
   });
 
-  const longRelevant = state.estimatedContextTokens >= LONG_CONTEXT_RELEVANCE_TOKENS;
-  const relevantInputs = [...(longRelevant ? [longContext] : []), ...(state.needsVision ? [vision] : [])];
+  const relevantInputs = [...(demand.longContext ? [longContext] : []), ...(demand.vision ? [vision] : [])];
   const input: CapabilityFeature = relevantInputs.length === 0
     ? {
       name: 'inputFit',
@@ -176,15 +152,6 @@ export function capabilityFeatures(row: BenchModel | undefined, state: TaskSnaps
     }
     : feature('inputFit', combine(relevantInputs.map((o) => [componentInterval(o), 1 / relevantInputs.length])), relevantInputs);
 
-  const difficulty = difficultyDetail(state);
-  const target = (axis: keyof TaskRelevance): Interval => {
-    if (collecting && axis === 'reasoning') return {
-      center: ACQUISITION_REASONING_TARGET, lower: ACQUISITION_REASONING_TARGET, upper: ACQUISITION_REASONING_TARGET,
-    };
-    const demand = demandInterval(state.difficulty, axis);
-    return { center: capabilityTarget(axis, demand.center), lower: capabilityTarget(axis, demand.lower), upper: capabilityTarget(axis, demand.upper) };
-  };
-  const targets = { reasoning: target('reasoning'), agentic: target('agentic'), research: target('research') };
   // Fit increases with quality and decreases with demand. Cross the bounds accordingly.
   const fit = (interval: Interval, axis: keyof TaskRelevance): Interval => scale({
     center: capabilityFit(interval.center, targets[axis].center, axis),
@@ -193,14 +160,14 @@ export function capabilityFeatures(row: BenchModel | undefined, state: TaskSnaps
   }, relevance[axis]);
   const demandFeature = (axis: keyof TaskRelevance, interval: Interval, observations: AxisObservation[], extra: string[] = []): CapabilityFeature => ({
     ...feature(`${axis}Fit`, fit(interval, axis), observations,
-      [...extra, difficulty, `target:${axis}:${targets[axis].center.toFixed(3)}`,
+      [...extra, demand.details.difficulty, `target:${axis}:${targets[axis].center.toFixed(3)}`,
         `target-bounds:${axis}:${targets[axis].lower.toFixed(3)}:${targets[axis].upper.toFixed(3)}`]),
     // The optimistic diagnostic uses the easiest supported target and is not clipped.
     shortfall: relevance[axis] === 0 ? 0 : Math.max(0, (targets[axis].lower - interval.upper) / CAPABILITY_SHORTFALL[axis]),
   });
   return [
     demandFeature('reasoning', componentInterval(intelligence), [intelligence],
-      [state.openDecisions === undefined ? 'openDecisions:unknown' : `openDecisions:${state.openDecisions}`]),
+      [demand.details.openDecisions]),
     demandFeature('agentic', componentInterval(terminalBench), [terminalBench]),
     collecting ? {
       name: 'researchFit',

@@ -11,6 +11,7 @@ import { greedyBoxSimplexMax, oracleSolve } from '../../test-support/lp-oracle.j
 import { enumerateEffectiveActions } from '../features/actions.js';
 import { FEATURE_INDEX, type ActionFeatureVector } from '../features/schema.js';
 import { capabilityFeatures } from '../features/model.js';
+import { composeTaskDemand } from '../features/task-demand.js';
 import type { DecisionStateV1 } from '../features/state.js';
 import { AssignmentLedger } from '../policy/assignment-transaction.js';
 import type { WorkPhaseState } from '../policy/work-phase.js';
@@ -89,7 +90,7 @@ describe('demand bounds in exact regret', () => {
         axisProvenance: { intelligence: 'measured', research: 'measured', knowledge: 'measured' },
       };
       const features = { key, values: new Array(10).fill(0), lower: new Array(10).fill(0), upper: new Array(10).fill(0), evidence: [] };
-      for (const { name, interval } of capabilityFeatures(row, s)) {
+      for (const { name, interval } of capabilityFeatures(row, composeTaskDemand(s), s)) {
         const j = FEATURE_INDEX[name];
         features.values[j] = interval.center;
         features.lower[j] = interval.lower;

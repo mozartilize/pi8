@@ -16,6 +16,7 @@ import type { RegistryModelInfo } from '../score/scorer.js';
 import { enumerateEffectiveActions, overrideAction, type EffectiveAction } from './actions.js';
 import { candidateFeatures } from './candidate.js';
 import { evidenceGaps } from './model.js';
+import { composeTaskDemand } from './task-demand.js';
 import { FEATURE_INDEX, type FeatureName } from './schema.js';
 import { sessionFeatures } from './session.js';
 import type { DecisionStateV1 } from './state.js';
@@ -243,7 +244,7 @@ describe('required evidence per phase', () => {
     const rows = row({ intelligence: 62 }, { intelligence: 'measured' });
     const max = enumerateEffectiveActions(model).find((a) => a.effort === 'max')!;
     expect(candidateFeatures(state({ phase: 'plan' }), model, max, rows).evidenceGaps).toEqual(['intelligence']);
-    expect(evidenceGaps(rows[0], state({ phase: 'plan' }))).toEqual([]);
+    expect(evidenceGaps(rows[0], composeTaskDemand(state({ phase: 'plan' })), state({ phase: 'plan' }))).toEqual([]);
   });
 });
 
