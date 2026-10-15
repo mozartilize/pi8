@@ -34,7 +34,7 @@ try {
   const benchmarks = store.models.map((row) => selectFields(row, [
     'registryId', 'benchSlug', 'active', 'effort', 'quality', 'qualityEstimated', 'axisProvenance',
     'priceInputPer1M', 'priceOutputPer1M', 'outputSpeedTps', 'latencyMsTtft', 'latencyMsTtfa',
-    'costPerTask', 'timePerTaskSeconds', 'contextWindow', 'source',
+    'costPerTask', 'timePerTaskSeconds', 'outputTokensPerTask', 'outputTokensProvenance', 'contextWindow', 'source',
   ])).sort((a, b) => `${a.registryId}:${a.effort ?? ''}:${a.benchSlug}`.localeCompare(`${b.registryId}:${b.effort ?? ''}:${b.benchSlug}`));
   const fixture = {
     source: 'Artificial Analysis API and models page with the available Pi provider registry',

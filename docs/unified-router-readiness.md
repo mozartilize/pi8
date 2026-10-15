@@ -21,7 +21,7 @@ not a complete production release.
 The following modules have executable offline tests:
 
 - Effective-action enumeration and per-axis benchmark provenance.
-- Candidate features, cache accounting and AA output-equivalent demand scaling.
+- Candidate features, cache accounting and the AA output-token demand prior.
 - Separate axis demands from the handoff or plan rubric and file measurements
   (`feature-v4`). Absolute targets determine capability tiers before preferences.
   Unknown demand uses the highest targets. Collecting context uses a

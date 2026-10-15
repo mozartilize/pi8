@@ -39,6 +39,10 @@ export const INTELLIGENCE_INDEX_VERSIONS: readonly string[] = ['4.3'];
 const majorMinor = (version: string | undefined): string | undefined =>
   version?.trim().replace(/^v/i, '').split('.').slice(0, 2).join('.') || undefined;
 
+/** True when the feature mapping normalizes this Intelligence Index version. */
+export const isCompatibleIndexVersion = (version: string | undefined): boolean =>
+  INTELLIGENCE_INDEX_VERSIONS.includes(majorMinor(version) ?? '');
+
 export interface Interval {
   center: number;
   lower: number;
@@ -76,7 +80,7 @@ export function observeAxis(row: BenchModel | undefined, axis: ProvenanceAxis, s
   const provenance = row?.axisProvenance?.[axis] ?? 'missing';
   if (value === undefined || !Number.isFinite(value)) return { axis, provenance: 'missing' };
   if (provenance !== 'measured' && provenance !== 'source-estimated') return { axis, provenance };
-  if (axis === 'intelligence' && !INTELLIGENCE_INDEX_VERSIONS.includes(majorMinor(state.benchmarkIndexVersion) ?? '')) {
+  if (axis === 'intelligence' && !isCompatibleIndexVersion(state.benchmarkIndexVersion)) {
     return { axis, provenance: 'missing', reason: 'incompatible-version' };
   }
   return { axis, provenance, normalized: NORMALIZE[axis](value) };

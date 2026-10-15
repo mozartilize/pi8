@@ -54,26 +54,14 @@ export const latencyProxySeconds = (outputTokens: number, outputSpeedTps: number
 
 /**
  * Output tokens of one invocation at demand scale 1. Each value is
- * multiplied by the action's demand scale (`effortDemandScale`), so a higher
- * effort, or a model that writes more, costs more and takes longer when AA
- * measured that it does.
+ * multiplied by the matching bound of the action's output-demand prior
+ * (`outputDemandPrior`), so a higher effort, or a model that writes more,
+ * costs more and takes longer when AA measured that it does.
  */
 export const OUTPUT_TOKENS_CENTRAL = 1024;
 export const OUTPUT_TOKENS_MIN = 512;
 export const OUTPUT_TOKENS_MAX = 4096;
 
-/**
- * Output-equivalent tokens per AA task at demand scale 1. An authored
- * reference near the median of synchronized rows, not a measurement.
- */
-export const REFERENCE_TOKENS_PER_TASK = 100_000;
-/**
- * Demand-scale envelope of a model with no measured cost per task. It spans
- * the measured range, so missing evidence widens the cost and time intervals
- * and gives no advantage.
- */
-export const DEMAND_SCALE_UNKNOWN_MIN = 0.05;
-export const DEMAND_SCALE_UNKNOWN_MAX = 12;
 
 // ─── Capability axes ─────────────────────────────────────────────────
 

@@ -34,7 +34,7 @@ Feature intervals + Θ                            → minimax regret
 | Benchmark + provenance | Store, đúng model và effort | Quality intervals | Không: evidence gaps và capabilityShortfall chỉ là diagnostics | Có: ba capability features, inputFit |
 | Context tokens, vision input | Request hiện tại | Input relevance; predicted input cost | Có: context ảnh hưởng dispatch; evidence cho input shape | Có: inputFit và cost |
 | Registry token prices | `model.cost` | Predicted USD interval | Không | Có: costDesirability |
-| Benchmark cost/task và output price | Benchmark đúng model | Output-demand scale | Không | Có: cost và time |
+| AA output tokens/task | Benchmark đúng model và đúng effort | Output-demand prior | Không | Có: cost và time |
 | Cache evidence | Prefix identity, age, warm tokens | Cached input buckets | Không | Có: cost; không cộng một cache bonus riêng |
 | Output speed | Benchmark output tokens/s | Latency proxy | Không | Có: timeDesirability |
 | Incumbent | Exact provider/model | Continuity | Không | Có: continuity; cũng dùng khi phá hòa |
@@ -215,8 +215,10 @@ Nguồn: [weights.ts](../extensions/routing/optimization/weights.ts), [session.t
 | OUTPUT_TOKENS_CENTRAL | 1,024 | Predicted output center trước demand scale |
 | OUTPUT_TOKENS_MIN | 512 | Predicted output lower trước demand scale |
 | OUTPUT_TOKENS_MAX | 4,096 | Predicted output upper trước demand scale |
-| REFERENCE_TOKENS_PER_TASK | 100,000 | Mẫu số để chuẩn hóa output demand |
-| Unknown output demand | Center 1; envelope [0.05, 12] | Mở rộng cost và time intervals |
+| REFERENCE_TOKENS_PER_TASK | 30,000 | Mẫu số để chuẩn hóa output demand |
+| Giới hạn center | [0.05, 12] | Giới hạn center của output-demand prior |
+| DEMAND_TRANSFER_FACTOR | 2 | Envelope = [center / 2, center × 2] |
+| Unknown output demand | Center 1; envelope [0.025, 24] | Mở rộng cost và time intervals |
 | LATENCY_OVERHEAD_SECONDS | 2 giây | Latency proxy |
 | TIME_SHAPE_SECONDS | 5 giây | Độ cong time transform |
 | TIME_SATURATION_SECONDS | 300 giây | Latency ≥300 giây có desirability 0 |
@@ -224,29 +226,28 @@ Nguồn: [weights.ts](../extensions/routing/optimization/weights.ts), [session.t
 | Unknown/zero output speed | Center 0.5; interval [0,1] | Không giả thành nhanh |
 
 ```text
-scale = (AA costPerTask / (AA outputPricePer1M / 1,000,000)) / 100,000
+center = clamp(AA outputTokensPerTask / 30,000, 0.05, 12)
+low = center / 2;  high = center × 2
 costFeature(USD) = clamp(1 − log10(USD / 0.00001) / 6)
 latency = 2 + outputTokens / outputSpeedTps
 timeFeature(t) = clamp(1 − ln(1 + t/5) / ln(1 + 300/5))
 ```
 
-Scale trên là proxy output-equivalent: AA cost/task còn chứa input cost, nên không phải số output tokens đo trực tiếp.
+AA output tokens/task là quan sát trên benchmark task, không phải dự báo chính xác cho invocation kế tiếp. Envelope đối xứng theo tỉ lệ thể hiện sai số chuyển giao này.
 
 | Evidence output demand | Quy tắc |
 |---|---|
-| Có cost/task và output price dương ở đúng effort | Dùng scale của row đó |
-| Effort chưa có scale, có effort đo được cao hơn | Dùng effort gần nhất phía trên |
-| Không có effort đo được cao hơn | Dùng scale lớn nhất đo được của cùng model |
-| Cùng model không có measurement usable | Unknown demand envelope |
+| Row đúng effort có observation `measured`, page và API index version tương thích | Dùng prior của row đó |
+| Thiếu row, thiếu observation, `source-estimated`, `unknown-effort`, `invalid`, `conflict`, version không rõ hoặc không tương thích | Unknown demand envelope, kèm reason trong evidence |
 
-**Chỉ demand kinh tế được mượn giữa efforts. Quality không được mượn.** D về độ khó không nhân giá hay thời gian.
+**Không mượn demand hoặc quality giữa efforts hay giữa models.** D về độ khó không nhân giá hay thời gian.
 
 ### 6.2 Công thức predicted spend
 
 Đặt `I = estimatedContextTokens`, `W = usable warm-prefix tokens`, `pMiss = cacheWrite price nếu >0, nếu không thì input price`. Các price đổi từ $/M tokens sang $/token.
 
 ```text
-centralUSD = W × pReadCentral + (I − W) × pMiss + 1,024 × scale × pOutput
+centralUSD = W × pReadCentral + (I − W) × pMiss + 1,024 × center × pOutput
 minUSD     = W × pReadLow     + (I − W) × pMiss +   512 × low   × pOutput
 maxUSD     = I × pMiss                         + 4,096 × high  × pOutput
 ```

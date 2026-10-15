@@ -7,31 +7,29 @@
  * nonfinancial continuity is a separate feature. A missing price gives the
  * common feature interval, never invented dollars.
  *
- * Output demand depends on the model and its effort. AA measures the cost of
- * one task at each effort of a model; at the row's output price this gives
- * output-equivalent tokens per task, on one scale for all models. Without
- * this scale a higher effort, or a model that writes more, would gain
- * quality at no cost or time.
+ * Output demand depends on the model and its effort. AA measures the output
+ * tokens (answer and reasoning) of one Intelligence Index task at each effort
+ * of a model. This is a benchmark observation, not a forecast of the next
+ * invocation, so it moves the forecast only by a bounded amount. Without it a
+ * higher effort, or a model that writes more, would gain quality at no cost or
+ * time.
  */
 import type { CacheRetention, ModelPromptCache } from '@earendil-works/pi-ai';
 
 import type { BenchModel } from '../../types.js';
 import { parseCandidateKey, type RegistryModelInfo } from '../score/scorer.js';
-import { effortRank, type EffectiveAction } from './actions.js';
+import type { EffectiveAction } from './actions.js';
 import {
   OUTPUT_TOKENS_CENTRAL,
   OUTPUT_TOKENS_MAX,
   OUTPUT_TOKENS_MIN,
-  DEMAND_SCALE_UNKNOWN_MAX,
-  DEMAND_SCALE_UNKNOWN_MIN,
   PRICE_UNKNOWN_VALUE,
-  REFERENCE_TOKENS_PER_TASK,
   SPEED_UNKNOWN_VALUE,
   costDesirability,
   latencyProxySeconds,
   timeDesirability,
 } from './mapping.js';
-import type { Interval } from './model.js';
+import { isCompatibleIndexVersion, type Interval } from './model.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 import type { DecisionStateV1 } from './state.js';
 
@@ -45,11 +43,21 @@ export interface SpendBuckets {
 }
 
 /**
- * How the demand scale was obtained: `measured` from the action's own
- * effort, `nearest` from another measured effort of the same model, and
- * `unknown` when the model has no measured cost per task.
+ * Source of the output-demand prior: `aa-exact` from an AA observation at the
+ * action's own effort, `neutral` when no usable observation exists.
  */
-export type DemandScaleCode = 'measured' | 'nearest' | 'unknown';
+export type DemandScaleCode = 'aa-exact' | 'neutral';
+
+/** Why an action has no usable AA output-token observation. */
+export type NeutralDemandReason =
+  | 'no-row'
+  | 'absent'
+  | 'invalid'
+  | 'conflict'
+  | 'unknown-effort'
+  | 'source-estimated'
+  | 'version-unknown'
+  | 'version-incompatible';
 
 /**
  * Dimensionless output-demand multiplier of one action: a central value and
@@ -60,6 +68,7 @@ export interface OutputDemandPrior {
   low: number;
   high: number;
   code: DemandScaleCode;
+  reason?: NeutralDemandReason;
 }
 
 /**
@@ -78,53 +87,57 @@ export const outputTokenForecast = (prior: OutputDemandPrior): OutputTokenForeca
   high: OUTPUT_TOKENS_MAX * prior.high,
 });
 
+// Output-demand policy. Authored values, not fitted prediction parameters.
+// The reference is a fixed rounded anchor near the median AA observation; a
+// benchmark refresh does not recompute it. The center keeps the full measured
+// ratio between actions: a compressed ratio makes the highest effort of every
+// model look almost as cheap as its lower efforts, so it wins most tasks. The
+// limits span the observed range (about 0.06 to 6.6) with margin. The
+// envelope is the center divided and multiplied by one factor: a benchmark
+// task is not the next invocation, and the uncertainty is a ratio with no
+// direction. An envelope that always reaches the reference removes the
+// worst-case advantage of a terse action only.
+const REFERENCE_TOKENS_PER_TASK = 30_000;
+const DEMAND_SCALE_MIN = 0.05;
+const DEMAND_SCALE_MAX = 12;
+const DEMAND_TRANSFER_FACTOR = 2;
+
+/**
+ * Prior of an action with no usable observation: a neutral center and an
+ * envelope that contains every measured prior, so missing evidence widens the
+ * cost and time intervals and gives no advantage.
+ */
 export const UNKNOWN_DEMAND: OutputDemandPrior = {
   center: 1,
-  low: DEMAND_SCALE_UNKNOWN_MIN,
-  high: DEMAND_SCALE_UNKNOWN_MAX,
-  code: 'unknown',
+  low: DEMAND_SCALE_MIN / DEMAND_TRANSFER_FACTOR,
+  high: DEMAND_SCALE_MAX * DEMAND_TRANSFER_FACTOR,
+  code: 'neutral',
 };
 
-/**
- * Output-equivalent tokens of one AA task: the AA cost per task at the AA
- * output price of the same row. The cost includes input tokens, so this
- * overstates output for input-heavy models; it is one common proxy for all
- * candidates.
- */
-function tokensPerTask(row: BenchModel): number | undefined {
-  if (!usable(row.costPerTask) || row.costPerTask === 0) return undefined;
-  if (!usable(row.priceOutputPer1M) || row.priceOutputPer1M === 0) return undefined;
-  return row.costPerTask / perToken(row.priceOutputPer1M);
-}
+const neutral = (reason: NeutralDemandReason): OutputDemandPrior => ({ ...UNKNOWN_DEMAND, reason });
 
 /**
- * Output-demand multiplier of one action on one scale for all models:
- * output-equivalent tokens per AA task divided by `REFERENCE_TOKENS_PER_TASK`.
- * A model that spends more tokens at every effort gets a larger scale at
- * every effort. An unmeasured effort takes the scale of the nearest measured
- * effort above it, so it never looks cheaper than a measured higher effort.
- * With no measured effort above, it takes the largest measured scale. A model
- * with no measured cost per task gets the wide unknown envelope.
+ * Output-demand prior of one action from the benchmark row at its served
+ * effort (`rowAtServedEffort`). Only an exact-effort AA observation of a row
+ * whose Intelligence Index AA did not estimate counts, and only when the page
+ * and API index versions are compatible. Another effort or another model
+ * never supplies the observation. The envelope of a measured prior is the
+ * uncertainty of transferring benchmark-task behavior to the next invocation,
+ * not an AA confidence interval.
  */
-export function effortDemandScale(rows: readonly BenchModel[], action: EffectiveAction): OutputDemandPrior {
-  const measured = rows
-    .filter((row) => row.active && row.registryId === action.registryId && tokensPerTask(row) !== undefined)
-    .sort((a, b) => effortRank(a.effort) - effortRank(b.effort));
-  const exact = (row: BenchModel, code: DemandScaleCode): OutputDemandPrior => {
-    const scale = tokensPerTask(row)! / REFERENCE_TOKENS_PER_TASK;
-    return { center: scale, low: scale, high: scale, code };
-  };
-  if (action.effort === undefined) {
-    const own = measured.find((row) => row.effort === undefined || row.effort === 'off');
-    return own ? exact(own, 'measured') : UNKNOWN_DEMAND;
+export function outputDemandPrior(row: BenchModel | undefined, apiIndexVersion: string | undefined): OutputDemandPrior {
+  if (!row) return neutral('no-row');
+  const provenance = row.outputTokensProvenance;
+  if (!provenance) return neutral('absent');
+  if (provenance.status !== 'measured') return neutral(provenance.status);
+  const tokens = row.outputTokensPerTask;
+  if (!usable(tokens)) return neutral('invalid');
+  if (provenance.indexVersion === undefined || apiIndexVersion === undefined) return neutral('version-unknown');
+  if (!isCompatibleIndexVersion(provenance.indexVersion) || !isCompatibleIndexVersion(apiIndexVersion)) {
+    return neutral('version-incompatible');
   }
-  if (measured.length === 0) return UNKNOWN_DEMAND;
-  const own = measured.find((row) => row.effort === action.effort);
-  if (own) return exact(own, 'measured');
-  const above = measured.find((row) => effortRank(row.effort) > effortRank(action.effort));
-  if (above) return exact(above, 'nearest');
-  const largest = measured.reduce((a, b) => (tokensPerTask(b)! > tokensPerTask(a)! ? b : a));
-  return exact(largest, 'nearest');
+  const center = Math.min(DEMAND_SCALE_MAX, Math.max(DEMAND_SCALE_MIN, tokens / REFERENCE_TOKENS_PER_TASK));
+  return { center, low: center / DEMAND_TRANSFER_FACTOR, high: center * DEMAND_TRANSFER_FACTOR, code: 'aa-exact' };
 }
 
 export interface PredictedSpendV1 {
@@ -296,6 +309,9 @@ export function predictSpend(
   return { priceKnown: true, centralUSD, minUSD, maxUSD, cacheHitEstimate, cacheEligibility, tokens };
 }
 
+const demandDetail = (demand: OutputDemandPrior): string =>
+  demand.reason ? `demand:${demand.code}:${demand.reason}` : `demand:${demand.code}`;
+
 export function costFeature(spend: PredictedSpendV1, demand: OutputDemandPrior = UNKNOWN_DEMAND): { interval: Interval; evidence: FeatureEvidence } {
   if (!spend.priceKnown) {
     return {
@@ -306,7 +322,7 @@ export function costFeature(spend: PredictedSpendV1, demand: OutputDemandPrior =
   return {
     // Desirability falls with cost, so the bounds swap.
     interval: { center: costDesirability(spend.centralUSD!), lower: costDesirability(spend.maxUSD!), upper: costDesirability(spend.minUSD!) },
-    evidence: { feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION, details: [`cache:${spend.cacheHitEstimate}`, `cache-eligibility:${spend.cacheEligibility}`, `demand:${demand.code}`] },
+    evidence: { feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION, details: [`cache:${spend.cacheHitEstimate}`, `cache-eligibility:${spend.cacheEligibility}`, demandDetail(demand)] },
   };
 }
 
@@ -328,6 +344,6 @@ export function timeFeature(
       lower: timeDesirability(latencyProxySeconds(output.high, tps)),
       upper: timeDesirability(latencyProxySeconds(output.low, tps)),
     },
-    evidence: { feature: 'timeDesirability', code: 'speed-known', mapping: FEATURE_MAPPING_VERSION, details: [`demand:${demand.code}`] },
+    evidence: { feature: 'timeDesirability', code: 'speed-known', mapping: FEATURE_MAPPING_VERSION, details: [demandDetail(demand)] },
   };
 }

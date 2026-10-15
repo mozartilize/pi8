@@ -101,6 +101,8 @@ Estimated quality can satisfy ordinary eligibility checks. It cannot prove cross
 | `visionReasoning` | MMMU-Pro correctness |
 | `costPerTask` | Benchmark task cost at the measured effort |
 | `timePerTaskSeconds` | Benchmark task duration at the measured effort |
+| `outputTokensPerTask` | AA weighted output tokens (answer and reasoning) per Intelligence Index task, from the models page, at an explicit effort label |
+| `outputTokensProvenance` | Status of that observation (`measured`, `source-estimated`, `unknown-effort`, `invalid`, `conflict`) and the page's Intelligence Index version |
 
 Indexes measure different tasks. Equal numbers on different indexes do not imply equal capability.
 
