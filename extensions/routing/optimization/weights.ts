@@ -11,13 +11,13 @@ import { FEATURE_COUNT, FEATURE_SCHEMA_DIGEST } from '../features/schema.js';
 
 // [reasoning, agentic, research, input, cost, time,
 //  continuity, friction, effortRecovery, modelSwitchRecovery]
-export const THETA0: readonly number[] = [0.17, 0.2, 0.08, 0.05, 0.3, 0.05, 0.09, 0.04, 0.01, 0.01];
+export const THETA0: readonly number[] = Object.freeze([0.17, 0.2, 0.08, 0.05, 0.3, 0.05, 0.09, 0.04, 0.01, 0.01]);
 
-export const THETA_BOUNDS: readonly (readonly [number, number])[] = [
+export const THETA_BOUNDS: readonly (readonly [number, number])[] = Object.freeze(([
   [0, 0.45], [0, 0.45], [0, 0.3], [0, 0.25],
   [0.08, 0.55], [0, 0.2], [0, 0.3], [0, 0.25],
   [0, 0.3], [0, 0.3],
-];
+] as [number, number][]).map((bound) => Object.freeze(bound)));
 
 /** Utility margin of an A/B answer. */
 export const CHOICE_MARGIN = 0.005;

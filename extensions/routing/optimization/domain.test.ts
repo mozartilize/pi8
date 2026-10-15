@@ -14,6 +14,7 @@ import {
   compileDomainArtifact,
   compileWeightDomain,
   domainIdentity,
+  reviveDomainArtifact,
   thetaBaseArtifact,
   thetaBasePolytope,
 } from './domain.js';
@@ -22,7 +23,9 @@ import { validProblem } from '../../test-support/decision-problem.js';
 import type { SelectableAction } from './compile.js';
 import { solveMinimaxRegret, type NumericDomain } from './minimax.js';
 import type { LPAdapter, LpRunControls } from './lp.js';
-import { THETA0 } from './weights.js';
+import { THETA0, THETA_BOUNDS } from './weights.js';
+import { CORE_SCENARIOS_V1 } from '../preferences/scenarios.js';
+import { FEATURE_COUNT } from '../features/schema.js';
 import { preferenceProfileDigest } from '../preferences/schema.js';
 
 const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
@@ -176,5 +179,45 @@ describe('domain artifacts', () => {
     expect(domainIdentity(edited)).not.toBe(compiled.identity);
     expect(artifactMatches(compiled, edited, preferenceProfileDigest(edited))).toBe(false);
     expect(artifactMatches(compiled, OPERATOR_PROFILE, preferenceProfileDigest(edited))).toBe(false);
+  });
+});
+
+describe('frozen policy inputs', () => {
+  it('the authored bounds, the anchor and every stored artifact are read-only at runtime', async () => {
+    expect(Object.isFrozen(THETA0)).toBe(true);
+    expect(Object.isFrozen(THETA_BOUNDS) && THETA_BOUNDS.every((bound) => Object.isFrozen(bound))).toBe(true);
+    const lp = new WorkerLpAdapter();
+    try {
+      for (const artifact of [
+        thetaBaseArtifact({ version: 1 }),
+        await compileDomainArtifact({ version: 1, settledImplementation: 'lower_cost' }, lp),
+        reviveDomainArtifact(JSON.parse(JSON.stringify(thetaBaseArtifact({ version: 1 }))))!,
+      ]) {
+        const { polytope } = artifact.domain;
+        expect(Object.isFrozen(artifact.domain)).toBe(true);
+        expect(Object.isFrozen(polytope)).toBe(true);
+        expect(Object.isFrozen(polytope.colLower) && Object.isFrozen(polytope.colUpper)).toBe(true);
+        expect(Object.isFrozen(polytope.rows) && polytope.rows.every((row) => Object.isFrozen(row) && Object.isFrozen(row.coeffs))).toBe(true);
+        expect(Object.isFrozen(artifact.representativePoint)).toBe(true);
+      }
+    } finally {
+      await lp.close();
+    }
+  });
+
+  it('every frozen v1 scenario vector has one value in [0, 1] per feature and is read-only', () => {
+    for (const scenario of Object.values(CORE_SCENARIOS_V1)) {
+      for (const option of [scenario.A, scenario.B]) {
+        expect(option.features).toHaveLength(FEATURE_COUNT);
+        expect(option.features.every((value) => value >= 0 && value <= 1)).toBe(true);
+        expect(Object.isFrozen(option.features)).toBe(true);
+      }
+    }
+  });
+
+  it('a revived artifact without rows or a representative is rejected', () => {
+    const stored = JSON.parse(JSON.stringify(thetaBaseArtifact({ version: 1 })));
+    expect(reviveDomainArtifact({ ...stored, representativePoint: undefined })).toBeUndefined();
+    expect(reviveDomainArtifact({ ...stored, domain: { ...stored.domain, polytope: { ...stored.domain.polytope, rows: undefined } } })).toBeUndefined();
   });
 });

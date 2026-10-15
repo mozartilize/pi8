@@ -217,6 +217,25 @@ export async function representativePoint(domain: WeightDomain, lp: LPAdapter, c
   return point.slice(0, n);
 }
 
+/**
+ * A read-only copy of a domain. The selector, the artifact store and the LP
+ * worker share one artifact, so no reader can change the domain of another.
+ */
+function frozenDomain(domain: WeightDomain): WeightDomain {
+  const { polytope } = domain;
+  return Object.freeze({
+    ...domain,
+    polytope: Object.freeze({
+      numCols: polytope.numCols,
+      colLower: Object.freeze([...polytope.colLower]),
+      colUpper: Object.freeze([...polytope.colUpper]),
+      rows: Object.freeze(polytope.rows.map((row) => Object.freeze({ ...row, coeffs: Object.freeze([...row.coeffs]) }))),
+    }) as Polytope,
+    constraints: Object.freeze([...domain.constraints]),
+    ...(domain.slackRanges ? { slackRanges: Object.freeze([...domain.slackRanges]) } : {}),
+  });
+}
+
 /** Compile the atomic artifact of a valid profile. */
 export async function compileDomainArtifact(
   profile: UserRoutingPreferencesV1,
@@ -231,7 +250,7 @@ export async function compileDomainArtifact(
     status: 'ready' as const,
     identity: domainIdentity(profile),
     profileDigest: preferenceProfileDigest(profile),
-    domain,
+    domain: frozenDomain(domain),
     representativePoint: Object.freeze([...point]),
     thetaRepresentative: Object.freeze(point.slice(0, FEATURE_COUNT)),
   });
@@ -248,7 +267,7 @@ export function thetaBaseArtifact(profile: UserRoutingPreferencesV1): DomainArti
     status: 'ready' as const,
     identity: domainIdentity(profile),
     profileDigest: preferenceProfileDigest(profile),
-    domain,
+    domain: frozenDomain(domain),
     representativePoint: Object.freeze([...THETA0]),
     thetaRepresentative: Object.freeze([...THETA0]),
   });
@@ -265,9 +284,12 @@ export function reviveDomainArtifact(raw: unknown): DomainArtifact | undefined {
   const polytope = value?.domain?.polytope;
   if (value?.status !== 'ready' || !polytope || !Array.isArray(polytope.colLower) || !Array.isArray(polytope.colUpper)) return undefined;
   const open = (bounds: readonly (number | null | undefined)[]) => bounds.map((bound) => bound ?? undefined);
+  if (!Array.isArray(polytope.rows) || !Array.isArray(value.representativePoint) || !Array.isArray(value.thetaRepresentative)) return undefined;
   return Object.freeze({
     ...value,
-    domain: { ...value.domain, polytope: { ...polytope, colLower: open(polytope.colLower), colUpper: open(polytope.colUpper) } },
+    domain: frozenDomain({ ...value.domain, polytope: { ...polytope, colLower: open(polytope.colLower), colUpper: open(polytope.colUpper) } }),
+    representativePoint: Object.freeze([...value.representativePoint]),
+    thetaRepresentative: Object.freeze([...value.thetaRepresentative]),
   });
 }
 

@@ -9,7 +9,7 @@
  * `preferences.version` 2 and an explicit migration or reconfirmation.
  */
 import { digestOf } from '../digest.js';
-import { FEATURE_SCHEMA_DIGEST } from '../features/schema.js';
+import { FEATURE_COUNT, FEATURE_SCHEMA_DIGEST } from '../features/schema.js';
 import type { PreferenceKey } from './schema.js';
 
 export interface ScenarioOptionV1 {
@@ -79,6 +79,17 @@ export const CORE_SCENARIOS_V1: Readonly<Record<PreferenceKey, PreferenceScenari
     tradeOff: 'Recovery action preference; not proof that either action succeeds',
   },
 };
+
+for (const scenario of Object.values(CORE_SCENARIOS_V1)) {
+  for (const option of [scenario.A, scenario.B]) {
+    // A stored v1 answer means a comparison of these exact vectors; a vector of
+    // another length or outside [0, 1] does not fit the feature schema.
+    if (option.features.length !== FEATURE_COUNT || !option.features.every((value) => Number.isFinite(value) && value >= 0 && value <= 1)) {
+      throw new Error(`scenario ${scenario.key} option ${option.label} does not match the feature schema`);
+    }
+    Object.freeze(option.features);
+  }
+}
 
 export const CORE_SCENARIOS_V1_DIGEST = digestOf({ scenarios: CORE_SCENARIOS_V1, featureSchema: FEATURE_SCHEMA_DIGEST });
 
