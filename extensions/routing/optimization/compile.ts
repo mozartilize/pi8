@@ -8,9 +8,9 @@
  * canonical action key.
  */
 import { FEATURE_COUNT, FEATURE_INDEX, type ActionFeatureVector } from '../features/schema.js';
-import type { Polytope } from './lp.js';
+import { LP_RESIDUAL_TOLERANCE, type Polytope } from './lp.js';
 import type { DecisionProblem, NumericAction, NumericDomain, TieKey } from './minimax.js';
-import { LP_RESIDUAL_TOLERANCE, THETA_BOUNDS } from './weights.js';
+import { THETA_BOUNDS } from './weights.js';
 
 export interface SelectableAction {
   features: ActionFeatureVector;

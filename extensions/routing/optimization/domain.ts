@@ -22,11 +22,10 @@ import {
   type PreferenceKey,
   type UserRoutingPreferencesV1,
 } from '../preferences/schema.js';
-import { lpAnswerProblem, pointProblem, type LPAdapter, type LinearRow, type LpRunControls, type Polytope } from './lp.js';
+import { LP_RESIDUAL_TOLERANCE, lpAnswerProblem, pointProblem, type LPAdapter, type LinearRow, type LpRunControls, type Polytope } from './lp.js';
 import {
   CHOICE_MARGIN,
   EQUIVALENT_TOLERANCE,
-  LP_RESIDUAL_TOLERANCE,
   THETA0,
   THETA_BASE_DIGEST,
   THETA_BOUNDS,

@@ -25,7 +25,6 @@ export const CHOICE_MARGIN = 0.005;
 export const EQUIVALENT_TOLERANCE = 0.005;
 /** Equal slack penalty of every answer when answers are jointly unrepresentable. */
 export const UNIFORM_CONFLICT_SLACK_PENALTY = 1;
-export { LP_RESIDUAL_TOLERANCE } from './lp.js';
 
 export const THETA_BASE_DIGEST = digestOf({
   featureSchema: FEATURE_SCHEMA_DIGEST,

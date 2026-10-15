@@ -364,7 +364,7 @@ Fallback reasons: `timeout`, `spike-pair-cap`, `numerical`, `no-solver`, `domain
 
 500 ms là deadline được truyền vào solver, không phải hard timeout bao quanh toàn bộ JavaScript. Base closed-form và các phần tính đồng bộ không tự yield chỉ vì deadline đã qua.
 
-Nguồn: [select.ts](../extensions/routing/optimization/select.ts), [regret.ts](../extensions/routing/optimization/regret.ts).
+Nguồn: [select.ts](../extensions/routing/optimization/select.ts), [compile.ts](../extensions/routing/optimization/compile.ts), [minimax.ts](../extensions/routing/optimization/minimax.ts).
 
 ## 9. Ranking không đồng nghĩa dispatch chain
 
