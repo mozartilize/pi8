@@ -29,9 +29,10 @@ export interface WarmPrefixEvidence {
   /** When the recorded request was observed. Its age is measured from this time. */
   observedAtMs: number;
   /**
-   * Chance that the provider still holds the prefix while it is inside its
-   * lifetime: 1 for a request of this session, lower for a request of another
-   * session. It never extends the lifetime.
+   * Authored weight of a hit while the prefix is inside its lifetime: 1 for a
+   * request of this session, lower for a request of another session. It is not
+   * a measured hit rate. 0 means the record gives no hit. It never extends the
+   * lifetime.
    */
   hitProbability: number;
   /**

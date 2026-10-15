@@ -32,7 +32,7 @@ export const FEATURE_INDEX: Readonly<Record<FeatureName, number>> = Object.fromE
  * change alters what a stored preference scenario means, `preferences.version`
  * must also increase. A benchmark refresh changes observations, not policy.
  */
-export const FEATURE_MAPPING_VERSION = 'feature-v8' as const;
+export const FEATURE_MAPPING_VERSION = 'feature-v9' as const;
 
 export const FEATURE_SCHEMA_DIGEST = digestOf({ names: FEATURE_NAMES, mapping: FEATURE_MAPPING_VERSION });
 

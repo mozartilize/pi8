@@ -187,9 +187,9 @@ export function compliancePenalties(history: ModelHistory, weights: ReputationWe
 
 /** Cross-session cache credit requires an identical prompt head, never just model popularity. */
 /**
- * Prompt-head prefixes that other sessions recorded, with their hit
- * probability. The candidate's cache lifetime is applied by the feature
- * mapping; the one-hour limit here only bounds the measured probabilities.
+ * Prompt-head prefixes that other sessions recorded, with an authored hit
+ * weight. The candidate's cache lifetime is applied by the feature
+ * mapping; the one-hour limit here only bounds the authored weights.
  */
 export function sharedPrefixCredits(history: ModelHistory, prefix: string, tokens: number, ownSession: string, now = Date.now()): Map<string, WarmPrefixEvidence> {
   const credits = new Map<string, WarmPrefixEvidence>();

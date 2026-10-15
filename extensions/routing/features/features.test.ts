@@ -510,14 +510,16 @@ describe('cache-aware cost', () => {
     expect(usd(long, tiered, aHigh).centralUSD).toBeCloseTo(100_000 * 2 * 4 / 1e6 + 1024 * 20 / 1e6, 12);
   });
 
-  it('widens only the lower cost bound when the cache-read price is missing', () => {
+  it('gives no cache credit and no maximum cost when a hit is possible without a cache-read price', () => {
     const noRead = registryModel('o', 'gpt', { cost: { input: 2, output: 8 }, promptCache: { short: 300 } });
     const spend = usd(cacheState(), noRead, oHigh);
-    // Central: no cache credit. Minimum: free cached tokens. Maximum: all input missed.
+    // Central: no cache credit. Minimum: free cached tokens. Maximum: unknown,
+    // because a read can cost more than a miss.
     // No benchmark row: output uses the neutral demand envelope [0.025, 24].
     expect(spend.centralUSD).toBeCloseTo(100_000 * 2 / 1e6 + 1024 * 8 / 1e6, 12);
     expect(spend.minUSD).toBeCloseTo(60_000 * 2 / 1e6 + 512 * 0.025 * 8 / 1e6, 12);
-    expect(spend.maxUSD).toBeCloseTo(100_000 * 2 / 1e6 + 4096 * 24 * 8 / 1e6, 12);
+    expect(spend.maxUSD).toBeUndefined();
+    expect(spend.cacheReadPriceUnknown).toBe(true);
   });
 });
 

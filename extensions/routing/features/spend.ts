@@ -30,7 +30,14 @@ export interface PredictedSpendV1 {
   priceKnown: boolean;
   centralUSD?: number;
   minUSD?: number;
+  /**
+   * Absent when the price is unknown, or when a cache hit is possible and the
+   * registry gives no cache-read price. A read can cost more than a miss, so
+   * the cost then has no known upper bound.
+   */
   maxUSD?: number;
+  /** True when a cache hit is possible and the registry gives no cache-read price. */
+  cacheReadPriceUnknown?: true;
   cacheHitEstimate: 'uncertain' | 'none';
   cacheEligibility: CacheEligibility;
   tokens: SpendBuckets;
@@ -99,18 +106,21 @@ export function predictSpend(
   const outputPrice = perToken(pricing.output);
   const missPrice = missPricePerToken(pricing, model, retention);
   const readKnown = usable(pricing.cacheRead);
-  // Unknown cache-read price: no credit in the center; the bounds span a free read and a miss.
+  // The central input uses the weighted prefix. The bounds use the two outcomes
+  // that the weight does not decide: a miss, and a hit of the largest prefix
+  // that can hit. A cache read can cost more than a miss, so neither outcome is
+  // always cheaper. An unknown read price gives no credit in the center, a free
+  // read at the minimum, and no maximum when a hit is possible.
   const readCentral = readKnown ? perToken(pricing.cacheRead!) : missPrice;
   const readLow = readKnown ? readCentral : 0;
-  const readHigh = readKnown ? readCentral : missPrice;
-  // The central input uses the weighted prefix. The bounds use the two outcomes
-  // that the weight does not decide: a miss, and a hit of the largest live prefix.
-  // A cache read can cost more than a miss, so neither outcome is always cheaper.
   const missInput = input * missPrice;
   const hitInput = (read: number) => hitTokens * read + (input - hitTokens) * missPrice;
   const centralUSD = warm * readCentral + (input - warm) * missPrice + outputCentral * outputPrice;
   const minUSD = Math.min(missInput, hitInput(readLow)) + output.low * outputPrice;
-  const maxUSD = Math.max(missInput, hitInput(readHigh)) + output.high * outputPrice;
+  if (!readKnown && hitTokens > 0) {
+    return { priceKnown: true, centralUSD, minUSD, cacheReadPriceUnknown: true, cacheHitEstimate, cacheEligibility, tokens };
+  }
+  const maxUSD = Math.max(missInput, hitInput(readCentral)) + output.high * outputPrice;
   return { priceKnown: true, centralUSD, minUSD, maxUSD, cacheHitEstimate, cacheEligibility, tokens };
 }
 
@@ -122,9 +132,19 @@ export function costFeature(spend: PredictedSpendV1, demand: OutputDemandPrior =
     };
   }
   return {
-    // Desirability falls with cost, so the bounds swap.
-    interval: { center: costDesirability(spend.centralUSD!), lower: costDesirability(spend.maxUSD!), upper: costDesirability(spend.minUSD!) },
-    evidence: { feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION, details: [`cache:${spend.cacheHitEstimate}`, `cache-eligibility:${spend.cacheEligibility}`, demandDetail(demand)] },
+    // Desirability falls with cost, so the bounds swap. No maximum cost gives the lowest desirability.
+    interval: {
+      center: costDesirability(spend.centralUSD!),
+      lower: spend.maxUSD === undefined ? 0 : costDesirability(spend.maxUSD),
+      upper: costDesirability(spend.minUSD!),
+    },
+    evidence: {
+      feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION,
+      details: [
+        `cache:${spend.cacheHitEstimate}`, `cache-eligibility:${spend.cacheEligibility}`,
+        ...(spend.cacheReadPriceUnknown ? ['cache-read-price:unknown'] : []), demandDetail(demand),
+      ],
+    },
   };
 }
 

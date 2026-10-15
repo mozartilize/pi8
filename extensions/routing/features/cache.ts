@@ -53,9 +53,11 @@ export type CacheEligibility =
  * effort changes keep the model's cache, an action of that model may reuse
  * the largest live prefix recorded for any effort of the model.
  *
- * `tokens` is the largest probability-weighted prefix. It is the central
- * estimate only: `hitProbability` is an authored estimate, not a measured
- * hit rate. `hitTokens` is the largest prefix on a hit, for the spend bounds.
+ * `hitProbability` is an authored weight, not a measured hit rate. A value
+ * in (0, 1] means a hit is possible; 0 or a non-finite value means the record
+ * gives no hit. `tokens` is the largest weighted prefix: the central estimate
+ * only. `hitTokens` is the largest prefix that can hit. It sets the spend
+ * bounds, which are a possibility envelope, not a confidence interval.
  * Records can overlap, so neither value adds the tokens of two records.
  * Both values use the prompt's token scale and cannot exceed the prompt.
  */
@@ -92,8 +94,10 @@ export function usableWarmPrefix(
       const age = state.nowMs - record.observedAtMs;
       if (age < 0 || age >= ttl) continue;
       live = true;
+      const probability = Number.isFinite(record.hitProbability) ? clamp01(record.hitProbability) : 0;
+      if (probability === 0) continue;
       const prefix = Math.min(input, Math.max(0, record.tokens) * scale);
-      warmTokens = Math.max(warmTokens, prefix * clamp01(record.hitProbability));
+      warmTokens = Math.max(warmTokens, prefix * probability);
       hitTokens = Math.max(hitTokens, prefix);
     }
   }
