@@ -13,7 +13,9 @@ Saved benchmark data + Pi registry
                  |
        Compute features and uncertainty intervals
                  |
-       Rank every authorized action in one pool
+       Reject malformed numerical actions
+                 |
+       Rank valid authorized actions in one pool
                  |
        Delegate with a fallback chain
 ```
@@ -60,11 +62,13 @@ The lower fit uses lower quality and upper demand. The upper fit uses upper qual
 
 ## One comparison pool
 
-Permission and technical guards decide which actions may serve. Every action that passes them enters one comparison pool. Exact minimax regret ranks that whole pool. When exact selection is not available, a central fallback ranks the same pool with one weight vector. The decision records which method ran. Central fallback is not minimax regret.
+Permission, technical guards, and numerical validation decide which actions may serve. Every action that passes them enters one comparison pool. Exact minimax regret ranks that whole pool. When exact selection is not available, a central fallback ranks the same pool with one weight vector. The decision records which method ran. Central fallback is not minimax regret.
 
 Capability enters the comparison only as features. An action below a target gets a lower capability fit. The preference weight domain decides how much that fit counts against price, speed, and continuity. Two actions whose fits on an axis both clip to zero have the same feature value on that axis, whatever their shortfalls.
 
 Missing quality evidence is uncertainty, not a reason to rank an action last. Missing and source-estimated quality use the full `[0, 1]` interval. With equal bounds and other features, they have the same exact regret. Their central fallback scores can differ because their central values differ.
+
+Malformed feature vectors, non-finite predicted costs, and duplicate action keys are numerical errors, not low utility or missing quality evidence. The router records their keys in `invalidActions` and excludes them from ranking, context preparation, and provider fallback. If every action is invalid, selection returns `no-feasible-action` with reason `invalid-features` and starts no provider request. A saved route is ranked again if one of its actions fails numerical validation.
 
 Exact decisions record `regretScope: pool`. Their regret values are comparable across all ranked actions. A record without this marker can contain regret values that are comparable only among actions of equal shortfall.
 

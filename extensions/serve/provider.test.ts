@@ -431,6 +431,30 @@ async function prepareSelectedWork(harness: ProviderTestHarness, tree: SessionTr
   return context;
 }
 
+describe('numerically invalid action dispatch guard', () => {
+  it('starts no request when every action key is duplicated', async () => {
+    const invalid = registryModel('invalid/duplicate', { reasoning: false });
+    const harness = await setupProviderTest({ dir: temp.path, models: [invalid, invalid] });
+    harness.scriptReply([{ type: 'text_delta', delta: 'must not serve' }, { type: 'done' }]);
+    await harness.serve({ messages: [{ role: 'user', content: 'hi', timestamp: 1 }] } as Context);
+    expect(harness.streamedModels()).toEqual([]);
+    const errors = harness.outStream.events.filter((event) => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(JSON.stringify(errors[0])).toContain('no action has valid numerical features');
+  });
+
+  it('does not dispatch rejected actions after the valid fallback chain is exhausted', async () => {
+    const valid = registryModel('valid/one', { reasoning: false });
+    const invalid = registryModel('invalid/duplicate', { reasoning: false });
+    const harness = await setupProviderTest({ dir: temp.path, models: [valid, invalid, invalid] });
+    harness.scriptReply([{ type: 'error', error: { errorMessage: 'permanent rejection' } }]);
+    await harness.serve({ messages: [{ role: 'user', content: 'hi', timestamp: 1 }] } as Context);
+    expect(harness.streamedModels()).toEqual(['valid/one']);
+    expect(harness.getProviderState().lastDecision?.fallbackChain).toEqual(['valid/one']);
+    expect(JSON.stringify(harness.outStream.events)).toContain('All routing fallbacks exhausted');
+  });
+});
+
 describe('benchmark data prerequisite', () => {
   const missing = { ready: false as const, message: 'router/auto has no benchmark data. Run /router-sync <key>.' };
 

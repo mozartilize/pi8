@@ -15,6 +15,8 @@
 import { enumerateEffectiveActions, overrideAction, effortRank, type EffectiveAction } from '../routing/features/actions.js';
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { rowAtServedEffort } from '../routing/features/model.js';
+import { candidateFeatures } from '../routing/features/candidate.js';
+import { partitionDecisionProblem } from '../routing/optimization/compile.js';
 import { createBoundaryAuthorization, type BoundaryAuthorizationV1 } from '../routing/policy/boundary-authorization.js';
 import { isExcludedExecutor } from '../routing/policy/execution-contract.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
@@ -25,6 +27,7 @@ import {
   DomainCache,
   PRODUCTION_SOLVER_BUDGET,
   selectByRegret,
+  toSelectable,
   type SelectionCandidate,
   type SelectorPorts,
   type UnifiedDecision,
@@ -165,7 +168,7 @@ function traceActions(
 ): UnifiedActionTrace[] {
   const byKey = new Map(result.actions.map((action) => [action.features.key, action]));
   const keys = new Set(result.ranking.slice(0, limit));
-  for (const key of [chosen, incumbentKey]) if (key && byKey.has(key)) keys.add(key);
+  for (const key of [chosen, incumbentKey]) if (key && result.ranking.includes(key)) keys.add(key);
   return [...keys].flatMap((key): UnifiedActionTrace[] => {
     const action = byKey.get(key);
     if (!action) return [];
@@ -222,7 +225,7 @@ function authorize(input: UnifiedTurnInput, selection: readonly SelectionCandida
 /**
  * The route that was ranked before a manual pin, without a new ranking. The
  * saved route applies only to the same feature mapping, task type and work.
- * Its chain keeps the saved actions that are legal now and hold the prompt.
+ * Its chain keeps the saved actions that are legal, numerically valid and hold the prompt.
  * Returns undefined when one check fails or no saved action remains.
  */
 export function restoreUnifiedDecision(input: UnifiedTurnInput, saved: RoutingDecision): {
@@ -239,6 +242,10 @@ export function restoreUnifiedDecision(input: UnifiedTurnInput, saved: RoutingDe
   const { selection, candidates } = legalActions(input);
   const authorization = authorize(input, selection);
   const allowed = new Set(authorization.allowedActors);
+  const { invalid } = partitionDecisionProblem(selection.filter(({ action }) => allowed.has(action.key))
+    .map(({ model, action }) => toSelectable(candidateFeatures(input.state, model, action, input.rows))));
+  // Recompute the ranking and its diagnostics if a saved action fails numerical validation.
+  if (invalid.some(({ key }) => saved.fallbackChain.includes(key))) return undefined;
   const chain = saved.fallbackChain.filter((key) => {
     const candidate = candidates.get(key);
     return allowed.has(key) && candidate !== undefined && holdsPrompt(candidate.contextWindow, input.state.estimatedContextTokens);
@@ -298,6 +305,7 @@ export async function resolveUnifiedDecision(
     ...(result.solver === 'exact' ? { regretScope: 'pool' as const } : {}),
     ranked: result.ranking.length,
     insufficientEvidence: result.insufficientEvidence.length,
+    ...(result.invalidActions ? { invalidActions: [...result.invalidActions] } : {}),
     holdingPrompt: chain.length,
     ...(preparationTarget ? { preparationTarget } : {}),
     ...(input.state.difficulty
@@ -313,7 +321,9 @@ export async function resolveUnifiedDecision(
     dimension: input.state.phase,
     cause: input.cause,
     chosen,
-    reason: chosen ? reasonText(result, chosen, preparationTarget) : 'No routable models: no legal action remains for this request.',
+    reason: chosen ? reasonText(result, chosen, preparationTarget)
+      : result.solverFallbackReason === 'invalid-features' ? 'No routable models: no action has valid numerical features.'
+        : 'No routable models: no legal action remains for this request.',
     fallbackChain: chain,
     unified,
     ...(input.incumbentKey ? { switched: input.incumbentKey !== chosen } : {}),

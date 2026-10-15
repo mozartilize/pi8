@@ -1099,8 +1099,13 @@ async function scoreRouterTurn(args: {
     (ranking, chosen, candidates) => session.preparation.plan(ranking, chosen, candidates, estContextTokens)?.key);
   if (outcome.kind === 'cancelled') return { kind: 'terminal', reason: 'aborted', message: 'Routing was cancelled.' };
   if (outcome.kind === 'stale') return SESSION_CHANGED;
-  // Every legal action is excluded: name the exclusions, as for an empty pool.
-  if (outcome.decision.fallbackChain.length === 0) return noRoutableCandidates(session);
+  if (outcome.decision.fallbackChain.length === 0) {
+    if (outcome.decision.unified?.solverFallbackReason === 'invalid-features') {
+      debugLog('decision.rejected', { invalidActions: outcome.decision.unified.invalidActions });
+      return { kind: 'terminal', reason: 'error', message: outcome.decision.reason };
+    }
+    return noRoutableCandidates(session);
+  }
   const live = session.getWorkPhaseState();
   if (!resolved.stillCurrent() || live?.intentKey !== turnInput.key || (live.workItemId ?? turnInput.key) !== workItemId) return SESSION_CHANGED;
   session.commitWorkPhaseState({ ...live, boundaryAuthorization: outcome.authorization });

@@ -454,8 +454,10 @@ export interface UnifiedDecisionMeta {
   featureSchemaDigest: string;
   /** Present on exact decisions whose regret values compare every ranked action. */
   regretScope?: 'pool';
-  /** Legal actions in the ranking. */
+  /** Numerically valid legal actions in the ranking. */
   ranked: number;
+  /** Diagnostic: malformed or duplicate actions excluded from ranking and dispatch fallback. */
+  invalidActions?: string[];
   /** Diagnostic: ranked actions without evidence for a required quality axis. */
   insufficientEvidence: number;
   /** Ranked actions whose window holds the current prompt. */

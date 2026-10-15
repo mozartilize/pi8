@@ -55,8 +55,8 @@ export interface InvalidAction {
 /**
  * Validate and copy the actions into one immutable numerical problem. An
  * action with a malformed vector, and every action whose key occurs more than
- * once, goes to `invalid` instead of the problem: the selector keeps it in the
- * fallback chain but does not compare its numbers.
+ * once, goes to `invalid` instead of the problem. These diagnostics do not
+ * authorize dispatch or participate in the fallback ranking.
  */
 export function partitionDecisionProblem(actions: readonly SelectableAction[]): { problem: DecisionProblem; invalid: InvalidAction[] } {
   const counts = new Map<string, number>();

@@ -11,7 +11,7 @@ import { benchStoreJson } from '../test-support/provider-harness.js';
 import { WorkerLpAdapter, type LPAdapter } from '../routing/optimization/lp.js';
 import { DomainCache, PRODUCTION_SOLVER_BUDGET } from '../routing/optimization/select.js';
 import { buildCandidate, type RegistryModelInfo } from '../routing/score/scorer.js';
-import { closeSelectorPorts, prepareSelectorDomain, resolveUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
+import { closeSelectorPorts, prepareSelectorDomain, resolveUnifiedDecision, restoreUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
 
 const lp = new WorkerLpAdapter();
 afterAll(() => lp.close());
@@ -71,6 +71,49 @@ describe('production selection adapter', () => {
     expect(result.decision.unified).toMatchObject({ ranked: 3, holdingPrompt: 1, insufficientEvidence: 2 });
     expect(result.decision.chosen).toBe('test/one:high');
     expect(result.candidates.find((c) => c.effort === 'low')?.effort).toBe('low');
+  });
+
+  it('keeps invalid numerical actions out of the provider fallback chain', async () => {
+    const turn = input([model('valid'), model('invalid')]);
+    turn.state.promptTokenScales = new Map([['test/invalid', NaN]]);
+    turn.incumbentKey = 'test/invalid:high';
+    const preparation = vi.fn<Parameters<typeof resolveUnifiedDecision>[1]>(noPreparation);
+    const result = await resolveUnifiedDecision(turn, preparation);
+    if (result.kind !== 'decision') throw new Error('Expected a decision');
+    expect(result.selection.invalidActions).toEqual(['test/invalid:high', 'test/invalid:low', 'test/invalid:off']);
+    expect(result.decision.unified?.invalidActions).toEqual(result.selection.invalidActions);
+    expect(result.decision.unified?.top?.every((action) => action.rank > 0 && action.key.startsWith('test/valid:'))).toBe(true);
+    expect(result.selection.insufficientEvidence.every((key) => key.startsWith('test/valid:'))).toBe(true);
+    expect(result.decision.fallbackChain).toHaveLength(1);
+    expect(result.decision.fallbackChain[0]).toMatch(/^test\/valid:/);
+    expect(preparation.mock.calls[0]?.[0]).toEqual(result.selection.ranking);
+    expect(result.selection.ranking.every((key) => key.startsWith('test/valid:'))).toBe(true);
+  });
+
+  it('returns an empty dispatch chain and skips preparation when every numerical action is invalid', async () => {
+    const turn = input();
+    turn.state.promptTokenScales = new Map([['test/one', NaN]]);
+    const preparation = vi.fn(noPreparation);
+    const result = await resolveUnifiedDecision(turn, preparation);
+    if (result.kind !== 'decision') throw new Error('Expected a decision');
+    expect(result.decision.chosen).toBe('');
+    expect(result.decision.fallbackChain).toEqual([]);
+    expect(result.decision.unified).toMatchObject({ solver: 'no-feasible-action', solverFallbackReason: 'invalid-features', ranked: 0 });
+    expect(preparation).not.toHaveBeenCalled();
+  });
+
+  it('does not restore invalid numerical actions from a saved fallback chain', async () => {
+    const turn = input([model('one'), model('two')]);
+    const result = await resolveUnifiedDecision(turn, noPreparation);
+    if (result.kind !== 'decision') throw new Error('Expected a decision');
+    const saved = { ...result.decision, intentKey: turn.authorizationScope.boundaryId };
+    turn.state.promptTokenScales = new Map([['test/one', NaN]]);
+    expect(restoreUnifiedDecision(turn, saved)).toBeUndefined();
+    const fresh = await resolveUnifiedDecision(turn, noPreparation);
+    if (fresh.kind !== 'decision') throw new Error('Expected a decision');
+    expect(fresh.decision.fallbackChain).toEqual(saved.fallbackChain.filter((key) => key.startsWith('test/two:')));
+    turn.state.promptTokenScales = new Map([['test/one', NaN], ['test/two', NaN]]);
+    expect(restoreUnifiedDecision(turn, saved)).toBeUndefined();
   });
 
   it('records the numbers that ordered the best actions, including the chosen action and the incumbent', async () => {

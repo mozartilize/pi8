@@ -1,7 +1,7 @@
 /**
  * The single automatic ranking API of the unified router.
- * Every authorized action enters one comparison pool. Exact minimax regret,
- * or its labeled central fallback, ranks that whole pool. Capability
+ * Every authorized action with valid numerical features enters one comparison
+ * pool. Exact minimax regret, or its labeled central fallback, ranks that pool. Capability
  * shortfall and evidence gaps are diagnostics: they never filter, group,
  * rank or break ties. Capability and uncertainty enter only as features and
  * their intervals.
@@ -65,19 +65,18 @@ export interface UnifiedDecision {
   totalSlack?: number;
   /** Absent only for `no-feasible-action`. */
   chosen?: string;
-  /** Every legal action, best first. Operational fallback keeps all of them. */
+  /** Numerically valid legal actions, best first. Only these may enter dispatch fallback. */
   ranking: string[];
   /**
    * Diagnostic: actions without evidence for a required quality axis. They
    * compete in the same pool; their missing quality is an uncertainty interval.
    */
   insufficientEvidence: string[];
-  /** Diagnostic: true when no action had evidence for every required axis. */
+  /** Diagnostic: true when every rankable action lacks evidence for a required axis. */
   allInsufficient: boolean;
   /**
    * Diagnostic: actions whose feature vector is malformed or whose key is
-   * duplicated. They stay at the end of the ranking, in key order, so they
-   * remain in the fallback chain; the solver does not compare them.
+   * duplicated. They are excluded from ranking and dispatch fallback.
    */
   invalidActions?: string[];
   /** Exact max regret of every action against the whole pool. Absent for a central fallback. */
@@ -187,7 +186,8 @@ export class DomainCache implements DomainLookup {
   }
 }
 
-const toSelectable = (features: ActionFeatures): SelectableAction => ({
+/** Selection and saved-route validation must check the same numerical inputs. */
+export const toSelectable = (features: ActionFeatures): SelectableAction => ({
   features: features.features,
   ...(features.spend.priceKnown ? { centralUsd: features.spend.centralUSD } : {}),
 });
@@ -222,10 +222,10 @@ export async function selectByRegret(
     .map((candidate) => candidateFeatures(state, candidate.model, candidate.action, rows));
   const { problem, invalid } = partitionDecisionProblem(actions.map(toSelectable));
   const invalidActions = invalid.map((entry) => entry.key);
-  const withInvalid = (ranking: readonly string[]): string[] => [...ranking, ...invalidActions];
-  const insufficientEvidence = actions.filter((features) => features.evidenceGaps.length > 0)
+  const rankable = new Set(problem.actions.map((action) => action.id));
+  const insufficientEvidence = actions.filter((features) => rankable.has(features.features.key) && features.evidenceGaps.length > 0)
     .map((features) => features.features.key).sort();
-  const allInsufficient = actions.length > 0 && insufficientEvidence.length === actions.length;
+  const allInsufficient = rankable.size > 0 && insufficientEvidence.length === rankable.size;
   const base = {
     kind: 'decision' as const,
     profileDigest: preferences.digest,
@@ -251,10 +251,9 @@ export async function selectByRegret(
     compiled?: DomainArtifact,
   ): UnifiedDecision => {
     const { ranking } = centralChoice(problem, theta);
-    const full = withInvalid(ranking);
     return {
       ...base, solver: 'fallback-central', solverFallbackReason: reason, domainStatus, constraintsEnforced,
-      chosen: full[0], ranking: full, theta,
+      chosen: ranking[0], ranking, theta,
       ...(compiled ? { compiledDomainIdentity: compiled.identity, ...domainBinding(compiled) } : {}),
     };
   };
@@ -290,8 +289,10 @@ export async function selectByRegret(
     });
   }
   if (problem.actions.length === 0) {
-    // Every action is invalid: no numbers to compare. Keep all of them in key order.
-    return finish(central('invalid-features', notReady?.status ?? 'ready', THETA0, false));
+    return finish({
+      ...base, solver: 'no-feasible-action', solverFallbackReason: 'invalid-features',
+      domainStatus: notReady?.status ?? 'ready', constraintsEnforced: false, ranking: [],
+    });
   }
   if (artifact) {
     try {
@@ -317,7 +318,7 @@ export async function selectByRegret(
     if (controls.signal?.aborted) return { kind: 'cancelled' };
     return finish({
       ...base, solver: 'exact', domainStatus: 'ready', constraintsEnforced: enforced,
-      chosen: exact.chosen, ranking: withInvalid(exact.ranking), maxRegret: exact.maxRegret,
+      chosen: exact.chosen, ranking: [...exact.ranking], maxRegret: exact.maxRegret,
       compiledDomainIdentity: artifact.identity, ...domainBinding(artifact),
     });
   } catch (error) {

@@ -653,7 +653,7 @@ describe('spike pair cap discontinuity (synthetic, CPU only)', () => {
   }, 30_000);
 });
 
-describe('invalid actions and invalid domains do not stop selection', () => {
+describe('invalid actions are rejected and invalid domains use fallback', () => {
   const run = (pool: readonly SelectionCandidate[], ports: SelectorPorts, profile: UserRoutingPreferencesV1 = OPERATOR) => {
     const preferences = snapshot(profile);
     return selectByRegret(solverState, pool, rows, preferences, ports, {
@@ -661,21 +661,48 @@ describe('invalid actions and invalid domains do not stop selection', () => {
     }) as Promise<UnifiedDecision>;
   };
 
-  it('a duplicated action stays at the end of the ranking; the other actions are solved exactly', async () => {
+  it('rejects duplicated actions and solves the remaining actions exactly', async () => {
     const result = await run([...candidates, candidates[0]!], readyPorts());
     expect(result.solver).toBe('exact');
     expect(result.invalidActions).toEqual(['c/cheap:high']);
-    expect(result.ranking).toEqual(['s/strong:high', 'c/cheap:high']);
+    expect(result.ranking).toEqual(['s/strong:high']);
     expect([...result.maxRegret!.keys()]).toEqual(['s/strong:high']);
   });
 
-  it('when every action is invalid, all of them stay in the ranking under a labeled fallback', async () => {
-    const result = await run([...candidates, ...candidates], readyPorts());
-    expect(result.solver).toBe('fallback-central');
+  it.each(['exact', 'domain-not-ready', 'solver-failure', 'pair-cap'] as const)(
+    'keeps malformed numerical actions out of the dispatch ranking (%s)', async (path) => {
+      const invalid = pick([model('bad', 'invalid', { input: 1, output: 2 })])[0]!;
+      const state = { ...solverState, promptTokenScales: new Map([['bad/invalid', NaN]]) };
+      const preferences = snapshot(OPERATOR);
+      const ports = path === 'domain-not-ready' ? portsWith(() => undefined)
+        : readyPorts(path === 'solver-failure' ? BROKEN_LP : lp);
+      const result = await selectByRegret(state, [...candidates, invalid], rows, preferences, ports, {
+        expectedProfileDigest: preferences.digest, decisionDeadlineMs: 5_000,
+        ...(path === 'pair-cap' ? { pairCap: 0 } : {}),
+      });
+      if (result.kind !== 'decision') throw new Error('expected a decision');
+      expect(result.solver).toBe(path === 'exact' ? 'exact' : 'fallback-central');
+      expect(result.invalidActions).toEqual([invalid.action.key]);
+      expect([...result.ranking].sort()).toEqual(candidates.map((candidate) => candidate.action.key).sort());
+      expect(result.ranking).toContain(result.chosen);
+      if (path === 'exact') expect([...result.maxRegret!.keys()].sort()).toEqual([...result.ranking].sort());
+    },
+  );
+
+  it.each(['duplicates', 'non-finite'] as const)('returns no feasible action when all inputs are invalid (%s)', async (kind) => {
+    const preferences = snapshot(OPERATOR);
+    const state = kind === 'duplicates' ? solverState
+      : { ...solverState, promptTokenScales: new Map(candidates.map((candidate) => [candidate.action.registryId, NaN])) };
+    const result = await selectByRegret(state, kind === 'duplicates' ? [...candidates, ...candidates] : candidates,
+      rows, preferences, readyPorts(), { expectedProfileDigest: preferences.digest, decisionDeadlineMs: 5_000 });
+    if (result.kind !== 'decision') throw new Error('expected a decision');
+    expect(result.solver).toBe('no-feasible-action');
     expect(result.solverFallbackReason).toBe('invalid-features');
     expect(result.constraintsEnforced).toBe(false);
-    expect(result.ranking).toEqual(['c/cheap:high', 's/strong:high']);
-    expect(result.chosen).toBe('c/cheap:high');
+    expect(result.invalidActions).toEqual(['c/cheap:high', 's/strong:high']);
+    expect(result.ranking).toEqual([]);
+    expect(result.chosen).toBeUndefined();
+    expect(result.theta).toBeUndefined();
   });
 
   it('a stored domain outside the base bounds is not applied, on the exact and the pair-cap paths', async () => {
