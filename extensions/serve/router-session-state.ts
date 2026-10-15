@@ -12,6 +12,7 @@
  */
 import { loadModelHistory, type ModelHistory } from '../bench/model-history.js';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import type { CacheRetention } from '@earendil-works/pi-ai';
 import type {
   Candidate,
   DecisionCause,
@@ -27,6 +28,7 @@ import { ContextPreparationState } from './context-preparation.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
 import type { PendingTrajectoryEscalation, StruggleDecision } from '../routing/struggle/types.js';
 import type { ToolCycleInput } from '../routing/struggle/fingerprints.js';
+import type { WarmPrefixEvidence } from '../routing/features/state.js';
 import { applyEvent, emptyLedger, parseContextEvent, type TopicLedger } from '../routing/context/ledger.js';
 import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
 import { ReadCoverage, type LineRange } from '../routing/context/grounding.js';
@@ -325,10 +327,12 @@ export class RouterSession {
   private previousServed: ServedInfo | undefined;
   /** Estimated context tokens of the request being routed. */
   private requestTokens = 0;
+  /** When the request being routed was observed, before any dispatch, and its cache retention tier. */
+  private request: { observedAtMs: number; retention: CacheRetention } = { observedAtMs: 0, retention: 'short' };
   /** Identity of the prompt head (system prompt, tool list) the warm caches were written with. */
   private prefixIdentity: string | undefined;
-  /** Per served candidate key: when it last served and the context tokens it sent. */
-  private warmCaches = new Map<string, { at: number; tokens: number }>();
+  /** Per served candidate key: when its last served request was observed, the context tokens it sent, and its retention tier. */
+  private warmCaches = new Map<string, { at: number; tokens: number; retention: CacheRetention }>();
   private semiHold: { intentKey: string; model: string } | undefined;
   private notifiedModel: string | undefined;
   /**
@@ -420,29 +424,44 @@ export class RouterSession {
 
   setLastServed(s: ServedInfo | undefined): void {
     this.served = s;
-    if (s) this.warmCaches.set(servedKey(s), { at: Date.now(), tokens: this.requestTokens });
+    // The cache entry dates from the request, not from the end of its stream:
+    // dating it at the end would extend its lifetime by the generation time.
+    // A request at retention `none` writes no cache and leaves the earlier entry.
+    if (s && this.request.retention !== 'none') {
+      this.warmCaches.set(servedKey(s), { at: this.request.observedAtMs, tokens: this.requestTokens, retention: this.request.retention });
+    }
   }
 
   /**
-   * Record the request being routed: its serve warms `tokens` of cache. A
-   * different prompt head (skills, tools, or system prompt changed) shares no
-   * prefix with any earlier request, so every warm cache is forgotten.
+   * Record the request being routed: its serve warms `tokens` of cache at
+   * `retention`. A different prompt head (skills, tools, or system prompt
+   * changed) shares no prefix with any earlier request, so every warm cache
+   * is forgotten.
    */
-  noteRequest(tokens: number, prefixIdentity: string): void {
+  noteRequest(tokens: number, prefixIdentity: string, retention: CacheRetention): void {
     if (this.prefixIdentity !== prefixIdentity) this.warmCaches.clear();
     this.prefixIdentity = prefixIdentity;
     this.requestTokens = Math.max(0, tokens);
+    this.request = { observedAtMs: Date.now(), retention };
+  }
+
+  /** When the request being routed was observed, and its cache retention tier. */
+  getRequestCache(): { observedAtMs: number; retention: CacheRetention } {
+    return this.request;
   }
 
   /**
-   * Tokens each served candidate key's own prompt cache still holds: keys that
-   * served within `ttlMs`, with the context they sent. A cached request larger
-   * than the current one cannot be its prefix, so it holds nothing.
+   * The recorded prefix of each served candidate key: the context it sent and
+   * when it served. A cached request larger than the current one cannot be its
+   * prefix, so it is left out. The cache lifetime differs by model, so the
+   * feature mapping applies it per candidate.
    */
-  warmPrefixTokens(now: number, currentTokens: number, ttlMs: number): Map<string, number> {
-    const warm = new Map<string, number>();
+  warmPrefixEvidence(currentTokens: number): Map<string, WarmPrefixEvidence> {
+    const warm = new Map<string, WarmPrefixEvidence>();
     for (const [key, entry] of this.warmCaches) {
-      if (now - entry.at < ttlMs && entry.tokens <= currentTokens) warm.set(key, entry.tokens);
+      if (entry.tokens <= currentTokens) {
+        warm.set(key, { tokens: entry.tokens, observedAtMs: entry.at, hitProbability: 1, retention: entry.retention });
+      }
     }
     return warm;
   }
@@ -740,6 +759,7 @@ export class RouterSession {
     this.chosenRegistryId = undefined;
     this.previousServed = undefined;
     this.requestTokens = 0;
+    this.request = { observedAtMs: 0, retention: 'short' };
     this.prefixIdentity = undefined;
     this.warmCaches.clear();
     this.semiHold = undefined;

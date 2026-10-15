@@ -3,6 +3,8 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { resolveStoragePath } from './store.js';
+import type { CacheRetention } from '@earendil-works/pi-ai';
+import type { WarmPrefixEvidence } from '../routing/features/state.js';
 
 const REMINDER_RULE_VERSION = 1;
 const DAY = 86_400_000;
@@ -22,9 +24,22 @@ export interface ModelEvent {
   /** The routed task type, so fitted weights can control for workload mix. */
   dimension?: string;
   reminder?: string;
-  /** Only successful serves carry prompt-head hashes and counts. */
+  /** Only successful serves that wrote a cache carry prompt-head hashes and counts. */
   prefix?: string;
   prefixTokens?: number;
+  /** When the request that wrote the prefix was observed, before dispatch. */
+  prefixAt?: number;
+  /** Retention tier of the request that wrote the prefix. */
+  cacheRetention?: CacheRetention;
+}
+/** A prefix that another session wrote; it is credited only at a known retention tier. */
+interface RecentPrefix {
+  at: number;
+  prefix: string;
+  tokens: number;
+  retention: Exclude<CacheRetention, 'none'>;
+  session?: string;
+  entry: string;
 }
 interface StoredEvent extends ModelEvent { at: number; version: number }
 /** Counts for one reminder kind (`context`, `completion`, `contract`). */
@@ -43,7 +58,7 @@ export interface ModelHistory {
   collectedSince?: number;
   stats: ReadonlyMap<string, ModelStats>;
   /** Provider and effort remain part of cache identity, unlike compliance identity. */
-  recentPrefixes: ReadonlyMap<string, { at: number; prefix: string; tokens: number; session?: string; entry: string }>;
+  recentPrefixes: ReadonlyMap<string, RecentPrefix>;
 }
 
 export function modelEntryId(session: string, entry: string): string {
@@ -74,7 +89,7 @@ export function appendModelEvent(event: ModelEvent, storageBase?: string): void 
 /** Old rule versions and unfinished reminder episodes do not become penalties. */
 export function loadModelHistory(storageBase?: string, now = Date.now()): ModelHistory {
   const stats = new Map<string, ModelStats>();
-  const recentPrefixes = new Map<string, { at: number; prefix: string; tokens: number; session?: string; entry: string }>();
+  const recentPrefixes = new Map<string, RecentPrefix>();
   const events: StoredEvent[] = [];
   try {
     const text = readFileSync(join(resolveStoragePath(storageBase), 'model-events.jsonl'), 'utf8');
@@ -113,9 +128,15 @@ export function loadModelHistory(storageBase?: string, now = Date.now()): ModelH
     };
     if (event.kind === 'served') {
       if (!seen.has(entryKey)) { stat.entries += weight; seen.add(entryKey); }
+      // A prefix without its request time and retention tier has no known lifetime.
       if (typeof event.prefix === 'string' && /^[a-f0-9]{64}$/.test(event.prefix)
-        && Number.isFinite(event.prefixTokens) && event.prefixTokens! > 0) {
-        recentPrefixes.set(event.model, { at: event.at, prefix: event.prefix, tokens: event.prefixTokens!, entry: event.entry, session: event.session });
+        && Number.isFinite(event.prefixTokens) && event.prefixTokens! > 0
+        && Number.isFinite(event.prefixAt) && event.prefixAt! <= event.at
+        && (event.cacheRetention === 'short' || event.cacheRetention === 'long')) {
+        recentPrefixes.set(event.model, {
+          at: event.prefixAt!, prefix: event.prefix, tokens: event.prefixTokens!, retention: event.cacheRetention,
+          entry: event.entry, session: event.session,
+        });
       }
     } else if (!kind) {
       continue;
@@ -165,8 +186,13 @@ export function compliancePenalties(history: ModelHistory, weights: ReputationWe
 }
 
 /** Cross-session cache credit requires an identical prompt head, never just model popularity. */
-export function sharedPrefixCredits(history: ModelHistory, prefix: string, tokens: number, ownSession: string, now = Date.now()): Map<string, number> {
-  const credits = new Map<string, number>();
+/**
+ * Prompt-head prefixes that other sessions recorded, with their hit
+ * probability. The candidate's cache lifetime is applied by the feature
+ * mapping; the one-hour limit here only bounds the measured probabilities.
+ */
+export function sharedPrefixCredits(history: ModelHistory, prefix: string, tokens: number, ownSession: string, now = Date.now()): Map<string, WarmPrefixEvidence> {
+  const credits = new Map<string, WarmPrefixEvidence>();
   if (!modelHistoryReady(history, now)) return credits;
   for (const [key, last] of history.recentPrefixes) {
     const gap = now - last.at;
@@ -174,7 +200,7 @@ export function sharedPrefixCredits(history: ModelHistory, prefix: string, token
       || last.session === ownSession || gap < 0 || gap > 3_600_000) continue;
     // Conservative incremental hit chances above the observed background rate.
     const probability = gap <= 300_000 ? 0.40 : 0.30;
-    credits.set(key, Math.min(Math.max(0, tokens), last.tokens) * probability);
+    credits.set(key, { tokens: Math.min(Math.max(0, tokens), last.tokens), observedAtMs: last.at, hitProbability: probability, retention: last.retention });
   }
   return credits;
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -298,39 +298,74 @@ describe('trajectory evidence ownership', () => {
 });
 
 describe('warm prompt caches', () => {
-  it('reports each served key with the context it sent while its cache lives', () => {
+  it('reports each served key with the context it sent and when it served', () => {
     const session = new RouterSession();
-    session.noteRequest(40_000, 'head-a');
+    const before = Date.now();
+    session.noteRequest(40_000, 'head-a', 'short');
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
-    session.noteRequest(55_000, 'head-a');
+    session.noteRequest(55_000, 'head-a', 'short');
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'xhigh', viaFallback: false, accumulatedCost: 0 });
-    const now = Date.now();
-    expect(session.warmPrefixTokens(now, 60_000, 300_000))
-      .toEqual(new Map([['codex/luna:high', 40_000], ['codex/luna:xhigh', 55_000]]));
-    // Expired caches and requests larger than the current context hold nothing.
-    expect(session.warmPrefixTokens(now + 300_000, 60_000, 300_000)).toEqual(new Map());
-    expect(session.warmPrefixTokens(now, 50_000, 300_000)).toEqual(new Map([['codex/luna:high', 40_000]]));
+    const after = Date.now();
+    const warm = session.warmPrefixEvidence(60_000);
+    const tokens = new Map([...warm].map(([key, e]) => [key, e.tokens]));
+    expect(tokens).toEqual(new Map([['codex/luna:high', 40_000], ['codex/luna:xhigh', 55_000]]));
+    for (const e of warm.values()) {
+      expect(e.hitProbability).toBe(1);
+      expect(e.observedAtMs).toBeGreaterThanOrEqual(before);
+      expect(e.observedAtMs).toBeLessThanOrEqual(after);
+    }
+    // A request larger than the current context cannot be its prefix.
+    expect([...session.warmPrefixEvidence(50_000).keys()]).toEqual(['codex/luna:high']);
+  });
+
+  it('dates each entry from its request, not from the end of its stream, and keeps its retention tier', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const session = new RouterSession();
+      session.noteRequest(40_000, 'head-a', 'long');
+      // Four minutes of streaming do not extend the cache lifetime.
+      vi.setSystemTime(1_240_000);
+      session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
+      expect(session.warmPrefixEvidence(60_000).get('codex/luna:high'))
+        .toEqual({ tokens: 40_000, observedAtMs: 1_000_000, hitProbability: 1, retention: 'long' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a request at retention none writes no entry and keeps the earlier one', () => {
+    const session = new RouterSession();
+    const served = { registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 };
+    session.noteRequest(40_000, 'head-a', 'short');
+    session.setLastServed(served);
+    const earlier = session.warmPrefixEvidence(60_000).get('codex/luna:high');
+    expect(earlier?.retention).toBe('short');
+    session.noteRequest(50_000, 'head-a', 'none');
+    session.setLastServed(served);
+    expect(session.warmPrefixEvidence(60_000).get('codex/luna:high')).toEqual(earlier);
+    expect(session.getRequestCache().retention).toBe('none');
   });
 
   it('forgets every cache when the prompt head changes', () => {
     const session = new RouterSession();
-    session.noteRequest(40_000, 'head-a');
+    session.noteRequest(40_000, 'head-a', 'short');
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
-    session.noteRequest(45_000, 'head-a');
-    expect(session.warmPrefixTokens(Date.now(), 45_000, 300_000).size).toBe(1);
-    session.noteRequest(45_000, 'head-b');
-    expect(session.warmPrefixTokens(Date.now(), 45_000, 300_000)).toEqual(new Map());
+    session.noteRequest(45_000, 'head-a', 'short');
+    expect(session.warmPrefixEvidence(45_000).size).toBe(1);
+    session.noteRequest(45_000, 'head-b', 'short');
+    expect(session.warmPrefixEvidence(45_000)).toEqual(new Map());
   });
 
   it('forgets every cache when the history is rewritten or the session resets', () => {
     const session = new RouterSession();
-    session.noteRequest(40_000, 'head-a');
+    session.noteRequest(40_000, 'head-a', 'short');
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
     session.clearWarmCaches();
-    expect(session.warmPrefixTokens(Date.now(), 60_000, 300_000)).toEqual(new Map());
+    expect(session.warmPrefixEvidence(60_000)).toEqual(new Map());
     session.setLastServed({ registryId: 'codex/luna', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
     session.reset();
-    expect(session.warmPrefixTokens(Date.now(), 60_000, 300_000)).toEqual(new Map());
+    expect(session.warmPrefixEvidence(60_000)).toEqual(new Map());
   });
 });
 

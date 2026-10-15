@@ -23,7 +23,9 @@ import {
   type Context,
   type SimpleStreamOptions,
   type Message,
+  type CacheRetention,
 } from '@earendil-works/pi-ai';
+import { getProviderEnvValue } from '@earendil-works/pi-ai/utils/provider-env';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
 
@@ -76,7 +78,7 @@ import { runDelegationLoop, type DelegationOptions } from './delegation.js';
 import { readPreferences, resolveUnifiedDecision, restoreUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
 import { FEATURE_SCHEMA_DIGEST } from '../routing/features/schema.js';
 import { createUnifiedDispatch, type RecoveryHost } from './unified-dispatch.js';
-import type { DecisionStateV1, ServedIdentity } from '../routing/features/state.js';
+import type { DecisionStateV1, ServedIdentity, WarmPrefixEvidence } from '../routing/features/state.js';
 import { phaseDifficulty } from '../routing/features/difficulty.js';
 import { enumerateEffectiveActions, effortRank, overrideAction } from '../routing/features/actions.js';
 import { actorAllowedForBoundary, createBoundaryAuthorization, settleBoundary as settleAuthorization, type BoundaryAuthorizationV1 } from '../routing/policy/boundary-authorization.js';
@@ -211,12 +213,16 @@ function textFromBlock(block: unknown): string {
 // scale so context-pressure detection, the long-context guard, and the
 // cache-retention bonus don't treat an image-heavy session as near-empty.
 const ESTIMATED_IMAGE_CHARS = 4800;
+
 /**
- * How long a served candidate's prompt cache counts as warm: Anthropic's
- * default cache lifetime, and the short end of OpenAI's in-memory retention.
- * The shorter bound never credits a cache that has already expired.
+ * Retention tier of the delegated request: the request option, else the
+ * legacy `PI_CACHE_RETENTION=long` opt-in, else `short`. This is the rule Pi's
+ * cache warmer uses for a request's cache lifetime; Pi does not export it.
  */
-const PROMPT_CACHE_TTL_MS = 5 * 60_000;
+function requestCacheRetention(options: SimpleStreamOptions | undefined): CacheRetention {
+  return options?.cacheRetention
+    ?? (getProviderEnvValue('PI_CACHE_RETENTION', options?.env) === 'long' ? 'long' : 'short');
+}
 
 function countImageBlocks(messages: readonly Message[] | undefined): number {
   let count = 0;
@@ -708,8 +714,9 @@ async function prepareRouterTurn(args: {
   session: RouterSession;
   runtime: RuntimeBindings;
   agentLoopRequest: boolean;
+  cacheRetention: CacheRetention;
 }): Promise<{ kind: 'ready'; prepared: PreparedTurn } | RouterTurnOutcome> {
-  const { context, session, runtime, agentLoopRequest } = args;
+  const { context, session, runtime, agentLoopRequest, cacheRetention } = args;
   const waitTimer = startTimer();
   const registry = await waitForRegistry(() => runtime.getCurrentModelRegistry());
   const extensionContext = runtime.getLastExtensionContext();
@@ -721,7 +728,7 @@ async function prepareRouterTurn(args: {
 
   const config = loadConfig();
   const measured = measureTurnInput(context, config);
-  session.noteRequest(measured.estContextTokens, promptHeadIdentity(measured.head));
+  session.noteRequest(measured.estContextTokens, promptHeadIdentity(measured.head), cacheRetention);
   const intent = resolveBaseIntent(measured.turnInput, session);
 
   session.bindTrajectoryIntent(measured.turnInput.key);
@@ -975,11 +982,15 @@ async function scoreRouterTurn(args: {
   const userReasoningOverride =
     requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
   const execution = contractActive && contract.release;
-  const warm = session.warmPrefixTokens(Date.now(), estContextTokens, PROMPT_CACHE_TTL_MS);
+  const warmPrefixes = new Map<string, WarmPrefixEvidence[]>();
+  const addWarmPrefix = (key: string, evidence: WarmPrefixEvidence) => {
+    warmPrefixes.set(key, [...(warmPrefixes.get(key) ?? []), evidence]);
+  };
+  for (const [key, evidence] of session.warmPrefixEvidence(estContextTokens)) addWarmPrefix(key, evidence);
   const history = config.reputation === false ? undefined : session.getModelHistory(turnInput.key);
   if (history) {
-    for (const [key, tokens] of sharedPrefixCredits(history, prepared.cacheHead.identity, prepared.cacheHead.tokens, modelEventSession())) {
-      warm.set(key, Math.max(warm.get(key) ?? 0, tokens));
+    for (const [key, evidence] of sharedPrefixCredits(history, prepared.cacheHead.identity, prepared.cacheHead.tokens, modelEventSession())) {
+      addWarmPrefix(key, evidence);
     }
   }
   const identity = (key: string): ServedIdentity => {
@@ -1016,12 +1027,10 @@ async function scoreRouterTurn(args: {
         ? 'severe-reasoning-loop' as const : 'attributed-rework' as const,
     }] : [],
     cache: {
-      observedAtMs: Date.now(),
       promptIdentity: prepared.cacheHead.identity,
       ...(incumbentRegistryId ? { incumbentKey: incumbentRegistryId } : {}),
-      warmPrefixTokens: warm,
-      ttlMs: PROMPT_CACHE_TTL_MS,
-      source: history ? 'model-history' : warm.size > 0 ? 'session' : 'none',
+      warmPrefixes,
+      retention: session.getRequestCache().retention,
     },
     promptIdentity: prepared.cacheHead.identity,
     nowMs: Date.now(),
@@ -1475,9 +1484,15 @@ async function delegateRouterTurn(args: {
     recordServedWork(session, session.getWorkPhaseState()?.workItemId);
     const actual = session.getLastServed();
     if (config.reputation !== false && actual) {
+      const request = session.getRequestCache();
       appendModelEvent({
         kind: 'served', model: servedKey(actual), entry: modelEventEntry(intentKey), session: modelEventSession(),
-        dimension: decision.dimension, prefix: prepared.cacheHead.identity, prefixTokens: prepared.cacheHead.tokens,
+        dimension: decision.dimension,
+        // A request at retention `none` writes no cache, so it records no prefix.
+        ...(request.retention === 'none' ? {} : {
+          prefix: prepared.cacheHead.identity, prefixTokens: prepared.cacheHead.tokens,
+          prefixAt: request.observedAtMs, cacheRetention: request.retention,
+        }),
       });
     }
   }
@@ -2042,7 +2057,9 @@ async function runRouterTurn(args: {
   }
 
   const agentLoopRequest = isAgentLoopRequest(options, pi, runtime.getLastExtensionContext());
-  const preparation = await prepareRouterTurn({ context, session, runtime, agentLoopRequest });
+  const preparation = await prepareRouterTurn({
+    context, session, runtime, agentLoopRequest, cacheRetention: requestCacheRetention(options),
+  });
   if (preparation.kind !== 'ready') return preparation;
   const { prepared } = preparation;
 

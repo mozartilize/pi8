@@ -144,6 +144,8 @@ Only the shared system prompt and tool prefix count. Conversation tokens do not.
 
 These values are observational estimates, not guaranteed cache hits. Selection frequency earns no credit.
 
+A record older than the candidate model's prompt cache lifetime, at the retention tier of the request that wrote it, gets no credit at any probability. A record without its request time or tier, and a model without a declared lifetime, get no credit.
+
 ## Protocol preference
 
 Protocol preference uses independent reminder and ignore rates, not execution-success bonuses.

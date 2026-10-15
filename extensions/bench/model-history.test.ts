@@ -125,16 +125,33 @@ describe('global model history', () => {
 
   it('credits only a recent identical prompt head from another session at the same provider and effort', () => withTempRouterDir(() => {
     collectedForTwoWeeks();
-    appendModelEvent({ kind: 'served', model: 'p/a:high', entry: modelEntryId('other', 'e'), session: 'other', prefix, prefixTokens: 2000 });
+    const written = { prefix, prefixTokens: 2000, prefixAt: now - 120_000, cacheRetention: 'long' as const };
+    appendModelEvent({ kind: 'served', model: 'p/a:high', entry: modelEntryId('other', 'e'), session: 'other', ...written });
     const history = loadModelHistory();
-    expect(sharedPrefixCredits(history, prefix, 1000, 'own', now).get('p/a:high')).toBe(400);
-    expect(sharedPrefixCredits(history, prefix, 1000, 'own', now + 600_000).get('p/a:high')).toBe(300);
+    // The record keeps its request time and retention tier, so the feature mapping can apply each candidate's cache lifetime.
+    expect(sharedPrefixCredits(history, prefix, 1000, 'own', now).get('p/a:high'))
+      .toEqual({ tokens: 1000, observedAtMs: now - 120_000, hitProbability: 0.40, retention: 'long' });
+    expect(sharedPrefixCredits(history, prefix, 1000, 'own', now + 600_000).get('p/a:high')?.hitProbability).toBe(0.30);
+    expect(sharedPrefixCredits(history, prefix, 5000, 'own', now).get('p/a:high')?.tokens).toBe(2000);
     expect(sharedPrefixCredits(history, prefix, 1000, 'own', now + 3_600_001).size).toBe(0);
     expect(sharedPrefixCredits(history, 'b'.repeat(64), 1000, 'own').size).toBe(0);
     expect(sharedPrefixCredits(history, prefix, 1000, 'other').size).toBe(0);
     expect(sharedPrefixCredits(history, prefix, 1000, 'own').has('q/a:high')).toBe(false);
-    appendModelEvent({ kind: 'served', model: 'p/no-owner:high', entry: modelEntryId('s', 'unowned'), prefix, prefixTokens: 2000 });
+    appendModelEvent({ kind: 'served', model: 'p/no-owner:high', entry: modelEntryId('s', 'unowned'), ...written });
     expect(sharedPrefixCredits(loadModelHistory(), prefix, 1000, 'own').has('p/no-owner:high')).toBe(false);
+  }));
+
+  it('credits no prefix without its request time and a retention tier that writes a cache', () => withTempRouterDir(() => {
+    collectedForTwoWeeks();
+    const served = (model: string, extra: object) => appendModelEvent({
+      kind: 'served', model, entry: modelEntryId('other', model), session: 'other', prefix, prefixTokens: 2000, ...extra,
+    } as Parameters<typeof appendModelEvent>[0]);
+    served('p/no-tier:high', { prefixAt: now - 1000 });
+    served('p/none:high', { prefixAt: now - 1000, cacheRetention: 'none' });
+    served('p/no-time:high', { cacheRetention: 'short' });
+    served('p/future:high', { prefixAt: now + 1000, cacheRetention: 'short' });
+    served('p/ok:high', { prefixAt: now - 1000, cacheRetention: 'short' });
+    expect([...sharedPrefixCredits(loadModelHistory(), prefix, 1000, 'own').keys()]).toEqual(['p/ok:high']);
   }));
 
   it('ignores incomplete writes without losing complete records', () => withTempRouterDir((dir) => {

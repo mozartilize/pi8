@@ -3,7 +3,7 @@
  * an observation or explicitly marks it unknown. A missing declaration is not
  * a declaration of zero.
  */
-import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
+import type { CacheRetention, ModelThinkingLevel } from '@earendil-works/pi-ai';
 
 import type { Dimension } from '../../types.js';
 
@@ -21,20 +21,42 @@ export interface FrictionEvent extends ServedIdentity {
   kind: FrictionKind;
 }
 
+/** One recorded prompt prefix that a provider may still hold in its cache. */
+export interface WarmPrefixEvidence {
+  /** Prompt tokens of the recorded request. */
+  tokens: number;
+  /** When the recorded request was observed. Its age is measured from this time. */
+  observedAtMs: number;
+  /**
+   * Chance that the provider still holds the prefix while it is inside its
+   * lifetime: 1 for a request of this session, lower for a request of another
+   * session. It never extends the lifetime.
+   */
+  hitProbability: number;
+  /**
+   * Retention tier of the request that wrote the prefix. The prefix lives for
+   * the model's lifetime at this tier, not at the tier of a later request.
+   */
+  retention: CacheRetention;
+}
+
 /**
  * Cache evidence of the current request. A warm-prefix entry is eligibility
- * to try reuse, not a guaranteed hit.
+ * to try reuse, not a guaranteed hit. Each candidate model declares its own
+ * cache lifetime, so the feature mapping applies the lifetime per action.
  */
 export interface CacheEvidenceV1 {
-  observedAtMs: number;
   /** Identity of the prompt head the warm entries were observed for. */
   promptIdentity: string;
   /** Action key of the incumbent, for shared-cache effort reuse. */
   incumbentKey?: string;
-  /** Warm prefix tokens by action key. */
-  warmPrefixTokens: ReadonlyMap<string, number>;
-  ttlMs: number;
-  source: 'session' | 'model-history' | 'none';
+  /** Recorded warm prefixes by action key. */
+  warmPrefixes: ReadonlyMap<string, readonly WarmPrefixEvidence[]>;
+  /**
+   * Retention tier of the delegated request. At `none` the request reads and
+   * writes no cache; the tier also sets the cache-write price.
+   */
+  retention: CacheRetention;
 }
 
 export type DecisionBoundary =

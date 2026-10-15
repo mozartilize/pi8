@@ -26,11 +26,6 @@ export interface ActionFeatures {
   capabilityShortfall: number;
 }
 
-/** pi-ai keeps the cached prefix across efforts only for per-message effort. */
-export const effortSharesCache = (model: RegistryModelInfo): boolean =>
-  model.api === 'anthropic-messages'
-  && (model.compat as { supportsMidConvoEffort?: unknown } | undefined)?.supportsMidConvoEffort === true;
-
 export function candidateFeatures(
   state: DecisionStateV1,
   model: RegistryModelInfo,
@@ -47,7 +42,7 @@ export function candidateFeatures(
     evidence.push(capability.evidence);
   }
   const demand = effortDemandScale(rows, action);
-  const spend = predictSpend(state, action, model.cost, effortSharesCache(model), demand);
+  const spend = predictSpend(state, action, model, demand);
   const cost = costFeature(spend, demand);
   intervals.set('costDesirability', cost.interval);
   evidence.push(cost.evidence);

@@ -21,7 +21,7 @@ import type {
 import { DEFAULT_DIMENSION_WEIGHTS, DEFAULT_SWITCH_MARGIN } from '../../constants.js';
 import { renderScoredReason, type ScoredReason } from './decision-reason.js';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
-import type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
+import type { ModelCostTier, ModelPromptCache, ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 
 // ─── Candidate identity ─────────────────────────────────────────────
 
@@ -914,7 +914,16 @@ export interface RegistryModelInfo {
   reasoning?: boolean;
   thinkingLevelMap?: ThinkingLevelMap;
   input?: readonly ('text' | 'image')[];
-  cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
+  cost?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    /** Request-wide rates. The highest threshold that the prompt tokens exceed applies to the full request. */
+    tiers?: readonly ModelCostTier[];
+  };
+  /** Prompt cache lifetime in seconds per retention tier. A missing tier means the lifetime is unknown. */
+  promptCache?: ModelPromptCache;
   /** API-specific compatibility flags; only `supportsMidConvoEffort` is read. */
   compat?: object;
 }

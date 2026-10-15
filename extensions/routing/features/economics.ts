@@ -13,8 +13,10 @@
  * this scale a higher effort, or a model that writes more, would gain
  * quality at no cost or time.
  */
-import type { BenchModel, Candidate } from '../../types.js';
-import { parseCandidateKey } from '../score/scorer.js';
+import type { CacheRetention, ModelPromptCache } from '@earendil-works/pi-ai';
+
+import type { BenchModel } from '../../types.js';
+import { parseCandidateKey, type RegistryModelInfo } from '../score/scorer.js';
 import { effortRank, type EffectiveAction } from './actions.js';
 import {
   OUTPUT_TOKENS_CENTRAL,
@@ -33,7 +35,7 @@ import type { Interval } from './model.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 import type { DecisionStateV1 } from './state.js';
 
-export type Pricing = NonNullable<Candidate['cost']>;
+export type Pricing = NonNullable<RegistryModelInfo['cost']>;
 
 export interface SpendBuckets {
   uncachedInput: number;
@@ -112,6 +114,7 @@ export interface PredictedSpendV1 {
   minUSD?: number;
   maxUSD?: number;
   cacheHitEstimate: 'uncertain' | 'none';
+  cacheEligibility: CacheEligibility;
   tokens: SpendBuckets;
 }
 
@@ -125,62 +128,145 @@ export const promptTokenScale = (state: DecisionStateV1, registryId: string): nu
 const billedPromptTokens = (state: DecisionStateV1, action: EffectiveAction): number =>
   Math.max(0, state.estimatedContextTokens) * promptTokenScale(state, action.registryId);
 
+/** pi-ai keeps the cached prefix across efforts only for per-message effort. */
+export const effortSharesCache = (model: RegistryModelInfo): boolean =>
+  model.api === 'anthropic-messages'
+  && (model.compat as { supportsMidConvoEffort?: unknown } | undefined)?.supportsMidConvoEffort === true;
+
+/**
+ * Lifetime in milliseconds of the prompt cache that a request at `retention`
+ * writes: 0 for retention `none`, undefined when the model declares no
+ * lifetime for the tier. A cache price does not imply a lifetime.
+ */
+export function cacheTtlMs(promptCache: ModelPromptCache | undefined, retention: CacheRetention): number | undefined {
+  if (retention === 'none') return 0;
+  const seconds = promptCache?.[retention];
+  return seconds !== undefined && Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined;
+}
+
+/** Why an action has warm-prefix credit or has none. */
+export type CacheEligibility =
+  | 'eligible'
+  | 'subagent'
+  | 'no-recorded-prefix'
+  | 'prompt-mismatch'
+  | 'retention-none'
+  | 'ttl-unknown'
+  | 'expired';
+
 /**
  * Warm prefix tokens the action may reuse, in the tokens its model bills.
- * Every action, including the incumbent, reuses at most its recorded warm
- * prefix; when effort changes keep the model's cache, an action of that model
- * may reuse the largest warm prefix recorded for any effort of the model.
- * Warm entries are estimates, so they take the same scale as the prompt.
+ * A request at retention `none` reads no cache. Otherwise only a record
+ * younger than the model's own cache lifetime at the tier that wrote the
+ * record counts; an unknown lifetime gives no credit. Every action,
+ * including the incumbent, reuses at most its recorded warm prefix; when
+ * effort changes keep the model's cache, an action of that model may reuse
+ * the largest live prefix recorded for any effort of the model. A record of
+ * another session counts at its hit probability. Warm entries are estimates,
+ * so they take the same scale as the prompt.
  */
 export function usableWarmPrefix(
   state: DecisionStateV1,
   action: EffectiveAction,
-  effortSharesCache: boolean,
-): number {
+  model: RegistryModelInfo,
+): { tokens: number; eligibility: CacheEligibility } {
+  const none = (eligibility: CacheEligibility) => ({ tokens: 0, eligibility });
   const cache = state.cache;
-  const input = billedPromptTokens(state, action);
-  if (state.isSubagentSpawn || !cache || cache.source === 'none') return 0;
-  if (state.promptIdentity === undefined || cache.promptIdentity !== state.promptIdentity) return 0;
-  if (state.nowMs - cache.observedAtMs > cache.ttlMs) return 0;
-  let warmTokens = Math.max(0, cache.warmPrefixTokens.get(action.key) ?? 0);
-  if (effortSharesCache) {
-    for (const [key, tokens] of cache.warmPrefixTokens) {
+  if (state.isSubagentSpawn) return none('subagent');
+  if (!cache || cache.warmPrefixes.size === 0) return none('no-recorded-prefix');
+  if (state.promptIdentity === undefined || cache.promptIdentity !== state.promptIdentity) return none('prompt-mismatch');
+  if (cache.retention === 'none') return none('retention-none');
+  const shares = effortSharesCache(model);
+  let recorded = false;
+  let known = false;
+  let live = false;
+  let warmTokens = 0;
+  for (const [key, records] of cache.warmPrefixes) {
+    if (key !== action.key) {
+      if (!shares) continue;
       const parsed = parseCandidateKey(key);
-      if (`${parsed.provider}/${parsed.id}` === action.registryId && tokens > warmTokens) {
-        warmTokens = tokens;
-      }
+      if (`${parsed.provider}/${parsed.id}` !== action.registryId) continue;
+    }
+    for (const record of records) {
+      recorded = true;
+      const ttl = cacheTtlMs(model.promptCache, record.retention);
+      if (!ttl) continue;
+      known = true;
+      const age = state.nowMs - record.observedAtMs;
+      if (age < 0 || age >= ttl) continue;
+      live = true;
+      warmTokens = Math.max(warmTokens, Math.max(0, record.tokens) * record.hitProbability);
     }
   }
+  if (!recorded) return none('no-recorded-prefix');
+  if (!known) return none('ttl-unknown');
+  if (!live) return none('expired');
   const warm = warmTokens * promptTokenScale(state, action.registryId);
-  return Math.min(input, warm);
+  return { tokens: Math.min(billedPromptTokens(state, action), warm), eligibility: 'eligible' };
 }
 
 const perToken = (pricePer1M: number): number => pricePer1M / 1_000_000;
 
+/**
+ * Price per token of a prompt token that the cache does not hold. A request at
+ * retention `none` writes no cache, so the token is input. A model without a
+ * write charge bills the input price. Pi bills a 1h (`long`) cache write at
+ * twice the input price; a model writes 1h entries only when it declares a
+ * `long` lifetime, else the write is a short write at the write price.
+ */
+function missPricePerToken(pricing: Pricing, model: RegistryModelInfo, retention: CacheRetention): number {
+  const inputPrice = perToken(pricing.input!);
+  if (!writeBilled(pricing, retention)) return inputPrice;
+  if (retention === 'long' && cacheTtlMs(model.promptCache, 'long') !== undefined) return 2 * inputPrice;
+  return perToken(pricing.cacheWrite!);
+}
+
+const writeBilled = (pricing: Pricing | undefined, retention: CacheRetention): boolean =>
+  retention !== 'none' && usable(pricing?.cacheWrite) && pricing!.cacheWrite! > 0;
+
+/**
+ * Rates of the whole request: the tier with the highest `inputTokensAbove`
+ * that the billed prompt tokens exceed, else the base rates. This is Pi's
+ * billing rule; the billed prompt is input, cache read and cache write
+ * together, so cache reuse does not change the tier.
+ */
+export function requestRates(pricing: Pricing, promptTokens: number): Pricing {
+  let rates: Pricing = pricing;
+  let matched = -1;
+  for (const tier of pricing.tiers ?? []) {
+    if (promptTokens > tier.inputTokensAbove && tier.inputTokensAbove > matched) {
+      rates = tier;
+      matched = tier.inputTokensAbove;
+    }
+  }
+  return rates;
+}
+
 export function predictSpend(
   state: DecisionStateV1,
   action: EffectiveAction,
-  pricing: Pricing | undefined,
-  effortSharesCache: boolean,
+  model: RegistryModelInfo,
   demand: DemandScale = UNKNOWN_DEMAND,
 ): PredictedSpendV1 {
   const outputCentral = OUTPUT_TOKENS_CENTRAL * demand.scale;
   const input = billedPromptTokens(state, action);
-  const warm = usableWarmPrefix(state, action, effortSharesCache);
-  const writeBilled = usable(pricing?.cacheWrite) && pricing!.cacheWrite! > 0;
+  const pricing = model.cost && requestRates(model.cost, input);
+  const { tokens: warm, eligibility: cacheEligibility } = usableWarmPrefix(state, action, model);
+  // Without cache evidence the request has Pi's default tier.
+  const retention = state.cache?.retention ?? 'short';
+  const writes = writeBilled(pricing, retention);
   const tokens: SpendBuckets = {
     cacheRead: warm,
-    cacheWrite: writeBilled ? input - warm : 0,
-    uncachedInput: writeBilled ? 0 : input - warm,
+    cacheWrite: writes ? input - warm : 0,
+    uncachedInput: writes ? 0 : input - warm,
     output: outputCentral,
   };
   const cacheHitEstimate = warm > 0 ? 'uncertain' as const : 'none' as const;
   if (!pricing || !usable(pricing.input) || !usable(pricing.output)) {
-    return { priceKnown: false, cacheHitEstimate, tokens };
+    return { priceKnown: false, cacheHitEstimate, cacheEligibility, tokens };
   }
-  const inputPrice = perToken(pricing.input);
   const outputPrice = perToken(pricing.output);
-  const missPrice = writeBilled ? perToken(pricing.cacheWrite!) : inputPrice;
+  const missPrice = missPricePerToken(pricing, model, retention);
   const readKnown = usable(pricing.cacheRead);
   // Unknown cache-read price: no credit in the center, a widened lower bound.
   const readCentral = readKnown ? perToken(pricing.cacheRead!) : missPrice;
@@ -188,20 +274,20 @@ export function predictSpend(
   const centralUSD = warm * readCentral + (input - warm) * missPrice + outputCentral * outputPrice;
   const minUSD = warm * readLow + (input - warm) * missPrice + OUTPUT_TOKENS_MIN * demand.low * outputPrice;
   const maxUSD = input * missPrice + OUTPUT_TOKENS_MAX * demand.high * outputPrice;
-  return { priceKnown: true, centralUSD, minUSD, maxUSD, cacheHitEstimate, tokens };
+  return { priceKnown: true, centralUSD, minUSD, maxUSD, cacheHitEstimate, cacheEligibility, tokens };
 }
 
 export function costFeature(spend: PredictedSpendV1, demand: DemandScale = UNKNOWN_DEMAND): { interval: Interval; evidence: FeatureEvidence } {
   if (!spend.priceKnown) {
     return {
       interval: { center: PRICE_UNKNOWN_VALUE, lower: 0, upper: 1 },
-      evidence: { feature: 'costDesirability', code: 'price-unknown', mapping: FEATURE_MAPPING_VERSION },
+      evidence: { feature: 'costDesirability', code: 'price-unknown', mapping: FEATURE_MAPPING_VERSION, details: [`cache-eligibility:${spend.cacheEligibility}`] },
     };
   }
   return {
     // Desirability falls with cost, so the bounds swap.
     interval: { center: costDesirability(spend.centralUSD!), lower: costDesirability(spend.maxUSD!), upper: costDesirability(spend.minUSD!) },
-    evidence: { feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION, details: [`cache:${spend.cacheHitEstimate}`, `demand:${demand.code}`] },
+    evidence: { feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION, details: [`cache:${spend.cacheHitEstimate}`, `cache-eligibility:${spend.cacheEligibility}`, `demand:${demand.code}`] },
   };
 }
 

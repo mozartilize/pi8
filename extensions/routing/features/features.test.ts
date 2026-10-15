@@ -343,32 +343,34 @@ describe('cache-aware cost', () => {
   const anthropic = registryModel('a', 'claude', {
     api: 'anthropic-messages', compat: { supportsMidConvoEffort: true },
     cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+    promptCache: { short: 300, long: 3600 },
   });
-  const openai = registryModel('o', 'gpt', { cost: { input: 2, output: 8, cacheRead: 0.2, cacheWrite: 0 } });
+  const openai = registryModel('o', 'gpt', { cost: { input: 2, output: 8, cacheRead: 0.2, cacheWrite: 0 }, promptCache: { short: 300 } });
   const [aLow, aHigh] = [enumerateEffectiveActions(anthropic).find((a) => a.effort === 'low')!, enumerateEffectiveActions(anthropic).find((a) => a.effort === 'high')!];
   const oHigh = enumerateEffectiveActions(openai).find((a) => a.effort === 'high')!;
+  type WarmRecord = { tokens: number; ageMs?: number; hitProbability?: number; retention?: 'short' | 'long' };
+  // state().nowMs is 1_000_000; ageMs is measured back from it.
+  const cache = (records: [string, WarmRecord[]][], patch: Partial<NonNullable<DecisionStateV1['cache']>> = {}): NonNullable<DecisionStateV1['cache']> => ({
+    promptIdentity: 'head-1',
+    incumbentKey: aHigh.key,
+    warmPrefixes: new Map(records.map(([key, list]) => [key, list.map((r) => ({ tokens: r.tokens, observedAtMs: 1_000_000 - (r.ageMs ?? 0), hitProbability: r.hitProbability ?? 1, retention: r.retention ?? 'short' }))])),
+    retention: 'short',
+    ...patch,
+  });
   const cacheState = (patch: Partial<DecisionStateV1> = {}) => state({
     estimatedContextTokens: 100_000,
     promptIdentity: 'head-1',
-    cache: {
-      observedAtMs: 1_000_000,
-      promptIdentity: 'head-1',
-      incumbentKey: aHigh.key,
-      warmPrefixTokens: new Map([[aHigh.key, 80_000], [oHigh.key, 40_000]]),
-      ttlMs: 300_000,
-      source: 'session',
-    },
+    cache: cache([[aHigh.key, [{ tokens: 80_000 }]], [oHigh.key, [{ tokens: 40_000 }]]]),
     ...patch,
   });
   const usd = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction) => candidateFeatures(s, model, action, []).spend;
+  const read = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction) => usd(s, model, action).tokens.cacheRead;
 
   it('prices only the recorded warm prefix of the incumbent at the cache-read rate and new tokens at the write rate', () => {
     const warm = usd(cacheState(), anthropic, aHigh);
     expect(warm.tokens).toEqual({ cacheRead: 80_000, cacheWrite: 20_000, uncachedInput: 0, output: 1024 });
     expect(warm.centralUSD).toBeCloseTo(80_000 * 0.3 / 1e6 + 20_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
-    const uncachedIncumbent = usd(cacheState({
-      cache: { observedAtMs: 1_000_000, promptIdentity: 'head-1', incumbentKey: aHigh.key, warmPrefixTokens: new Map([[oHigh.key, 40_000]]), ttlMs: 300_000, source: 'session' },
-    }), anthropic, aHigh);
+    const uncachedIncumbent = usd(cacheState({ cache: cache([[oHigh.key, [{ tokens: 40_000 }]]]) }), anthropic, aHigh);
     expect(uncachedIncumbent.tokens).toEqual({ cacheRead: 0, cacheWrite: 100_000, uncachedInput: 0, output: 1024 });
     const cold = usd(cacheState({ cache: undefined }), anthropic, aHigh);
     expect(cold.tokens).toEqual({ cacheRead: 0, cacheWrite: 100_000, uncachedInput: 0, output: 1024 });
@@ -384,25 +386,88 @@ describe('cache-aware cost', () => {
   it('shares the model warm prefix across efforts only when the model keeps it', () => {
     expect(usd(cacheState(), anthropic, aLow).tokens).toEqual({ cacheRead: 80_000, cacheWrite: 20_000, uncachedInput: 0, output: 1024 });
     // Even when another model is the incumbent, an effort-sharing model reuses the warm prefix of its own sibling effort.
-    const challengerShared = cacheState({
-      cache: {
-        observedAtMs: 1_000_000,
-        promptIdentity: 'head-1',
-        incumbentKey: oHigh.key,
-        warmPrefixTokens: new Map([[aHigh.key, 60_000], [oHigh.key, 80_000]]),
-        ttlMs: 300_000,
-        source: 'session',
-      },
-    });
+    const challengerShared = cacheState({ cache: cache([[aHigh.key, [{ tokens: 60_000 }]], [oHigh.key, [{ tokens: 80_000 }]]], { incumbentKey: oHigh.key }) });
     expect(usd(challengerShared, anthropic, aLow).tokens).toEqual({ cacheRead: 60_000, cacheWrite: 40_000, uncachedInput: 0, output: 1024 });
-    const noSharing = registryModel('a', 'claude', { cost: anthropic.cost });
-    expect(usd(cacheState(), noSharing, aLow).tokens.cacheRead).toBe(0);
+    const noSharing = registryModel('a', 'claude', { cost: anthropic.cost, promptCache: anthropic.promptCache });
+    expect(read(cacheState(), noSharing, aLow)).toBe(0);
   });
 
-  it('gives no cache credit after TTL expiry, on a prompt-identity mismatch, or to a spawned subagent', () => {
-    expect(usd(cacheState({ nowMs: 1_000_000 + 300_001 }), anthropic, aHigh).tokens.cacheRead).toBe(0);
-    expect(usd(cacheState({ promptIdentity: 'head-2' }), anthropic, aHigh).tokens.cacheRead).toBe(0);
-    expect(usd(cacheState({ isSubagentSpawn: true }), anthropic, aHigh).tokens.cacheRead).toBe(0);
+  it('a sibling effort reuses the largest prefix that is still inside the lifetime, not a larger expired one', () => {
+    const s = cacheState({ cache: cache([[aLow.key, [{ tokens: 40_000, ageMs: 60_000 }]], [aHigh.key, [{ tokens: 80_000, ageMs: 300_000 }]]]) });
+    expect(read(s, anthropic, aHigh)).toBe(40_000);
+    expect(read(s, anthropic, aLow)).toBe(40_000);
+  });
+
+  it('measures age from each record against the lifetime the candidate model declares', () => {
+    const longLived = registryModel('b', 'long', { cost: openai.cost, promptCache: { short: 3600 } });
+    const bHigh = enumerateEffectiveActions(longLived).find((a) => a.effort === 'high')!;
+    const s = cacheState({ cache: cache([[oHigh.key, [{ tokens: 40_000, ageMs: 600_000 }]], [bHigh.key, [{ tokens: 40_000, ageMs: 600_000 }]]]) });
+    expect(read(s, openai, oHigh)).toBe(0);
+    expect(usd(s, openai, oHigh).cacheEligibility).toBe('expired');
+    expect(read(s, longLived, bHigh)).toBe(40_000);
+    // The lifetime bound is exclusive.
+    expect(read(cacheState({ nowMs: 1_000_000 + 299_999 }), anthropic, aHigh)).toBe(80_000);
+    expect(read(cacheState({ nowMs: 1_000_000 + 300_000 }), anthropic, aHigh)).toBe(0);
+  });
+
+  it('uses the lifetime of the tier that wrote each record, not the tier of the current request', () => {
+    const halfHourOld = (written: 'short' | 'long', current: 'short' | 'long') =>
+      cacheState({ cache: cache([[aHigh.key, [{ tokens: 80_000, ageMs: 1_800_000, retention: written }]]], { retention: current }) });
+    expect(read(halfHourOld('long', 'long'), anthropic, aHigh)).toBe(80_000);
+    expect(read(halfHourOld('long', 'short'), anthropic, aHigh)).toBe(80_000);
+    expect(read(halfHourOld('short', 'short'), anthropic, aHigh)).toBe(0);
+    const shortWrittenLongRequested = usd(halfHourOld('short', 'long'), anthropic, aHigh);
+    expect(shortWrittenLongRequested.tokens.cacheRead).toBe(0);
+    expect(shortWrittenLongRequested.cacheEligibility).toBe('expired');
+  });
+
+  it('a request at retention none reads no cache and bills every prompt token as input', () => {
+    const none = usd(cacheState({ cache: cache([[aHigh.key, [{ tokens: 80_000 }]]], { retention: 'none' }) }), anthropic, aHigh);
+    expect(none.tokens).toEqual({ cacheRead: 0, cacheWrite: 0, uncachedInput: 100_000, output: 1024 });
+    expect(none.cacheEligibility).toBe('retention-none');
+    expect(none.centralUSD).toBeCloseTo(100_000 * 3 / 1e6 + 1024 * 15 / 1e6, 12);
+    expect(none.maxUSD).toBeCloseTo(100_000 * 3 / 1e6 + 4096 * 12 * 15 / 1e6, 12);
+  });
+
+  it('bills a long cache write at twice the input price only for a model that writes long entries', () => {
+    const longCold = cacheState({ cache: cache([], { retention: 'long' }) });
+    const anthropicLong = usd(longCold, anthropic, aHigh);
+    expect(anthropicLong.tokens).toEqual({ cacheRead: 0, cacheWrite: 100_000, uncachedInput: 0, output: 1024 });
+    expect(anthropicLong.centralUSD).toBeCloseTo(100_000 * 2 * 3 / 1e6 + 1024 * 15 / 1e6, 12);
+    // Without a long lifetime the provider writes a short entry at the write price.
+    const shortOnly = registryModel('a', 'claude', { api: 'anthropic-messages', cost: anthropic.cost, promptCache: { short: 300 } });
+    expect(usd(longCold, shortOnly, aHigh).centralUSD).toBeCloseTo(100_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
+    // A model without a write charge bills uncached input at the input price.
+    const openaiLong = usd(longCold, openai, oHigh);
+    expect(openaiLong.tokens).toEqual({ cacheRead: 0, cacheWrite: 0, uncachedInput: 100_000, output: 1024 });
+    expect(openaiLong.centralUSD).toBeCloseTo(100_000 * 2 / 1e6 + 1024 * 8 / 1e6, 12);
+    // The short tier keeps the write price.
+    expect(usd(cacheState({ cache: undefined }), anthropic, aHigh).centralUSD).toBeCloseTo(100_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
+  });
+
+  it('gives no credit when the model declares no lifetime for the tier, even with a cache-read price', () => {
+    const unknownLifetime = registryModel('o', 'gpt', { cost: openai.cost });
+    const spend = usd(cacheState(), unknownLifetime, oHigh);
+    expect(spend.tokens.cacheRead).toBe(0);
+    expect(spend.cacheEligibility).toBe('ttl-unknown');
+    expect(read(cacheState({ cache: cache([[oHigh.key, [{ tokens: 40_000, retention: 'long' }]]], { retention: 'long' }) }), openai, oHigh)).toBe(0);
+    const evidence = candidateFeatures(cacheState(), unknownLifetime, oHigh, []).features.evidence.find((e) => e.feature === 'costDesirability')!;
+    expect(evidence.details).toContain('cache-eligibility:ttl-unknown');
+  });
+
+  it('credits another session prefix at its hit probability only inside the lifetime', () => {
+    const shared = (ageMs: number, retention: 'short' | 'long') => cacheState({ cache: cache([[aHigh.key, [
+      { tokens: 2_000, ageMs: 600_000, hitProbability: 0.3, retention },
+      { tokens: 10_000, ageMs, hitProbability: 0.3, retention },
+    ]]]) });
+    expect(read(shared(1_200_000, 'short'), anthropic, aHigh)).toBe(0);
+    expect(read(shared(1_200_000, 'long'), anthropic, aHigh)).toBeCloseTo(3_000, 9);
+  });
+
+  it('gives no cache credit on a prompt-identity mismatch or to a spawned subagent', () => {
+    expect(usd(cacheState({ promptIdentity: 'head-2' }), anthropic, aHigh).cacheEligibility).toBe('prompt-mismatch');
+    expect(read(cacheState({ promptIdentity: 'head-2' }), anthropic, aHigh)).toBe(0);
+    expect(read(cacheState({ isSubagentSpawn: true }), anthropic, aHigh)).toBe(0);
   });
 
   it('bills the prompt and its warm prefix in the tokens of the action model', () => {
@@ -417,8 +482,27 @@ describe('cache-aware cost', () => {
     expect(usd(openaiScaled, openai, oHigh).tokens).toEqual({ cacheRead: 60_000, cacheWrite: 0, uncachedInput: 90_000, output: 1024 });
   });
 
+  it('prices the whole request at the highest tier that its billed prompt tokens exceed', () => {
+    // The highest exceeded threshold wins, not the first one listed.
+    const tiered = registryModel('a', 'claude', { ...anthropic, cost: { ...anthropic.cost, tiers: [
+      { inputTokensAbove: 50_000, input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
+      { inputTokensAbove: 200_000, input: 6, output: 22.5, cacheRead: 0.6, cacheWrite: 7.5 },
+    ] } });
+    // 100,000 prompt tokens: the 50k tier applies to the cache read, the write and the output.
+    expect(usd(cacheState(), tiered, aHigh).centralUSD).toBeCloseTo(80_000 * 0.4 / 1e6 + 20_000 * 5 / 1e6 + 1024 * 20 / 1e6, 12);
+    // The threshold is exclusive.
+    const atThreshold = cacheState({ estimatedContextTokens: 50_000, cache: undefined });
+    expect(usd(atThreshold, tiered, aHigh).centralUSD).toBeCloseTo(50_000 * 3.75 / 1e6 + 1024 * 15 / 1e6, 12);
+    // The tier is chosen on the tokens the model bills, after its prompt token scale.
+    const scaled = cacheState({ cache: undefined, promptTokenScales: new Map([['a/claude', 2.5]]) });
+    expect(usd(scaled, tiered, aHigh).centralUSD).toBeCloseTo(250_000 * 7.5 / 1e6 + 1024 * 22.5 / 1e6, 12);
+    // A long write costs twice the tier input price.
+    const long = cacheState({ cache: cache([], { retention: 'long' }) });
+    expect(usd(long, tiered, aHigh).centralUSD).toBeCloseTo(100_000 * 2 * 4 / 1e6 + 1024 * 20 / 1e6, 12);
+  });
+
   it('widens only the lower cost bound when the cache-read price is missing', () => {
-    const noRead = registryModel('o', 'gpt', { cost: { input: 2, output: 8 } });
+    const noRead = registryModel('o', 'gpt', { cost: { input: 2, output: 8 }, promptCache: { short: 300 } });
     const spend = usd(cacheState(), noRead, oHigh);
     // Central: no cache credit. Minimum: free cached tokens. Maximum: all input missed.
     // No benchmark row: output uses the unknown demand envelope [0.05, 12].
