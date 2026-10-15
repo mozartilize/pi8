@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ComplexityBand, ExecutionRubric, MeasuredFeatures, ReasoningEvidence, ReasoningRubric } from '../../types.js';
-import { demandInterval } from './mapping.js';
+import { demandInterval } from './task-demand.js';
 import type { WorkPhaseState } from '../policy/work-phase.js';
 import { executionDifficulty, phaseDifficulty, reasoningDifficulty } from './difficulty.js';
 

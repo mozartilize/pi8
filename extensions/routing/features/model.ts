@@ -7,41 +7,44 @@
  */
 import type { BenchModel, ProvenanceAxis } from '../../types.js';
 import { selectMergeRow } from '../../bench/store.js';
+import { isCompatibleIndexVersion } from './benchmark.js';
 import type { EffectiveAction } from './actions.js';
-import {
-  INPUT_NOT_RELEVANT_VALUE,
-  KNOWLEDGE_SHARE,
-  MISSING_REPRESENTATIVE,
-  RESEARCH_SHARE,
-  normalizeFraction,
-  normalizeIntelligence,
-  normalizeKnowledge,
-  normalizeResearch,
-  normalizeTerminalBench,
-  capabilityFit,
-  CAPABILITY_SHORTFALL,
-  ACQUISITION_RESEARCH_VALUE,
-  type TaskRelevance,
-} from './mapping.js';
-import { FEATURE_MAPPING_VERSION, type AxisProvenance, type FeatureEvidence, type FeatureName } from './schema.js';
+import { clamp01 } from './mapping.js';
+import { FEATURE_MAPPING_VERSION, type AxisProvenance, type FeatureEvidence, type FeatureName, type Interval } from './schema.js';
 import type { BenchmarkSnapshot } from './state.js';
-import type { TaskDemand } from './task-demand.js';
+import type { TaskDemand, TaskRelevance } from './task-demand.js';
 
-/** Intelligence Index versions whose scale the feature mapping normalizes. Others give no evidence. */
-export const INTELLIGENCE_INDEX_VERSIONS: readonly string[] = ['4.3'];
+/** AA Intelligence Index on a 0..100 scale. */
+export const normalizeIntelligence = (index: number): number => clamp01(index / 100);
+/** Terminal-Bench 4.0 Agentic Coding pass rate in percent. */
+export const normalizeTerminalBench = (percent: number): number => clamp01(percent / 100);
+/** AA-Briefcase rubric pass rate, already in [0, 1]. */
+export const normalizeResearch = (rate: number): number => clamp01(rate);
+/** AA-Omniscience Index on a -100..100 scale. */
+export const normalizeKnowledge = (index: number): number => clamp01((index + 100) / 200);
+/** LCR / MMMU-Pro correctness fraction, already in [0, 1]. */
+export const normalizeFraction = (fraction: number): number => clamp01(fraction);
 
-const majorMinor = (version: string | undefined): string | undefined =>
-  version?.trim().replace(/^v/i, '').split('.').slice(0, 2).join('.') || undefined;
+/** Research share of `researchFit`; Knowledge has the remainder. */
+export const RESEARCH_SHARE = 0.75;
+export const KNOWLEDGE_SHARE = 0.25;
 
-/** True when the feature mapping normalizes this Intelligence Index version. */
-export const isCompatibleIndexVersion = (version: string | undefined): boolean =>
-  INTELLIGENCE_INDEX_VERSIONS.includes(majorMinor(version) ?? '');
+/** Central representative of a missing [0, 1] metric. */
+export const MISSING_REPRESENTATIVE = 0.5;
+/** Common `inputFit` value when no input aspect is relevant; it cancels between candidates. */
+export const INPUT_NOT_RELEVANT_VALUE = 0.5;
+/** Research does not distinguish actions while collecting context. */
+export const ACQUISITION_RESEARCH_VALUE = 0.5;
+/** A fixed shortfall spans the fit scale; raising the target must not divide away capability differences. */
+export const CAPABILITY_SHORTFALL: Readonly<Record<keyof TaskRelevance, number>> = {
+  reasoning: 0.15,
+  agentic: 0.2,
+  research: 0.2,
+};
 
-export interface Interval {
-  center: number;
-  lower: number;
-  upper: number;
-}
+/** Meeting the target earns full fit. Missing it by the axis shortfall earns zero. */
+export const capabilityFit = (quality: number, target: number, axis: keyof TaskRelevance): number =>
+  clamp01(1 - Math.max(0, target - quality) / CAPABILITY_SHORTFALL[axis]);
 
 export interface AxisObservation {
   axis: ProvenanceAxis;
@@ -181,3 +184,4 @@ export function capabilityFeatures(row: BenchModel | undefined, demand: TaskDema
     input,
   ];
 }
+

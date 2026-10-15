@@ -4,18 +4,9 @@
  * workload (estimated context size, image input). Capability features and
  * decision traces read the result; they do not compose demand again.
  */
-import type { ProvenanceAxis } from '../../types.js';
-import {
-  ACQUISITION_REASONING_TARGET,
-  LONG_CONTEXT_RELEVANCE_TOKENS,
-  OPEN_DECISIONS_REASONING,
-  PHASE_RELEVANCE,
-  REQUIRED_EVIDENCE_AXES,
-  capabilityTarget,
-  demandInterval,
-  type TaskRelevance,
-} from './mapping.js';
-import type { DemandInterval, TaskSnapshot } from './state.js';
+import type { Dimension, ProvenanceAxis } from '../../types.js';
+import { clamp01 } from './mapping.js';
+import type { DemandInterval, TaskDifficulty, TaskSnapshot } from './state.js';
 
 export type DemandAxis = keyof TaskRelevance;
 const DEMAND_AXES: readonly DemandAxis[] = ['reasoning', 'agentic', 'research'];
@@ -77,3 +68,68 @@ export function composeTaskDemand(task: TaskSnapshot): TaskDemand {
     },
   };
 }
+
+/**
+ * Estimated context size from which long-context quality is relevant. This is
+ * an input-shape relevance rule, not a model capability minimum.
+ */
+export const LONG_CONTEXT_RELEVANCE_TOKENS = 64_000;
+export interface TaskRelevance {
+  /** Reasoning relevance R. */
+  reasoning: number;
+  /** Agentic coding relevance D. */
+  agentic: number;
+  /** Research relevance H. */
+  research: number;
+}
+
+export const PHASE_RELEVANCE: Readonly<Record<Dimension, TaskRelevance>> = {
+  lightweight: { reasoning: 0.15, agentic: 0, research: 0.1 },
+  gather: { reasoning: 0.4, agentic: 0, research: 1 },
+  plan: { reasoning: 1, agentic: 0.25, research: 0.5 },
+  implement: { reasoning: 0.6, agentic: 1, research: 0.15 },
+  review: { reasoning: 1, agentic: 0.5, research: 0.8 },
+};
+
+/** Reasoning relevance when open decisions are explicitly observed (> 0). */
+export const OPEN_DECISIONS_REASONING = 0.9;
+/** Capability targets use absolute normalized benchmark scales, not pool ranks. */
+export const CAPABILITY_TARGETS: Readonly<Record<keyof TaskRelevance, readonly [number, number]>> = {
+  reasoning: [0.2, 0.55],
+  agentic: [0.01, 0.6],
+  research: [0.25, 0.65],
+};
+
+/** Collecting context has a fixed reasoning target, independent of the deliverable's unknown demand. */
+export const ACQUISITION_REASONING_TARGET = 0.20;
+/** Unknown demand retains the whole range. A valid declaration supplies an axis-specific bound. */
+export function demandInterval(difficulty: TaskDifficulty | undefined, axis: keyof TaskRelevance): DemandInterval {
+  const value = difficulty?.axes?.[axis] ?? difficulty?.value;
+  const bounds = difficulty?.bounds?.[axis];
+  if (value === undefined || !Number.isFinite(value)
+    || (bounds && (!Number.isFinite(bounds.lower) || !Number.isFinite(bounds.upper)
+      || bounds.lower > value || bounds.upper < value))) return { center: 0.5, lower: 0, upper: 1 };
+  return { center: clamp01(value), lower: clamp01(bounds?.lower ?? value), upper: clamp01(bounds?.upper ?? value) };
+}
+
+/** Target of one known demand value. Unknown demand is represented by `demandInterval`. */
+export function capabilityTarget(axis: keyof TaskRelevance, difficulty: number): number {
+  const [easy, hard] = CAPABILITY_TARGETS[axis];
+  return easy + (hard - easy) * clamp01(difficulty);
+}
+/**
+ * Quality axes whose evidence a decision reports for each model: the axes
+ * this phase relies on most. Evidence means a measured value or a
+ * same-metric, same-model, same-effort source estimate. A model without it
+ * is reported in the decision's evidence gaps and still competes in the same
+ * pool, with the full uncertainty interval for the missing quality.
+ * `lightweight` relies on no single axis. Collecting context requires
+ * Intelligence instead of the gather deliverable's Research evidence.
+ */
+export const REQUIRED_EVIDENCE_AXES: Readonly<Record<Dimension, readonly ProvenanceAxis[]>> = {
+  lightweight: [],
+  gather: ['research'],
+  plan: ['intelligence'],
+  implement: ['intelligence', 'agenticCoding'],
+  review: ['intelligence'],
+};

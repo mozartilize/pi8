@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { capabilityFit, capabilityTarget, demandInterval } from './mapping.js';
+import { capabilityFit } from './model.js';
+import { capabilityTarget, demandInterval } from './task-demand.js';
 
 describe('absolute capability targets', () => {
   it('maps known demands independently on each benchmark scale', () => {

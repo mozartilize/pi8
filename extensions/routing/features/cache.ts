@@ -7,6 +7,7 @@ import type { CacheRetention, ModelPromptCache } from '@earendil-works/pi-ai';
 
 import { parseCandidateKey } from '../score/scorer.js';
 import type { EffectiveAction } from './actions.js';
+import { clamp01 } from './mapping.js';
 import type { PriceSnapshot, SpendSnapshot } from './state.js';
 
 /** Billed prompt tokens per estimated token for the action's model. */
@@ -50,16 +51,20 @@ export type CacheEligibility =
  * record counts; an unknown lifetime gives no credit. Every action,
  * including the incumbent, reuses at most its recorded warm prefix; when
  * effort changes keep the model's cache, an action of that model may reuse
- * the largest live prefix recorded for any effort of the model. A record of
- * another session counts at its hit probability. Warm entries are estimates,
- * so they take the same scale as the prompt.
+ * the largest live prefix recorded for any effort of the model.
+ *
+ * `tokens` is the largest probability-weighted prefix. It is the central
+ * estimate only: `hitProbability` is an authored estimate, not a measured
+ * hit rate. `hitTokens` is the largest prefix on a hit, for the spend bounds.
+ * Records can overlap, so neither value adds the tokens of two records.
+ * Both values use the prompt's token scale and cannot exceed the prompt.
  */
 export function usableWarmPrefix(
   state: SpendSnapshot,
   action: EffectiveAction,
   model: PriceSnapshot,
-): { tokens: number; eligibility: CacheEligibility } {
-  const none = (eligibility: CacheEligibility) => ({ tokens: 0, eligibility });
+): { tokens: number; hitTokens: number; eligibility: CacheEligibility } {
+  const none = (eligibility: CacheEligibility) => ({ tokens: 0, hitTokens: 0, eligibility });
   const cache = state.cache;
   if (state.isSubagentSpawn) return none('subagent');
   if (!cache || cache.warmPrefixes.size === 0) return none('no-recorded-prefix');
@@ -70,6 +75,9 @@ export function usableWarmPrefix(
   let known = false;
   let live = false;
   let warmTokens = 0;
+  let hitTokens = 0;
+  const input = billedPromptTokens(state, action);
+  const scale = promptTokenScale(state, action.registryId);
   for (const [key, records] of cache.warmPrefixes) {
     if (key !== action.key) {
       if (!shares) continue;
@@ -84,13 +92,14 @@ export function usableWarmPrefix(
       const age = state.nowMs - record.observedAtMs;
       if (age < 0 || age >= ttl) continue;
       live = true;
-      warmTokens = Math.max(warmTokens, Math.max(0, record.tokens) * record.hitProbability);
+      const prefix = Math.min(input, Math.max(0, record.tokens) * scale);
+      warmTokens = Math.max(warmTokens, prefix * clamp01(record.hitProbability));
+      hitTokens = Math.max(hitTokens, prefix);
     }
   }
   if (!recorded) return none('no-recorded-prefix');
   if (!known) return none('ttl-unknown');
   if (!live) return none('expired');
-  const warm = warmTokens * promptTokenScale(state, action.registryId);
-  return { tokens: Math.min(billedPromptTokens(state, action), warm), eligibility: 'eligible' };
+  return { tokens: warmTokens, hitTokens, eligibility: 'eligible' };
 }
 

@@ -1,6 +1,6 @@
 # Unified selection: ma trận tham số
 
-Tài liệu mô tả code hiện tại với `feature-v7` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
+Tài liệu mô tả code hiện tại với `feature-v8` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
 
 **Điểm quan trọng:** guards quyết định action nào được phép gọi. Mọi action được phép nằm trong một pool so sánh duy nhất. Thứ tự xử lý là:
 
@@ -93,7 +93,7 @@ Các quy tắc bổ sung:
 
 Sau handoff hoặc sau khi model khai báo `answer`, dấu này hết hiệu lực. Câu trả lời gather dùng targets chung: với D chưa biết là reasoning 0.55 và research 0.65. Relevance reasoning 0.4 làm giảm điểm fit, nhưng không giảm target. Shortfall chỉ kiểm tra relevance bằng 0 hay khác 0.
 
-Nguồn: [mapping.ts](../extensions/routing/features/mapping.ts), [model.ts](../extensions/routing/features/model.ts).
+Nguồn: [task-demand.ts](../extensions/routing/features/task-demand.ts), [model.ts](../extensions/routing/features/model.ts).
 
 ## 3. Ma trận D: rubric → demand → target
 

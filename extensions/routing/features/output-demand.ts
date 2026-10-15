@@ -10,11 +10,9 @@
  * time. Spend and latency both read the one forecast.
  */
 import type { BenchModel } from '../../types.js';
-import { OUTPUT_TOKENS_CENTRAL, OUTPUT_TOKENS_MAX, OUTPUT_TOKENS_MIN } from './mapping.js';
-import { isCompatibleIndexVersion } from './model.js';
+import { usable } from './mapping.js';
+import { isCompatibleIndexVersion } from './benchmark.js';
 
-/** A finite, nonnegative number. */
-export const usable = (value: number | undefined): value is number => value !== undefined && Number.isFinite(value) && value >= 0;
 
 /**
  * Source of the output-demand prior: `aa-exact` from an AA observation at the
@@ -118,3 +116,12 @@ export function outputDemandPrior(row: BenchModel | undefined, apiIndexVersion: 
 export const demandDetail = (demand: OutputDemandPrior): string =>
   demand.reason ? `demand:${demand.code}:${demand.reason}` : `demand:${demand.code}`;
 
+/**
+ * Output tokens of one invocation at demand scale 1. Each value is
+ * multiplied by the matching bound of the action's output-demand prior
+ * (`outputDemandPrior`), so a higher effort, or a model that writes more,
+ * costs more and takes longer when AA measured that it does.
+ */
+export const OUTPUT_TOKENS_CENTRAL = 1024;
+export const OUTPUT_TOKENS_MIN = 512;
+export const OUTPUT_TOKENS_MAX = 4096;

@@ -6,9 +6,7 @@
  * item it was attributed to; it never moves to another effort or work item.
  * The recovery fits describe recovery options, not observed success.
  */
-import type { EffectiveAction } from './actions.js';
-import { raisesFailedEffort } from './continuity.js';
-import { FRICTION } from './mapping.js';
+import { raisesFailedEffort, type EffectiveAction } from './actions.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 import type { SessionSnapshot } from './state.js';
 
@@ -52,3 +50,9 @@ export function recoveryFeatures(state: Pick<SessionSnapshot, 'boundary' | 'rewo
   ];
   return { frictionAvoidance, effortRecoveryFit, modelSwitchRecoveryFit, evidence };
 }
+
+export const FRICTION = {
+  attributedRework: 0,
+  severeReasoningLoop: 0.25,
+  none: 1,
+} as const;

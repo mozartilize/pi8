@@ -9,12 +9,12 @@ import type { EffectiveAction } from './actions.js';
 import { continuityFeature } from './continuity.js';
 import { timeFeature } from './latency.js';
 import { clamp01 } from './mapping.js';
-import { capabilityFeatures, evidenceGaps, rowAtServedEffort, type Interval } from './model.js';
+import { capabilityFeatures, evidenceGaps, rowAtServedEffort } from './model.js';
 import { outputDemandPrior, outputTokenForecast } from './output-demand.js';
 import { recoveryFeatures } from './recovery.js';
-import { FEATURE_INDEX, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName } from './schema.js';
+import { FEATURE_INDEX, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName, type Interval } from './schema.js';
 import { costFeature, predictSpend, type PredictedSpendV1 } from './spend.js';
-import type { DecisionStateV1 } from './state.js';
+import type { BenchmarkSnapshot, DecisionStateV1, PriceSnapshot, SessionSnapshot, SpendSnapshot, TaskSnapshot } from './state.js';
 import { composeTaskDemand } from './task-demand.js';
 
 export interface ActionFeatures {
@@ -40,15 +40,33 @@ export function candidateFeatures(
   const intervals = new Map<FeatureName, Interval>();
   const evidence: FeatureEvidence[] = [];
   let capabilityShortfall = 0;
-  const task = composeTaskDemand(state);
-  for (const capability of capabilityFeatures(row, task, state)) {
+  const taskSnapshot: TaskSnapshot = {
+    phase: state.phase, contextAcquisition: state.contextAcquisition,
+    openDecisions: state.openDecisions, difficulty: state.difficulty,
+    estimatedContextTokens: state.estimatedContextTokens, needsVision: state.needsVision,
+  };
+  const benchmark: BenchmarkSnapshot = { benchmarkIndexVersion: state.benchmarkIndexVersion };
+  const spendSnapshot: SpendSnapshot = {
+    estimatedContextTokens: state.estimatedContextTokens, promptTokenScales: state.promptTokenScales,
+    cache: state.cache, promptIdentity: state.promptIdentity, nowMs: state.nowMs,
+    isSubagentSpawn: state.isSubagentSpawn,
+  };
+  const price: PriceSnapshot = { cost: model.cost, promptCache: model.promptCache, api: model.api, compat: model.compat };
+  const continuitySnapshot: Pick<SessionSnapshot, 'boundary' | 'incumbent' | 'rework'> = {
+    boundary: state.boundary, incumbent: state.incumbent, rework: state.rework,
+  };
+  const recoverySnapshot: Pick<SessionSnapshot, 'boundary' | 'rework' | 'friction' | 'workItemId'> = {
+    boundary: state.boundary, rework: state.rework, friction: state.friction, workItemId: state.workItemId,
+  };
+  const task = composeTaskDemand(taskSnapshot);
+  for (const capability of capabilityFeatures(row, task, benchmark)) {
     capabilityShortfall = Math.max(capabilityShortfall, capability.shortfall ?? 0);
     intervals.set(capability.name, capability.interval);
     evidence.push(capability.evidence);
   }
-  const demand = outputDemandPrior(row, state.benchmarkIndexVersion);
+  const demand = outputDemandPrior(row, benchmark.benchmarkIndexVersion);
   const output = outputTokenForecast(demand);
-  const spend = predictSpend(state, action, model, output);
+  const spend = predictSpend(spendSnapshot, action, price, output);
   const cost = costFeature(spend, demand);
   intervals.set('costDesirability', cost.interval);
   evidence.push(cost.evidence);
@@ -56,10 +74,10 @@ export function candidateFeatures(
   intervals.set('timeDesirability', time.interval);
   evidence.push(time.evidence);
   const exact = (value: number): Interval => ({ center: value, lower: value, upper: value });
-  const continuity = continuityFeature(state, action);
+  const continuity = continuityFeature(continuitySnapshot, action);
   intervals.set('continuity', exact(continuity.value));
   evidence.push(continuity.evidence);
-  const recovery = recoveryFeatures(state, action);
+  const recovery = recoveryFeatures(recoverySnapshot, action);
   intervals.set('frictionAvoidance', exact(recovery.frictionAvoidance));
   intervals.set('effortRecoveryFit', exact(recovery.effortRecoveryFit));
   intervals.set('modelSwitchRecoveryFit', exact(recovery.modelSwitchRecoveryFit));
@@ -75,5 +93,5 @@ export function candidateFeatures(
     upper[j] = clamp01(interval.upper);
     values[j] = Math.min(upper[j]!, Math.max(lower[j]!, clamp01(interval.center)));
   }
-  return { action, features: { key: action.key, values, lower, upper, evidence }, spend, evidenceGaps: evidenceGaps(row, task, state), capabilityShortfall };
+  return { action, features: { key: action.key, values, lower, upper, evidence }, spend, evidenceGaps: evidenceGaps(row, task, benchmark), capabilityShortfall };
 }

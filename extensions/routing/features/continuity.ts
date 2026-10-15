@@ -6,20 +6,9 @@
  * Model identity is the exact `provider/modelId`, effort excluded. Different
  * providers are different models even with equal model names.
  */
-import { effortRank, type EffectiveAction } from './actions.js';
-import { CONTINUITY } from './mapping.js';
+import { raisesFailedEffort, type EffectiveAction } from './actions.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
-import type { ServedIdentity, SessionSnapshot } from './state.js';
-
-/**
- * True when the action keeps the failed model at a higher effort. A failed
- * attempt without a known effort cannot show that this effort is higher.
- */
-export function raisesFailedEffort(failed: ServedIdentity, action: EffectiveAction): boolean {
-  return failed.registryId === action.registryId
-    && failed.effort !== undefined && action.effort !== undefined
-    && effortRank(action.effort) > effortRank(failed.effort);
-}
+import type { SessionSnapshot } from './state.js';
 
 export function continuityFeature(state: Pick<SessionSnapshot, 'boundary' | 'incumbent' | 'rework'>, action: EffectiveAction): { value: number; evidence: FeatureEvidence } {
   if (state.boundary === 'rework' && state.rework) {
@@ -35,3 +24,15 @@ export function continuityFeature(state: Pick<SessionSnapshot, 'boundary' | 'inc
   }
   return { value: CONTINUITY.unknown, evidence: { feature: 'continuity', code: 'identity-unknown', mapping: FEATURE_MAPPING_VERSION } };
 }
+
+export const CONTINUITY = {
+  /** Ordinary authorized boundary: same served model at any effort. */
+  ordinarySameModel: 0.65,
+  ordinaryDifferentModel: 0.45,
+  /** Attributed rework boundary. */
+  reworkSameModelHigherEffort: 0.78,
+  reworkSameModelEqualOrLowerEffort: 0.65,
+  reworkDifferentModel: 0.48,
+  /** No incumbent or unknown identity: common to all actions. */
+  unknown: 0.5,
+} as const;

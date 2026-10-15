@@ -10,6 +10,7 @@
  */
 import { clampThinkingLevel, type ModelThinkingLevel } from '@earendil-works/pi-ai';
 
+import type { ServedIdentity } from './state.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import { candidateKey, isThinkingSupportedByRegistryModel, servesThinkingOff } from '../score/scorer.js';
 
@@ -81,3 +82,14 @@ export function overrideAction(model: RegistryModelInfo, requested: ModelThinkin
   const clamped = clampThinkingLevel(model as Parameters<typeof clampThinkingLevel>[0], requested);
   return actions.find((action) => action.levels.includes(clamped));
 }
+
+/**
+ * True when the action keeps the failed model at a higher effort. A failed
+ * attempt without a known effort cannot show that this effort is higher.
+ */
+export function raisesFailedEffort(failed: ServedIdentity, action: EffectiveAction): boolean {
+  return failed.registryId === action.registryId
+    && failed.effort !== undefined && action.effort !== undefined
+    && effortRank(action.effort) > effortRank(failed.effort);
+}
+

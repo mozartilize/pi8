@@ -1,5 +1,15 @@
 /**
  * The single automatic ranking API of the unified router.
+ *
+ * This module is the orchestrator. It owns no feature formula and no
+ * numerical validation. The steps have these owners:
+ * - domain evaluation: `candidateFeatures` (features/);
+ * - decision compiler: `compileActionFeatures` and `checkDomain` (compile.ts);
+ * - preference domain: `artifactMatches` and `thetaBaseArtifact` (domain.ts);
+ * - generic optimizer: `solveMinimaxRegret` and `centralChoice` (minimax.ts).
+ * This module applies the permission snapshot, sets the deadline, and labels
+ * the selection result.
+ *
  * Every authorized action with valid numerical features enters one comparison
  * pool. Exact minimax regret, or its labeled central fallback, ranks that pool. Capability
  * shortfall and evidence gaps are diagnostics: they never filter, group,
@@ -29,7 +39,7 @@ import {
   type DomainArtifact,
 } from './domain.js';
 import { LpCancelledError, LpTimeoutError, LpVerificationError, type LPAdapter } from './lp.js';
-import { checkDomain, DecisionProblemError, partitionDecisionProblem, type SelectableAction } from './compile.js';
+import { checkDomain, compileActionFeatures, DecisionProblemError } from './compile.js';
 import { centralChoice, solveMinimaxRegret } from './minimax.js';
 import { THETA0 } from './weights.js';
 
@@ -186,12 +196,6 @@ export class DomainCache implements DomainLookup {
   }
 }
 
-/** Selection and saved-route validation must check the same numerical inputs. */
-export const toSelectable = (features: ActionFeatures): SelectableAction => ({
-  features: features.features,
-  ...(features.spend.priceKnown ? { centralUsd: features.spend.centralUSD } : {}),
-});
-
 function classifySolverFailure(error: unknown): SolverFallbackReason {
   if (error instanceof LpTimeoutError) return 'timeout';
   if (error instanceof LpVerificationError) return 'numerical';
@@ -220,7 +224,7 @@ export async function selectByRegret(
   const actions = candidates
     .filter((candidate) => !allowed || allowed.has(candidate.action.key))
     .map((candidate) => candidateFeatures(state, candidate.model, candidate.action, rows));
-  const { problem, invalid } = partitionDecisionProblem(actions.map(toSelectable));
+  const { problem, invalid } = compileActionFeatures(actions);
   const invalidActions = invalid.map((entry) => entry.key);
   const rankable = new Set(problem.actions.map((action) => action.id));
   const insufficientEvidence = actions.filter((features) => rankable.has(features.features.key) && features.evidenceGaps.length > 0)

@@ -11,9 +11,9 @@ import type { CacheRetention } from '@earendil-works/pi-ai';
 
 import type { EffectiveAction } from './actions.js';
 import { billedPromptTokens, cacheTtlMs, usableWarmPrefix, type CacheEligibility } from './cache.js';
-import { PRICE_UNKNOWN_VALUE, costDesirability } from './mapping.js';
-import type { Interval } from './model.js';
-import { demandDetail, outputTokenForecast, UNKNOWN_DEMAND, usable, type OutputDemandPrior, type OutputTokenForecast } from './output-demand.js';
+import { clamp01, usable } from './mapping.js';
+import type { Interval } from './schema.js';
+import { demandDetail, outputTokenForecast, UNKNOWN_DEMAND, type OutputDemandPrior, type OutputTokenForecast } from './output-demand.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 import type { PriceSnapshot, SpendSnapshot } from './state.js';
 
@@ -82,7 +82,7 @@ export function predictSpend(
   const outputCentral = output.center;
   const input = billedPromptTokens(state, action);
   const pricing = model.cost && requestRates(model.cost, input);
-  const { tokens: warm, eligibility: cacheEligibility } = usableWarmPrefix(state, action, model);
+  const { tokens: warm, hitTokens, eligibility: cacheEligibility } = usableWarmPrefix(state, action, model);
   // Without cache evidence the request has Pi's default tier.
   const retention = state.cache?.retention ?? 'short';
   const writes = writeBilled(pricing, retention);
@@ -92,19 +92,25 @@ export function predictSpend(
     uncachedInput: writes ? 0 : input - warm,
     output: outputCentral,
   };
-  const cacheHitEstimate = warm > 0 ? 'uncertain' as const : 'none' as const;
+  const cacheHitEstimate = hitTokens > 0 ? 'uncertain' as const : 'none' as const;
   if (!pricing || !usable(pricing.input) || !usable(pricing.output)) {
     return { priceKnown: false, cacheHitEstimate, cacheEligibility, tokens };
   }
   const outputPrice = perToken(pricing.output);
   const missPrice = missPricePerToken(pricing, model, retention);
   const readKnown = usable(pricing.cacheRead);
-  // Unknown cache-read price: no credit in the center, a widened lower bound.
+  // Unknown cache-read price: no credit in the center; the bounds span a free read and a miss.
   const readCentral = readKnown ? perToken(pricing.cacheRead!) : missPrice;
-  const readLow = readKnown ? perToken(pricing.cacheRead!) : 0;
+  const readLow = readKnown ? readCentral : 0;
+  const readHigh = readKnown ? readCentral : missPrice;
+  // The central input uses the weighted prefix. The bounds use the two outcomes
+  // that the weight does not decide: a miss, and a hit of the largest live prefix.
+  // A cache read can cost more than a miss, so neither outcome is always cheaper.
+  const missInput = input * missPrice;
+  const hitInput = (read: number) => hitTokens * read + (input - hitTokens) * missPrice;
   const centralUSD = warm * readCentral + (input - warm) * missPrice + outputCentral * outputPrice;
-  const minUSD = warm * readLow + (input - warm) * missPrice + output.low * outputPrice;
-  const maxUSD = input * missPrice + output.high * outputPrice;
+  const minUSD = Math.min(missInput, hitInput(readLow)) + output.low * outputPrice;
+  const maxUSD = Math.max(missInput, hitInput(readHigh)) + output.high * outputPrice;
   return { priceKnown: true, centralUSD, minUSD, maxUSD, cacheHitEstimate, cacheEligibility, tokens };
 }
 
@@ -121,3 +127,23 @@ export function costFeature(spend: PredictedSpendV1, demand: OutputDemandPrior =
     evidence: { feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION, details: [`cache:${spend.cacheHitEstimate}`, `cache-eligibility:${spend.cacheEligibility}`, demandDetail(demand)] },
   };
 }
+
+/** Lower end of the cost scale, USD. A cheaper or free action has desirability 1. */
+export const COST_FLOOR_USD = 0.00001;
+/** Decades of cost from the lower end to desirability 0, at $10. */
+export const COST_DECADES = 6;
+
+/**
+ * Desirability of a predicted all-in USD cost for one decision: log10 of the
+ * cost, linear over [$0.00001, $10]. The selector compares only differences,
+ * so the difference of two actions depends only on their cost ratio: an action
+ * at half the cost gains log10(2)/6 at any price level. A preference answer
+ * about a relative saving then applies the same way to a $0.001 turn and a $1 turn.
+ */
+export function costDesirability(usd: number): number {
+  if (usd <= COST_FLOOR_USD) return 1;
+  return clamp01(1 - Math.log10(usd / COST_FLOOR_USD) / COST_DECADES);
+}
+
+/** Common cost value when the price is unknown. Not a USD estimate. */
+export const PRICE_UNKNOWN_VALUE = 0.5;

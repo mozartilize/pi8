@@ -122,7 +122,7 @@ Each band extends half a rubric step around its central value, clipped to `[0, 1
 
 The logged scalar difficulty is the maximum central axis demand. Selection uses the axis bounds, not that summary. Decisions record `difficultySource` and `difficultyBounds`; records with neither declaration retain a missing-demand reason and bounds `[0, 1]`. Demand does not carry into another user entry or an unrelated phase.
 
-This mapping is `feature-v7`. Its digest invalidates compiled domains from other mappings. The stored v1 preference scenarios, their feature vectors, and their cost and time anchors are unchanged; preference answers need no migration.
+This mapping is `feature-v8`. Its digest invalidates compiled domains from other mappings. The stored v1 preference scenarios, their feature vectors, and their cost and time anchors are unchanged; preference answers need no migration.
 
 ## Cost, speed, and cache
 
@@ -130,7 +130,7 @@ Predicted spend uses registry input, output, and eligible cache prices. When the
 
 Prompt tokens are estimated from characters. Each provider bills its own tokens: a different tokenizer and request text that the provider adds. After each attempt with a complete usage report, the router records the billed prompt tokens (input, cache read, and cache write) divided by the estimate. Requests under 2,000 estimated tokens, requests with images, and ratios outside 0.5–4 are not recorded. The scale of a model is a moving average of these ratios (weight 0.3 for each new ratio). A model without a scale takes the mean scale of observed models with the same registry API. Predicted spend multiplies the prompt and its warm prefix by the scale. The context-window fit check uses the estimate without the scale. The scales persist in `prompt-token-scales.json` in the storage directory. Decision traces show `promptTokenScale` when it is not 1.
 
-A recorded warm prefix gives cache credit only while it is younger than the candidate model's prompt cache lifetime. The lifetime comes from the model's `promptCache` entry in Pi's registry, for the retention tier of the request that wrote the prefix. The tier of a request is its `cacheRetention`, else `long` when `PI_CACHE_RETENTION=long`, else `short`. A model without a lifetime for the tier gets no credit, even when it has a cache-read price. Age is measured from the time the router observed the recorded request, before dispatch, not from the end of its stream. A request at retention `none` reads and writes no cache: it gets no credit and bills every prompt token at the input price. At `long`, a model that bills cache writes and declares a `long` lifetime bills the write at twice the input price, as Pi does for 1h writes. An effort that shares the model's cache uses the largest sibling prefix that is still inside the lifetime. Decision traces show the reason in the cost evidence as `cache-eligibility:<reason>`.
+A recorded warm prefix gives cache credit only while it is younger than the candidate model's prompt cache lifetime. The lifetime comes from the model's `promptCache` entry in Pi's registry, for the retention tier of the request that wrote the prefix. The tier of a request is its `cacheRetention`, else `long` when `PI_CACHE_RETENTION=long`, else `short`. A model without a lifetime for the tier gets no credit, even when it has a cache-read price. Age is measured from the time the router observed the recorded request, before dispatch, not from the end of its stream. A request at retention `none` reads and writes no cache: it gets no credit and bills every prompt token at the input price. At `long`, a model that bills cache writes and declares a `long` lifetime bills the write at twice the input price, as Pi does for 1h writes. An effort that shares the model's cache uses the largest sibling prefix that is still inside the lifetime. A prefix of another session has a hit probability below 1. This probability is an authored estimate, not a measured hit rate. The central cost uses the largest prefix multiplied by its probability. The cost bounds use two outcomes: every prompt token misses, or the largest live prefix hits. The router does not add overlapping prefixes. When a cache read costs more than a miss, the hit outcome sets the upper bound. Decision traces show the reason in the cost evidence as `cache-eligibility:<reason>`.
 
 Latency is an output-token proxy, not measured task wall time. Demand changes neither the cost nor time transform. Cache estimates are not guaranteed cache hits. Preferences set the trade-off between these features and capability fit.
 
@@ -183,7 +183,10 @@ Paid evaluations and production activation require separate approval.
 | Source | Responsibility |
 |---|---|
 | [Selector](../extensions/routing/optimization/select.ts) | One-pool minimax regret and its central fallback |
-| [Feature mapping](../extensions/routing/features/mapping.ts) | Absolute targets, shortfall scales, and feature transforms |
+| [Task demand](../extensions/routing/features/task-demand.ts) | Task relevance, demand intervals, absolute targets, and required evidence |
+| [Capability features](../extensions/routing/features/model.ts) | Benchmark normalization, shortfall scales, and capability fit |
+| [Spend](../extensions/routing/features/spend.ts) and [cache](../extensions/routing/features/cache.ts) | Cache eligibility, predicted spend, and cost desirability |
+| [Decision compiler](../extensions/routing/optimization/compile.ts) | Numerical validation and the numerical problem |
 | [Difficulty](../extensions/routing/features/difficulty.ts) | Axis demands from accepted declarations |
 | [Work phase](../extensions/routing/policy/work-phase.ts) | Final-step requirements and handoff minimums |
 | [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan state and retention decisions |

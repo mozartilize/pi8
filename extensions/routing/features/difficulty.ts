@@ -7,8 +7,8 @@
  */
 import type { ComplexityBand, Dimension, ExecutionRubric, HandoffRubric, MeasuredFeatures, ReasoningEvidence, ReasoningRubric, TaskScope } from '../../types.js';
 import type { WorkPhaseState } from '../policy/work-phase.js';
-import { clamp01, COMPLEXITY_DEMAND } from './mapping.js';
-import type { TaskDifficulty } from './state.js';
+import { clamp01 } from './mapping.js';
+import type { DemandInterval, TaskDifficulty } from './state.js';
 
 const isExecutionRubric = (rubric: HandoffRubric): rubric is ExecutionRubric => 'openDecisions' in rubric;
 const level = (value: number): number => Number.isFinite(value) ? clamp01((value - 1) / 4) : 1;
@@ -90,3 +90,12 @@ export function phaseDifficulty(state: WorkPhaseState | undefined, phase: Dimens
   }
   return undefined;
 }
+
+/** Complexity bands span half a rubric step on each side, clipped to [0, 1]. These are policy bounds, not confidence intervals. */
+export const COMPLEXITY_DEMAND: Readonly<Record<ComplexityBand, Readonly<DemandInterval>>> = {
+  trivial: { center: 0, lower: 0, upper: 0.125 },
+  routine: { center: 0.25, lower: 0.125, upper: 0.375 },
+  moderate: { center: 0.5, lower: 0.375, upper: 0.625 },
+  hard: { center: 0.75, lower: 0.625, upper: 0.875 },
+  frontier: { center: 1, lower: 0.875, upper: 1 },
+};

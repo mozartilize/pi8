@@ -7,6 +7,7 @@
  * known price before an unknown price, then lower central USD, then the
  * canonical action key.
  */
+import type { ActionFeatures } from '../features/candidate.js';
 import { FEATURE_COUNT, FEATURE_INDEX, type ActionFeatureVector } from '../features/schema.js';
 import { LP_RESIDUAL_TOLERANCE, type Polytope } from './lp.js';
 import type { DecisionProblem, NumericAction, NumericDomain, TieKey } from './minimax.js';
@@ -86,6 +87,17 @@ export function partitionDecisionProblem(actions: readonly SelectableAction[]): 
     invalid: [...invalid].map(([key, reason]) => ({ key, reason })).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
   };
 }
+
+/**
+ * Compile evaluated actions. Selection and saved-route validation both call
+ * this function, so they check the same numerical inputs. An unknown price
+ * gives no central USD for the tie order.
+ */
+export const compileActionFeatures = (actions: readonly ActionFeatures[]): ReturnType<typeof partitionDecisionProblem> =>
+  partitionDecisionProblem(actions.map(({ features, spend }) => ({
+    features,
+    ...(spend.priceKnown ? { centralUsd: spend.centralUSD } : {}),
+  })));
 
 const isSimplexRow = (coeffs: readonly number[], dimension: number, lower?: number, upper?: number): boolean =>
   lower === 1 && upper === 1 && coeffs.every((value, j) => value === (j < dimension ? 1 : 0));

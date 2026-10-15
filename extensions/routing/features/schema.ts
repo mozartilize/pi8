@@ -24,8 +24,15 @@ export const FEATURE_INDEX: Readonly<Record<FeatureName, number>> = Object.fromE
   FEATURE_NAMES.map((name, index) => [name, index]),
 ) as Record<FeatureName, number>;
 
-/** Mapping identity recorded with every feature value. */
-export const FEATURE_MAPPING_VERSION = 'feature-v7' as const;
+/**
+ * Mapping identity recorded with every feature value. Each feature module owns
+ * its authored policy values: transforms, missing-value intervals, central
+ * representatives and relevances. These values are not calibrated
+ * measurements. A change to one of them is a feature-policy revision. If the
+ * change alters what a stored preference scenario means, `preferences.version`
+ * must also increase. A benchmark refresh changes observations, not policy.
+ */
+export const FEATURE_MAPPING_VERSION = 'feature-v8' as const;
 
 export const FEATURE_SCHEMA_DIGEST = digestOf({ names: FEATURE_NAMES, mapping: FEATURE_MAPPING_VERSION });
 
@@ -77,3 +84,10 @@ export interface ActionFeatureVector {
   upper: number[];
   evidence: FeatureEvidence[];
 }
+
+export interface Interval {
+  center: number;
+  lower: number;
+  upper: number;
+}
+

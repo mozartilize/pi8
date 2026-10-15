@@ -16,7 +16,7 @@ import { enumerateEffectiveActions, overrideAction, effortRank, type EffectiveAc
 import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { rowAtServedEffort } from '../routing/features/model.js';
 import { candidateFeatures } from '../routing/features/candidate.js';
-import { partitionDecisionProblem } from '../routing/optimization/compile.js';
+import { compileActionFeatures } from '../routing/optimization/compile.js';
 import { createBoundaryAuthorization, type BoundaryAuthorizationV1 } from '../routing/policy/boundary-authorization.js';
 import { isExcludedExecutor } from '../routing/policy/execution-contract.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
@@ -27,7 +27,6 @@ import {
   DomainCache,
   PRODUCTION_SOLVER_BUDGET,
   selectByRegret,
-  toSelectable,
   type SelectionCandidate,
   type SelectorPorts,
   type UnifiedDecision,
@@ -242,8 +241,8 @@ export function restoreUnifiedDecision(input: UnifiedTurnInput, saved: RoutingDe
   const { selection, candidates } = legalActions(input);
   const authorization = authorize(input, selection);
   const allowed = new Set(authorization.allowedActors);
-  const { invalid } = partitionDecisionProblem(selection.filter(({ action }) => allowed.has(action.key))
-    .map(({ model, action }) => toSelectable(candidateFeatures(input.state, model, action, input.rows))));
+  const { invalid } = compileActionFeatures(selection.filter(({ action }) => allowed.has(action.key))
+    .map(({ model, action }) => candidateFeatures(input.state, model, action, input.rows)));
   // Recompute the ranking and its diagnostics if a saved action fails numerical validation.
   if (invalid.some(({ key }) => saved.fallbackChain.includes(key))) return undefined;
   const chain = saved.fallbackChain.filter((key) => {
