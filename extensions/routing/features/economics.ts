@@ -51,16 +51,35 @@ export interface SpendBuckets {
  */
 export type DemandScaleCode = 'measured' | 'nearest' | 'unknown';
 
-/** Output-demand multiplier: a central value and the bounds of its envelope. */
-export interface DemandScale {
-  scale: number;
+/**
+ * Dimensionless output-demand multiplier of one action: a central value and
+ * the bounds of its envelope, with `low <= center <= high`.
+ */
+export interface OutputDemandPrior {
+  center: number;
   low: number;
   high: number;
   code: DemandScaleCode;
 }
 
-export const UNKNOWN_DEMAND: DemandScale = {
-  scale: 1,
+/**
+ * Output tokens of the next invocation. Spend and latency both consume this
+ * one object, so they always use the same demand.
+ */
+export interface OutputTokenForecast {
+  low: number;
+  center: number;
+  high: number;
+}
+
+export const outputTokenForecast = (prior: OutputDemandPrior): OutputTokenForecast => ({
+  low: OUTPUT_TOKENS_MIN * prior.low,
+  center: OUTPUT_TOKENS_CENTRAL * prior.center,
+  high: OUTPUT_TOKENS_MAX * prior.high,
+});
+
+export const UNKNOWN_DEMAND: OutputDemandPrior = {
+  center: 1,
   low: DEMAND_SCALE_UNKNOWN_MIN,
   high: DEMAND_SCALE_UNKNOWN_MAX,
   code: 'unknown',
@@ -87,13 +106,13 @@ function tokensPerTask(row: BenchModel): number | undefined {
  * With no measured effort above, it takes the largest measured scale. A model
  * with no measured cost per task gets the wide unknown envelope.
  */
-export function effortDemandScale(rows: readonly BenchModel[], action: EffectiveAction): DemandScale {
+export function effortDemandScale(rows: readonly BenchModel[], action: EffectiveAction): OutputDemandPrior {
   const measured = rows
     .filter((row) => row.active && row.registryId === action.registryId && tokensPerTask(row) !== undefined)
     .sort((a, b) => effortRank(a.effort) - effortRank(b.effort));
-  const exact = (row: BenchModel, code: DemandScaleCode): DemandScale => {
+  const exact = (row: BenchModel, code: DemandScaleCode): OutputDemandPrior => {
     const scale = tokensPerTask(row)! / REFERENCE_TOKENS_PER_TASK;
-    return { scale, low: scale, high: scale, code };
+    return { center: scale, low: scale, high: scale, code };
   };
   if (action.effort === undefined) {
     const own = measured.find((row) => row.effort === undefined || row.effort === 'off');
@@ -246,9 +265,9 @@ export function predictSpend(
   state: DecisionStateV1,
   action: EffectiveAction,
   model: RegistryModelInfo,
-  demand: DemandScale = UNKNOWN_DEMAND,
+  output: OutputTokenForecast = outputTokenForecast(UNKNOWN_DEMAND),
 ): PredictedSpendV1 {
-  const outputCentral = OUTPUT_TOKENS_CENTRAL * demand.scale;
+  const outputCentral = output.center;
   const input = billedPromptTokens(state, action);
   const pricing = model.cost && requestRates(model.cost, input);
   const { tokens: warm, eligibility: cacheEligibility } = usableWarmPrefix(state, action, model);
@@ -272,12 +291,12 @@ export function predictSpend(
   const readCentral = readKnown ? perToken(pricing.cacheRead!) : missPrice;
   const readLow = readKnown ? perToken(pricing.cacheRead!) : 0;
   const centralUSD = warm * readCentral + (input - warm) * missPrice + outputCentral * outputPrice;
-  const minUSD = warm * readLow + (input - warm) * missPrice + OUTPUT_TOKENS_MIN * demand.low * outputPrice;
-  const maxUSD = input * missPrice + OUTPUT_TOKENS_MAX * demand.high * outputPrice;
+  const minUSD = warm * readLow + (input - warm) * missPrice + output.low * outputPrice;
+  const maxUSD = input * missPrice + output.high * outputPrice;
   return { priceKnown: true, centralUSD, minUSD, maxUSD, cacheHitEstimate, cacheEligibility, tokens };
 }
 
-export function costFeature(spend: PredictedSpendV1, demand: DemandScale = UNKNOWN_DEMAND): { interval: Interval; evidence: FeatureEvidence } {
+export function costFeature(spend: PredictedSpendV1, demand: OutputDemandPrior = UNKNOWN_DEMAND): { interval: Interval; evidence: FeatureEvidence } {
   if (!spend.priceKnown) {
     return {
       interval: { center: PRICE_UNKNOWN_VALUE, lower: 0, upper: 1 },
@@ -293,7 +312,8 @@ export function costFeature(spend: PredictedSpendV1, demand: DemandScale = UNKNO
 
 export function timeFeature(
   row: BenchModel | undefined,
-  demand: DemandScale = UNKNOWN_DEMAND,
+  demand: OutputDemandPrior = UNKNOWN_DEMAND,
+  output: OutputTokenForecast = outputTokenForecast(demand),
 ): { interval: Interval; evidence: FeatureEvidence } {
   const tps = row?.outputSpeedTps;
   if (!usable(tps) || tps === 0) {
@@ -304,9 +324,9 @@ export function timeFeature(
   }
   return {
     interval: {
-      center: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_CENTRAL * demand.scale, tps)),
-      lower: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_MAX * demand.high, tps)),
-      upper: timeDesirability(latencyProxySeconds(OUTPUT_TOKENS_MIN * demand.low, tps)),
+      center: timeDesirability(latencyProxySeconds(output.center, tps)),
+      lower: timeDesirability(latencyProxySeconds(output.high, tps)),
+      upper: timeDesirability(latencyProxySeconds(output.low, tps)),
     },
     evidence: { feature: 'timeDesirability', code: 'speed-known', mapping: FEATURE_MAPPING_VERSION, details: [`demand:${demand.code}`] },
   };
