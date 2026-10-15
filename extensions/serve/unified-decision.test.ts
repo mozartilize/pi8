@@ -8,7 +8,8 @@ import type { BenchModel } from '../types.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { registryModel } from '../test-support/router-fixtures.js';
 import { benchStoreJson } from '../test-support/provider-harness.js';
-import { WorkerLpAdapter } from '../routing/optimization/lp.js';
+import { WorkerLpAdapter, type LPAdapter } from '../routing/optimization/lp.js';
+import { DomainCache, PRODUCTION_SOLVER_BUDGET } from '../routing/optimization/select.js';
 import { buildCandidate, type RegistryModelInfo } from '../routing/score/scorer.js';
 import { closeSelectorPorts, prepareSelectorDomain, resolveUnifiedDecision, type UnifiedTurnInput } from './unified-decision.js';
 
@@ -241,6 +242,25 @@ describe('production selection adapter', () => {
       expect(await prepareSelectorDomain()).toBe('ready');
       await closeSelectorPorts();
       expect(await firstSelection()).toMatchObject({ solver: 'exact', domainStatus: 'ready', constraintsEnforced: true });
+    });
+
+    it('solves with the production deadline on the process LP worker', async () => {
+      savePreferences(OPERATOR);
+      const domains = new DomainCache(lp);
+      expect(await domains.compile(OPERATOR)).toBeDefined();
+      const remaining: number[] = [];
+      const recorder: LPAdapter = {
+        solve: (request, controls) => {
+          remaining.push((controls?.deadlineAt ?? Number.POSITIVE_INFINITY) - performance.now());
+          return lp.solve(request, controls);
+        },
+        close: async () => {},
+      };
+      const result = await resolveUnifiedDecision({ ...input([model('one'), model('two')]), ports: { lp: recorder, domains } }, noPreparation);
+      if (result.kind !== 'decision') throw new Error('Expected a decision');
+      expect(result.decision.unified).toMatchObject({ solver: 'exact', constraintsEnforced: true });
+      expect(remaining.length).toBeGreaterThan(0);
+      for (const ms of remaining) expect(ms).toBeLessThanOrEqual(PRODUCTION_SOLVER_BUDGET.deadlineMs);
     });
 
     it('does not apply the preferences in the first selection when nothing compiled them', async () => {
