@@ -261,6 +261,10 @@ AA output tokens/task là quan sát trên benchmark task, không phải dự bá
 | Row đúng effort có observation `measured`, page và API index version tương thích | Dùng prior của row đó |
 | Thiếu row, thiếu observation, `source-estimated`, `unknown-effort`, `invalid`, `conflict`, version không rõ hoặc không tương thích | Unknown demand envelope, kèm reason trong evidence |
 
+Coverage trên `fixtures/real-pool.json` (index 4.3, bỏ provider `cursor`): 769 effective actions. 282 action (36,7%) có prior `aa-exact`. 64 action có benchmark row đúng effort nhưng row không có observation (`absent`). 423 action không có benchmark row đúng effort (`no-row`). Không action nào bị loại vì `source-estimated`, `unknown-effort`, `invalid`, `conflict` hoặc version. Số liệu này đổi khi fixture được tạo lại.
+
+`real-pool-sensitivity.test.ts` kiểm tra trên real pool, với domain base và domain operator: thiếu output tokens, giá hoặc output speed không làm giảm max regret của action bị ảnh hưởng; warm prefix còn hạn không làm tăng max regret của incumbent; mọi action được phép vẫn ở trong ranking.
+
 **Không mượn demand hoặc quality giữa efforts hay giữa models.** D về độ khó không nhân giá hay thời gian.
 
 ### 6.2 Công thức predicted spend
