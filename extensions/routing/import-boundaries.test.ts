@@ -42,6 +42,6 @@ describe('router import boundaries', () => {
   });
 
   it('the boundary check sees relative imports', () => {
-    expect(imports('routing/features/candidate.ts')).toContain('routing/features/economics.js');
+    expect(imports('routing/features/candidate.ts')).toContain('routing/features/spend.js');
   });
 });

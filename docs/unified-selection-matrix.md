@@ -202,7 +202,7 @@ Weight không xuất hiện trực tiếp trong một scenario vẫn liên hệ 
 
 Nhiều friction event dùng giá trị nhỏ nhất. Unattributed friction được ghi evidence nhưng không tự giảm feature.
 
-Nguồn: [weights.ts](../extensions/routing/optimization/weights.ts), [session.ts](../extensions/routing/features/session.ts).
+Nguồn: [weights.ts](../extensions/routing/optimization/weights.ts), [continuity.ts](../extensions/routing/features/continuity.ts), [recovery.ts](../extensions/routing/features/recovery.ts).
 
 ## 6. Ma trận giá, cache, effort và tốc độ
 
@@ -271,7 +271,7 @@ Host có thể bổ sung warm-prefix credits từ model history khi `reputation`
 
 Production dùng registry prices, kể cả provider subscription. Không có phí tháng, remaining quota hay `apiCostModels` trong công thức. Trường price tiers không được đọc trong `predictSpend()`; hàm này dùng các price fields ở cấp trên.
 
-Nguồn: [economics.ts](../extensions/routing/features/economics.ts), [candidate.ts](../extensions/routing/features/candidate.ts).
+Nguồn: [output-demand.ts](../extensions/routing/features/output-demand.ts), [cache.ts](../extensions/routing/features/cache.ts), [spend.ts](../extensions/routing/features/spend.ts), [latency.ts](../extensions/routing/features/latency.ts), [candidate.ts](../extensions/routing/features/candidate.ts).
 
 ## 7. Ma trận preferences → constraints → miền Θ
 

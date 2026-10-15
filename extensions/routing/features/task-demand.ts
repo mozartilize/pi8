@@ -18,7 +18,7 @@ import {
 import type { DemandInterval, TaskSnapshot } from './state.js';
 
 export type DemandAxis = keyof TaskRelevance;
-export const DEMAND_AXES: readonly DemandAxis[] = ['reasoning', 'agentic', 'research'];
+const DEMAND_AXES: readonly DemandAxis[] = ['reasoning', 'agentic', 'research'];
 
 export interface TaskDemand {
   /** Collecting context in the gather phase: the deliverable's demand is not yet known. */

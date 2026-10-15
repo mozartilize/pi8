@@ -6,13 +6,16 @@
 import type { BenchModel, ProvenanceAxis } from '../../types.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import type { EffectiveAction } from './actions.js';
-import { costFeature, outputDemandPrior, outputTokenForecast, predictSpend, timeFeature, type PredictedSpendV1 } from './economics.js';
+import { continuityFeature } from './continuity.js';
+import { timeFeature } from './latency.js';
 import { clamp01 } from './mapping.js';
 import { capabilityFeatures, evidenceGaps, rowAtServedEffort, type Interval } from './model.js';
-import { composeTaskDemand } from './task-demand.js';
-import { FEATURE_INDEX, FEATURE_MAPPING_VERSION, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName } from './schema.js';
-import { sessionFeatures } from './session.js';
+import { outputDemandPrior, outputTokenForecast } from './output-demand.js';
+import { recoveryFeatures } from './recovery.js';
+import { FEATURE_INDEX, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName } from './schema.js';
+import { costFeature, predictSpend, type PredictedSpendV1 } from './spend.js';
 import type { DecisionStateV1 } from './state.js';
+import { composeTaskDemand } from './task-demand.js';
 
 export interface ActionFeatures {
   action: EffectiveAction;
@@ -52,16 +55,15 @@ export function candidateFeatures(
   const time = timeFeature(row, demand, output);
   intervals.set('timeDesirability', time.interval);
   evidence.push(time.evidence);
-  const session = sessionFeatures(state, action);
   const exact = (value: number): Interval => ({ center: value, lower: value, upper: value });
-  intervals.set('continuity', exact(session.continuity));
-  intervals.set('frictionAvoidance', exact(session.frictionAvoidance));
-  intervals.set('effortRecoveryFit', exact(session.effortRecoveryFit));
-  intervals.set('modelSwitchRecoveryFit', exact(session.modelSwitchRecoveryFit));
-  evidence.push(...session.evidence);
-  for (const name of ['effortRecoveryFit', 'modelSwitchRecoveryFit'] as const) {
-    evidence.push({ feature: name, code: 'boundary-rule', mapping: FEATURE_MAPPING_VERSION });
-  }
+  const continuity = continuityFeature(state, action);
+  intervals.set('continuity', exact(continuity.value));
+  evidence.push(continuity.evidence);
+  const recovery = recoveryFeatures(state, action);
+  intervals.set('frictionAvoidance', exact(recovery.frictionAvoidance));
+  intervals.set('effortRecoveryFit', exact(recovery.effortRecoveryFit));
+  intervals.set('modelSwitchRecoveryFit', exact(recovery.modelSwitchRecoveryFit));
+  evidence.push(...recovery.evidence);
 
   const values = new Array<number>(FEATURE_NAMES.length);
   const lower = new Array<number>(FEATURE_NAMES.length);

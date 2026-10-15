@@ -18,7 +18,8 @@ import { candidateFeatures } from './candidate.js';
 import { evidenceGaps } from './model.js';
 import { composeTaskDemand } from './task-demand.js';
 import { FEATURE_INDEX, type FeatureName } from './schema.js';
-import { sessionFeatures } from './session.js';
+import { continuityFeature } from './continuity.js';
+import { recoveryFeatures } from './recovery.js';
 import type { DecisionStateV1 } from './state.js';
 
 const EPS = 1e-6;
@@ -311,8 +312,8 @@ describe('N5: total continuity and exact recovery attribution', () => {
 
   it('matches the hand table at the W rework boundary', () => {
     const table = actions.map((a) => {
-      const f = sessionFeatures(rework, a);
-      return [a.key, f.continuity, f.frictionAvoidance, f.effortRecoveryFit, f.modelSwitchRecoveryFit];
+      const f = recoveryFeatures(rework, a);
+      return [a.key, continuityFeature(rework, a).value, f.frictionAvoidance, f.effortRecoveryFit, f.modelSwitchRecoveryFit];
     });
     expect(table).toEqual([
       ['p/X:low', 0.65, 1, 0, 0],
@@ -325,18 +326,18 @@ describe('N5: total continuity and exact recovery attribution', () => {
 
   it('uses 0.65/0.45 at an ordinary boundary with no recovery features, and 0.50 without an incumbent', () => {
     const ordinary = state({ incumbent: { registryId: 'p/X', effort: 'medium' } });
-    expect(actions.map((a) => sessionFeatures(ordinary, a).continuity)).toEqual([0.65, 0.65, 0.65, 0.45, 0.45]);
+    expect(actions.map((a) => continuityFeature(ordinary, a).value)).toEqual([0.65, 0.65, 0.65, 0.45, 0.45]);
     for (const a of actions) {
-      expect(sessionFeatures(ordinary, a)).toMatchObject({ effortRecoveryFit: 0, modelSwitchRecoveryFit: 0 });
-      expect(sessionFeatures(state(), a).continuity).toBe(0.5);
+      expect(recoveryFeatures(ordinary, a)).toMatchObject({ effortRecoveryFit: 0, modelSwitchRecoveryFit: 0 });
+      expect(continuityFeature(state(), a).value).toBe(0.5);
     }
   });
 
   it('counts friction only for the exact model, effort and work item', () => {
     const loop = state({ workItemId: 'W', friction: [{ registryId: 'p/X', effort: 'high', workItemId: 'W', kind: 'severe-reasoning-loop' }] });
-    expect(actions.map((a) => sessionFeatures(loop, a).frictionAvoidance)).toEqual([1, 1, 0.25, 1, 1]);
+    expect(actions.map((a) => recoveryFeatures(loop, a).frictionAvoidance)).toEqual([1, 1, 0.25, 1, 1]);
     const unattributed = state({ workItemId: 'W', friction: [{ registryId: 'p/X', effort: 'high', workItemId: 'W', kind: 'unattributed' }] });
-    expect(sessionFeatures(unattributed, actions[2]!).frictionAvoidance).toBe(1);
+    expect(recoveryFeatures(unattributed, actions[2]!).frictionAvoidance).toBe(1);
   });
 });
 
