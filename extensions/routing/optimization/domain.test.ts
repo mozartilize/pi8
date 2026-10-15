@@ -18,9 +18,14 @@ import {
   thetaBasePolytope,
 } from './domain.js';
 import { WorkerLpAdapter, pointProblem, type Polytope } from './lp.js';
-import { solveMinimaxRegret } from './regret.js';
+import { compileDecisionProblem, type SelectableAction } from './compile.js';
+import { solveMinimaxRegret, type NumericDomain } from './minimax.js';
+import type { LPAdapter, LpRunControls } from './lp.js';
 import { THETA0 } from './weights.js';
 import { preferenceProfileDigest } from '../preferences/schema.js';
+
+const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
+  solveMinimaxRegret(compileDecisionProblem(actions), domain, lp, controls);
 
 const lp = new WorkerLpAdapter();
 afterAll(() => lp.close());
@@ -143,7 +148,7 @@ describe('single-answer expressibility', () => {
   it.each(CORE_PREFERENCE_KEYS)('%s: each direction selects its own option with zero regret on the frozen pair', async (key) => {
     for (const direction of ['A', 'B'] as const) {
       const artifact = await compileDomainArtifact(toProfile({ [key]: direction }), lp);
-      const result = await solveMinimaxRegret(scenarioActions(key), artifact.domain, lp);
+      const result = await solveActions(scenarioActions(key), artifact.domain, lp);
       expect(result.chosen).toBe(`${key}:${direction}`);
       expect(result.maxRegret.get(`${key}:${direction}`)).toBeLessThanOrEqual(1e-7);
       expect(result.maxRegret.get(`${key}:${direction === 'A' ? 'B' : 'A'}`)).toBeGreaterThan(1e-4);

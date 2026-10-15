@@ -33,6 +33,14 @@ describe('router import boundaries', () => {
     }
   });
 
+  it('the numerical optimizer imports only the LP adapter and Node built-ins', () => {
+    for (const file of ['routing/optimization/minimax.ts', 'routing/optimization/lp.ts']) {
+      for (const target of imports(file)) {
+        expect(target, `${file} imports ${target}`).toMatch(/^(routing\/optimization\/(lp|minimax)\.js|node:.*)$/);
+      }
+    }
+  });
+
   it('the boundary check sees relative imports', () => {
     expect(imports('routing/features/candidate.ts')).toContain('routing/features/economics.js');
   });

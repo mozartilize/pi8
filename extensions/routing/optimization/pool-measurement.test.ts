@@ -19,8 +19,13 @@ import { preferenceProfileDigest, validatePreferences, type UserRoutingPreferenc
 import type { RegistryModelInfo } from '../score/scorer.js';
 import { domainIdentity, thetaBaseDomain } from './domain.js';
 import { WorkerLpAdapter } from './lp.js';
-import { solveMinimaxRegret } from './regret.js';
+import { compileDecisionProblem, type SelectableAction } from './compile.js';
+import { solveMinimaxRegret, type NumericDomain } from './minimax.js';
+import type { LPAdapter, LpRunControls } from './lp.js';
 import { DomainCache, SPIKE_SOLVER_BUDGET, selectByRegret, type SelectionCandidate } from './select.js';
+
+const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
+  solveMinimaxRegret(compileDecisionProblem(actions), domain, lp, controls);
 
 const ENABLED = process.env.PI8_POOL_MEASURE === '1';
 const PHASES: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
@@ -131,7 +136,7 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
                   };
                   // The selector compares the whole pool; LP solves are counted on the same pool and domain.
                   const domain = label === 'empty' ? thetaBaseDomain() : cache.lookup(domainIdentity(profile))?.domain;
-                  const solves = domain ? (await solveMinimaxRegret(result.actions.map((a) => ({ features: a.features })), domain, lp)).lpSolves : undefined;
+                  const solves = domain ? (await solveActions(result.actions.map((a) => ({ features: a.features })), domain, lp)).lpSolves : undefined;
                   log(`  ${label} ${phase}: pool ${result.actions.length} (${result.insufficientEvidence.length} without required evidence, compared in the same pool); LP solves ${solves ?? '-'}; ${result.solver}; top ${result.ranking.slice(0, 3).map(describe).join(' | ')}`);
                 }
               }

@@ -9,7 +9,8 @@
  */
 import { Worker } from 'node:worker_threads';
 
-import { LP_RESIDUAL_TOLERANCE } from './weights.js';
+/** Absolute LP residual tolerance; not a preference tolerance. */
+export const LP_RESIDUAL_TOLERANCE = 1e-7;
 
 export interface LinearRow {
   /** Dense coefficients, one per column. */

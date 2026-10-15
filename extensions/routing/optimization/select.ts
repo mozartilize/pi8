@@ -29,7 +29,8 @@ import {
   type DomainArtifact,
 } from './domain.js';
 import { LpCancelledError, LpTimeoutError, LpVerificationError, type LPAdapter } from './lp.js';
-import { centralChoice, solveMinimaxRegret, type SelectableAction } from './regret.js';
+import { checkDomain, compileDecisionProblem, type SelectableAction } from './compile.js';
+import { centralChoice, solveMinimaxRegret } from './minimax.js';
 import { THETA0 } from './weights.js';
 
 export type DomainStatus = 'ready' | 'domain-not-ready' | 'domain-error' | 'unsupported-version';
@@ -215,7 +216,7 @@ export async function selectByRegret(
   const actions = candidates
     .filter((candidate) => !allowed || allowed.has(candidate.action.key))
     .map((candidate) => candidateFeatures(state, candidate.model, candidate.action, rows));
-  const pool = actions.map(toSelectable);
+  const problem = compileDecisionProblem(actions.map(toSelectable));
   const insufficientEvidence = actions.filter((features) => features.evidenceGaps.length > 0)
     .map((features) => features.features.key).sort();
   const allInsufficient = actions.length > 0 && insufficientEvidence.length === actions.length;
@@ -242,7 +243,7 @@ export async function selectByRegret(
     constraintsEnforced: boolean,
     compiled?: DomainArtifact,
   ): UnifiedDecision => {
-    const { chosen, ranking } = centralChoice(pool, theta);
+    const { chosen, ranking } = centralChoice(problem, theta);
     return {
       ...base, solver: 'fallback-central', solverFallbackReason: reason, domainStatus, constraintsEnforced,
       chosen, ranking, theta,
@@ -285,11 +286,13 @@ export async function selectByRegret(
     return finish(central(notReady!.reason, notReady!.status, THETA0, false));
   }
   const enforced = true;
-  if (controls.pairCap !== undefined && pool.length * (pool.length - 1) > controls.pairCap) {
+  const size = problem.actions.length;
+  if (controls.pairCap !== undefined && size * (size - 1) > controls.pairCap) {
     return finish(central('spike-pair-cap', 'ready', artifact.thetaRepresentative, enforced, artifact));
   }
   try {
-    const exact = await solveMinimaxRegret(pool, artifact.domain, ports.lp, { signal: controls.signal, deadlineAt });
+    checkDomain(problem, artifact.domain);
+    const exact = await solveMinimaxRegret(problem, artifact.domain, ports.lp, { signal: controls.signal, deadlineAt });
     if (controls.signal?.aborted) return { kind: 'cancelled' };
     return finish({
       ...base, solver: 'exact', domainStatus: 'ready', constraintsEnforced: enforced,

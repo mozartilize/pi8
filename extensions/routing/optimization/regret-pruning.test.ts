@@ -11,8 +11,13 @@ import type { ActionFeatureVector } from '../features/schema.js';
 import type { UserRoutingPreferencesV1 } from '../preferences/schema.js';
 import { compileDomainArtifact, thetaBaseDomain, type WeightDomain } from './domain.js';
 import { WorkerLpAdapter } from './lp.js';
-import { baseDomainMax, pairObjective, solveMinimaxRegret, type SelectableAction } from './regret.js';
+import { compileDecisionProblem, type SelectableAction } from './compile.js';
+import { baseDomainMax, pairObjective, solveMinimaxRegret, type NumericDomain, type RegretResult } from './minimax.js';
+import type { LPAdapter, LpRunControls } from './lp.js';
 import { THETA_BOUNDS } from './weights.js';
+
+const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
+  solveMinimaxRegret(compileDecisionProblem(actions), domain, lp, controls);
 
 const lp = new WorkerLpAdapter();
 afterAll(() => lp.close());
@@ -36,7 +41,7 @@ async function reference(actions: readonly SelectableAction[], domain: WeightDom
  * Every regret equals the reference, and the ranking is in reference regret
  * order: no later action has a smaller reference regret than an earlier one.
  */
-function expectSameRanking(result: Awaited<ReturnType<typeof solveMinimaxRegret>>, expected: ReadonlyMap<string, number>) {
+function expectSameRanking(result: RegretResult, expected: ReadonlyMap<string, number>) {
   expect(result.ranking).toHaveLength(expected.size);
   for (const [key, value] of expected) expect(result.maxRegret.get(key)!).toBeCloseTo(value, 6);
   for (let i = 1; i < result.ranking.length; i++) {
@@ -74,7 +79,7 @@ const CONFLICTING: UserRoutingPreferencesV1 = { version: 1, openDesignDecisions:
 describe('baseDomainMax', () => {
   it('equals the independent greedy oracle', () => {
     fc.assert(fc.property(fc.array(fc.double({ min: -1, max: 1, noNaN: true }), { minLength: 10, maxLength: 10 }), (c) => {
-      expect(baseDomainMax(c)).toBeCloseTo(greedyBoxSimplexMax(c, THETA_BOUNDS), 12);
+      expect(baseDomainMax(c, THETA_BOUNDS)).toBeCloseTo(greedyBoxSimplexMax(c, THETA_BOUNDS), 12);
     }));
   });
 });
@@ -83,7 +88,7 @@ describe('pruned solver equals the unpruned reference', () => {
   it('ThetaBase: same regrets and winner without any LP', async () => {
     const base = thetaBaseDomain();
     await fc.assert(fc.asyncProperty(pool, async (actions) => {
-      const result = await solveMinimaxRegret(actions, base, lp);
+      const result = await solveActions(actions, base, lp);
       const expected = await reference(actions, base);
       expect(result.lpSolves).toBe(0);
       expectSameRanking(result, expected);
@@ -94,7 +99,7 @@ describe('pruned solver equals the unpruned reference', () => {
     const artifact = await compileDomainArtifact(profile, lp);
     expect(artifact.domain.mode).toBe(mode);
     await fc.assert(fc.asyncProperty(pool, async (actions) => {
-      const result = await solveMinimaxRegret(actions, artifact.domain, lp);
+      const result = await solveActions(actions, artifact.domain, lp);
       expectSameRanking(result, await reference(actions, artifact.domain));
       expect(result.lpSolves).toBeLessThanOrEqual(actions.length * (actions.length - 1));
     }), { numRuns: 25 });
@@ -103,7 +108,7 @@ describe('pruned solver equals the unpruned reference', () => {
   it('clustered pools: bounds close together still give the whole ranking', async () => {
     const artifact = await compileDomainArtifact(OPERATOR, lp);
     await fc.assert(fc.asyncProperty(clusteredPool(), async (actions) => {
-      const result = await solveMinimaxRegret(actions, artifact.domain, lp);
+      const result = await solveActions(actions, artifact.domain, lp);
       expectSameRanking(result, await reference(actions, artifact.domain));
     }), { numRuns: 300 });
   }, 120_000);
@@ -111,7 +116,7 @@ describe('pruned solver equals the unpruned reference', () => {
   it('pools larger than one LP chunk: the whole ranking is in regret order', async () => {
     const artifact = await compileDomainArtifact(OPERATOR, lp);
     await fc.assert(fc.asyncProperty(clusteredPool(24, 40), async (actions) => {
-      const result = await solveMinimaxRegret(actions, artifact.domain, lp);
+      const result = await solveActions(actions, artifact.domain, lp);
       expectSameRanking(result, await reference(actions, artifact.domain));
     }), { numRuns: 25 });
   }, 120_000);
@@ -119,7 +124,7 @@ describe('pruned solver equals the unpruned reference', () => {
   it('cuts LP work on a large pool and keeps every action in the ranking', async () => {
     const artifact = await compileDomainArtifact(OPERATOR, lp);
     const actions = fc.sample(fc.tuple(...Array.from({ length: 60 }, (_, i) => action(i))), 1)[0]!;
-    const result = await solveMinimaxRegret(actions, artifact.domain, lp);
+    const result = await solveActions(actions, artifact.domain, lp);
     expect(result.ranking).toHaveLength(60);
     expect(new Set(result.ranking).size).toBe(60);
     // Pruning must skip a large share of the ordered pairs; the exact share depends on the domain shape.
@@ -133,7 +138,7 @@ describe('pruned solver equals the unpruned reference', () => {
     const c = mk('c', [0.9, 0.9, 0.9, 0.5, 0.5, 0.5, 0.5, 1, 0, 0]);
     const b = mk('b', [0.8, 0.8, 0.8, 0.5, 0.5, 0.5, 0.5, 1, 0, 0]);
     const artifact = await compileDomainArtifact(OPERATOR, lp);
-    const result = await solveMinimaxRegret([c, b], artifact.domain, lp);
+    const result = await solveActions([c, b], artifact.domain, lp);
     const expected = await reference([c, b], artifact.domain);
     expect(result.maxRegret.get('c')!).toBeCloseTo(expected.get('c')!, 7);
     expect(result.maxRegret.get('b')!).toBeCloseTo(expected.get('b')!, 7);

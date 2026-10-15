@@ -18,10 +18,14 @@ import type { WorkPhaseState } from '../policy/work-phase.js';
 import { preferenceProfileDigest, validatePreferences, type UserRoutingPreferencesV1 } from '../preferences/schema.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import { compileDomainArtifact, thetaBaseDomain, type DomainArtifact, type WeightDomain } from './domain.js';
-import { WorkerLpAdapter, type LPAdapter, type LpRequest, type LpResult, type Polytope } from './lp.js';
-import { centralChoice, solveMinimaxRegret, sortByKey } from './regret.js';
+import { WorkerLpAdapter, type LPAdapter, type LpRequest, type LpResult, type LpRunControls, type Polytope } from './lp.js';
+import { compileDecisionProblem, type SelectableAction } from './compile.js';
+import { centralChoice, solveMinimaxRegret, type NumericDomain } from './minimax.js';
 import { DomainCache, selectByRegret, type SelectionCandidate, type SelectorPorts, type UnifiedDecision } from './select.js';
 import { THETA0, THETA_BOUNDS } from './weights.js';
+
+const solveActions = (actions: readonly SelectableAction[], domain: NumericDomain, lp: LPAdapter, controls?: LpRunControls) =>
+  solveMinimaxRegret(compileDecisionProblem(actions), domain, lp, controls);
 
 const lp = new WorkerLpAdapter();
 afterAll(() => lp.close());
@@ -38,7 +42,7 @@ describe('N4: regret direction and independent oracle', () => {
     Math.max(0, greedyBoxSimplexMax(b.upper.map((u, j) => u - a.lower[j]!), THETA_BOUNDS));
 
   it('chooses the action with the smaller oracle max regret, with matching values', async () => {
-    const result = await solveMinimaxRegret([{ features: P }, { features: Q }], thetaBaseDomain(), lp);
+    const result = await solveActions([{ features: P }, { features: Q }], thetaBaseDomain(), lp);
     const expected = { P: oraclePR(P, Q), Q: oraclePR(Q, P) };
     expect(result.maxRegret.get('P')).toBeCloseTo(expected.P, 7);
     expect(result.maxRegret.get('Q')).toBeCloseTo(expected.Q, 7);
@@ -48,14 +52,14 @@ describe('N4: regret direction and independent oracle', () => {
   });
 
   it('excludes self-pairs: a single uncertain action has zero regret', async () => {
-    const result = await solveMinimaxRegret([{ features: Q }], thetaBaseDomain(), lp);
+    const result = await solveActions([{ features: Q }], thetaBaseDomain(), lp);
     expect(result.maxRegret.get('Q')).toBe(0);
   });
 
   it('does not depend on pool order', async () => {
     const R = exactVector('R', common.map((v, j) => (j === 1 ? 0.7 : v)));
-    const forward = await solveMinimaxRegret([{ features: P }, { features: Q }, { features: R }], thetaBaseDomain(), lp);
-    const backward = await solveMinimaxRegret([{ features: R }, { features: Q }, { features: P }], thetaBaseDomain(), lp);
+    const forward = await solveActions([{ features: P }, { features: Q }, { features: R }], thetaBaseDomain(), lp);
+    const backward = await solveActions([{ features: R }, { features: Q }, { features: P }], thetaBaseDomain(), lp);
     expect(backward.ranking).toEqual(forward.ranking);
     expect([...backward.maxRegret]).toEqual(expect.arrayContaining([...forward.maxRegret]));
   });
@@ -64,11 +68,11 @@ describe('N4: regret direction and independent oracle', () => {
     const same = exactVector('b', common);
     const higherContinuity = exactVector('c', common.map((v, j) => (j === 6 ? 0.6 : v)));
     // Equal features except continuity: c dominates, so it has zero regret.
-    expect((await solveMinimaxRegret([{ features: same }, { features: higherContinuity }], thetaBaseDomain(), lp)).chosen).toBe('c');
+    expect((await solveActions([{ features: same }, { features: higherContinuity }], thetaBaseDomain(), lp)).chosen).toBe('c');
     const twin = exactVector('a', common);
-    const cheaper = await solveMinimaxRegret([{ features: twin, centralUsd: 0.2 }, { features: same, centralUsd: 0.1 }], thetaBaseDomain(), lp);
+    const cheaper = await solveActions([{ features: twin, centralUsd: 0.2 }, { features: same, centralUsd: 0.1 }], thetaBaseDomain(), lp);
     expect(cheaper.chosen).toBe('b');
-    const unpriced = await solveMinimaxRegret([{ features: twin }, { features: same }], thetaBaseDomain(), lp);
+    const unpriced = await solveActions([{ features: twin }, { features: same }], thetaBaseDomain(), lp);
     expect(unpriced.chosen).toBe('a');
   });
 });
@@ -102,8 +106,8 @@ describe('demand bounds in exact regret', () => {
     const narrow = actions(0.375, 0.625);
     const wide = actions(0, 1);
     expect(narrow.map((a) => a.features.values)).toEqual(wide.map((a) => a.features.values));
-    const bounded = await solveMinimaxRegret(narrow, thetaBaseDomain(), lp);
-    const unknown = await solveMinimaxRegret(wide, thetaBaseDomain(), lp);
+    const bounded = await solveActions(narrow, thetaBaseDomain(), lp);
+    const unknown = await solveActions(wide, thetaBaseDomain(), lp);
     // Both meet the bounded target, so cheaper has zero regret. At demand 1,
     // cheap loses 4/15 reasoning fit; the adversary uses weights 0.45 and 0.08.
     expect(bounded.ranking).toEqual(['cheap', 'strong']);
@@ -139,11 +143,11 @@ describe('analytic solver fixtures: preferences, not capability priority, order 
     // A: reasoning 1.0, cost 0.2. B: reasoning 0.9, cost 0.3.
     // U(A) - U(B) = 0.05 * 0.1 - 0.55 * 0.1 = -0.05 (cost-oriented), 0.45 * 0.1 - 0.08 * 0.1 = +0.037 (capability-oriented).
     const actions = [{ features: vector('A', 1.0, 0.2) }, { features: vector('B', 0.9, 0.3) }];
-    const cost = await solveMinimaxRegret(actions, pointDomain(COST_ORIENTED), lp);
+    const cost = await solveActions(actions, pointDomain(COST_ORIENTED), lp);
     expect(cost.chosen).toBe('B');
     expect(cost.maxRegret.get('B')).toBeCloseTo(0, 9);
     expect(cost.maxRegret.get('A')).toBeCloseTo(0.05, 9);
-    const capability = await solveMinimaxRegret(actions, pointDomain(CAPABILITY_ORIENTED), lp);
+    const capability = await solveActions(actions, pointDomain(CAPABILITY_ORIENTED), lp);
     expect(capability.chosen).toBe('A');
     expect(capability.maxRegret.get('A')).toBeCloseTo(0, 9);
     expect(capability.maxRegret.get('B')).toBeCloseTo(0.037, 9);
@@ -154,7 +158,7 @@ describe('analytic solver fixtures: preferences, not capability priority, order 
     // The cheaper action gains at least 0.08 / 3 from cost and loses at most 0.45e-6 on reasoning.
     const strong = vector('strong', 0.6 + 1e-6, 1 / 6);
     const cheaper = vector('cheaper', 0.6, 1 / 2);
-    const result = await solveMinimaxRegret([{ features: strong }, { features: cheaper }], thetaBaseDomain(), lp);
+    const result = await solveActions([{ features: strong }, { features: cheaper }], thetaBaseDomain(), lp);
     expect(result.chosen).toBe('cheaper');
     expect(result.maxRegret.get('cheaper')).toBe(0);
     expect(result.maxRegret.get('strong')).toBeCloseTo(0.55 / 3, 9);
@@ -285,7 +289,7 @@ describe('selectByRegret result paths', () => {
     const result = await selectByRegret(solverState, candidates, rows, snapshot(profile), portsWith(() => undefined, noLp),
       { expectedProfileDigest: preferenceProfileDigest(profile), decisionDeadlineMs: 0 });
     expect(result).toMatchObject({ kind: 'decision', solver: 'exact', constraintsEnforced: true });
-    const viaLp = await solveMinimaxRegret(candidates.map((c) => ({ features: (result as UnifiedDecision).actions.find((a) => a.action.key === c.action.key)!.features })), { ...thetaBaseDomain(), mode: 'hard' }, lp);
+    const viaLp = await solveActions(candidates.map((c) => ({ features: (result as UnifiedDecision).actions.find((a) => a.action.key === c.action.key)!.features })), { ...thetaBaseDomain(), mode: 'hard' }, lp);
     expect(viaLp.chosen).toBe((result as UnifiedDecision).chosen);
   });
 
@@ -636,12 +640,12 @@ describe('spike pair cap discontinuity (synthetic, CPU only)', () => {
     // The 65th action is dominated by every other action.
     vectors[64] = exactVector('z-irrelevant', [0, 0, 0.5, 0.5, 0, 0.5, 0.5, 1, 0, 0]);
     const actions = vectors.map((features) => ({ features }));
-    const exact = await solveMinimaxRegret(actions.slice(0, 64), thetaBaseDomain(), lp);
-    const withIrrelevant = await solveMinimaxRegret(actions, thetaBaseDomain(), lp);
+    const exact = await solveActions(actions.slice(0, 64), thetaBaseDomain(), lp);
+    const withIrrelevant = await solveActions(actions, thetaBaseDomain(), lp);
     // Exact regret is unchanged by a dominated action.
     expect(withIrrelevant.chosen).toBe(exact.chosen);
     // Under the spike cap the 65-action pool would take the central path instead.
-    const capped = centralChoice(sortByKey(actions), THETA0);
+    const capped = centralChoice(compileDecisionProblem(actions), THETA0);
     expect(64 * 63).toBeLessThanOrEqual(4096);
     expect(65 * 64).toBeGreaterThan(4096);
     expect(typeof capped.chosen).toBe('string');
