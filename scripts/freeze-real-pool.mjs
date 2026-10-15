@@ -27,7 +27,7 @@ try {
   });
   // Exclude URLs, headers, credentials and user settings from the public fixture.
   const registry = [...await runtime.getAvailable()].map((model) => ({
-    ...selectFields(model, ['provider', 'id', 'api', 'contextWindow', 'maxTokens', 'reasoning', 'input', 'cost', 'thinkingLevelMap']),
+    ...selectFields(model, ['provider', 'id', 'api', 'contextWindow', 'maxTokens', 'reasoning', 'input', 'cost', 'thinkingLevelMap', 'promptCache']),
     ...(model.compat?.supportsMidConvoEffort !== undefined ? { compat: { supportsMidConvoEffort: model.compat.supportsMidConvoEffort } } : {}),
   })).sort((a, b) => `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`));
   if (registry.length === 0) throw new Error('The available registry is empty.');

@@ -58,9 +58,14 @@ describe('real candidate pool', () => {
   });
 
   it('contains only public registry metadata, not credentials or endpoint settings', () => {
-    const allowed = new Set(['provider', 'id', 'api', 'contextWindow', 'maxTokens', 'reasoning', 'input', 'cost', 'thinkingLevelMap', 'compat']);
+    const allowed = new Set(['provider', 'id', 'api', 'contextWindow', 'maxTokens', 'reasoning', 'input', 'cost', 'thinkingLevelMap', 'promptCache', 'compat']);
     expect(fixture.registry.flatMap((model) => Object.keys(model).filter((key) => !allowed.has(key)))).toEqual([]);
     expect(fixture.registry.flatMap((model) => Object.keys(model.compat ?? {}).filter((key) => key !== 'supportsMidConvoEffort'))).toEqual([]);
+  });
+
+  it('keeps the prompt-cache lifetimes that warm-prefix credit reads', () => {
+    // Without them every warm prefix in the frozen pool is `ttl-unknown`.
+    expect(fixture.registry.some((model) => model.promptCache !== undefined)).toBe(true);
   });
 
   it('has a candidate for every catalog model', () => {

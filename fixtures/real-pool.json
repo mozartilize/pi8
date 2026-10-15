@@ -2,7 +2,7 @@
   "source": "Artificial Analysis API and models page with the available Pi provider registry",
   "indexVersion": "4.3",
   "piVersion": "1.1.0",
-  "registryDigest": "7dae28e417985420f322514f4a771cfd235394cb168b005eee50de1ec6014e7e",
+  "registryDigest": "a273b85c5e54bcd780c651ecb0277cf39d853c5d4505d36220953cdbe8b3787b",
   "benchmarkDigest": "0ecb5817045e11ac97d636fc16494e9e6e6f234a89b137e2f67d69f49f2baeb8",
   "registry": [
     {
@@ -26,6 +26,10 @@
         "off": null,
         "xhigh": "xhigh",
         "max": "max"
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -50,6 +54,10 @@
         "xhigh": "xhigh",
         "max": "max"
       },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
+      },
       "compat": {
         "supportsMidConvoEffort": true
       }
@@ -70,6 +78,10 @@
         "output": 5,
         "cacheRead": 0.1,
         "cacheWrite": 1.25
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -88,6 +100,10 @@
         "output": 5,
         "cacheRead": 0.1,
         "cacheWrite": 1.25
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -125,6 +141,10 @@
         "xhigh": "xhigh",
         "max": "max"
       },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
+      },
       "compat": {
         "supportsMidConvoEffort": true
       }
@@ -145,6 +165,10 @@
         "output": 25,
         "cacheRead": 0.5,
         "cacheWrite": 6.25
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -163,6 +187,10 @@
         "output": 25,
         "cacheRead": 0.5,
         "cacheWrite": 6.25
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -184,6 +212,10 @@
       },
       "thinkingLevelMap": {
         "max": "max"
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -206,6 +238,10 @@
       "thinkingLevelMap": {
         "xhigh": "xhigh",
         "max": "max"
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -228,6 +264,10 @@
       "thinkingLevelMap": {
         "xhigh": "xhigh",
         "max": "max"
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -251,6 +291,10 @@
         "off": null,
         "xhigh": "xhigh",
         "max": "max"
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       },
       "compat": {
         "supportsMidConvoEffort": true
@@ -282,6 +326,10 @@
         "xhigh": "xhigh",
         "max": "max"
       },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
+      },
       "compat": {
         "supportsMidConvoEffort": true
       }
@@ -302,6 +350,10 @@
         "output": 15,
         "cacheRead": 0.3,
         "cacheWrite": 3.75
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -320,6 +372,10 @@
         "output": 15,
         "cacheRead": 0.3,
         "cacheWrite": 3.75
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -341,6 +397,10 @@
       },
       "thinkingLevelMap": {
         "max": "max"
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -363,6 +423,10 @@
       "thinkingLevelMap": {
         "xhigh": "xhigh",
         "max": "max"
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       }
     },
     {
@@ -390,6 +454,10 @@
         "high": "high",
         "xhigh": "xhigh",
         "max": "max"
+      },
+      "promptCache": {
+        "short": 300,
+        "long": 3600
       },
       "compat": {
         "supportsMidConvoEffort": true
