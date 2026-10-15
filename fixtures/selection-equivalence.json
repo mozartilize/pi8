@@ -1,0 +1,2282 @@
+{
+ "empty/lightweight/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "2c78bf014afcfb1f",
+  "maxRegret": "9fe2ebd69983118b",
+  "features": "c47e2f84e9c2b1c9",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "empty/lightweight/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-6-luna:off"
+  ],
+  "ranking": "8b13992f4e7e63f3",
+  "maxRegret": "16fa61bf674ed482",
+  "features": "aa3cbec56fb97ac3",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "empty/lightweight/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-5.6-luna:low"
+  ],
+  "ranking": "28a1ace0630a0a42",
+  "maxRegret": "4733f5c6dfbbe4c5",
+  "features": "047d4b6c6c0e0db9",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "empty/lightweight/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-5.6-luna:low"
+  ],
+  "ranking": "54691fc574739696",
+  "maxRegret": "be5953cb4e69bb30",
+  "features": "d247b251dff525e0",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "empty/gather/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-6-luna:off"
+  ],
+  "ranking": "b8b8aed9f65e9a02",
+  "maxRegret": "e1eb6e0b2204e299",
+  "features": "6d0e90b7ef5ba246",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "empty/gather/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "anthropic/claude-sonnet-5-5:high",
+  "top": [
+   "anthropic/claude-sonnet-5-5:high",
+   "github-copilot/claude-sonnet-5.5:high",
+   "opencode/claude-sonnet-5-5:high",
+   "github-copilot/claude-opus-5.5:medium",
+   "opencode/claude-opus-5-5:medium"
+  ],
+  "ranking": "ca5c72d578cb248a",
+  "maxRegret": "f68f657e3b4b0580",
+  "features": "df3c7d5c70245e64",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "empty/gather/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "anthropic/claude-sonnet-5-5:high",
+  "top": [
+   "anthropic/claude-sonnet-5-5:high",
+   "github-copilot/claude-sonnet-5.5:high",
+   "opencode/claude-sonnet-5-5:high",
+   "anthropic/claude-opus-5-5:medium",
+   "github-copilot/claude-opus-5.5:medium"
+  ],
+  "ranking": "a6e406b62baf1a4e",
+  "maxRegret": "ec7b054891e9025d",
+  "features": "d1f61ac690605fa0",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "empty/gather/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "anthropic/claude-sonnet-5-5:high",
+  "top": [
+   "anthropic/claude-sonnet-5-5:high",
+   "github-copilot/claude-sonnet-5.5:high",
+   "opencode/claude-sonnet-5-5:high",
+   "github-copilot/claude-opus-5.5:medium",
+   "opencode/claude-opus-5-5:medium"
+  ],
+  "ranking": "3df42ebbc359ec8f",
+  "maxRegret": "dfdeaf25f535280c",
+  "features": "6a6495152cc2973f",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "empty/plan/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:high",
+  "top": [
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high",
+   "opencode/gpt-6.1-sol:high",
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh"
+  ],
+  "ranking": "15339bd62c68b22c",
+  "maxRegret": "c6de8f9de17dd725",
+  "features": "7f46a3c5b2d1e037",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "empty/plan/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:high",
+  "top": [
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high",
+   "opencode/gpt-6.1-sol:high",
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh"
+  ],
+  "ranking": "b289c84d34ea1414",
+  "maxRegret": "ffd233f4e949e5a0",
+  "features": "d8fcd953858ce0c8",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "empty/plan/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high"
+  ],
+  "ranking": "232413cbd161be1b",
+  "maxRegret": "3f749e9ba4ab9d5d",
+  "features": "87991df15dc62d74",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "empty/plan/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high"
+  ],
+  "ranking": "3b186036986a6dfc",
+  "maxRegret": "db7da95c2c130945",
+  "features": "19902fc9a3d83bd6",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "empty/implement/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high"
+  ],
+  "ranking": "11f6c0ae7e4beb85",
+  "maxRegret": "cfd21cc72746ca3a",
+  "features": "ef80124bb7114033",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "empty/implement/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high"
+  ],
+  "ranking": "7edde84e3f0f35cd",
+  "maxRegret": "e27a74d11140935d",
+  "features": "5025c5e06b9399bb",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "empty/implement/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high"
+  ],
+  "ranking": "38a24be9aba6dcf1",
+  "maxRegret": "9241b01dc6bd6811",
+  "features": "b43e2bcf565619b7",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "empty/implement/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high"
+  ],
+  "ranking": "51f906f360e9f88f",
+  "maxRegret": "d7048828bbafb14e",
+  "features": "6b84c287380e3ac9",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "empty/review/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high"
+  ],
+  "ranking": "4622d55040144ea2",
+  "maxRegret": "6276b3d9bc8725b5",
+  "features": "292e574f118ce668",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "empty/review/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high"
+  ],
+  "ranking": "b0bde55b8c36a2f4",
+  "maxRegret": "6bf81f84536c2e92",
+  "features": "b778d25c7bd4117e",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "empty/review/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "anthropic/claude-opus-5-5:medium",
+   "github-copilot/claude-opus-5.5:medium"
+  ],
+  "ranking": "a88437badc11dfc1",
+  "maxRegret": "90eb93d95e5a2603",
+  "features": "40f9ca90c04a4357",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "empty/review/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "base",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/claude-opus-5.5:medium",
+   "opencode/claude-opus-5-5:medium"
+  ],
+  "ranking": "298c45daffdd0181",
+  "maxRegret": "f59f2ccb1dd5a80e",
+  "features": "5badd0d752d458b8",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator/lightweight/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "b04b40a9f706e8b4",
+  "maxRegret": "c6361fc12ec4f8c8",
+  "features": "c47e2f84e9c2b1c9",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "operator/lightweight/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "fe2aa6eb0eee04f1",
+  "maxRegret": "3a3bd345ebff7a6e",
+  "features": "aa3cbec56fb97ac3",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "operator/lightweight/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-5.6-luna:low"
+  ],
+  "ranking": "bfeb1149c88c096d",
+  "maxRegret": "c9f13720a61a012c",
+  "features": "047d4b6c6c0e0db9",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator/lightweight/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-5.6-luna:low"
+  ],
+  "ranking": "8ee5166e6b35cbd2",
+  "maxRegret": "cb9dabfb3a67cfc9",
+  "features": "d247b251dff525e0",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator/gather/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6.1-sol:high",
+  "top": [
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high",
+   "opencode/gpt-6.1-sol:high",
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh"
+  ],
+  "ranking": "0556e3264a3c3107",
+  "maxRegret": "582418679edb2b7a",
+  "features": "6d0e90b7ef5ba246",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator/gather/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6.1-sol:high",
+  "top": [
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high",
+   "opencode/gpt-6.1-sol:high",
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh"
+  ],
+  "ranking": "269fc6faf1a793b5",
+  "maxRegret": "7a9586b52eb615f9",
+  "features": "df3c7d5c70245e64",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator/gather/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high"
+  ],
+  "ranking": "315ea0e1633ddaf4",
+  "maxRegret": "71c3724493ac20a6",
+  "features": "d1f61ac690605fa0",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator/gather/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high"
+  ],
+  "ranking": "3344edf83015c268",
+  "maxRegret": "9aa22f295f99e661",
+  "features": "6a6495152cc2973f",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator/plan/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high"
+  ],
+  "ranking": "69e321551e1aa6de",
+  "maxRegret": "3f0313b42151b0df",
+  "features": "7f46a3c5b2d1e037",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator/plan/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6.1-sol:xhigh",
+  "top": [
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh",
+   "github-copilot/gpt-6.1-sol:high",
+   "openai-codex/gpt-6.1-sol:high"
+  ],
+  "ranking": "3d4ffd827f839a44",
+  "maxRegret": "05d3ff4c4a416dd6",
+  "features": "d8fcd953858ce0c8",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator/plan/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "anthropic/claude-opus-5-5:high",
+  "top": [
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh"
+  ],
+  "ranking": "319493b6422d9939",
+  "maxRegret": "9cb904549ce90f40",
+  "features": "87991df15dc62d74",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator/plan/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/claude-opus-5.5:high",
+  "top": [
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh"
+  ],
+  "ranking": "062f579af3c512a3",
+  "maxRegret": "fdbaf4c37aec2a26",
+  "features": "19902fc9a3d83bd6",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator/implement/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "94bc9fa27443636a",
+  "maxRegret": "86abcf58a55fe918",
+  "features": "ef80124bb7114033",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator/implement/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "2382afb88e2d2a40",
+  "maxRegret": "555a99d04bcad018",
+  "features": "5025c5e06b9399bb",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator/implement/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-6-luna:high"
+  ],
+  "ranking": "bfd758f6043f2020",
+  "maxRegret": "4091c9be26a66dc7",
+  "features": "b43e2bcf565619b7",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator/implement/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-6-luna:high"
+  ],
+  "ranking": "915c0544b5870a93",
+  "maxRegret": "aeb60016008f8799",
+  "features": "6b84c287380e3ac9",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator/review/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "anthropic/claude-opus-5-5:high",
+  "top": [
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh"
+  ],
+  "ranking": "156f8ed4114df441",
+  "maxRegret": "a808cf0a06d9d86f",
+  "features": "292e574f118ce668",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator/review/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/claude-opus-5.5:high",
+  "top": [
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "github-copilot/gpt-6.1-sol:xhigh",
+   "openai-codex/gpt-6.1-sol:xhigh",
+   "opencode/gpt-6.1-sol:xhigh"
+  ],
+  "ranking": "991c9d15b705381c",
+  "maxRegret": "199a679fc0f7aa0f",
+  "features": "b778d25c7bd4117e",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator/review/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "anthropic/claude-opus-5-5:high",
+  "top": [
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-sonnet-5-5:max",
+   "github-copilot/claude-sonnet-5.5:max"
+  ],
+  "ranking": "140bfe1506b2d5ed",
+  "maxRegret": "4435f4fb8923e114",
+  "features": "40f9ca90c04a4357",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator/review/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "github-copilot/claude-opus-5.5:high",
+  "top": [
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-sonnet-5-5:max",
+   "github-copilot/claude-sonnet-5.5:max",
+   "opencode/claude-sonnet-5-5:max"
+  ],
+  "ranking": "7a926edb42f317a4",
+  "maxRegret": "7e3ae03f92f58a28",
+  "features": "5badd0d752d458b8",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "conflicting/lightweight/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "openai-codex/gpt-5.6-luna:off"
+  ],
+  "ranking": "deccfc22b943dfeb",
+  "maxRegret": "71cf41343cf0b7ae",
+  "features": "c47e2f84e9c2b1c9",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "conflicting/lightweight/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-6-luna:off"
+  ],
+  "ranking": "793ce4b807890a57",
+  "maxRegret": "ee51649c12180390",
+  "features": "aa3cbec56fb97ac3",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "conflicting/lightweight/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-5.6-luna:low"
+  ],
+  "ranking": "45125a40b606af18",
+  "maxRegret": "7d4f97eb34913b24",
+  "features": "047d4b6c6c0e0db9",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "conflicting/lightweight/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/gpt-6-luna:low",
+  "top": [
+   "github-copilot/gpt-6-luna:low",
+   "openai-codex/gpt-6-luna:low",
+   "opencode-go/gpt-6-luna:low",
+   "opencode/gpt-6-luna:low",
+   "github-copilot/gpt-5.6-luna:medium"
+  ],
+  "ranking": "c972b0c49f11c093",
+  "maxRegret": "06cdabd6a5397170",
+  "features": "d247b251dff525e0",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "conflicting/gather/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "anthropic/claude-opus-5-5:high",
+  "top": [
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-opus-5-5:medium",
+   "github-copilot/claude-opus-5.5:medium"
+  ],
+  "ranking": "6d002c244176e8c4",
+  "maxRegret": "bcbadec35dda16b7",
+  "features": "6d0e90b7ef5ba246",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "conflicting/gather/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/claude-opus-5.5:medium",
+  "top": [
+   "github-copilot/claude-opus-5.5:medium",
+   "opencode/claude-opus-5-5:medium",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-sonnet-5-5:high"
+  ],
+  "ranking": "dc154790600c98c1",
+  "maxRegret": "06e8cd319ee1d8d4",
+  "features": "df3c7d5c70245e64",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "conflicting/gather/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "anthropic/claude-opus-5-5:medium",
+  "top": [
+   "anthropic/claude-opus-5-5:medium",
+   "github-copilot/claude-opus-5.5:medium",
+   "opencode/claude-opus-5-5:medium",
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high"
+  ],
+  "ranking": "4d8e289fca024c5c",
+  "maxRegret": "618836e86221a25d",
+  "features": "d1f61ac690605fa0",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "conflicting/gather/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/claude-opus-5.5:medium",
+  "top": [
+   "github-copilot/claude-opus-5.5:medium",
+   "opencode/claude-opus-5-5:medium",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-sonnet-5-5:high"
+  ],
+  "ranking": "8cebec98ce12b379",
+  "maxRegret": "7d6d497e52d44f62",
+  "features": "6a6495152cc2973f",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "conflicting/plan/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "anthropic/claude-opus-5-5:high",
+  "top": [
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-opus-5-5:xhigh",
+   "github-copilot/claude-opus-5.5:xhigh"
+  ],
+  "ranking": "194f606dfff08580",
+  "maxRegret": "21dd5648d946380e",
+  "features": "7f46a3c5b2d1e037",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "conflicting/plan/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/claude-opus-5.5:high",
+  "top": [
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "github-copilot/gpt-6-astra:xhigh",
+   "openai-codex/gpt-6-astra:xhigh",
+   "opencode/gpt-6-astra:xhigh"
+  ],
+  "ranking": "ea0a92ca6f3a8c72",
+  "maxRegret": "1fa57e895d76638c",
+  "features": "d8fcd953858ce0c8",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "conflicting/plan/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "anthropic/claude-opus-5-5:high",
+  "top": [
+   "anthropic/claude-opus-5-5:high",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-opus-5-5:xhigh",
+   "github-copilot/claude-opus-5.5:xhigh"
+  ],
+  "ranking": "dc9539dac22043cf",
+  "maxRegret": "ab60707342be75d3",
+  "features": "87991df15dc62d74",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "conflicting/plan/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/claude-opus-5.5:high",
+  "top": [
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "github-copilot/gpt-6-astra:xhigh",
+   "openai-codex/gpt-6-astra:xhigh",
+   "opencode/gpt-6-astra:xhigh"
+  ],
+  "ranking": "69fe958d25396a84",
+  "maxRegret": "85229f9a8f5995fe",
+  "features": "19902fc9a3d83bd6",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "conflicting/implement/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/gpt-6-astra:xhigh",
+  "top": [
+   "github-copilot/gpt-6-astra:xhigh",
+   "openai-codex/gpt-6-astra:xhigh",
+   "opencode/gpt-6-astra:xhigh",
+   "anthropic/claude-opus-5-5:xhigh",
+   "github-copilot/claude-opus-5.5:xhigh"
+  ],
+  "ranking": "d5ebdc027a6f161e",
+  "maxRegret": "aa0dfa3ed60d3a60",
+  "features": "ef80124bb7114033",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "conflicting/implement/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/gpt-6-astra:xhigh",
+  "top": [
+   "github-copilot/gpt-6-astra:xhigh",
+   "openai-codex/gpt-6-astra:xhigh",
+   "opencode/gpt-6-astra:xhigh",
+   "github-copilot/claude-opus-5.5:xhigh",
+   "opencode/claude-opus-5-5:xhigh"
+  ],
+  "ranking": "4441695ea7abb5f6",
+  "maxRegret": "112cf35e44e60ec3",
+  "features": "5025c5e06b9399bb",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "conflicting/implement/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/gpt-6-astra:xhigh",
+  "top": [
+   "github-copilot/gpt-6-astra:xhigh",
+   "openai-codex/gpt-6-astra:xhigh",
+   "opencode/gpt-6-astra:xhigh",
+   "anthropic/claude-opus-5-5:xhigh",
+   "github-copilot/claude-opus-5.5:xhigh"
+  ],
+  "ranking": "9b5b48e984f23dee",
+  "maxRegret": "3f1d613f59df5c01",
+  "features": "b43e2bcf565619b7",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "conflicting/implement/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/gpt-6-astra:xhigh",
+  "top": [
+   "github-copilot/gpt-6-astra:xhigh",
+   "openai-codex/gpt-6-astra:xhigh",
+   "opencode/gpt-6-astra:xhigh",
+   "github-copilot/claude-opus-5.5:xhigh",
+   "opencode/claude-opus-5-5:xhigh"
+  ],
+  "ranking": "548038728c78b3b2",
+  "maxRegret": "bb44790330f56e09",
+  "features": "6b84c287380e3ac9",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "conflicting/review/30000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "anthropic/claude-sonnet-5-5:max",
+  "top": [
+   "anthropic/claude-sonnet-5-5:max",
+   "github-copilot/claude-sonnet-5.5:max",
+   "opencode/claude-sonnet-5-5:max",
+   "anthropic/claude-opus-5-5:xhigh",
+   "github-copilot/claude-opus-5.5:xhigh"
+  ],
+  "ranking": "c0667cfc2ad73e8a",
+  "maxRegret": "08244198bd612c61",
+  "features": "292e574f118ce668",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "conflicting/review/30000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/claude-opus-5.5:xhigh",
+  "top": [
+   "github-copilot/claude-opus-5.5:xhigh",
+   "opencode/claude-opus-5-5:xhigh",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-sonnet-5-5:max"
+  ],
+  "ranking": "22961e42af39e35a",
+  "maxRegret": "ed2d03b1360fa677",
+  "features": "b778d25c7bd4117e",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "conflicting/review/150000/ordinary": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "anthropic/claude-opus-5-5:xhigh",
+  "top": [
+   "anthropic/claude-opus-5-5:xhigh",
+   "github-copilot/claude-opus-5.5:xhigh",
+   "opencode/claude-opus-5-5:xhigh",
+   "anthropic/claude-sonnet-5-5:max",
+   "github-copilot/claude-sonnet-5.5:max"
+  ],
+  "ranking": "543d04d7ac29cda5",
+  "maxRegret": "507f3b6d06d0d9ae",
+  "features": "40f9ca90c04a4357",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "conflicting/review/150000/rework": {
+  "solver": "exact",
+  "status": "ready",
+  "enforced": true,
+  "mode": "min-slack",
+  "slack": 0.011003799999999998,
+  "chosen": "github-copilot/claude-opus-5.5:xhigh",
+  "top": [
+   "github-copilot/claude-opus-5.5:xhigh",
+   "opencode/claude-opus-5-5:xhigh",
+   "github-copilot/claude-opus-5.5:high",
+   "opencode/claude-opus-5-5:high",
+   "anthropic/claude-sonnet-5-5:max"
+  ],
+  "ranking": "7fc71fe9b9ff8dca",
+  "maxRegret": "eff26fbe36c93237",
+  "features": "5badd0d752d458b8",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-not-ready/lightweight/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "d1f8514010802236",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "c47e2f84e9c2b1c9",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "operator-not-ready/lightweight/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "5197b0e380f9ca19",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "aa3cbec56fb97ac3",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "operator-not-ready/lightweight/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "ff34aa33189c0e2f",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "047d4b6c6c0e0db9",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-not-ready/lightweight/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "66628ab2364028bc",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "d247b251dff525e0",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-not-ready/gather/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "430189af7eb2fa21",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "6d0e90b7ef5ba246",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator-not-ready/gather/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "d865cb76847148d9",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "df3c7d5c70245e64",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator-not-ready/gather/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "c2ec5e6d4f37d36a",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "d1f61ac690605fa0",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator-not-ready/gather/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "c4036920efb83fdc",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "6a6495152cc2973f",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator-not-ready/plan/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "0280beb1fc5d47b6",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "7f46a3c5b2d1e037",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator-not-ready/plan/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "7112cd84c71f735d",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "d8fcd953858ce0c8",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator-not-ready/plan/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "b5468a1e13dee038",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "87991df15dc62d74",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-not-ready/plan/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "2db7f6ab9cf54c2c",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "19902fc9a3d83bd6",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-not-ready/implement/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "e698cbd28e068d65",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "ef80124bb7114033",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator-not-ready/implement/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "ff5be0616e01c458",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "5025c5e06b9399bb",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator-not-ready/implement/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "dec1cc24b75f3dd2",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "b43e2bcf565619b7",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator-not-ready/implement/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "4f09fa4f650e1768",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "6b84c287380e3ac9",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator-not-ready/review/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "db4cc6fd841818d7",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "292e574f118ce668",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator-not-ready/review/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "5f097f1bb896cf48",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "b778d25c7bd4117e",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator-not-ready/review/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "0b5f4f61abd83fda",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "40f9ca90c04a4357",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-not-ready/review/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "domain-not-ready",
+  "status": "domain-not-ready",
+  "enforced": false,
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "68a020d69be3fa8a",
+  "theta": [
+   0.17,
+   0.2,
+   0.08,
+   0.05,
+   0.3,
+   0.05,
+   0.09,
+   0.04,
+   0.01,
+   0.01
+  ],
+  "features": "5badd0d752d458b8",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-pair-cap/lightweight/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "016140da66a22396",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "c47e2f84e9c2b1c9",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "operator-pair-cap/lightweight/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "fb3909384cba4cfb",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "aa3cbec56fb97ac3",
+  "insufficientEvidence": "4f53cda18c2baa0c"
+ },
+ "operator-pair-cap/lightweight/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "0143901c7da4096e",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "047d4b6c6c0e0db9",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-pair-cap/lightweight/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "855f346562e2e56e",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "d247b251dff525e0",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-pair-cap/gather/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "bfb06fc39ddeb481",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "6d0e90b7ef5ba246",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator-pair-cap/gather/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "76d43eada6dc86df",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "df3c7d5c70245e64",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator-pair-cap/gather/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "fdbdf23d6bb9579e",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "d1f61ac690605fa0",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator-pair-cap/gather/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "1964659efe8229ac",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "6a6495152cc2973f",
+  "insufficientEvidence": "61a42e6d2aa279ea"
+ },
+ "operator-pair-cap/plan/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "ab694c84b095d763",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "7f46a3c5b2d1e037",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator-pair-cap/plan/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "81be42bbd2c5d046",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "d8fcd953858ce0c8",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator-pair-cap/plan/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "ed39fad414bee07f",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "87991df15dc62d74",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-pair-cap/plan/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "19739dfc8316cdcc",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "19902fc9a3d83bd6",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-pair-cap/implement/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "c2f71c77b08cd13c",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "ef80124bb7114033",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator-pair-cap/implement/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "3e4ff40a62d1a4ef",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "5025c5e06b9399bb",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator-pair-cap/implement/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "63ea7ef0da60976e",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "b43e2bcf565619b7",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator-pair-cap/implement/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "c69e2bf0b111c3d6",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "6b84c287380e3ac9",
+  "insufficientEvidence": "4a85dbedf973ea1f"
+ },
+ "operator-pair-cap/review/30000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "0f4f7900adacd417",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "292e574f118ce668",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator-pair-cap/review/30000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "6b94dc1bac868ac1",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "b778d25c7bd4117e",
+  "insufficientEvidence": "86eb38d503ea1784"
+ },
+ "operator-pair-cap/review/150000/ordinary": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "3434061559bb18f5",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "40f9ca90c04a4357",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ },
+ "operator-pair-cap/review/150000/rework": {
+  "solver": "fallback-central",
+  "reason": "spike-pair-cap",
+  "status": "ready",
+  "enforced": true,
+  "mode": "hard",
+  "chosen": "opencode-go/longcat-2.5-preview-free:high",
+  "top": [
+   "opencode-go/longcat-2.5-preview-free:high",
+   "opencode-go/longcat-2.5-preview-free:low",
+   "opencode-go/longcat-2.5-preview-free:medium",
+   "opencode-go/longcat-2.5-preview-free:minimal",
+   "opencode-go/longcat-2.5-preview-free:off"
+  ],
+  "ranking": "90861b16223ace97",
+  "theta": [
+   0.2368133745174074,
+   0.04130400193275139,
+   0.08622420525074972,
+   0.049999999999999996,
+   0.3536584208639704,
+   0.05000000326443816,
+   0.08999999673556182,
+   0.03999999999999999,
+   0.010000000000000021,
+   0.04199999743512108
+  ],
+  "features": "5badd0d752d458b8",
+  "insufficientEvidence": "6b70f0f47e3a46ae"
+ }
+}
