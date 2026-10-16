@@ -1,18 +1,20 @@
 /**
- * Time feature of one next invocation: the output-token forecast at the
- * model's measured output speed. An unknown speed gives the common feature
+ * Time feature of one action: the benchmark-output time proxy, the AA output
+ * tokens per task at the model's measured output speed. This is an
+ * output-streaming resource proxy at the benchmark-task horizon. It is not the
+ * wall time of an AA task and not the latency of the next invocation. An
+ * unknown speed or a missing output-token count gives the common feature
  * interval.
  */
 import type { BenchModel } from '../../types.js';
 import { clamp01, usable } from './mapping.js';
 import type { Interval } from './schema.js';
-import { demandDetail, outputTokenForecast, UNKNOWN_DEMAND, type OutputDemandPrior, type OutputTokenForecast } from './output-demand.js';
+import { outputEvidenceDetail, type BenchmarkOutputEvidence } from './benchmark-output.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 
 export function timeFeature(
   row: BenchModel | undefined,
-  demand: OutputDemandPrior = UNKNOWN_DEMAND,
-  output: OutputTokenForecast = outputTokenForecast(demand),
+  output: BenchmarkOutputEvidence,
 ): { interval: Interval; evidence: FeatureEvidence } {
   const tps = row?.outputSpeedTps;
   if (!usable(tps) || tps === 0) {
@@ -21,31 +23,33 @@ export function timeFeature(
       evidence: { feature: 'timeDesirability', code: 'speed-unknown', mapping: FEATURE_MAPPING_VERSION },
     };
   }
+  if (output.kind === 'missing') {
+    // No finite upper output duration is justified: the worst case is
+    // desirability 0 and the best case (no output) is desirability 1.
+    return {
+      interval: { center: SPEED_UNKNOWN_VALUE, lower: 0, upper: 1 },
+      evidence: { feature: 'timeDesirability', code: 'missing', mapping: FEATURE_MAPPING_VERSION, details: [outputEvidenceDetail(output), 'speed:known'] },
+    };
+  }
+  const value = timeDesirability(benchmarkOutputSeconds(output.tokensPerTask, tps));
   return {
-    interval: {
-      center: timeDesirability(latencyProxySeconds(output.center, tps)),
-      lower: timeDesirability(latencyProxySeconds(output.high, tps)),
-      upper: timeDesirability(latencyProxySeconds(output.low, tps)),
-    },
-    evidence: { feature: 'timeDesirability', code: 'speed-known', mapping: FEATURE_MAPPING_VERSION, details: [demandDetail(demand)] },
+    interval: { center: value, lower: value, upper: value },
+    evidence: { feature: 'timeDesirability', code: 'speed-known', mapping: FEATURE_MAPPING_VERSION, details: [outputEvidenceDetail(output)] },
   };
 }
 
-/** Fixed per-invocation overhead of the latency proxy, seconds. */
-export const LATENCY_OVERHEAD_SECONDS = 2;
-export const TIME_SHAPE_SECONDS = 5;
-export const TIME_SATURATION_SECONDS = 300;
+// Fixed clock units at the benchmark-task horizon: 1 minute shapes the curve,
+// and a proxy of 1 hour or more has desirability 0.
+export const TIME_SHAPE_SECONDS = 60;
+export const TIME_SATURATION_SECONDS = 3600;
 
-/**
- * Desirability of the output-dominant latency proxy `t = 2 + O / tps`.
- * This is not observed task wall time.
- */
+/** Desirability of the benchmark-output time proxy, in seconds. */
 export function timeDesirability(seconds: number): number {
   return clamp01(1 - Math.log(1 + seconds / TIME_SHAPE_SECONDS) / Math.log(1 + TIME_SATURATION_SECONDS / TIME_SHAPE_SECONDS));
 }
 
-export const latencyProxySeconds = (outputTokens: number, outputSpeedTps: number): number =>
-  LATENCY_OVERHEAD_SECONDS + outputTokens / outputSpeedTps;
+export const benchmarkOutputSeconds = (tokensPerTask: number, outputSpeedTps: number): number =>
+  tokensPerTask / outputSpeedTps;
 
-/** Common time value when the output speed is unknown. */
+/** Common time value when the output speed or the output-token count is unknown. */
 export const SPEED_UNKNOWN_VALUE = 0.5;

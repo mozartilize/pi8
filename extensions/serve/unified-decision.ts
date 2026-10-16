@@ -173,7 +173,7 @@ function traceActions(
     if (!action) return [];
     const { values } = action.features;
     const regret = result.maxRegret?.get(key);
-    const { centralUSD, minUSD, maxUSD } = action.spend;
+    const { centralUSD, minUSD, maxUSD } = action.costProxy;
     return [{
       key,
       rank: result.ranking.indexOf(key) + 1,

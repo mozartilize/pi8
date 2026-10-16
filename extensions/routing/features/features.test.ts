@@ -62,6 +62,14 @@ const raw = (slug: string, name: string, evaluations: AARawModel['evaluations'],
 const pipeline = (rows: AARawModel[], site: AASiteModel[], registry: RegistryModelInfo[]): BenchModel[] =>
   mergeBenchRows(resolveRows(normalize(rows, site), registry, {}));
 
+/** A benchmark row with a measured output-token count, or with none when `tokens` is undefined. */
+const outputRow = (registryId: string, effort: ModelThinkingLevel | undefined, tokens: number | undefined, extra: Partial<BenchModel> = {}): BenchModel => ({
+  registryId, benchSlug: `${registryId}-${effort}`, active: true, effort, source: 'aa',
+  quality: { intelligence: 50 }, axisProvenance: { intelligence: 'measured' }, outputSpeedTps: 100,
+  ...(tokens === undefined ? {} : { outputTokensPerTask: tokens, outputTokensProvenance: { status: 'measured' as const, indexVersion: '4.3.2' } }),
+  ...extra,
+});
+
 const featuresOf = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction, rows: BenchModel[]) =>
   candidateFeatures(s, model, action, rows).features;
 
@@ -282,17 +290,17 @@ describe('N3: feature boundaries and fixed missing shares', () => {
   it('gives an unknown price the common interval, not zero dollars', () => {
     const unpriced = registryModel('p', 'xmodel', { cost: undefined });
     const result = candidateFeatures(state(), unpriced, action, []);
-    expect(result.spend.priceKnown).toBe(false);
-    expect(result.spend.centralUSD).toBeUndefined();
+    expect(result.costProxy.priceKnown).toBe(false);
+    expect(result.costProxy.centralUSD).toBeUndefined();
     expectTriple(feature(result.features, 'costDesirability'), [0.5, 0, 1]);
   });
 
   it('derives the known-price feature from the frozen log transform', () => {
-    // 10,000 input at $1/M + 1,024 output at $4/M = 0.014096 USD, no cache evidence.
+    // 10,000 input at $1/M + 1,024 AA output tokens per task at $4/M = 0.014096 USD, no cache evidence.
     const usd = 10_000 / 1e6 + 1024 * 4 / 1e6;
     const expected = 1 - Math.log10(usd / 0.00001) / 6;
-    const result = candidateFeatures(state(), model, action, []);
-    expect(result.spend.centralUSD).toBeCloseTo(usd, 12);
+    const result = candidateFeatures(state(), model, action, [outputRow('p/xmodel', 'high', 1024)]);
+    expect(result.costProxy.centralUSD).toBeCloseTo(usd, 12);
     expect(feature(result.features, 'costDesirability')[0]).toBeCloseTo(expected, 9);
   });
 });
@@ -372,7 +380,9 @@ describe('cache-aware cost', () => {
     cache: cache([[aHigh.key, [{ tokens: 80_000 }]], [oHigh.key, [{ tokens: 40_000 }]]]),
     ...patch,
   });
-  const usd = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction) => candidateFeatures(s, model, action, []).spend;
+  // Each action has a measured 1,024 output tokens per task.
+  const usd = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction) =>
+    candidateFeatures(s, model, action, [outputRow(action.registryId, action.effort, 1024)]).costProxy;
   const read = (s: DecisionStateV1, model: RegistryModelInfo, action: EffectiveAction) => usd(s, model, action).tokens.cacheRead;
 
   it('prices only the recorded warm prefix of the incumbent at the cache-read rate and new tokens at the write rate', () => {
@@ -435,7 +445,7 @@ describe('cache-aware cost', () => {
     expect(none.tokens).toEqual({ cacheRead: 0, cacheWrite: 0, uncachedInput: 100_000, output: 1024 });
     expect(none.cacheEligibility).toBe('retention-none');
     expect(none.centralUSD).toBeCloseTo(100_000 * 3 / 1e6 + 1024 * 15 / 1e6, 12);
-    expect(none.maxUSD).toBeCloseTo(100_000 * 3 / 1e6 + 4096 * 24 * 15 / 1e6, 12);
+    expect(none.maxUSD).toBeCloseTo(100_000 * 3 / 1e6 + 1024 * 15 / 1e6, 12);
   });
 
   it('bills a long cache write at twice the input price only for a model that writes long entries', () => {
@@ -515,99 +525,86 @@ describe('cache-aware cost', () => {
     const spend = usd(cacheState(), noRead, oHigh);
     // Central: no cache credit. Minimum: free cached tokens. Maximum: unknown,
     // because a read can cost more than a miss.
-    // No benchmark row: output uses the neutral demand envelope [0.025, 24].
     expect(spend.centralUSD).toBeCloseTo(100_000 * 2 / 1e6 + 1024 * 8 / 1e6, 12);
-    expect(spend.minUSD).toBeCloseTo(60_000 * 2 / 1e6 + 512 * 0.025 * 8 / 1e6, 12);
+    expect(spend.minUSD).toBeCloseTo(60_000 * 2 / 1e6 + 1024 * 8 / 1e6, 12);
     expect(spend.maxUSD).toBeUndefined();
     expect(spend.cacheReadPriceUnknown).toBe(true);
   });
 });
 
-describe('output demand: bounded prior from exact-effort AA output tokens', () => {
+describe('benchmark output: raw AA output tokens per task in cost and time', () => {
+  // 10,000 prompt tokens at $1/M with no cache evidence and no write charge: prompt cost $0.01.
   const model = registryModel('p', 'xmodel');
-  const benchRow = (effort: ModelThinkingLevel, tokens: number | undefined, extra: Partial<BenchModel> = {}): BenchModel => ({
-    registryId: 'p/xmodel', benchSlug: `xmodel-${effort}`, active: true, effort, source: 'aa',
-    quality: { intelligence: 50 }, axisProvenance: { intelligence: 'measured' }, outputSpeedTps: 100,
-    priceOutputPer1M: 4,
-    ...(tokens === undefined ? {} : { outputTokensPerTask: tokens, outputTokensProvenance: { status: 'measured' as const, indexVersion: '4.3.2' } }),
-    ...extra,
-  });
+  const benchRow = (effort: ModelThinkingLevel, tokens: number | undefined, extra: Partial<BenchModel> = {}): BenchModel =>
+    outputRow('p/xmodel', effort, tokens, extra);
   const at = (effort: ModelThinkingLevel, rows: BenchModel[], s: DecisionStateV1 = state(), m: RegistryModelInfo = model) =>
     candidateFeatures(s, m, enumerateEffectiveActions(m).find((a) => a.effort === effort)!, rows);
-  const demandDetail = (result: ReturnType<typeof at>, name: FeatureName) =>
-    result.features.evidence.find((e) => e.feature === name)!.details!.find((d) => d.startsWith('demand:'));
-  const expectForecast = (actual: number[], expected: number[], label = '') =>
-    actual.forEach((value, i) => expect(value, `${label}[${i}]`).toBeCloseTo(expected[i]!, 6));
-  /** Output tokens [low, center, high] read back from spend: 10,000 input at $1/M, output at $4/M. */
-  const forecast = (result: ReturnType<typeof at>) => [
-    (result.spend.minUSD! - 10_000 / 1e6) * 1e6 / 4,
-    result.spend.tokens.output,
-    (result.spend.maxUSD! - 10_000 / 1e6) * 1e6 / 4,
-  ];
+  const detail = (result: ReturnType<typeof at>, name: FeatureName) =>
+    result.features.evidence.find((e) => e.feature === name)!.details!.find((d) => d.startsWith('output-tokens:'));
+  const costOf = (usd: number) => 1 - Math.log10(usd / 0.00001) / 6;
+  const timeOf = (seconds: number) => Math.max(0, 1 - Math.log(1 + seconds / 60) / Math.log(61));
 
-  it('maps AA tokens per task to the forecast with independent expected arithmetic', () => {
-    // center = clamp(x / 30,000, 0.05, 12); low = center / 2; high = center * 2.
-    // Missing evidence: center 1, low 0.05 / 2, high 12 * 2.
-    const cases: [number | undefined, [number, number, number]][] = [
-      [undefined, [12.8, 1024, 98304]],
-      [0, [12.8, 51.2, 409.6]],
-      [1_500, [12.8, 51.2, 409.6]],
-      [15_000, [128, 512, 4096]],
-      [30_000, [256, 1024, 8192]],
-      [90_000, [768, 3072, 24576]],
-      [360_000, [3072, 12288, 98304]],
-      [600_000, [3072, 12288, 98304]],
-    ];
-    for (const [tokens, expected] of cases) {
-      expectForecast(forecast(at('high', [benchRow('high', tokens)])), expected, String(tokens));
-    }
-    expect(demandDetail(at('high', [benchRow('high', 90_000)]), 'costDesirability')).toBe('demand:aa-exact');
-    expect(demandDetail(at('high', [benchRow('high', 90_000)]), 'timeDesirability')).toBe('demand:aa-exact');
-  });
-
-  it('more tokens per task never lowers any forecast bound, and the forecast stays ordered', () => {
-    let previous = [0, 0, 0];
-    for (const tokens of [0, 1, 1_499, 1_500, 1_501, 29_999, 30_000, 30_001, 359_999, 360_000, 360_001, 1e9]) {
-      const current = forecast(at('high', [benchRow('high', tokens)]));
-      expect(current[0]).toBeLessThanOrEqual(current[1]! + 1e-9);
-      expect(current[1]).toBeLessThanOrEqual(current[2]! + 1e-9);
-      current.forEach((value, i) => expect(value).toBeGreaterThanOrEqual(previous[i]! - 1e-9));
-      previous = current;
+  it('uses the measured tokens per task unscaled for output cost and output time', () => {
+    // 600 and 1,000,000 are outside any reference clamp; 0 has no overhead in time.
+    for (const tokens of [0, 600, 15_000, 197_430, 1_000_000]) {
+      const result = at('high', [benchRow('high', tokens)]);
+      const usd = 0.01 + tokens * 4 / 1e6;
+      expect(result.costProxy.tokens.output).toBe(tokens);
+      expect(result.costProxy.centralUSD).toBeCloseTo(usd, 12);
+      expectTriple(feature(result.features, 'costDesirability'), [costOf(usd), costOf(usd), costOf(usd)]);
+      const time = timeOf(tokens / 100);
+      expectTriple(feature(result.features, 'timeDesirability'), [time, time, time]);
+      expect(detail(result, 'costDesirability')).toBe('output-tokens:measured');
+      expect(detail(result, 'timeDesirability')).toBe('output-tokens:measured');
     }
   });
 
-  it('missing evidence envelope contains every measured forecast and gives no advantage', () => {
-    const neutral = at('high', [benchRow('high', undefined)]);
-    const neutralCost = feature(neutral.features, 'costDesirability');
-    const neutralTime = feature(neutral.features, 'timeDesirability');
-    for (const tokens of [0, 30_000, 197_430]) {
-      const measured = at('high', [benchRow('high', tokens)]);
-      const [, costLower, costUpper] = feature(measured.features, 'costDesirability');
-      const [, timeLower, timeUpper] = feature(measured.features, 'timeDesirability');
-      expect(neutralCost[1]).toBeLessThanOrEqual(costLower! + 1e-12);
-      expect(neutralCost[2]).toBeGreaterThanOrEqual(costUpper! - 1e-12);
-      expect(neutralTime[1]).toBeLessThanOrEqual(timeLower! + 1e-12);
-      expect(neutralTime[2]).toBeGreaterThanOrEqual(timeUpper! - 1e-12);
+  it('a positive output price with no token count gives only a lower cost bound', () => {
+    const result = at('high', [benchRow('high', undefined)]);
+    expect(result.costProxy).toMatchObject({ priceKnown: true, minUSD: 0.01 });
+    expect(result.costProxy.centralUSD).toBeUndefined();
+    expect(result.costProxy.maxUSD).toBeUndefined();
+    expect(result.costProxy.tokens.output).toBeUndefined();
+    expectTriple(feature(result.features, 'costDesirability'), [costOf(0.01) / 2, 0, costOf(0.01)]);
+    expectTriple(feature(result.features, 'timeDesirability'), [0.5, 0, 1]);
+    const time = result.features.evidence.find((e) => e.feature === 'timeDesirability')!;
+    expect(time).toMatchObject({ code: 'missing', details: ['output-tokens:absent', 'speed:known'] });
+    // The missing interval contains every measured value, so it gives no advantage.
+    for (const tokens of [0, 30_000, 10_000_000]) {
+      const measured = at('high', [benchRow('high', tokens)]).features;
+      for (const name of ['costDesirability', 'timeDesirability'] as const) {
+        const [, lower, upper] = feature(measured, name);
+        expect(feature(result.features, name)[1]).toBeLessThanOrEqual(lower!);
+        expect(feature(result.features, name)[2]).toBeGreaterThanOrEqual(upper!);
+      }
     }
-    // Neutral center equals the center of an observation at the reference.
-    expect(neutralTime[0]).toBeCloseTo(feature(at('high', [benchRow('high', 30_000)]).features, 'timeDesirability')[0]!, 12);
+  });
+
+  it('a zero output price makes the token count irrelevant to cost', () => {
+    const free = registryModel('p', 'xmodel', { cost: { input: 1, output: 0, cacheRead: 0.1 } });
+    const measured = at('high', [benchRow('high', 197_430)], state(), free);
+    const missing = at('high', [benchRow('high', undefined)], state(), free);
+    for (const result of [measured, missing]) {
+      expect(result.costProxy).toMatchObject({ centralUSD: 0.01, minUSD: 0.01, maxUSD: 0.01 });
+      expectTriple(feature(result.features, 'costDesirability'), [costOf(0.01), costOf(0.01), costOf(0.01)]);
+    }
   });
 
   it('does not borrow an observation from another effort or another model', () => {
     const rows = [benchRow('low', 3_000), benchRow('max', 150_000), benchRow('high', 150_000, { registryId: 'q/other', benchSlug: 'other' })];
-    expectForecast(forecast(at('high', rows)), [12.8, 1024, 98304]);
-    expect(demandDetail(at('high', rows), 'costDesirability')).toBe('demand:neutral:no-row');
-    const inactive = [benchRow('high', 150_000, { active: false })];
-    expect(demandDetail(at('high', inactive), 'costDesirability')).toBe('demand:neutral:no-row');
+    expect(at('high', rows).costProxy.tokens.output).toBeUndefined();
+    expect(detail(at('high', rows), 'costDesirability')).toBe('output-tokens:no-row');
+    expect(detail(at('high', [benchRow('high', 150_000, { active: false })]), 'costDesirability')).toBe('output-tokens:no-row');
   });
 
-  it('gives a neutral prior with the reason for each unusable observation', () => {
+  it('records the reason for each unusable observation and uses no token count', () => {
     const cases: [BenchModel, DecisionStateV1, string][] = [
       [benchRow('high', undefined), state(), 'absent'],
       [benchRow('high', 50_000, { outputTokensProvenance: { status: 'source-estimated', indexVersion: '4.3.2' } }), state(), 'source-estimated'],
       [benchRow('high', 50_000, { outputTokensProvenance: { status: 'unknown-effort', indexVersion: '4.3.2' } }), state(), 'unknown-effort'],
       [benchRow('high', undefined, { outputTokensProvenance: { status: 'conflict', indexVersion: '4.3.2' } }), state(), 'conflict'],
       [benchRow('high', undefined, { outputTokensProvenance: { status: 'invalid' } }), state(), 'invalid'],
+      [benchRow('high', -5, { outputTokensProvenance: { status: 'measured', indexVersion: '4.3.2' } }), state(), 'invalid'],
       [benchRow('high', 50_000, { outputTokensProvenance: { status: 'measured' } }), state(), 'version-unknown'],
       [benchRow('high', 50_000), state({ benchmarkIndexVersion: undefined }), 'version-unknown'],
       [benchRow('high', 50_000, { outputTokensProvenance: { status: 'measured', indexVersion: '4.4.0' } }), state(), 'version-incompatible'],
@@ -615,29 +612,41 @@ describe('output demand: bounded prior from exact-effort AA output tokens', () =
     ];
     for (const [row, s, reason] of cases) {
       const result = at('high', [row], s);
-      expect(demandDetail(result, 'costDesirability'), reason).toBe(`demand:neutral:${reason}`);
-      expectForecast(forecast(result), [12.8, 1024, 98304], reason);
+      expect(detail(result, 'costDesirability'), reason).toBe(`output-tokens:${reason}`);
+      expect(detail(result, 'timeDesirability'), reason).toBe(`output-tokens:${reason}`);
+      expect(result.costProxy.centralUSD, reason).toBeUndefined();
+      expect(result.costProxy.tokens.output, reason).toBeUndefined();
     }
   });
 
-  it('benchmark cost per task and benchmark or registry output price do not change output demand', () => {
-    const base = forecast(at('high', [benchRow('high', 90_000)]));
-    const costly = at('high', [benchRow('high', 90_000, { costPerTask: 50, priceOutputPer1M: 0.01 })]);
-    expectForecast(forecast(costly), base);
+  it('prices output at the registry output price, never the benchmark price or cost per task', () => {
+    const benchPriced = at('high', [benchRow('high', 90_000, { costPerTask: 50, priceOutputPer1M: 0.01 })]);
+    expect(benchPriced.costProxy.centralUSD).toBeCloseTo(0.01 + 90_000 * 4 / 1e6, 12);
     const pricier = registryModel('p', 'xmodel', { cost: { input: 1, output: 40, cacheRead: 0.1 } });
     const repriced = at('high', [benchRow('high', 90_000)], state(), pricier);
-    expect(repriced.spend.tokens.output).toBe(3072);
+    expect(repriced.costProxy.centralUSD).toBeCloseTo(0.01 + 90_000 * 40 / 1e6, 12);
     expect(feature(repriced.features, 'timeDesirability')).toEqual(feature(at('high', [benchRow('high', 90_000)]).features, 'timeDesirability'));
   });
 
-  it('output speed changes time only, and more tokens per task lowers cost and time', () => {
+  it('output speed changes time only', () => {
     const fast = at('high', [benchRow('high', 90_000, { outputSpeedTps: 400 })]);
     const slow = at('high', [benchRow('high', 90_000)]);
-    expect(fast.spend).toEqual(slow.spend);
-    expect(feature(fast.features, 'timeDesirability')[0]).toBeGreaterThan(feature(slow.features, 'timeDesirability')[0]!);
-    const terse = at('high', [benchRow('high', 10_000)]);
-    expect(feature(terse.features, 'costDesirability')[0]).toBeGreaterThan(feature(slow.features, 'costDesirability')[0]!);
-    expect(feature(terse.features, 'timeDesirability')[0]).toBeGreaterThan(feature(slow.features, 'timeDesirability')[0]!);
+    expect(fast.costProxy).toEqual(slow.costProxy);
+    expect(feature(fast.features, 'timeDesirability')[0]).toBeCloseTo(timeOf(90_000 / 400), 12);
+  });
+
+  it('the features of an action do not depend on the other rows of the pool', () => {
+    const own = [benchRow('high', 30_000)];
+    const extreme = outputRow('q/frontier', 'high', 10_000_000, {
+      quality: { intelligence: 100, agenticCoding: 100, research: 1 },
+      axisProvenance: { intelligence: 'measured', agenticCoding: 'measured', research: 'measured' }, outputSpeedTps: 1,
+    });
+    const terse = outputRow('q/terse', 'high', 1, { quality: { intelligence: 1 }, outputSpeedTps: 100_000 });
+    const alone = at('high', own).features;
+    for (const pool of [[...own, extreme], [terse, ...own, extreme]]) {
+      const shared = at('high', pool).features;
+      expect([shared.values, shared.lower, shared.upper]).toEqual([alone.values, alone.lower, alone.upper]);
+    }
   });
 });
 

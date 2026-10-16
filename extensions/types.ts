@@ -429,7 +429,7 @@ export interface UnifiedActionTrace {
   centralScore?: number;
   /** Central feature values by feature name. */
   features: Record<string, number>;
-  /** Predicted spend in USD; absent when the price is unknown. */
+  /** Economic cost proxy in USD; absent when its central value is unknown. */
   costUsd?: { central: number; min?: number; max?: number };
   /** Billed prompt tokens per estimated token of the action's model; absent when 1. */
   promptTokenScale?: number;

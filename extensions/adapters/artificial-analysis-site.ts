@@ -136,7 +136,7 @@ export function parseSiteModels(raw: unknown): AASiteModel[] {
       briefcaseRubricPassRate: finite(row.briefcaseRubricPassRate),
       intelligenceIndexTimePerTask: finite(row.intelligenceIndexTimePerTask),
       terminalBench40: finite(row.terminalBench40),
-      // Optional metric: a missing or malformed value gives no output-demand
+      // Optional metric: a missing or malformed value gives no output-token
       // evidence and does not fail the sync.
       ...outputTokens(row.intelligenceIndexOutputTokensPerTask),
     });

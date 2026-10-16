@@ -6,21 +6,21 @@
 import type { BenchModel, ProvenanceAxis } from '../../types.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import type { EffectiveAction } from './actions.js';
+import { benchmarkOutputEvidence } from './benchmark-output.js';
 import { continuityFeature } from './continuity.js';
 import { timeFeature } from './latency.js';
 import { clamp01 } from './mapping.js';
 import { capabilityFeatures, evidenceGaps, rowAtServedEffort } from './model.js';
-import { outputDemandPrior, outputTokenForecast } from './output-demand.js';
 import { recoveryFeatures } from './recovery.js';
 import { FEATURE_INDEX, FEATURE_NAMES, type ActionFeatureVector, type FeatureEvidence, type FeatureName, type Interval } from './schema.js';
-import { costFeature, predictSpend, type PredictedSpendV1 } from './spend.js';
+import { costFeature, predictCostProxy, type CostProxyV1 } from './spend.js';
 import type { BenchmarkSnapshot, DecisionStateV1, PriceSnapshot, SessionSnapshot, SpendSnapshot, TaskSnapshot } from './state.js';
 import { composeTaskDemand } from './task-demand.js';
 
 export interface ActionFeatures {
   action: EffectiveAction;
   features: ActionFeatureVector;
-  spend: PredictedSpendV1;
+  costProxy: CostProxyV1;
   /** Diagnostic: required quality axes without evidence. Never filters or orders actions. */
   evidenceGaps: ProvenanceAxis[];
   /**
@@ -64,13 +64,12 @@ export function candidateFeatures(
     intervals.set(capability.name, capability.interval);
     evidence.push(capability.evidence);
   }
-  const demand = outputDemandPrior(row, benchmark.benchmarkIndexVersion);
-  const output = outputTokenForecast(demand);
-  const spend = predictSpend(spendSnapshot, action, price, output);
-  const cost = costFeature(spend, demand);
+  const output = benchmarkOutputEvidence(row, benchmark.benchmarkIndexVersion);
+  const costProxy = predictCostProxy(spendSnapshot, action, price, output);
+  const cost = costFeature(costProxy, output);
   intervals.set('costDesirability', cost.interval);
   evidence.push(cost.evidence);
-  const time = timeFeature(row, demand, output);
+  const time = timeFeature(row, output);
   intervals.set('timeDesirability', time.interval);
   evidence.push(time.evidence);
   const exact = (value: number): Interval => ({ center: value, lower: value, upper: value });
@@ -93,5 +92,5 @@ export function candidateFeatures(
     upper[j] = clamp01(interval.upper);
     values[j] = Math.min(upper[j]!, Math.max(lower[j]!, clamp01(interval.center)));
   }
-  return { action, features: { key: action.key, values, lower, upper, evidence }, spend, evidenceGaps: evidenceGaps(row, task, benchmark), capabilityShortfall };
+  return { action, features: { key: action.key, values, lower, upper, evidence }, costProxy, evidenceGaps: evidenceGaps(row, task, benchmark), capabilityShortfall };
 }

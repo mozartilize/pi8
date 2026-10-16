@@ -1849,7 +1849,8 @@ describe('context acquisition', () => {
       dir: temp.path,
       // A cheaper model leads on research. A model at about five times the
       // price leads on intelligence and agentic coding. Phase and task
-      // difficulty distinguish them; the cost feature scores the price ratio.
+      // difficulty distinguish them. Both write the same output tokens per
+      // task, so the cost feature scores the price ratio.
       benchmarks: [
         {
           registryId: 'alpha/cheap',
@@ -1858,6 +1859,8 @@ describe('context acquisition', () => {
           quality: { intelligence: 20, coding: 60, agenticCoding: 60, knowledge: 40, research: 0.9 },
           costPerTask: 0.02,
           outputSpeedTps: 100,
+          outputTokensPerTask: 20_000,
+          outputTokensProvenance: { status: 'measured', indexVersion: '4.3' },
           priceInputPer1M: 0.1,
           priceOutputPer1M: 0.2,
           source: 'test',
@@ -1869,6 +1872,8 @@ describe('context acquisition', () => {
           quality: { intelligence: 70, coding: 78, agenticCoding: 90, knowledge: -10, research: 0.1 },
           costPerTask: 0.1,
           outputSpeedTps: 100,
+          outputTokensPerTask: 20_000,
+          outputTokensProvenance: { status: 'measured', indexVersion: '4.3' },
           priceInputPer1M: 0.5,
           priceOutputPer1M: 1,
           source: 'test',

@@ -448,10 +448,12 @@ const BROKEN_LP: LPAdapter = { solve: async () => { throw new Error('no solver')
 const pick = (models: RegistryModelInfo[]): SelectionCandidate[] => models.map((m) => ({ model: m, action: enumerateEffectiveActions(m)[0]! }));
 
 describe('missing evidence is an uncertainty interval, not a ranking tail', () => {
-  // A strong and expensive, B moderate and cheaper, U has no benchmark row and is cheapest.
+  // A strong and expensive, B moderate and cheaper, U has no benchmark row and
+  // is cheapest. U has free output, so its cost is known without an
+  // output-token count; A and B have no count and only a lower cost bound.
   const A = model('a', 'strong', { input: 5, output: 25, cacheRead: 0.5 });
   const B = model('b', 'middle', { input: 0.2, output: 0.8, cacheRead: 0.02 });
-  const U = model('u', 'unmeasured', { input: 0.01, output: 0.04, cacheRead: 0.001 });
+  const U = model('u', 'unmeasured', { input: 0.01, output: 0, cacheRead: 0.001 });
   const guardRows = [benchRow('a/strong', 70, 55), benchRow('b/middle', 55, 50)];
   const empty = { version: 1 } as UserRoutingPreferencesV1;
   let costArtifact: DomainArtifact;

@@ -1,6 +1,6 @@
 # Unified selection: ma trận tham số
 
-Tài liệu mô tả code hiện tại với `feature-v9` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
+Tài liệu mô tả code hiện tại với `feature-v10` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
 
 **Điểm quan trọng:** guards quyết định action nào được phép gọi. Mọi action được phép nằm trong một pool so sánh duy nhất. Thứ tự xử lý là:
 
@@ -30,10 +30,10 @@ Mỗi phép biến đổi có một module sở hữu. Module chỉ đọc snaps
 | Liệt kê action | `features/actions.ts` | Registry model | `provider/model/effort` hợp lệ |
 | Task demand | `features/task-demand.ts` | `TaskDeclarations` + `WorkloadMeasurement` | Relevance, demand intervals, targets, required evidence |
 | Capability | `features/model.ts` | Task demand + benchmark row đúng effort + `BenchmarkSnapshot` | Bốn capability features, shortfall, evidence gaps |
-| Output demand | `features/output-demand.ts` | Benchmark row đúng effort + index version | Output-demand prior và output-token forecast |
+| Benchmark output | `features/benchmark-output.ts` | Benchmark row đúng effort + index version | AA output tokens/task (`measured`) hoặc reason thiếu (`missing`) |
 | Cache | `features/cache.ts` | `SpendSnapshot` + `PriceSnapshot` | Warm prefix và cache eligibility |
-| Spend | `features/spend.ts` | `SpendSnapshot` + `PriceSnapshot` + output forecast | Billing buckets, USD interval, cost feature |
-| Latency | `features/latency.ts` | Output speed + output forecast | Time feature |
+| Spend | `features/spend.ts` | `SpendSnapshot` + `PriceSnapshot` + benchmark output | Billing buckets, economic cost proxy (USD), cost feature |
+| Latency | `features/latency.ts` | Output speed + benchmark output | Time feature |
 | Continuity | `features/continuity.ts` | `SessionSnapshot` | Continuity feature |
 | Recovery | `features/recovery.ts` | `SessionSnapshot` | Friction avoidance và hai recovery features |
 | Feature vector | `features/candidate.ts` | `DecisionStateV1` (adapter duy nhất cấp các snapshot) | Vector 10 features có evidence |
@@ -53,11 +53,11 @@ Mỗi phép biến đổi có một module sở hữu. Module chỉ đọc snaps
 | Rubric 1–5 | Handoff hoặc execution plan được chấp nhận | Ba axis demands `D_R`, `D_A`, `D_H` | Không: chỉ đặt targets | Có: quyết định capability fit |
 | Số file, thư mục, dòng, fix commits | Router đo trên targets | Phần cộng vào `D_A` | Không | Có, qua agentic fit |
 | Benchmark + provenance | Store, đúng model và effort | Quality intervals | Không: evidence gaps và capabilityShortfall chỉ là diagnostics | Có: ba capability features, inputFit |
-| Context tokens, vision input | Request hiện tại | Input relevance; predicted input cost | Có: context ảnh hưởng dispatch; evidence cho input shape | Có: inputFit và cost |
-| Registry token prices | `model.cost` | Predicted USD interval | Không | Có: costDesirability |
-| AA output tokens/task | Benchmark đúng model và đúng effort | Output-demand prior | Không | Có: cost và time |
+| Context tokens, vision input | Request hiện tại | Input relevance; prompt cost | Có: context ảnh hưởng dispatch; evidence cho input shape | Có: inputFit và cost |
+| Registry token prices | `model.cost` | USD interval của economic cost proxy | Không | Có: costDesirability |
+| AA output tokens/task | Benchmark đúng model và đúng effort | Benchmark output cost và time, dùng nguyên giá trị | Không | Có: cost và time |
 | Cache evidence | Prefix identity, age, warm tokens | Cached input buckets | Không | Có: cost; không cộng một cache bonus riêng |
-| Output speed | Benchmark output tokens/s | Latency proxy | Không | Có: timeDesirability |
+| Output speed | Benchmark output tokens/s | Benchmark-output time proxy | Không | Có: timeDesirability |
 | Incumbent | Exact provider/model | Continuity | Không | Có: continuity; cũng dùng khi phá hòa |
 | Friction | Exact model/effort/work item | Friction avoidance | Không | Có: frictionAvoidance |
 | Attributed rework | Failed model/effort | Hai recovery features | Không | Có: effortRecoveryFit, modelSwitchRecoveryFit |
@@ -197,8 +197,8 @@ Mọi θ không âm, nằm trong bounds dưới đây, và `sum(θ) = 1`. Bounds
 | 1 | agenticFit | A × agentic fit | 0.20 | [0, 0.45] | 0.041304 | settledImplementation, researchTasks |
 | 2 | researchFit | H × research fit | 0.08 | [0, 0.30] | 0.086224 | researchTasks |
 | 3 | inputFit | LCR/vision trung bình khi liên quan; khác thì 0.5 | 0.05 | [0, 0.25] | 0.050000 | Không có coefficient trực tiếp |
-| 4 | costDesirability | Log predicted USD | 0.30 | [0.08, 0.55] | 0.353658 | Bốn preference đầu |
-| 5 | timeDesirability | Log latency proxy | 0.05 | [0, 0.20] | 0.050000 | Không có coefficient trực tiếp |
+| 4 | costDesirability | Log economic cost proxy (USD) | 0.30 | [0.08, 0.55] | 0.353658 | Bốn preference đầu |
+| 5 | timeDesirability | Log benchmark-output time proxy | 0.05 | [0, 0.20] | 0.050000 | Không có coefficient trực tiếp |
 | 6 | continuity | Quan hệ với incumbent hoặc failed model | 0.09 | [0, 0.30] | 0.090000 | handoffWarmCache, afterRework |
 | 7 | frictionAvoidance | Failure/friction đúng model/effort/work item | 0.04 | [0, 0.25] | 0.040000 | Không có coefficient trực tiếp |
 | 8 | effortRecoveryFit | Cùng failed model, effort cao hơn: 1; khác: 0 | 0.01 | [0, 0.30] | 0.010000 | afterRework |
@@ -233,54 +233,49 @@ Nguồn: [weights.ts](../extensions/routing/optimization/weights.ts), [continuit
 |---|---:|---|
 | COST_FLOOR_USD | $0.00001 | Cost ≤ mốc này có desirability 1 |
 | COST_DECADES | 6 | Cost ≥ $10 có desirability 0 |
-| OUTPUT_TOKENS_CENTRAL | 1,024 | Predicted output center trước demand scale |
-| OUTPUT_TOKENS_MIN | 512 | Predicted output lower trước demand scale |
-| OUTPUT_TOKENS_MAX | 4,096 | Predicted output upper trước demand scale |
-| REFERENCE_TOKENS_PER_TASK | 30,000 | Mẫu số để chuẩn hóa output demand |
-| Giới hạn center | [0.05, 12] | Giới hạn center của output-demand prior |
-| DEMAND_TRANSFER_FACTOR | 2 | Envelope = [center / 2, center × 2] |
-| Unknown output demand | Center 1; envelope [0.025, 24] | Mở rộng cost và time intervals |
-| LATENCY_OVERHEAD_SECONDS | 2 giây | Latency proxy |
-| TIME_SHAPE_SECONDS | 5 giây | Độ cong time transform |
-| TIME_SATURATION_SECONDS | 300 giây | Latency ≥300 giây có desirability 0 |
+| TIME_SHAPE_SECONDS | 60 giây | Độ cong time transform |
+| TIME_SATURATION_SECONDS | 3,600 giây | Time proxy ≥3,600 giây có desirability 0 |
 | Unknown price | Center 0.5; interval [0,1] | Không giả thành giá $0 |
 | Unknown/zero output speed | Center 0.5; interval [0,1] | Không giả thành nhanh |
+| Thiếu output tokens/task, output price >0 | Cost: [0, costFeature(minUSD)], center là trung điểm | Không giả một số token |
+| Thiếu output tokens/task, speed đã biết | Time: center 0.5; interval [0,1] | Không giả một số token |
 
 ```text
-center = clamp(AA outputTokensPerTask / 30,000, 0.05, 12)
-low = center / 2;  high = center × 2
+benchmarkOutputUSD = AA outputTokensPerTask × pOutput
 costFeature(USD) = clamp(1 − log10(USD / 0.00001) / 6)
-latency = 2 + outputTokens / outputSpeedTps
-timeFeature(t) = clamp(1 − ln(1 + t/5) / ln(1 + 300/5))
+benchmarkOutputSeconds = AA outputTokensPerTask / outputSpeedTps
+timeFeature(t) = clamp(1 − ln(1 + t/60) / ln(1 + 3600/60))
 ```
 
-AA output tokens/task là quan sát trên benchmark task, không phải dự báo chính xác cho invocation kế tiếp. Envelope đối xứng theo tỉ lệ thể hiện sai số chuyển giao này.
+AA output tokens/task là quan sát trên một benchmark task, không phải dự báo output của invocation kế tiếp. Router dùng nguyên giá trị đó: không có mốc tham chiếu, không giới hạn, không thống kê của pool. Cost và time chỉ dùng các phép biến đổi tuyệt đối cố định, nên feature của một action không đổi khi một action khác vào hoặc rời pool. Time proxy không phải wall time của task AA và không phải latency của invocation kế tiếp.
 
-| Evidence output demand | Quy tắc |
+| Evidence output tokens | Quy tắc |
 |---|---|
-| Row đúng effort có observation `measured`, page và API index version tương thích | Dùng prior của row đó |
-| Thiếu row, thiếu observation, `source-estimated`, `unknown-effort`, `invalid`, `conflict`, version không rõ hoặc không tương thích | Unknown demand envelope, kèm reason trong evidence |
+| Row đúng effort có observation `measured`, page và API index version tương thích | Dùng nguyên token count của row đó; evidence `output-tokens:measured` |
+| Thiếu row, thiếu observation, `source-estimated`, `unknown-effort`, `invalid`, `conflict`, version không rõ hoặc không tương thích | Không có token count; evidence `output-tokens:<reason>` |
 
-Coverage trên `fixtures/real-pool.json` (index 4.3, bỏ provider `cursor`): 769 effective actions. 282 action (36,7%) có prior `aa-exact`. 64 action có benchmark row đúng effort nhưng row không có observation (`absent`). 423 action không có benchmark row đúng effort (`no-row`). Không action nào bị loại vì `source-estimated`, `unknown-effort`, `invalid`, `conflict` hoặc version. Số liệu này đổi khi fixture được tạo lại.
+Coverage trên `fixtures/real-pool.json` (index 4.3, bỏ provider `cursor`): 769 effective actions. 282 action (36,7%) có token count `measured`. 64 action có benchmark row đúng effort nhưng row không có observation (`absent`). 423 action không có benchmark row đúng effort (`no-row`). Không action nào bị loại vì `source-estimated`, `unknown-effort`, `invalid`, `conflict` hoặc version. Số liệu này đổi khi fixture được tạo lại.
 
 `real-pool-sensitivity.test.ts` kiểm tra trên real pool, với domain base và domain operator: thiếu output tokens, giá hoặc output speed không làm giảm max regret của action bị ảnh hưởng; warm prefix còn hạn không làm tăng max regret của incumbent; mọi action được phép vẫn ở trong ranking.
 
-**Không mượn demand hoặc quality giữa efforts hay giữa models.** D về độ khó không nhân giá hay thời gian.
+**Không mượn output tokens hoặc quality giữa efforts hay giữa models.** D về độ khó không nhân giá hay thời gian.
 
-### 6.2 Công thức predicted spend
+### 6.2 Công thức economic cost proxy
 
-Đặt `I = estimatedContextTokens`, `W = usable warm-prefix tokens`, `pMiss = cacheWrite price nếu >0, nếu không thì input price`. Các price đổi từ $/M tokens sang $/token.
+Đặt `I = estimatedContextTokens`, `W = usable warm-prefix tokens`, `pMiss = cacheWrite price nếu >0, nếu không thì input price`, `O = benchmarkOutputUSD`. Các price đổi từ $/M tokens sang $/token. Prompt cost là của request hiện tại; O là của một benchmark task. Tổng là routing proxy, không phải spend của invocation kế tiếp.
 
 ```text
-centralUSD = W × pReadCentral + (I − W) × pMiss + 1,024 × center × pOutput
-minUSD     = W × pReadLow     + (I − W) × pMiss +   512 × low   × pOutput
-maxUSD     = I × pMiss                         + 4,096 × high  × pOutput
+centralUSD = W × pReadCentral + (I − W) × pMiss + O
+minUSD     = min(miss, hit với pReadLow)        + O
+maxUSD     = max(miss, hit với pReadCentral)    + O
 ```
 
 | Cache/price input | Cách xử lý |
 |---|---|
 | Không có pricing hoặc input/output price không usable | Price unknown |
 | Giá input/output bằng 0, hợp lệ | Known price; có thể free |
+| Output price = 0 | O = 0, kể cả khi thiếu output tokens/task |
+| Output price >0 và thiếu output tokens/task | Chỉ có minUSD (prompt cost, O = 0); không có centralUSD, maxUSD |
 | cacheRead price thiếu | Center không có cache discount; lower dùng read price 0 |
 | cacheWrite price >0 | Cold input tính ở write price thay input price, không tính hai lần |
 | Cache source none, sai promptIdentity, quá TTL hoặc subagent spawn | W = 0 |
@@ -290,13 +285,13 @@ maxUSD     = I × pMiss                         + 4,096 × high  × pOutput
 | Shared cache giữa efforts | Chỉ khi API = anthropic-messages và supportsMidConvoEffort = true |
 | Cache TTL | Feature nhận từ cache state; production provider truyền 5 phút (`5 × 60,000 ms`) |
 
-Cost transform giảm theo USD: lower cost feature lấy `costFeature(maxUSD)`, upper lấy `costFeature(minUSD)`.
+Cost transform giảm theo USD: lower cost feature lấy `costFeature(maxUSD)`, upper lấy `costFeature(minUSD)`. Không có maxUSD thì lower = 0.
 
 Host có thể bổ sung warm-prefix credits từ model history khi `reputation` không bị tắt. Sau đó feature dùng warm tokens và prompt identity đã chuẩn bị, không đọc reputation như một weight riêng.
 
-Production dùng registry prices, kể cả provider subscription. Không có phí tháng, remaining quota hay `apiCostModels` trong công thức. Trường price tiers không được đọc trong `predictSpend()`; hàm này dùng các price fields ở cấp trên.
+Production dùng registry prices, kể cả provider subscription. Không có phí tháng, remaining quota hay `apiCostModels` trong công thức. Khi registry có price tiers, tier có ngưỡng cao nhất mà số prompt token bị tính phí vượt qua định giá toàn bộ request.
 
-Nguồn: [output-demand.ts](../extensions/routing/features/output-demand.ts), [cache.ts](../extensions/routing/features/cache.ts), [spend.ts](../extensions/routing/features/spend.ts), [latency.ts](../extensions/routing/features/latency.ts), [candidate.ts](../extensions/routing/features/candidate.ts).
+Nguồn: [benchmark-output.ts](../extensions/routing/features/benchmark-output.ts), [cache.ts](../extensions/routing/features/cache.ts), [spend.ts](../extensions/routing/features/spend.ts), [latency.ts](../extensions/routing/features/latency.ts), [candidate.ts](../extensions/routing/features/candidate.ts).
 
 ## 7. Ma trận preferences → constraints → miền Θ
 

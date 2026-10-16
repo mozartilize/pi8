@@ -6,7 +6,7 @@
  * Contracts, not winners:
  * - Missing evidence (output tokens, price, output speed) widens intervals
  *   only, so it never lowers an affected action's max regret.
- * - A live warm prefix lowers spend only, so it never raises the incumbent's
+ * - A live warm prefix lowers the prompt cost only, so it never raises the incumbent's
  *   max regret.
  * - Every authorized action stays in the ranking in every case.
  */
@@ -104,13 +104,15 @@ describe.each(PROFILES)('real-pool evidence sensitivity (%s domain)', (_label, p
     expectNotLower(before, await maxRegret(profile, state(), fixture.registry, rows), keysOf(measuredId));
   });
 
-  it('when no action has output-token evidence, every action stays ranked with the same demand envelope', async () => {
+  it('when no action has output-token evidence, every action stays ranked and none uses a measured count', async () => {
     const rows = fixture.benchmarks.map((row) => ({ ...row, outputTokensPerTask: undefined, outputTokensProvenance: undefined }));
     const result = await maxRegret(profile, state(), fixture.registry, rows);
-    const details = new Set(result.actions.flatMap((a) => a.features.evidence)
+    const details = result.actions.flatMap((a) => a.features.evidence)
       .filter((e) => e.feature === 'costDesirability' || e.feature === 'timeDesirability')
-      .flatMap((e) => e.details ?? []).filter((d) => d.startsWith('demand:')));
-    expect([...details].every((d) => d.startsWith('demand:neutral:'))).toBe(true);
+      .flatMap((e) => e.details ?? []).filter((d) => d.startsWith('output-tokens:'));
+    expect(details.length).toBeGreaterThan(0);
+    expect(details).not.toContain('output-tokens:measured');
+    expect(result.actions.every((a) => a.costProxy.tokens.output === undefined)).toBe(true);
   });
 
   it('a live warm prefix never raises the max regret of the incumbent', async () => {
@@ -131,6 +133,6 @@ describe.each(PROFILES)('real-pool evidence sensitivity (%s domain)', (_label, p
     const after = await maxRegret(profile, warm, fixture.registry, fixture.benchmarks);
     expect(after.maxRegret!.get(incumbent.action.key)!).toBeLessThanOrEqual(before.maxRegret!.get(incumbent.action.key)! + TOLERANCE);
     const credited = after.actions.find((a) => a.features.key === incumbent.action.key)!;
-    expect(credited.spend.cacheEligibility).toBe('eligible');
+    expect(credited.costProxy.cacheEligibility).toBe('eligible');
   });
 });

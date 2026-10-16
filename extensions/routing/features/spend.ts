@@ -1,11 +1,15 @@
 /**
- * Spend of one next provider invocation and its cost feature.
+ * Economic cost proxy of one action and its cost feature.
  *
- * The forecast prompt is split into disjoint buckets: cache read, cache write
- * (only where the registry bills writes), uncached input, and output. Each
- * token is priced once. Cache savings enter the cost once and nowhere else;
- * nonfinancial continuity is a separate feature. A missing price gives the
- * common feature interval, never invented dollars.
+ * The proxy is the prompt cost of the current request plus the benchmark
+ * output cost: the AA output tokens per task at the registry output price.
+ * The two terms have different horizons (one invocation and one benchmark
+ * task), so the sum is a routing proxy, not the spend of the next invocation.
+ * The prompt is split into disjoint buckets: cache read, cache write (only
+ * where the registry bills writes) and uncached input. Each prompt token is
+ * priced once. Cache savings enter the cost once and nowhere else;
+ * nonfinancial continuity is a separate feature. A missing price or a missing
+ * output-token count gives an interval, never invented dollars.
  */
 import type { CacheRetention } from '@earendil-works/pi-ai';
 
@@ -13,34 +17,41 @@ import type { EffectiveAction } from './actions.js';
 import { billedPromptTokens, cacheTtlMs, usableWarmPrefix, type CacheEligibility } from './cache.js';
 import { clamp01, usable } from './mapping.js';
 import type { Interval } from './schema.js';
-import { demandDetail, outputTokenForecast, UNKNOWN_DEMAND, type OutputDemandPrior, type OutputTokenForecast } from './output-demand.js';
+import { outputEvidenceDetail, type BenchmarkOutputEvidence } from './benchmark-output.js';
 import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 import type { PriceSnapshot, SpendSnapshot } from './state.js';
 
 export type Pricing = NonNullable<PriceSnapshot['cost']>;
 
-export interface SpendBuckets {
+export interface CostBuckets {
   uncachedInput: number;
   cacheRead: number;
   cacheWrite: number;
-  output: number;
+  /** AA output tokens per task at the action's effort; absent without a measured observation. */
+  output?: number;
 }
 
-export interface PredictedSpendV1 {
+export interface CostProxyV1 {
   priceKnown: boolean;
+  /**
+   * Absent when the price is unknown, or when the output price is positive
+   * and the output-token count is missing: a prompt-only value would then
+   * look cheaper than the cost of an action with a measured count.
+   */
   centralUSD?: number;
+  /** Absent when the price is unknown. With a missing output-token count, the prompt cost at zero output. */
   minUSD?: number;
   /**
-   * Absent when the price is unknown, or when a cache hit is possible and the
-   * registry gives no cache-read price. A read can cost more than a miss, so
-   * the cost then has no known upper bound.
+   * Absent when `centralUSD` is absent, or when a cache hit is possible and
+   * the registry gives no cache-read price. A read can cost more than a miss,
+   * so the cost then has no known upper bound.
    */
   maxUSD?: number;
   /** True when a cache hit is possible and the registry gives no cache-read price. */
   cacheReadPriceUnknown?: true;
   cacheHitEstimate: 'uncertain' | 'none';
   cacheEligibility: CacheEligibility;
-  tokens: SpendBuckets;
+  tokens: CostBuckets;
 }
 
 const perToken = (pricePer1M: number): number => pricePer1M / 1_000_000;
@@ -80,30 +91,28 @@ export function requestRates(pricing: Pricing, promptTokens: number): Pricing {
   return rates;
 }
 
-export function predictSpend(
+export function predictCostProxy(
   state: SpendSnapshot,
   action: EffectiveAction,
   model: PriceSnapshot,
-  output: OutputTokenForecast = outputTokenForecast(UNKNOWN_DEMAND),
-): PredictedSpendV1 {
-  const outputCentral = output.center;
+  output: BenchmarkOutputEvidence,
+): CostProxyV1 {
   const input = billedPromptTokens(state, action);
   const pricing = model.cost && requestRates(model.cost, input);
   const { tokens: warm, hitTokens, eligibility: cacheEligibility } = usableWarmPrefix(state, action, model);
   // Without cache evidence the request has Pi's default tier.
   const retention = state.cache?.retention ?? 'short';
   const writes = writeBilled(pricing, retention);
-  const tokens: SpendBuckets = {
+  const tokens: CostBuckets = {
     cacheRead: warm,
     cacheWrite: writes ? input - warm : 0,
     uncachedInput: writes ? 0 : input - warm,
-    output: outputCentral,
+    ...(output.kind === 'measured' ? { output: output.tokensPerTask } : {}),
   };
   const cacheHitEstimate = hitTokens > 0 ? 'uncertain' as const : 'none' as const;
   if (!pricing || !usable(pricing.input) || !usable(pricing.output)) {
     return { priceKnown: false, cacheHitEstimate, cacheEligibility, tokens };
   }
-  const outputPrice = perToken(pricing.output);
   const missPrice = missPricePerToken(pricing, model, retention);
   const readKnown = usable(pricing.cacheRead);
   // The central input uses the weighted prefix. The bounds use the two outcomes
@@ -115,34 +124,39 @@ export function predictSpend(
   const readLow = readKnown ? readCentral : 0;
   const missInput = input * missPrice;
   const hitInput = (read: number) => hitTokens * read + (input - hitTokens) * missPrice;
-  const centralUSD = warm * readCentral + (input - warm) * missPrice + outputCentral * outputPrice;
-  const minUSD = Math.min(missInput, hitInput(readLow)) + output.low * outputPrice;
-  if (!readKnown && hitTokens > 0) {
-    return { priceKnown: true, centralUSD, minUSD, cacheReadPriceUnknown: true, cacheHitEstimate, cacheEligibility, tokens };
-  }
-  const maxUSD = Math.max(missInput, hitInput(readCentral)) + output.high * outputPrice;
-  return { priceKnown: true, centralUSD, minUSD, maxUSD, cacheHitEstimate, cacheEligibility, tokens };
+  const promptMin = Math.min(missInput, hitInput(readLow));
+  const known = { priceKnown: true, cacheHitEstimate, cacheEligibility, tokens };
+  // A zero output price makes the token count irrelevant. A positive price
+  // with no count gives only a lower bound: the output costs zero or more.
+  const outputUSD = pricing.output === 0 ? 0
+    : output.kind === 'measured' ? output.tokensPerTask * perToken(pricing.output) : undefined;
+  if (outputUSD === undefined) return { ...known, minUSD: promptMin };
+  const centralUSD = warm * readCentral + (input - warm) * missPrice + outputUSD;
+  const minUSD = promptMin + outputUSD;
+  if (!readKnown && hitTokens > 0) return { ...known, centralUSD, minUSD, cacheReadPriceUnknown: true };
+  const maxUSD = Math.max(missInput, hitInput(readCentral)) + outputUSD;
+  return { ...known, centralUSD, minUSD, maxUSD };
 }
 
-export function costFeature(spend: PredictedSpendV1, demand: OutputDemandPrior = UNKNOWN_DEMAND): { interval: Interval; evidence: FeatureEvidence } {
-  if (!spend.priceKnown) {
+export function costFeature(cost: CostProxyV1, output: BenchmarkOutputEvidence): { interval: Interval; evidence: FeatureEvidence } {
+  if (!cost.priceKnown) {
     return {
       interval: { center: PRICE_UNKNOWN_VALUE, lower: 0, upper: 1 },
-      evidence: { feature: 'costDesirability', code: 'price-unknown', mapping: FEATURE_MAPPING_VERSION, details: [`cache-eligibility:${spend.cacheEligibility}`] },
+      evidence: { feature: 'costDesirability', code: 'price-unknown', mapping: FEATURE_MAPPING_VERSION, details: [`cache-eligibility:${cost.cacheEligibility}`] },
     };
   }
+  // Desirability falls with cost, so the bounds swap. No maximum cost gives
+  // the lowest desirability. Without a central cost the center is the
+  // midpoint of the bounds.
+  const upper = costDesirability(cost.minUSD!);
+  const lower = cost.maxUSD === undefined ? 0 : costDesirability(cost.maxUSD);
   return {
-    // Desirability falls with cost, so the bounds swap. No maximum cost gives the lowest desirability.
-    interval: {
-      center: costDesirability(spend.centralUSD!),
-      lower: spend.maxUSD === undefined ? 0 : costDesirability(spend.maxUSD),
-      upper: costDesirability(spend.minUSD!),
-    },
+    interval: { center: cost.centralUSD === undefined ? (lower + upper) / 2 : costDesirability(cost.centralUSD), lower, upper },
     evidence: {
       feature: 'costDesirability', code: 'price-known', mapping: FEATURE_MAPPING_VERSION,
       details: [
-        `cache:${spend.cacheHitEstimate}`, `cache-eligibility:${spend.cacheEligibility}`,
-        ...(spend.cacheReadPriceUnknown ? ['cache-read-price:unknown'] : []), demandDetail(demand),
+        `cache:${cost.cacheHitEstimate}`, `cache-eligibility:${cost.cacheEligibility}`,
+        ...(cost.cacheReadPriceUnknown ? ['cache-read-price:unknown'] : []), outputEvidenceDetail(output),
       ],
     },
   };
@@ -154,7 +168,7 @@ export const COST_FLOOR_USD = 0.00001;
 export const COST_DECADES = 6;
 
 /**
- * Desirability of a predicted all-in USD cost for one decision: log10 of the
+ * Desirability of the economic cost proxy of one decision: log10 of the
  * cost, linear over [$0.00001, $10]. The selector compares only differences,
  * so the difference of two actions depends only on their cost ratio: an action
  * at half the cost gains log10(2)/6 at any price level. A preference answer

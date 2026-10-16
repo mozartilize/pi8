@@ -15,7 +15,7 @@ import { THETA_BOUNDS } from './weights.js';
 
 export interface SelectableAction {
   features: ActionFeatureVector;
-  /** Central predicted USD of the next invocation, when the price is known. */
+  /** Central economic cost proxy in USD, when it is known. */
   centralUsd?: number;
 }
 
@@ -90,13 +90,13 @@ export function partitionDecisionProblem(actions: readonly SelectableAction[]): 
 
 /**
  * Compile evaluated actions. Selection and saved-route validation both call
- * this function, so they check the same numerical inputs. An unknown price
- * gives no central USD for the tie order.
+ * this function, so they check the same numerical inputs. An unknown price or
+ * a missing output-token count gives no central USD for the tie order.
  */
 export const compileActionFeatures = (actions: readonly ActionFeatures[]): ReturnType<typeof partitionDecisionProblem> =>
-  partitionDecisionProblem(actions.map(({ features, spend }) => ({
+  partitionDecisionProblem(actions.map(({ features, costProxy }) => ({
     features,
-    ...(spend.priceKnown ? { centralUsd: spend.centralUSD } : {}),
+    ...(costProxy.centralUSD !== undefined ? { centralUsd: costProxy.centralUSD } : {}),
   })));
 
 const isSimplexRow = (coeffs: readonly number[], dimension: number, lower?: number, upper?: number): boolean =>
