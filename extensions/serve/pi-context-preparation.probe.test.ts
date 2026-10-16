@@ -1,4 +1,4 @@
-/** Real Pi 1.1.0 mechanism probes. Fake providers make no network or paid calls. */
+/** Real Pi mechanism probes. Fake providers make no network or paid calls. */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +37,8 @@ interface ProbeOptions {
   enabled?: boolean;
   guard?: 'abort' | 'throw';
   targetReserve?: number;
-  manualBeforeStart?: boolean;
+  manualBeforeRun?: boolean;
+  manualAtStart?: boolean;
   manualInContext?: boolean;
   fallback?: boolean;
   persist?: boolean;
@@ -178,51 +179,61 @@ async function makeProbe(options: ProbeOptions = {}) {
         if (options.preparationChain) preparation.ledger.bump({ context: preparation.ledger.revisions.context + 1 });
       });
       pi.on('session_compact_failed', () => { trace.push({ kind: 'compact-failed' }); compacting = false; });
-      pi.on('before_agent_start', async (event, ctx) => {
-        if (options.preparationChain) {
-          const inputTokens = () => tokens([
-            ...convertToLlm(buildSessionContext(ctx.sessionManager.getBranch()).messages),
-            { role: 'user', content: event.prompt, timestamp: 0 },
-            { role: 'system', content: event.systemPrompt, timestamp: 0 },
-          ]);
-          const decision: UnifiedDecision = {
-            kind: 'decision', solver: 'exact', domainStatus: 'ready', constraintsEnforced: true,
-            chosen: 'B', ranking: ['B', 'C'], profileDigest: 'probe-profile', featureSchemaDigest: 'probe-features',
-            actions: [], insufficientEvidence: [], allInsufficient: false,
-          };
-          const host: AssignmentHost = {
-            ledger: preparation.ledger, transitions: () => [],
-            select: async () => { trace.push({ kind: 'select' }); return decision; },
-            inputBudget: (target) => {
-              const model = runtime.getModel('probe', target)!;
-              return model.contextWindow - settings.getCompactionSettings(model).reserveTokens;
-            },
-            prepare: async (target, signal, request) => {
-              const model = runtime.getModel('probe', target)!;
-              const resolved = settings.getCompactionSettings(model);
-              const fits = () => inputTokens() <= model.contextWindow - resolved.reserveTokens;
-              trace.push({ kind: 'prepare', model: target, tokens: inputTokens() });
-              if (signal.aborted) return { kind: 'cancelled' };
-              if (fits()) return { kind: 'ready' };
-              if (!resolved.enabled || !request.allowCompaction) return { kind: 'failed' };
-              try {
-                await new Promise<void>((resolve, reject) => ctx.compact({ onComplete: () => resolve(), onError: reject }));
-              } catch {
-                return { kind: 'failed', compactionAttempted: true };
-              }
-              const kind = signal.aborted ? 'cancelled' : fits() ? 'ready' : 'failed';
-              return { kind, compactionAttempted: true };
-            },
-          };
-          // This pre-run mechanism probe supplies a stable signal. The hook
-          // does not expose the enclosing invocation's AbortSignal.
-          preparation.outcome = await routeAssignment(host, new AbortController().signal);
-          if (preparation.outcome.kind === 'reserved') servingTarget = runtime.getModel('probe', preparation.outcome.reservation.target)!;
-          return;
-        }
-        if (!options.manualBeforeStart) return;
-        trace.push({ kind: 'manual-before-start' });
-        await new Promise<void>((resolve, reject) => ctx.compact({ onComplete: () => resolve(), onError: reject }));
+      pi.registerCommand('probe-prepare', {
+        description: 'Prepare context while the session is idle.',
+        handler: async (prompt, ctx) => {
+          if (options.preparationChain) {
+            const inputTokens = () => tokens([
+              ...convertToLlm(buildSessionContext(ctx.sessionManager.getBranch()).messages),
+              { role: 'user', content: prompt, timestamp: 0 },
+              { role: 'system', content: ctx.getSystemPrompt(), timestamp: 0 },
+            ]);
+            const decision: UnifiedDecision = {
+              kind: 'decision', solver: 'exact', domainStatus: 'ready', constraintsEnforced: true,
+              chosen: 'B', ranking: ['B', 'C'], profileDigest: 'probe-profile', featureSchemaDigest: 'probe-features',
+              actions: [], insufficientEvidence: [], allInsufficient: false,
+            };
+            const host: AssignmentHost = {
+              ledger: preparation.ledger, transitions: () => [],
+              select: async () => { trace.push({ kind: 'select' }); return decision; },
+              inputBudget: (target) => {
+                const model = runtime.getModel('probe', target)!;
+                return model.contextWindow - settings.getCompactionSettings(model).reserveTokens;
+              },
+              prepare: async (target, signal, request) => {
+                const model = runtime.getModel('probe', target)!;
+                const resolved = settings.getCompactionSettings(model);
+                const fits = () => inputTokens() <= model.contextWindow - resolved.reserveTokens;
+                trace.push({ kind: 'prepare', model: target, tokens: inputTokens() });
+                if (signal.aborted) return { kind: 'cancelled' };
+                if (fits()) return { kind: 'ready' };
+                if (!resolved.enabled || !request.allowCompaction) return { kind: 'failed' };
+                try {
+                  await new Promise<void>((resolve, reject) => ctx.compact({ onComplete: () => resolve(), onError: reject }));
+                } catch {
+                  return { kind: 'failed', compactionAttempted: true };
+                }
+                const kind = signal.aborted ? 'cancelled' : fits() ? 'ready' : 'failed';
+                return { kind, compactionAttempted: true };
+              },
+            };
+            // The idle command has no enclosing agent invocation to cancel.
+            preparation.outcome = await routeAssignment(host, new AbortController().signal);
+            if (preparation.outcome.kind === 'reserved') servingTarget = runtime.getModel('probe', preparation.outcome.reservation.target)!;
+            return;
+          }
+          if (!options.manualBeforeRun) return;
+          trace.push({ kind: 'manual-before-run' });
+          await new Promise<void>((resolve, reject) => ctx.compact({ onComplete: () => resolve(), onError: reject }));
+        },
+      });
+      pi.on('before_agent_start', (_event, ctx) => {
+        if (!options.manualAtStart || manualStarted) return;
+        manualStarted = true;
+        ctx.compact({
+          onComplete: () => { trace.push({ kind: 'manual-complete' }); manualFinished.resolve(); },
+          onError: () => { trace.push({ kind: 'manual-failed' }); manualFinished.resolve(); },
+        });
       });
       pi.on('context', (event, ctx) => {
         const input = tokens(event.messages);
@@ -346,12 +357,29 @@ describe('real Pi context preparation mechanisms', () => {
   });
 
   it('manual compaction can finish before an agent run starts', async () => {
-    const probe = await makeProbe({ mode: 'wrapper', manualBeforeStart: true, guard: 'abort' });
+    const probe = await makeProbe({ mode: 'wrapper', manualBeforeRun: true, guard: 'abort' });
+    await probe.session.prompt('/probe-prepare Continue');
     await probe.session.prompt('Continue', { expandPromptTemplates: false });
     expect(probe.compactions()).toHaveLength(1);
     expect(probe.trace.findIndex((event) => event.kind === 'compact-persisted')).toBeLessThan(probe.trace.findIndex((event) => event.kind === 'context'));
     expect(probe.serving()).toHaveLength(1);
     expect(probe.serving()[0].tokens).toBeLessThan(272_000 - 16_384);
+  });
+
+  it('manual compaction from the start hook aborts the run before dispatch', async () => {
+    const probe = await makeProbe({ mode: 'wrapper', manualAtStart: true });
+    await probe.session.prompt('Continue', { expandPromptTemplates: false });
+    await probe.manualFinished;
+    expect(probe.serving()).toEqual([]);
+    expect(probe.compactions()).toHaveLength(1);
+    const terminal = probe.trace.filter((event) => event.kind === 'consumer-end');
+    expect(terminal).toHaveLength(1);
+    expect(['error', 'aborted']).toContain(terminal[0].reason);
+    expect(probe.trace.findIndex((event) => event.kind === 'consumer-end')).toBeLessThan(probe.trace.findIndex((event) => event.kind === 'manual-complete'));
+    expect(probe.trace.filter((event) => event.kind === 'manual-complete')).toHaveLength(1);
+    await probe.session.prompt('Continue after preparation', { expandPromptTemplates: false });
+    expect(probe.serving()).toHaveLength(1);
+    expect(probe.session.getLastAssistantText()).toBe('ANSWER-B');
   });
 
   it.each([
@@ -360,6 +388,7 @@ describe('real Pi context preparation mechanisms', () => {
     { cContextWindow: 200_000, failSummaries: 1, target: 'C', preparations: ['B', 'C'], summaries: 2, compactions: 1 },
   ])('pre-run preparation serves $target with C=$cContextWindow and $failSummaries failed summaries', async (scenario) => {
     const probe = await makeProbe({ mode: 'wrapper', guard: 'abort', preparationChain: scenario });
+    await probe.session.prompt('/probe-prepare Continue');
     await probe.session.prompt('Continue', { expandPromptTemplates: false });
     expect(probe.trace.filter((event) => event.kind === 'prepare').map((event) => event.model)).toEqual(scenario.preparations);
     expect(probe.trace.filter((event) => event.kind === 'select')).toHaveLength(1);
