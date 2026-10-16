@@ -1,6 +1,6 @@
 # Unified selection: ma trận tham số
 
-Tài liệu mô tả code hiện tại với `feature-v10` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
+Tài liệu mô tả code hiện tại với `feature-v11` và `preferences.version = 1`. Không mô tả một thiết kế đề xuất. Các mốc năng lực và trọng số là policy do tác giả đặt, không phải xác suất hoàn thành task đã được hiệu chuẩn.
 
 **Điểm quan trọng:** guards quyết định action nào được phép gọi. Mọi action được phép nằm trong một pool so sánh duy nhất. Thứ tự xử lý là:
 
@@ -236,7 +236,8 @@ Nguồn: [weights.ts](../extensions/routing/optimization/weights.ts), [continuit
 | TIME_SHAPE_SECONDS | 60 giây | Độ cong time transform |
 | TIME_SATURATION_SECONDS | 3,600 giây | Time proxy ≥3,600 giây có desirability 0 |
 | Unknown price | Center 0.5; interval [0,1] | Không giả thành giá $0 |
-| Unknown/zero output speed | Center 0.5; interval [0,1] | Không giả thành nhanh |
+| Unknown/zero output speed, có speed ở effort khác cùng registry model | Time bounds từ min/max speed của các row active; center là trung điểm | `speed-other-effort`: ước tính, không phải giới hạn bảo đảm |
+| Không có output speed dùng được ở cùng registry model | Center 0.5; interval [0,1] | Không giả thành nhanh |
 | Thiếu output tokens/task, output price >0 | Cost: [0, costFeature(minUSD)], center là trung điểm | Không giả một số token |
 | Thiếu output tokens/task, speed đã biết | Time: center 0.5; interval [0,1] | Không giả một số token |
 

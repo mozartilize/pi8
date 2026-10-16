@@ -2,9 +2,11 @@
  * Time feature of one action: the benchmark-output time proxy, the AA output
  * tokens per task at the model's measured output speed. This is an
  * output-streaming resource proxy at the benchmark-task horizon. It is not the
- * wall time of an AA task and not the latency of the next invocation. An
- * unknown speed or a missing output-token count gives the common feature
- * interval.
+ * wall time of an AA task and not the latency of the next invocation. A
+ * missing output-token count gives the common feature interval. A row without
+ * a speed takes the range of the speeds measured at the other efforts of the
+ * same model. This range is an estimate, not a guaranteed bound for the missing
+ * observation. With no such speed, the common feature interval applies.
  */
 import type { BenchModel } from '../../types.js';
 import { clamp01, usable } from './mapping.js';
@@ -15,9 +17,24 @@ import { FEATURE_MAPPING_VERSION, type FeatureEvidence } from './schema.js';
 export function timeFeature(
   row: BenchModel | undefined,
   output: BenchmarkOutputEvidence,
+  rows: readonly BenchModel[],
 ): { interval: Interval; evidence: FeatureEvidence } {
   const tps = row?.outputSpeedTps;
   if (!usable(tps) || tps === 0) {
+    const speeds = rows
+      .filter((other) => row && other.registryId === row.registryId && other.effort !== row.effort && other.active)
+      .map((other) => other.outputSpeedTps)
+      .filter((speed): speed is number => usable(speed) && speed > 0);
+    if (speeds.length > 0 && output.kind !== 'missing') {
+      const at = (speed: number) => timeDesirability(benchmarkOutputSeconds(output.tokensPerTask, speed));
+      // The slowest measured speed gives the lower desirability bound.
+      const lower = at(Math.min(...speeds));
+      const upper = at(Math.max(...speeds));
+      return {
+        interval: { center: (lower + upper) / 2, lower, upper },
+        evidence: { feature: 'timeDesirability', code: 'speed-other-effort', mapping: FEATURE_MAPPING_VERSION, details: [outputEvidenceDetail(output)] },
+      };
+    }
     return {
       interval: { center: SPEED_UNKNOWN_VALUE, lower: 0, upper: 1 },
       evidence: { feature: 'timeDesirability', code: 'speed-unknown', mapping: FEATURE_MAPPING_VERSION },

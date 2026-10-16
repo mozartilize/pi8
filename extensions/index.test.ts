@@ -25,7 +25,8 @@ import { activateEvent, createEvent, workItem } from './test-support/context-fix
 import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, requestRouting } from './routing/context/persistence.js';
 
 vi.mock('./host/commands.js', () => ({ registerCommands: vi.fn(() => vi.fn()) }));
-vi.mock('./serve/provider.js', () => ({
+vi.mock('./serve/provider.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./serve/provider.js')>()),
   registerAutoRouterProvider: vi.fn(),
   buildSubagentProviderAuthFilter: vi.fn(() => () => true),
   getBlacklistDebugState: vi.fn(() => ({ instance: 'test' })),
@@ -326,23 +327,42 @@ describe('disconnected subagent routing', () => {
       expect(calls()).toBe(before);
     });
 
-    it('forgets the synced thinking level only when switching TO router/auto', async () => {
+    it.each(['medium', 'off', undefined])('adopts Pi level %s only when selecting router/auto', async (level) => {
       const handlers = new Map<string, (...args: any[]) => unknown>();
       const pi = {
         on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
         registerTool: vi.fn(),
+        getThinkingLevel: () => level,
       } as unknown as ExtensionAPI;
       await autoModelRouterExtension(pi);
       const modelSelect = handlers.get('model_select')!;
       const ctx = contextWithRegistry([registryModel('alpha/cheap')]);
       defaultRouterSession.setSyncedThinkingLevel('high');
+      defaultRouterSession.setLastResolvedThinkingLevel('high');
 
       modelSelect({ model: { provider: 'github-copilot', id: 'gpt-5.4' } }, ctx);
       expect(defaultRouterSession.getSyncedThinkingLevel()).toBe('high');
+      expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe('high');
 
       // The level Pi applies during the switch is not a user choice.
       modelSelect({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctx);
-      expect(defaultRouterSession.getSyncedThinkingLevel()).toBeUndefined();
+      expect(defaultRouterSession.getSyncedThinkingLevel()).toBe(level);
+      expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe(level);
+    });
+
+    it.each([true, false])('adopts the startup level only for router/auto: %s', async (auto) => {
+      const handlers = new Map<string, (...args: any[]) => unknown>();
+      const pi = {
+        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
+        registerTool: vi.fn(),
+        getThinkingLevel: () => 'medium',
+      } as unknown as ExtensionAPI;
+      await autoModelRouterExtension(pi);
+      defaultRouterSession.setLastResolvedThinkingLevel('high');
+      const model = auto ? { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } : { provider: 'alpha', id: 'cheap' };
+      await handlers.get('session_start')!({ reason: 'new' }, contextWithRegistry([registryModel('alpha/cheap')], model));
+      expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe(auto ? 'medium' : undefined);
+      expect(defaultRouterSession.getSyncedThinkingLevel()).toBe(auto ? 'medium' : undefined);
     });
   });
 

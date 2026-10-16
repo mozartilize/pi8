@@ -35,7 +35,7 @@ import {
   registerCommands,
   type ManualModelCompletionUpdater,
 } from './host/commands.js';
-import { registerAutoRouterProvider, buildSubagentProviderAuthFilter } from './serve/provider.js';
+import { adoptPiThinkingLevel, registerAutoRouterProvider, buildSubagentProviderAuthFilter } from './serve/provider.js';
 
 import {
   SUBAGENT_ROUTING_ENABLED,
@@ -342,7 +342,11 @@ async function handleSessionStart(
   }
   // A reassertion below selects router/auto through model_select, which
   // gives the notice itself.
-  if (isRouterAutoActive(ctx?.model)) noticeSetup(ctx, runtime);
+  if (isRouterAutoActive(ctx?.model)) {
+    noticeSetup(ctx, runtime);
+    // The session opens with Pi's level, which the user did not choose for router/auto.
+    adoptPiThinkingLevel(pi, session);
+  }
   try {
     registerAutoRouterProvider(pi, ctx, session, runtime);
     // Pi derives a resumed/restored session's "current model" from the
@@ -458,7 +462,7 @@ function handleModelSelect(
     noticeSetup(ctx, runtime);
     // Pi applies the new model's thinking level during the switch; that is
     // not a user choice, so the next turn must not read it as one.
-    session.setSyncedThinkingLevel(undefined);
+    adoptPiThinkingLevel(pi, session);
     // Requests sent under the previous model were not served by the router:
     // the rebuilt ledger no longer continues the active item, and the
     // requests become history that a later entry can return to.

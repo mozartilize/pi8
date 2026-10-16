@@ -560,6 +560,17 @@ function advanceWorkPhase(args: {
   args.session.commitWorkPhaseState(workPhaseState);
 }
 
+function requestedThinkingLevel(
+  options: SimpleStreamOptions | undefined,
+  agentLoop: boolean,
+  session: RouterSession,
+): string | undefined {
+  if (typeof options?.reasoning === 'string') return options.reasoning;
+  // Pi omits the option for off. A readable session level distinguishes that
+  // from a caller that supplies neither a level nor session state.
+  return agentLoop && session.getSyncedThinkingLevel() !== undefined ? 'off' : undefined;
+}
+
 function resolveTurnEffort(args: {
   chosenCandidate: Candidate | undefined;
   options: SimpleStreamOptions | undefined;
@@ -569,7 +580,7 @@ function resolveTurnEffort(args: {
   pi: ExtensionAPI;
   session: RouterSession;
 }) {
-  const requestedReasoning = args.explicitThinking ?? (typeof args.options?.reasoning === 'string' ? args.options.reasoning : undefined);
+  const requestedReasoning = args.explicitThinking ?? requestedThinkingLevel(args.options, args.agentLoopRequest, args.session);
   // A request from outside Pi's agent loop serves the level it asks for.
   const inheritedReasoning = args.agentLoopRequest && args.explicitThinking == null &&
     requestedReasoning === args.session.getLastResolvedThinkingLevel();
@@ -593,7 +604,7 @@ function resolveTurnEffort(args: {
   // for its own request: writing it to Pi would change the level that the
   // agent loop sends next.
   if (args.agentLoopRequest) {
-    args.session.setLastResolvedThinkingLevel(reasoning);
+    args.session.setLastResolvedThinkingLevel(reasoning ?? (requestedReasoning === 'off' ? 'off' : undefined));
     try {
       args.pi.setThinkingLevel((reasoning ?? 'off') as never);
     } catch {
@@ -980,9 +991,9 @@ async function scoreRouterTurn(args: {
     ? submitterKey(routableCandidates, handBack.submitter)
     : (servedCandidateKey && scoredIncumbentKey(routableCandidates, servedCandidateKey))
       || session.getLastChosenRegistryId();
-  const requestedReasoning = typeof options?.reasoning === 'string' ? options.reasoning : undefined;
-  const userReasoningOverride =
-    requestedReasoning != null && requestedReasoning !== session.getLastResolvedThinkingLevel();
+  const requestedReasoning = requestedThinkingLevel(options, prepared.agentLoopRequest, session);
+  const userReasoningOverride = requestedReasoning != null &&
+    (!prepared.agentLoopRequest || requestedReasoning !== session.getLastResolvedThinkingLevel());
   const execution = contractActive && contract.release;
   const warmPrefixes = new Map<string, WarmPrefixEvidence[]>();
   const addWarmPrefix = (key: string, evidence: WarmPrefixEvidence) => {
@@ -1536,6 +1547,18 @@ function readPiThinkingLevel(pi: ExtensionAPI): string | undefined {
 }
 
 /**
+/**
+ * Record the thinking level that Pi holds when router/auto becomes the session
+ * model as the level the router resolved. Pi applies a level during each model
+ * switch, so that level is not a user choice: a request at it lets the router
+ * choose the effort. A later change to another level stays a user choice.
+ */
+export function adoptPiThinkingLevel(pi: ExtensionAPI, session: RouterSession): void {
+  const level = readPiThinkingLevel(pi);
+  session.setLastResolvedThinkingLevel(level);
+  session.setSyncedThinkingLevel(level);
+}
+
  * Whether Pi's agent loop sent this request. The agent loop sends each
  * request with the run's abort signal (`ctx.signal`) and with the session
  * thinking level, which Pi reads before every request. Another extension that

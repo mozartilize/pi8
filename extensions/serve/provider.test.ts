@@ -1253,6 +1253,47 @@ describe('semi-automatic confirmation gate', () => {
   });
 });
 
+describe('the first request after adopting Pi thinking', () => {
+  it.each([
+    { baseline: 'medium', requested: 'medium', external: false, expected: 'low' },
+    { baseline: 'off', requested: 'off', external: false, expected: 'low' },
+    { baseline: 'medium', requested: 'high', external: false, expected: 'high' },
+    { baseline: 'medium', requested: 'off', external: false, expected: 'off' },
+    { baseline: 'medium', requested: 'medium', external: true, expected: 'medium' },
+  ])('baseline $baseline, request $requested, external $external', async ({ baseline, requested, external, expected }) => {
+    let level = baseline;
+    const pi = {
+      getThinkingLevel: () => level,
+      setThinkingLevel: (next: string) => { level = next; },
+    } as unknown as ExtensionAPI;
+    // During acquisition, equal quality leaves low strictly cheaper and
+    // faster. An explicit level must still restrict the scored actions.
+    const benchmarks = (['off', 'low', 'medium', 'high'] as const).map((effort, i): BenchModel => ({
+      registryId: 'alpha/first', benchSlug: `first-${effort}`, effort, active: true, source: 'test',
+      quality: { intelligence: 50, agenticCoding: 50, research: 0.5 }, outputSpeedTps: 100,
+      outputTokensPerTask: [200_000, 100, 50_000, 100_000][i],
+      outputTokensProvenance: { status: 'measured', indexVersion: '4.3' },
+    }));
+    const h = await setupProviderTest({ dir: temp.path, models: [REGISTRY_MODELS[0]!], benchmarks, pi });
+    const { adoptPiThinkingLevel } = await import('./provider.js');
+    adoptPiThinkingLevel(pi, h.session);
+    level = requested;
+    h.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
+    await h.serve({ messages: [{ role: 'user', content: 'find the parser' }] } as unknown as Context, {
+      ...(requested === 'off' ? {} : { reasoning: requested as 'medium' | 'high' }),
+      ...(external ? { signal: new AbortController().signal } : {}),
+    });
+    const decision = h.getProviderState().lastDecision!;
+    expect(decision.chosen).toBe(`alpha/first:${expected}`);
+    expect(h.delegatedCall().options?.reasoning).toBe(expected === 'off' ? undefined : expected);
+    expect(h.session.getManualModel()).toBeUndefined();
+    const efforts = decision.unified!.top!.map((action) => action.key.split(':')[1]);
+    if (external || baseline !== requested) expect(new Set(efforts)).toEqual(new Set([expected]));
+    else expect(efforts).toEqual(expect.arrayContaining(['off', 'low', 'medium', 'high']));
+    if (external) expect(level).toBe(baseline);
+  });
+});
+
 describe('a thinking-level change the router did not write pins the served model', () => {
   // Stateful stand-in for Pi's session thinking level: the router's footer
   // sync writes it, and Pi sends it back as `options.reasoning` (omitted for `off`).

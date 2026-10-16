@@ -69,7 +69,7 @@ export function candidateFeatures(
   const cost = costFeature(costProxy, output);
   intervals.set('costDesirability', cost.interval);
   evidence.push(cost.evidence);
-  const time = timeFeature(row, output);
+  const time = timeFeature(row, output, rows);
   intervals.set('timeDesirability', time.interval);
   evidence.push(time.evidence);
   const exact = (value: number): Interval => ({ center: value, lower: value, upper: value });

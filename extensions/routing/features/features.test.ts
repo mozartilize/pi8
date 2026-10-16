@@ -635,6 +635,51 @@ describe('benchmark output: raw AA output tokens per task in cost and time', () 
     expect(feature(fast.features, 'timeDesirability')[0]).toBeCloseTo(timeOf(90_000 / 400), 12);
   });
 
+  it('estimates missing speed from the active efforts of the same registry model only', () => {
+    const own = benchRow('medium', 12_000, { outputSpeedTps: undefined });
+    const siblings = [
+      benchRow('low', 100, { outputSpeedTps: 50 }),
+      benchRow('high', 900_000, { outputSpeedTps: 200 }),
+      benchRow('off', 80, { outputSpeedTps: 80 }),
+    ];
+    const noise = [
+      benchRow('max', 10, { outputSpeedTps: 1, active: false }),
+      benchRow('low', 10, { outputSpeedTps: 1_000, registryId: 'q/xmodel' }),
+      benchRow('high', 10, { outputSpeedTps: 1, registryId: 'p/xmodel-v2' }),
+      ...[0, -1, NaN, Infinity].map((outputSpeedTps) => benchRow('xhigh', 10, { outputSpeedTps })),
+    ];
+    const lower = timeOf(240); // 12,000 / 50, using only the served effort's tokens.
+    const upper = timeOf(60); // 12,000 / 200.
+    for (const rows of [[own, ...siblings], [own, ...siblings, ...noise]]) {
+      const result = at('medium', rows);
+      expectTriple(feature(result.features, 'timeDesirability'), [(lower + upper) / 2, lower, upper]);
+      expect(result.features.evidence.find((e) => e.feature === 'timeDesirability')?.code).toBe('speed-other-effort');
+      expect(result.costProxy.tokens.output).toBe(12_000);
+      expect(result.costProxy).toEqual(at('medium', [own]).costProxy);
+    }
+    const measured = at('medium', [{ ...own, outputSpeedTps: 100 }, ...siblings]);
+    expectTriple(feature(measured.features, 'timeDesirability'), [timeOf(120), timeOf(120), timeOf(120)]);
+    expect(measured.features.evidence.find((e) => e.feature === 'timeDesirability')?.code).toBe('speed-known');
+  });
+
+  it('keeps unknown time without usable speed or the served effort token count', () => {
+    const own = benchRow('medium', 12_000, { outputSpeedTps: undefined });
+    const sibling = benchRow('low', 300, { outputSpeedTps: 200 });
+    for (const rows of [
+      [own],
+      [own, { ...sibling, active: false }],
+      [own, { ...sibling, registryId: 'q/xmodel' }],
+      [own, { ...sibling, outputSpeedTps: 0 }],
+      [benchRow('medium', undefined, { outputSpeedTps: undefined }), sibling],
+      [sibling],
+    ]) expectTriple(feature(at('medium', rows).features, 'timeDesirability'), [0.5, 0, 1]);
+
+    // One available speed gives a point estimate, but not a measured-speed claim.
+    const single = at('medium', [own, sibling]);
+    expectTriple(feature(single.features, 'timeDesirability'), [timeOf(60), timeOf(60), timeOf(60)]);
+    expect(single.features.evidence.find((e) => e.feature === 'timeDesirability')?.code).toBe('speed-other-effort');
+  });
+
   it('the features of an action do not depend on the other rows of the pool', () => {
     const own = [benchRow('high', 30_000)];
     const extreme = outputRow('q/frontier', 'high', 10_000_000, {
