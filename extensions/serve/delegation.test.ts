@@ -135,6 +135,58 @@ describe('runDelegationLoop contracts', () => {
     expect(h.output[1]).toEqual({ type: 'text_delta', delta: 'served' });
   });
 
+  describe('empty answer to a synthetic tail', () => {
+    // The event sequence that openai-codex sends for an empty reply.
+    const emptyReply = [
+      { type: 'start' },
+      { type: 'thinking_start' },
+      { type: 'thinking_end' },
+      { type: 'text_start' },
+      { type: 'text_end' },
+      { type: 'done', message: { stopReason: 'stop' } },
+    ];
+    const answer = [{ type: 'text_delta', delta: 'served' }, { type: 'done', message: { stopReason: 'stop' } }];
+
+    it('serves the clean empty answer without a fallback or a blacklist', async () => {
+      const h = createDelegationHarness({
+        chain: ['alpha/model', 'beta/fallback'],
+        scripts: { 'alpha/model': [emptyReply], 'beta/fallback': [answer] },
+        syntheticTail: true,
+      });
+      const result = await h.run();
+      expect(result.success).toBe(true);
+      expect(result.lastServed?.registryId).toBe('alpha/model');
+      expect(h.attempts).toEqual(['alpha/model']);
+      expect(h.blacklist).toEqual([]);
+      // Pi receives the held events in order, and one terminal done.
+      expect(h.output).toEqual(emptyReply);
+    });
+
+    it('falls back from the same empty answer when a request or tool result is unanswered', async () => {
+      const h = createDelegationHarness({
+        chain: ['alpha/model', 'beta/fallback'],
+        scripts: { 'alpha/model': [emptyReply], 'beta/fallback': [answer] },
+      });
+      expect((await h.run()).lastServed?.registryId).toBe('beta/fallback');
+      expect(h.attempts).toEqual(['alpha/model', 'beta/fallback']);
+      expect(h.blacklist).toEqual(['alpha/model']);
+      expect(h.output).toEqual(answer);
+    });
+
+    it.each([
+      ['ends without done', emptyReply.slice(0, -1)],
+      ['ends with a done that did not stop cleanly', [...emptyReply.slice(0, -1), { type: 'done', message: { stopReason: 'toolUse' } }]],
+    ])('falls back when the stream %s', async (_name, events) => {
+      const h = createDelegationHarness({
+        chain: ['alpha/model', 'beta/fallback'],
+        scripts: { 'alpha/model': [events], 'beta/fallback': [answer] },
+        syntheticTail: true,
+      });
+      expect((await h.run()).lastServed?.registryId).toBe('beta/fallback');
+      expect(h.output).toEqual(answer);
+    });
+  });
+
   it('asks beforeFallback only for a real model change, not a missing chain entry', async () => {
     const asked: Array<[string, string]> = [];
     const h = createDelegationHarness({

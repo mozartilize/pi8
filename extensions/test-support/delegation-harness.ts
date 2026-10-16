@@ -121,6 +121,8 @@ export interface DelegationHarnessOptions {
   context?: Context;
   /** Receives the accounting event of each attempt that reached the provider. */
   onAttemptUsage?: (event: AttemptUsageEvent) => void;
+  /** Marks the delegated context as ending in synthetic messages only. */
+  syntheticTail?: boolean;
 }
 
 export interface DelegationHarness {
@@ -172,7 +174,7 @@ function buildRegistry(
 }
 
 export function createDelegationHarness(options: DelegationHarnessOptions): DelegationHarness {
-  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates, beforeFallback, context: contextOverride, onAttemptUsage } = options;
+  const { chain, scripts, decision: decisionOverride, signal, reasoning, userReasoningOverride, registry: registryOverrides, credentials, getProviderAuth, candidates, beforeFallback, context: contextOverride, onAttemptUsage, syntheticTail } = options;
 
   // Per-model ordered attempt queues; each entry is consumed on one streamSimple call.
   type ScriptEntry = readonly unknown[] | Error | AsyncIterable<unknown>;
@@ -282,6 +284,7 @@ export function createDelegationHarness(options: DelegationHarnessOptions): Dele
         candidates,
         beforeFallback,
         onAttemptUsage,
+        syntheticTail,
       };
       const result = await runDelegationLoop(
         delegationOptions,

@@ -1337,6 +1337,7 @@ async function delegateRouterTurn(args: {
     notifyOnRoute: config.prompt,
     turnTimer,
     session,
+    syntheticTail: prepared.measured.turnInput.syntheticTail,
   };
   const recoveryHost: RecoveryHost | undefined = !pin && !clarifying ? {
     input: scored.unifiedInput,

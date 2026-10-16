@@ -96,6 +96,7 @@ describe('getTurnClassificationInput', () => {
         assistant: 1,
         'tool-result': 0,
       },
+      syntheticTail: false,
     });
   });
 });
@@ -297,5 +298,46 @@ describe('getTurnClassificationInput — provenance', () => {
     expect(gen0.key).toBe(gen1.key);
     // The key has exactly three colon-separated fields (ordinal:timestamp:hash).
     expect(gen0.key.split(':').length).toBe(3);
+  });
+});
+
+describe('getTurnClassificationInput — synthetic tail', () => {
+  const prune: AgentMessage = {
+    role: 'custom', customType: 'context-prune-summary',
+    content: '<context-prune-summary>Tool output was summarized.</context-prune-summary>', display: false, timestamp: 3,
+  };
+  const toolCall = {
+    role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'read', arguments: {} }], timestamp: 2,
+  } as never as AgentMessage;
+  const toolResult = {
+    role: 'toolResult', toolCallId: 'call-1', toolName: 'read', content: [{ type: 'text', text: 'file' }], isError: false, timestamp: 3,
+  } as never as AgentMessage;
+  const tail = (sourceMessages: AgentMessage[]) =>
+    getTurnClassificationInput(convertToLlm(sourceMessages), { sourceMessages }).syntheticTail;
+
+  it.each([
+    ['a custom message after the final answer', true, [userMessage('find handlers', 1), assistantMessage('done', 2), prune]],
+    ['two custom messages after the final answer', true, [userMessage('find handlers', 1), assistantMessage('done', 2), prune, { ...prune, timestamp: 4 }]],
+    ['a custom message after the user request and before any answer', false, [userMessage('find handlers', 1), { ...prune, timestamp: 2 }]],
+    ['a user request after the custom message', false, [userMessage('find handlers', 1), assistantMessage('done', 2), prune, userMessage('next', 4)]],
+    ['a custom message before the user request', false, [assistantMessage('done', 2), prune, userMessage('next', 4)]],
+    ['a tool result that the model has not answered', false, [userMessage('find handlers', 1), toolCall, toolResult, { ...prune, timestamp: 4 }]],
+    ['no message after the final answer', false, [userMessage('find handlers', 1), assistantMessage('done', 2)]],
+  ] as const)('marks %s as %s', (_name, expected, sourceMessages) => {
+    expect(tail([...sourceMessages] as AgentMessage[])).toBe(expected);
+  });
+
+  it('treats an unmarked user-role message without its source as a user request', () => {
+    const messages = convertToLlm([userMessage('find handlers', 1), assistantMessage('done', 2), prune]);
+    expect(getTurnClassificationInput(messages).syntheticTail).toBe(false);
+  });
+
+  it('treats a settle reminder after the final answer as synthetic', () => {
+    const messages = [
+      userMessage('find handlers', 1),
+      assistantMessage('done', 2),
+      userMessage(`${ROUTER_SETTLE_PREFIX}\nRouter: this work item is still open.`, 3),
+    ] as Message[];
+    expect(getTurnClassificationInput(messages).syntheticTail).toBe(true);
   });
 });

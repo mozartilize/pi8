@@ -196,6 +196,12 @@ export interface DelegationOptions {
   onRequest?: () => void;
   /** Called once for each attempt that reached the provider, after the attempt ends. */
   onAttemptUsage?: (event: AttemptUsageEvent) => void;
+  /**
+   * Every message after the last assistant message is a known synthetic
+   * message (see `TurnClassificationInput.syntheticTail`). A clean empty
+   * answer to such a context serves the turn.
+   */
+  syntheticTail?: boolean;
 }
 
 export interface DelegationResult {
@@ -686,6 +692,15 @@ class AttemptController {
 
   discard(): void { this.attemptBuffer.discard(); }
 
+  /** Release the held events of a clean empty answer, and record the candidate as served. */
+  serveEmptyAnswer(): void {
+    this.attemptBuffer.flush();
+    this.servedTracked = true;
+    const recorded = recordServedAttempt(this.ctx, this.candidate);
+    this.lastServed = recorded.lastServed;
+    this.finalDecision = recorded.finalDecision;
+  }
+
   resumeHeldEvent(event: DelegatedEvent): void {
     this.attemptBuffer.forward(event);
     this.recordReleasedOutput();
@@ -922,6 +937,7 @@ async function runCandidateAttempt(
   // Debug evidence for a long stream: which events kept it open after its tool call ended.
   const eventCounts: Record<string, number> = {};
   let lastEventType: string | undefined;
+  let stoppedClean = false;
   let toolCallEndMs: number | undefined;
   // These values belong to router/auto's resolved request, not the destination.
   // Even the synthetic router API key overrides stored destination credentials.
@@ -974,6 +990,8 @@ async function runCandidateAttempt(
         if (lastEventMs !== undefined) timing.maxEventGapMs = Math.max(timing.maxEventGapMs, eventMs - lastEventMs);
         lastEventMs = eventMs;
         lastEventType = step.value.type;
+        stoppedClean = lastEventType === 'done'
+          && (step.value as { message?: { stopReason?: unknown } }).message?.stopReason === 'stop';
         eventCounts[lastEventType] = (eventCounts[lastEventType] ?? 0) + 1;
         if (toolCallEndMs === undefined && lastEventType === 'toolcall_end') toolCallEndMs = eventMs;
         if (timing.firstEventMs === undefined) {
@@ -1035,7 +1053,14 @@ async function runCandidateAttempt(
         // accept tool results for calls it made itself, and ends a foreign
         // tool-loop continuation without an answer. That is a protocol limit,
         // not a defect: the candidate must not be blacklisted for it.
-        failure = controller.severePreOutputSeen
+        // A hidden extension message, such as a context summary or a settle
+        // reminder, can start a turn after the final answer. The context then
+        // asks for nothing, so a clean empty answer is correct, not a model
+        // defect: Pi records it as it records the same answer from a direct model.
+        if (!controller.severePreOutputSeen && ctx.opts.syntheticTail && stoppedClean) {
+          controller.serveEmptyAnswer();
+          debugLog('attempt.stream', { candidate: candidate.candidateId, outcome: 'empty-answer' });
+        } else failure = controller.severePreOutputSeen
           ? { kind: 'trajectory', message: `trajectory reasoning-loop (no stronger target): ${candidate.candidateId}` }
           : context.messages.at(-1)?.role === 'toolResult'
             ? {

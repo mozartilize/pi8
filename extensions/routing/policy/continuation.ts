@@ -10,6 +10,13 @@ export interface TurnClassificationInput {
   promptText: string;
   /** How many messages of each recoverable origin the context held. */
   provenanceCounts: Record<MessageProvenance, number>;
+  /**
+   * True when every message after the last assistant message is a known
+   * synthetic message, and at least one is. The context then holds no user
+   * request and no tool result that the model has not answered, so a clean
+   * empty answer is a valid reply.
+   */
+  syntheticTail: boolean;
 }
 
 /**
@@ -96,6 +103,8 @@ export function getTurnClassificationInput(
   let latestUserIndex = -1;
   let userOrdinal = 0;
   let latestAnyUserIndex = -1;
+  let tailMessages = 0;
+  let tailSynthetic = true;
   for (let i = 0; i < source.length; i += 1) {
     const message = source[i];
     if (!message) continue;
@@ -113,6 +122,13 @@ export function getTurnClassificationInput(
     if (origin) matches!.splice(matches!.indexOf(origin), 1);
     const provenance = origin?.synthetic ? 'synthetic-known' : classifyProvenance(message, syntheticPrefixes);
     provenanceCounts[provenance] += 1;
+    if (provenance === 'assistant') {
+      tailMessages = 0;
+      tailSynthetic = true;
+    } else {
+      tailMessages += 1;
+      if (provenance !== 'synthetic-known') tailSynthetic = false;
+    }
     if (provenance === 'user') {
       latestAnyUserIndex = i;
       // Ephemeral hook/reminder injections arrive as user-role messages with no
@@ -130,12 +146,14 @@ export function getTurnClassificationInput(
   // Fallback: a conversation whose only user-provenance messages lack a
   // timestamp still routes on its latest one rather than degrading to "no user".
   if (latestUserIndex < 0) latestUserIndex = latestAnyUserIndex;
+  const syntheticTail = tailMessages > 0 && tailSynthetic;
 
   if (latestUserIndex < 0) {
     return {
       key: 'none',
       promptText: '',
       provenanceCounts,
+      syntheticTail,
     };
   }
 
@@ -148,5 +166,6 @@ export function getTurnClassificationInput(
     key,
     promptText,
     provenanceCounts,
+    syntheticTail,
   };
 }
