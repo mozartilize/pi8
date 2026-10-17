@@ -1537,16 +1537,6 @@ async function delegateRouterTurn(args: {
   return { kind: 'done' };
 }
 
-function readPiThinkingLevel(pi: ExtensionAPI): string | undefined {
-  try {
-    const level: unknown = pi.getThinkingLevel?.();
-    return typeof level === 'string' ? level : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
 /**
  * Record the thinking level that Pi holds when router/auto becomes the session
  * model as the level the router resolved. Pi applies a level during each model
@@ -1559,6 +1549,16 @@ export function adoptPiThinkingLevel(pi: ExtensionAPI, session: RouterSession): 
   session.setSyncedThinkingLevel(level);
 }
 
+function readPiThinkingLevel(pi: ExtensionAPI): string | undefined {
+  try {
+    const level: unknown = pi.getThinkingLevel?.();
+    return typeof level === 'string' ? level : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Whether Pi's agent loop sent this request. The agent loop sends each
  * request with the run's abort signal (`ctx.signal`) and with the session
  * thinking level, which Pi reads before every request. Another extension that
