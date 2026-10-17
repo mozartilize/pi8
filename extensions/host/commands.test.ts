@@ -306,6 +306,42 @@ describe('/router-manual', () => {
     expect(messages.at(-1)).toContain('Semi-auto: on');
   });
 
+  it('lists one routing history row for each run of turns on the same model', async () => {
+    const session = new RouterSession();
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, messages } = fakeCtx([{ provider: 'beta', id: 'second' }]);
+    const store = emptyStore();
+    store.syncedAt = Date.now();
+    saveStore(store);
+
+    for (const served of ['alpha/first', 'alpha/first', 'beta/second', 'alpha/first', 'alpha/first']) {
+      appendDecision(
+        {
+          dimension: 'gather',
+          chosen: served,
+          reason: 'scored',
+          confidence: 0.7,
+          routedUp: false,
+          routedDown: false,
+          cause: 'heuristic',
+          fallbackChain: [served],
+        },
+        { registryId: served, viaFallback: false, accumulatedCost: 0.01 },
+      );
+    }
+
+    await handlers.get('router-status')!('', ctx);
+
+    const msg = messages.at(-1) ?? '';
+    const rows = msg
+      .slice(msg.indexOf('Recent routing history:'))
+      .split('\n')
+      .filter((line) => line.includes(' → '))
+      .map((line) => line.split(' → ')[1]);
+    expect(rows).toEqual(['alpha/first', 'beta/second', 'alpha/first']);
+  });
+
   it('rejects a model outside the routable registry without changing the pin', async () => {
     const session = new RouterSession();
     session.setManualModel('alpha/first');

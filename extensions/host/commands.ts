@@ -326,14 +326,20 @@ async function handleStatusCommand(
   // Only actual routing decisions belong here: secondary records join
   // decisions by intentKey offline, and letting them through would push real
   // turns out of the recent window.
-  const history = readRecentDecisions(20);
+  const history = readRecentDecisions(200);
   const routingHistory = history.filter(
     (e) => e.cause !== 'self-healing-gap' && (e.kind === undefined || e.kind === 'decision'),
   );
   const fallbacks = routingHistory.filter((e) => e.viaFallback);
-  if (routingHistory.length > 0) {
+  // One row for each run of turns served by the same model, stamped with the
+  // newest turn of the run. A fallback turn always gets its own row.
+  const switches = routingHistory.filter((e, i) => {
+    const next = routingHistory[i + 1];
+    return !next || next.served !== e.served || e.viaFallback || next.viaFallback;
+  });
+  if (switches.length > 0) {
     lines.push('', 'Recent routing history:');
-    for (const e of routingHistory.slice(-6).reverse()) {
+    for (const e of switches.slice(-6).reverse()) {
       const markFallback = e.viaFallback ? ` ⚠ FELL BACK to ${e.served} (rank ${e.fallbackRank})` : '';
       lines.push(
         `  ${new Date(e.ts).toISOString().slice(11, 19)} ${e.dimension.padEnd(10)} → ${e.served}${markFallback}`,
