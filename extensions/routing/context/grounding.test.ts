@@ -11,7 +11,6 @@ import {
   isFresh,
   matchedLineRanges,
   readLineRange,
-  referencedArtifactsFresh,
   unmetArtifactPaths,
 } from './grounding.js';
 
@@ -60,15 +59,13 @@ describe('grounding', () => {
     const read = { grounding: [{ anchorValue: 'req.md', sha256: sha('v1'), observedAtEntryId: 'u', observedBy: 'read' as const }], openContext: [] };
     rmSync(join(dir, 'req.md'));
     expect(await unmetArtifactPaths(dir, read, ['req.md'])).toEqual([]);
-    // A missing path proves no context in hand.
-    expect(await referencedArtifactsFresh(dir, item, ['src/new.ts'])).toBe(false);
   });
 
   it('requires an accepted context handoff for a directory without treating it as a grounded file', async () => {
     mkdirSync(join(dir, 'src'));
-    expect(await referencedArtifactsFresh(dir, { grounding: [] }, ['src'])).toBe(false);
-    expect(await referencedArtifactsFresh(dir, { grounding: [], openContext: ['referenced-artifact'] }, ['src'])).toBe(false);
-    expect(await referencedArtifactsFresh(dir, { grounding: [], openContext: [] }, ['src'])).toBe(true);
+    expect(await unmetArtifactPaths(dir, { grounding: [] }, ['src'])).toEqual(['src']);
+    expect(await unmetArtifactPaths(dir, { grounding: [], openContext: ['referenced-artifact'] }, ['src'])).toEqual(['src']);
+    expect(await unmetArtifactPaths(dir, { grounding: [], openContext: [] }, ['src'])).toEqual([]);
   });
 
   it('never lets a directory investigation substitute for fresh file evidence', async () => {
@@ -78,31 +75,29 @@ describe('grounding', () => {
       openContext: [],
       grounding: [{ anchorValue: 'req.md', sha256: sha('v1'), observedAtEntryId: 'u', observedBy: 'read' as const }],
     };
-    expect(await referencedArtifactsFresh(dir, item, ['src', 'req.md'])).toBe(true);
-    expect(await referencedArtifactsFresh(dir, { ...item, openContext: ['referenced-artifact'] }, ['src', 'req.md'])).toBe(false);
-    expect(await referencedArtifactsFresh(dir, { ...item, grounding: [] }, ['src', 'req.md'])).toBe(false);
+    expect(await unmetArtifactPaths(dir, item, ['src', 'req.md'])).toEqual([]);
+    expect(await unmetArtifactPaths(dir, { ...item, openContext: ['referenced-artifact'] }, ['src', 'req.md'])).toEqual(['src']);
+    expect(await unmetArtifactPaths(dir, { ...item, grounding: [] }, ['src', 'req.md'])).toEqual(['req.md']);
     writeFileSync(join(dir, 'req.md'), 'v2');
-    expect(await referencedArtifactsFresh(dir, item, ['src', 'req.md'])).toBe(false);
-    expect(await referencedArtifactsFresh(dir, item, ['missing'])).toBe(false);
+    expect(await unmetArtifactPaths(dir, item, ['src', 'req.md'])).toEqual(['req.md']);
     rmSync(join(dir, 'req.md'));
     mkdirSync(join(dir, 'req.md'));
-    expect(await referencedArtifactsFresh(dir, item, ['req.md'])).toBe(false);
+    expect(await unmetArtifactPaths(dir, item, ['req.md'])).toEqual(['req.md']);
     // No read can meet a file above the size cap, so it owes none.
     writeFileSync(join(dir, 'big.md'), 'x'.repeat(GROUNDING_MAX_BYTES + 1));
-    expect(await referencedArtifactsFresh(dir, item, ['big.md'])).toBe(true);
+    expect(await unmetArtifactPaths(dir, item, ['big.md'])).toEqual([]);
     // A path that becomes a file owes its exact content even after a directory investigation.
     rmSync(join(dir, 'src'), { recursive: true });
     writeFileSync(join(dir, 'src'), 'file');
-    expect(await referencedArtifactsFresh(dir, item, ['src'])).toBe(false);
+    expect(await unmetArtifactPaths(dir, item, ['src'])).toEqual(['src']);
   });
 
   it('owes a referenced artifact until every referenced path is grounded and fresh', async () => {
     writeFileSync(join(dir, 'a.md'), 'a');
     writeFileSync(join(dir, 'b.md'), 'b');
     const item = { grounding: [{ anchorValue: 'a.md', sha256: sha('a'), observedAtEntryId: 'u', observedBy: 'read' as const }] };
-    expect(await referencedArtifactsFresh(dir, item, ['a.md'])).toBe(true);
-    expect(await referencedArtifactsFresh(dir, item, ['a.md', 'b.md'])).toBe(false);
-    expect(await referencedArtifactsFresh(dir, item, [])).toBe(false);
+    expect(await unmetArtifactPaths(dir, item, ['a.md'])).toEqual([]);
+    expect(await unmetArtifactPaths(dir, item, ['a.md', 'b.md'])).toEqual(['b.md']);
   });
 });
 

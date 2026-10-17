@@ -16,11 +16,10 @@ const MAX_BYTES = 16 * 1024 * 1024;
 
 const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
 
-async function digestWorkspace(exec: Exec, cwd: string, signal?: AbortSignal): Promise<WorkspaceSnapshot> {
+async function digestWorkspace(exec: Exec, cwd: string): Promise<WorkspaceSnapshot> {
   const listed = await exec('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     cwd,
     timeout: GIT_TIMEOUT_MS,
-    ...(signal ? { signal } : {}),
   });
   if (listed.code !== 0) return { status: 'unavailable', scope: 'git-worktree' };
   const files = [...new Set(listed.stdout.split('\0').filter(Boolean))].sort();
@@ -38,9 +37,9 @@ async function digestWorkspace(exec: Exec, cwd: string, signal?: AbortSignal): P
 }
 
 /** Digest the workspace within the deadline. A failure never throws; it gives a status without a digest. */
-export function snapshotWorkspace(exec: Exec, cwd: string, signal?: AbortSignal): Promise<WorkspaceSnapshot> {
+export function snapshotWorkspace(exec: Exec, cwd: string): Promise<WorkspaceSnapshot> {
   return withDeadline(
-    digestWorkspace(exec, cwd, signal).catch((): WorkspaceSnapshot => ({ status: 'unavailable', scope: 'git-worktree' })),
+    digestWorkspace(exec, cwd).catch((): WorkspaceSnapshot => ({ status: 'unavailable', scope: 'git-worktree' })),
     SNAPSHOT_DEADLINE_MS,
     (): WorkspaceSnapshot => ({ status: 'timeout', scope: 'git-worktree' }),
   );

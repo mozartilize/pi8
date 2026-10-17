@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { persistedContextEvents } from '../../test-support/context-events.js';
 import {
   CONTEXT_ENTRY_TYPE,
   SELECTION_ENTRY_TYPE,
-  branchEvents,
   branchHoldsEntry,
   classifyBranch,
   lastUnroutedRequest,
@@ -114,7 +114,7 @@ describe('branch reconstruction', () => {
       { v: 1, op: 'boundary', workItemId: 'w_1', boundary: 'work-reopen', handoffId: u2, sourceEntryId: u2 },
     ] });
     const reopened = t.getLeafId();
-    const boundaries = () => branchEvents(t.getBranch()).flatMap((e) => (e.op === 'boundary' ? [e.boundary] : []));
+    const boundaries = () => persistedContextEvents(t.getBranch()).flatMap((e) => (e.op === 'boundary' ? [e.boundary] : []));
 
     t.navigate(beforeCompletion);
     let ledger = rebuildLedger(t.getBranch());
@@ -148,7 +148,7 @@ describe('branch reconstruction', () => {
     t.custom(CONTEXT_ENTRY_TYPE, { v: 1, op: 'work-create', workItem: { id: 'w_bad' }, sourceEntryId: u });
     t.custom(CONTEXT_ENTRY_TYPE, 'garbage');
     t.event(createEvent(workItem('w_1'), u));
-    expect(branchEvents(t.getBranch()).map((e) => e.op)).toEqual(['work-create']);
+    expect(persistedContextEvents(t.getBranch()).map((e) => e.op)).toEqual(['work-create']);
     expect(rebuildLedger(t.getBranch()).items.size).toBe(1);
   });
 });
@@ -165,7 +165,7 @@ describe('classifyBranch', () => {
         handoffId: 'h:ready', sourceEntryId: 'e:ready' },
     ] });
     expect(tree.getBranch().filter((entry) => entry.type === 'custom')).toHaveLength(1);
-    expect(branchEvents(tree.getBranch()).map((event) => event.op)).toEqual(['work-create', 'activate', 'boundary']);
+    expect(persistedContextEvents(tree.getBranch()).map((event) => event.op)).toEqual(['work-create', 'activate', 'boundary']);
     const restored = rebuildLedger(tree.getBranch());
     expect(restored.activeWorkItemId).toBe(item.id);
     expect(restored.items.get(item.id)?.openContext).toEqual([]);
@@ -183,7 +183,6 @@ describe('classifyBranch', () => {
       { v: 1, op: 'work-create', workItem: other, sourceEntryId: 'e:other' },
       { v: 1, op: 'activate', workItemId: 'w:missing', sourceEntryId: 'e:other' },
     ] });
-    expect(branchEvents(tree.getBranch()).map((event) => event.op)).toEqual(['work-create']);
     const restored = rebuildLedger(tree.getBranch());
     expect(restored.items.size).toBe(1);
     expect(restored.items.has(prior.id)).toBe(true);

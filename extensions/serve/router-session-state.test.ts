@@ -99,9 +99,6 @@ describe('router session state', () => {
       dimension: 'implement',
       chosen: 'provider/model',
       reason: 'test',
-      confidence: 1,
-      routedUp: false,
-      routedDown: false,
       cause: 'heuristic',
       fallbackChain: ['provider/model'],
     });
@@ -151,12 +148,6 @@ describe('session generation and reset', () => {
     expect(defaultRouterSession.getSessionGeneration()).toBe(before + 1);
   });
 
-  it('clears skill names on session reset', () => {
-    defaultRouterSession.setActiveSkillNames(['systematic-debugging', 'writing-plans']);
-    defaultRouterSession.reset();
-    expect(defaultRouterSession.getActiveSkillNames()).toEqual([]);
-  });
-
   it('clears the entry state on reset', () => {
     defaultRouterSession.intent.commitWorkPhaseState({
       intentKey: 'intent-a',
@@ -197,9 +188,6 @@ describe('RouterSession independent instances', () => {
       dimension: 'implement',
       chosen: 'beta/strong',
       reason: 'test',
-      confidence: 1,
-      routedUp: false,
-      routedDown: false,
       cause: 'heuristic',
       fallbackChain: ['beta/strong'],
     });

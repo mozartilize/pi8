@@ -22,7 +22,7 @@ import {
   type PreferenceKey,
   type UserRoutingPreferencesV1,
 } from '../preferences/schema.js';
-import { LP_RESIDUAL_TOLERANCE, lpAnswerProblem, pointProblem, type LPAdapter, type LinearRow, type LpRunControls, type Polytope } from './lp.js';
+import { LP_RESIDUAL_TOLERANCE, lpAnswerProblem, pointProblem, type LPAdapter, type LinearRow, type Polytope } from './lp.js';
 import {
   CHOICE_MARGIN,
   EQUIVALENT_TOLERANCE,
@@ -75,9 +75,9 @@ export function domainIdentity(profile: UserRoutingPreferencesV1): string {
   });
 }
 
-const unit = (size: number, index: number, value = 1): number[] => {
+const unit = (size: number, index: number): number[] => {
   const row = new Array<number>(size).fill(0);
-  row[index] = value;
+  row[index] = 1;
   return row;
 };
 
@@ -131,30 +131,26 @@ function slackPolytope(constraints: readonly CompiledPreferenceConstraint[]): Po
   };
 }
 
-async function solveOne(lp: LPAdapter, polytope: Polytope, objective: number[], sense: 'max' | 'min', controls?: LpRunControls) {
-  const [result] = await lp.solve({ polytope, objectives: [objective], sense }, controls);
+async function solveOne(lp: LPAdapter, polytope: Polytope, objective: number[], sense: 'max' | 'min') {
+  const [result] = await lp.solve({ polytope, objectives: [objective], sense });
   return result!;
 }
 
-async function verifiedOptimum(lp: LPAdapter, polytope: Polytope, objective: number[], sense: 'max' | 'min', controls?: LpRunControls) {
-  const result = await solveOne(lp, polytope, objective, sense, controls);
+async function verifiedOptimum(lp: LPAdapter, polytope: Polytope, objective: number[], sense: 'max' | 'min') {
+  const result = await solveOne(lp, polytope, objective, sense);
   const problem = lpAnswerProblem(polytope, objective, result);
   if (problem) throw new Error(`domain LP failed: ${problem}`);
   return result as { objective: number; x: number[] };
 }
 
 /** Build the admissible domain of a profile. */
-export async function compileWeightDomain(
-  profile: UserRoutingPreferencesV1,
-  lp: LPAdapter,
-  controls?: LpRunControls,
-): Promise<WeightDomain> {
+export async function compileWeightDomain(profile: UserRoutingPreferencesV1, lp: LPAdapter): Promise<WeightDomain> {
   const constraints = compilePreferenceConstraints(profile);
   if (constraints.length === 0) return thetaBaseDomain();
 
   const base = thetaBasePolytope();
   const hard: Polytope = { ...base, rows: [...base.rows, ...hardRows(constraints)] };
-  const feasibility = await solveOne(lp, hard, new Array<number>(FEATURE_COUNT).fill(0), 'max', controls);
+  const feasibility = await solveOne(lp, hard, new Array<number>(FEATURE_COUNT).fill(0), 'max');
   if (feasibility.status === 'optimal' && !lpAnswerProblem(hard, new Array<number>(FEATURE_COUNT).fill(0), feasibility)) {
     return { mode: 'hard', polytope: hard, constraints, totalSlack: 0 };
   }
@@ -164,14 +160,14 @@ export async function compileWeightDomain(
 
   const soft = slackPolytope(constraints);
   const slackObjective = [...new Array<number>(FEATURE_COUNT).fill(0), ...constraints.map(() => UNIFORM_CONFLICT_SLACK_PENALTY)];
-  const minimum = await verifiedOptimum(lp, soft, slackObjective, 'min', controls);
+  const minimum = await verifiedOptimum(lp, soft, slackObjective, 'min');
   const totalSlackRow: LinearRow = { coeffs: slackObjective, upper: minimum.objective + LP_RESIDUAL_TOLERANCE };
   const polytope: Polytope = { ...soft, rows: [...soft.rows, totalSlackRow] };
   const slackRanges: ConstraintSlackRange[] = [];
   for (const [index, constraint] of constraints.entries()) {
     const objective = unit(polytope.numCols, FEATURE_COUNT + index);
-    const low = await verifiedOptimum(lp, polytope, objective, 'min', controls);
-    const high = await verifiedOptimum(lp, polytope, objective, 'max', controls);
+    const low = await verifiedOptimum(lp, polytope, objective, 'min');
+    const high = await verifiedOptimum(lp, polytope, objective, 'max');
     slackRanges.push({ key: constraint.key, min: Math.max(0, low.objective), max: Math.max(0, high.objective) });
   }
   return { mode: 'min-slack', polytope, constraints, totalSlack: minimum.objective, slackRanges };
@@ -182,7 +178,7 @@ export async function compileWeightDomain(
  * broken lexicographically: minimize theta[0], then theta[1], and so on, each
  * fixed within the residual tolerance. The answer is deterministic.
  */
-export async function representativePoint(domain: WeightDomain, lp: LPAdapter, controls?: LpRunControls): Promise<number[]> {
+export async function representativePoint(domain: WeightDomain, lp: LPAdapter): Promise<number[]> {
   const n = domain.polytope.numCols;
   // Columns: domain columns, then one distance column u_j per theta weight.
   const numCols = n + FEATURE_COUNT;
@@ -205,12 +201,12 @@ export async function representativePoint(domain: WeightDomain, lp: LPAdapter, c
     rows,
   };
   const distance = pad([], numCols).map((_, column) => (column >= n ? 1 : 0));
-  const nearest = await verifiedOptimum(lp, polytope, distance, 'min', controls);
+  const nearest = await verifiedOptimum(lp, polytope, distance, 'min');
   polytope = { ...polytope, rows: [...polytope.rows, { coeffs: distance, upper: nearest.objective + LP_RESIDUAL_TOLERANCE / 10 }] };
   let point = nearest.x;
   for (let j = 0; j < FEATURE_COUNT; j++) {
     const objective = unit(numCols, j);
-    const solved = await verifiedOptimum(lp, polytope, objective, 'min', controls);
+    const solved = await verifiedOptimum(lp, polytope, objective, 'min');
     point = solved.x;
     polytope = { ...polytope, rows: [...polytope.rows, { coeffs: objective, upper: solved.objective + LP_RESIDUAL_TOLERANCE / 10 }] };
   }
@@ -237,13 +233,9 @@ function frozenDomain(domain: WeightDomain): WeightDomain {
 }
 
 /** Compile the atomic artifact of a valid profile. */
-export async function compileDomainArtifact(
-  profile: UserRoutingPreferencesV1,
-  lp: LPAdapter,
-  controls?: LpRunControls,
-): Promise<DomainArtifact> {
-  const domain = await compileWeightDomain(profile, lp, controls);
-  const point = await representativePoint(domain, lp, controls);
+export async function compileDomainArtifact(profile: UserRoutingPreferencesV1, lp: LPAdapter): Promise<DomainArtifact> {
+  const domain = await compileWeightDomain(profile, lp);
+  const point = await representativePoint(domain, lp);
   const problem = pointProblem(domain.polytope, point);
   if (problem) throw new Error(`representative weight is not in its domain: ${problem}`);
   return Object.freeze({

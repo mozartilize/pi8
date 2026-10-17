@@ -133,17 +133,6 @@ export const CONTRACT_GATE =
   `${EXECUTION_CONTRACT_TOOL} with the remaining steps first, so the router can choose the executor. ` +
   `Otherwise make the change again; the router stops only the first one.`;
 
-/** Reason details that mark a pick raised by the incumbent minimums. */
-const INCUMBENT_RAISES = new Set(['incumbent-model', 'incumbent-capability', 'incumbent-effort']);
-
-/**
- * Limit extra edit reminders to implement picks raised by the incumbent.
- * Accepted implementation handoffs already carry closed-plan guidance.
- */
-function implementRaisedByIncumbent(last: RoutingDecision): boolean {
-  return last.scoredReason?.details.some((detail) => INCUMBENT_RAISES.has(detail.kind)) ?? false;
-}
-
 /**
  * Why a handoff does not apply to this decision, or undefined when it does.
  * `served` is the model serving the invocation that asks.
@@ -369,10 +358,9 @@ export function observeFiles(
   cwd: string,
   paths: readonly string[],
   signal?: AbortSignal,
-  deadlineMs = OBSERVE_DEADLINE_MS,
 ): Promise<FileObservations> {
   const observed: FileObservations = {};
-  return withDeadline(measureFiles(exec, cwd, paths, paths, observed, signal), deadlineMs, () => ({ ...observed }));
+  return withDeadline(measureFiles(exec, cwd, paths, paths, observed, signal), OBSERVE_DEADLINE_MS, () => ({ ...observed }));
 }
 
 /** Log how a contract ended, with the rubric and measurements it was valued on. */
@@ -726,7 +714,7 @@ export function remindContractOnEdit(
     const lastServed = session.getLastServed();
     const served = lastServed ? servedKey(lastServed) : undefined;
     if (state.contract || state.contractReminded || handoffInapplicable(last, state, served)) return undefined;
-    if (last.dimension === 'implement' && !implementRaisedByIncumbent(last)) return undefined;
+    if (last.dimension === 'implement') return undefined;
     session.commitWorkPhaseState({ ...state, contractReminded: true });
     appendExecutionContractSignal({
       intentKey: state.intentKey,

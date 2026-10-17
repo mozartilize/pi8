@@ -12,7 +12,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { registerCommands } from './commands.js';
-import { loadConfig, getConfigPath, savePreferences } from '../config.js';
+import { loadConfig, getConfigPath } from '../config.js';
+import { writeStoredPreferences } from '../test-support/stored-preferences.js';
 import { getProviderState } from '../serve/provider.js';
 import { defaultBlacklistState } from '../serve/blacklist.js';
 import {
@@ -310,9 +311,6 @@ describe('/router-manual', () => {
         dimension: 'implement',
         chosen: 'beta/second',
         reason: 'scored',
-        confidence: 0.7,
-        routedUp: false,
-        routedDown: false,
         cause: 'heuristic',
         fallbackChain: ['beta/second'],
       },
@@ -358,9 +356,6 @@ describe('/router-manual', () => {
           dimension: 'gather',
           chosen: served,
           reason: 'scored',
-          confidence: 0.7,
-          routedUp: false,
-          routedDown: false,
           cause: 'heuristic',
           fallbackChain: [served],
         },
@@ -641,9 +636,6 @@ describe('/router-report', () => {
       dimension: 'implement',
       chosen: 'beta/cheap',
       reason: 'scored',
-      confidence: 0.8,
-      routedUp: false,
-      routedDown: false,
       cause: 'heuristic',
       fallbackChain: ['beta/cheap'],
       baseline: { registryId: 'alpha/strong', source: 'auto', cost: { input: 10, output: 50 } },
@@ -704,9 +696,6 @@ describe('/router-report', () => {
         dimension: 'implement',
         chosen: 'beta/cheap',
         reason: 'scored',
-        confidence: 0.8,
-        routedUp: false,
-        routedDown: false,
         cause: 'heuristic',
         fallbackChain: ['beta/cheap'],
         baseline: { registryId: 'alpha/strong', source: 'auto' },
@@ -727,9 +716,6 @@ describe('/router-report', () => {
       dimension: 'implement',
       chosen: 'beta/cheap',
       reason: 'scored',
-      confidence: 0.8,
-      routedUp: false,
-      routedDown: false,
       cause: 'heuristic',
       fallbackChain: ['beta/cheap'],
       baseline: { registryId: 'alpha/strong', source: 'auto', cost: { input: 10, output: 50 } },
@@ -759,9 +745,6 @@ describe('/router-report', () => {
       dimension: 'implement',
       chosen: 'beta/cheap',
       reason: 'scored',
-      confidence: 0.8,
-      routedUp: false,
-      routedDown: false,
       cause: 'heuristic',
       fallbackChain: ['beta/cheap'],
       baseline: { registryId: 'alpha/strong', source: 'auto', cost: { input: 10, output: 50 } },
@@ -851,7 +834,7 @@ describe('/router-preferences', () => {
   });
 
   it('names a saved answer and that no decision has applied it yet', async () => {
-    savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+    writeStoredPreferences({ version: 1, settledImplementation: 'lower_cost' });
     const { pi, handlers } = fakePi();
     registerCommands(pi);
     const { ctx, messages } = fakeCtx();
@@ -870,7 +853,7 @@ describe('/router-preferences', () => {
     });
 
     it('names a softened last ranking when the domain used slack', async () => {
-      savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+      writeStoredPreferences({ version: 1, settledImplementation: 'lower_cost' });
       const session = new RouterSession();
       session.setLastDecision({
         dimension: 'implement',

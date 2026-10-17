@@ -2,7 +2,8 @@ import { afterEach, describe, it, expect } from 'vitest';
 import { visibleWidth } from '@earendil-works/pi-tui';
 import { setDebugPath } from './debuglog.js';
 import { clearRouterStatus, renderDebugEntry, formatStatus, formatDecisionDetail, formatWorkContext, servedKey, preferenceBinding } from './ui.js';
-import { emptyLedger, foldEvents } from '../routing/context/ledger.js';
+import { emptyLedger } from '../routing/context/ledger.js';
+import { foldEvents } from '../test-support/context-events.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import { candidateKey } from '../routing/score/scorer.js';
 import type { RoutingDecision } from '../types.js';
@@ -11,9 +12,6 @@ const decision: RoutingDecision = {
   dimension: 'implement',
   chosen: 'opencode-go/kimi-k2.7-code',
   reason: 'score 0.812 (quality 0.55, cost 0.21, speed 0.05)',
-  confidence: 0.72,
-  routedUp: false,
-  routedDown: false,
   cause: 'heuristic',
   fallbackChain: ['opencode-go/kimi-k2.7-code', 'github-copilot/gpt-5.4', 'opencode-go/glm-5.2'],
 };
@@ -89,9 +87,7 @@ describe('formatStatus', () => {
 
   it('explains an execution plan handoff and its return to the submitter', () => {
     const served = { registryId: 'alpha/cheap', viaFallback: false, accumulatedCost: 0 };
-    const base = {
-      ...decision, cause: 'execution-contract' as const, routedDown: true, routedPickChanged: true,
-    };
+    const base = { ...decision, cause: 'execution-contract' as const };
     const valued = {
       rubric: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
       measured: { files: 1, directories: 1, steps: 2, testTargets: 0 },
@@ -105,7 +101,6 @@ describe('formatStatus', () => {
     }, served);
     expect(active).toContain('  cause:      routed by an accepted execution plan');
     expect(active).toContain('  plan:       accepted (1 file, 2 steps); an executor model runs it');
-    expect(active).toContain('  note:       task type lowered by the accepted execution plan, so a cheaper model served');
     const broken = formatDecisionDetail({
       ...decision,
       executionContract: {
@@ -264,22 +259,6 @@ describe('formatDecisionDetail', () => {
     expect(lines).toMatch(/no benchmark quality data/i);
   });
 
-  it('renders capability diagnostics with their reasons', () => {
-    const lines = formatDecisionDetail(
-      {
-        ...decision,
-        candidateDiagnostics: [
-          { candidateKey: 'cheap/model', excludedReason: 'unknown-quality' },
-          { candidateKey: 'weak/model', excludedReason: 'below-intelligence-minimum' },
-        ],
-      },
-      { registryId: decision.chosen, viaFallback: false, accumulatedCost: 0 },
-    ).join('\n');
-
-    expect(lines).toContain('demoted:    cheap/model (no benchmark data for this task)');
-    expect(lines).toContain('demoted:    weak/model (intelligence score below the minimum for this task type)');
-  });
-
   it('is explicit when nothing has been routed yet', () => {
     expect(formatDecisionDetail(undefined, undefined).join('\n')).toMatch(/none yet/i);
   });
@@ -314,61 +293,6 @@ describe('notifyRouting', () => {
     expect(msgs[0][0]).toContain('a/b ');
     expect(msgs[0][0]).not.toContain('a/b:');
     expect(msgs[1][0]).not.toContain('c/d:');
-  });
-});
-
-describe('direction notes in /router-why', () => {
-  const decisionWith = (over: Partial<RoutingDecision> = {}): RoutingDecision => ({
-    ...decision,
-    ...over,
-  });
-
-  const served = () => ({
-    registryId: 'opencode-go/kimi-k2.7-code',
-    thinkingLevel: 'high' as const,
-    viaFallback: false,
-    accumulatedCost: 0.0123,
-  });
-
-  it('renders a downward route with the handoff cause', () => {
-    const lines = formatDecisionDetail(
-      decisionWith({
-        dimension: 'lightweight',
-        routedDown: true,
-        routedPickChanged: true,
-        cause: 'router-consult',
-      }),
-      served(),
-    );
-
-    expect(lines.join('\n')).toContain('task type adopted from a context handoff');
-    expect(lines.join('\n')).toContain('task type lowered by a later reading of the request, so a cheaper model served');
-  });
-
-  it('marks a downward route in the status widget', () => {
-    expect(formatStatus(decisionWith({ routedDown: true, routedPickChanged: true }), served())).toContain('(downgraded)');
-  });
-
-  it('suppresses the upgraded label when the raise did not change the served model', () => {
-    // Dimension was raised (routedUp) but the heuristic dimension would have
-    // picked the same model, so nothing stronger was served: no label.
-    const status = formatStatus(
-      decisionWith({ routedUp: true, routedPickChanged: false }),
-      served(),
-    );
-    expect(status).not.toContain('(upgraded)');
-    const detail = formatDecisionDetail(
-      decisionWith({ routedUp: true, routedPickChanged: false, cause: 'router-consult' }),
-      served(),
-    ).join('\n');
-    expect(detail).not.toContain('so a stronger model served');
-    expect(detail).toContain('no stronger model was available');
-  });
-
-  it('shows the upgraded label when the raise changed the served model', () => {
-    expect(
-      formatStatus(decisionWith({ routedUp: true, routedPickChanged: true }), served()),
-    ).toContain('(upgraded)');
   });
 });
 

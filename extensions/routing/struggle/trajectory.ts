@@ -189,10 +189,6 @@ export class TrajectoryState {
     return this.pending;
   }
 
-  setPending(pending: PendingTrajectoryEscalation | undefined): void {
-    this.pending = pending;
-  }
-
   consumePending(): PendingTrajectoryEscalation | undefined {
     const pending = this.pending;
     this.pending = undefined;

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { setDebugPath } from '../host/debuglog.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { savePreferences } from '../config.js';
+import { writeStoredPreferences } from '../test-support/stored-preferences.js';
 import type { BenchModel } from '../types.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { registryModel } from '../test-support/router-fixtures.js';
@@ -250,10 +250,10 @@ describe('production selection adapter', () => {
   });
 
   it('rejects a result when preferences change during selection', async () => {
-    savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+    writeStoredPreferences({ version: 1, settledImplementation: 'lower_cost' });
     const turn = input();
     turn.ports = { lp, domains: { lookup: () => {
-      savePreferences({ version: 1, settledImplementation: 'higher_coding_capability' });
+      writeStoredPreferences({ version: 1, settledImplementation: 'higher_coding_capability' });
       return undefined;
     } } };
     const prepare = vi.fn(noPreparation);
@@ -281,14 +281,14 @@ describe('production selection adapter', () => {
     afterEach(() => closeSelectorPorts());
 
     it('applies the preferences in the first selection of a process that follows the compile', async () => {
-      savePreferences(OPERATOR);
+      writeStoredPreferences(OPERATOR);
       expect(await prepareSelectorDomain()).toBe('ready');
       await closeSelectorPorts();
       expect(await firstSelection()).toMatchObject({ solver: 'exact', domainStatus: 'ready', constraintsEnforced: true });
     });
 
     it('solves with the production deadline on the process LP worker', async () => {
-      savePreferences(OPERATOR);
+      writeStoredPreferences(OPERATOR);
       const domains = new DomainCache(lp);
       expect(await domains.compile(OPERATOR)).toBeDefined();
       const remaining: number[] = [];
@@ -307,13 +307,13 @@ describe('production selection adapter', () => {
     });
 
     it('does not apply the preferences in the first selection when nothing compiled them', async () => {
-      savePreferences(OPERATOR);
+      writeStoredPreferences(OPERATOR);
       expect(await firstSelection()).toMatchObject({ solver: 'fallback-central', domainStatus: 'domain-not-ready', constraintsEnforced: false });
     });
 
     it('needs no compile for an empty profile or an unsupported version', async () => {
       expect(await prepareSelectorDomain()).toBe('not-needed');
-      savePreferences({ version: 99 } as never);
+      writeStoredPreferences({ version: 99 } as never);
       expect(await prepareSelectorDomain()).toBe('not-needed');
     });
   });

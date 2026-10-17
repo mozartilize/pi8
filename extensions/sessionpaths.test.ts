@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { setSessionFile, getSessionFile, sessionSidecarPath } from './sessionpaths.js';
+import { setSessionFile, sessionSidecarPath } from './sessionpaths.js';
 import { appendDecision } from './host/decisionlog.js';
 import { setDecisionLogBase } from './host/decisionlog.js';
 import { debugLog, setDebugPath, setConfigDebug } from './host/debuglog.js';
@@ -20,14 +20,8 @@ afterEach(() => {
 });
 
 describe('sessionpaths', () => {
-  it('round-trips the session file', () => {
-    setSessionFile('/x/y/2026_abc.jsonl');
-    expect(getSessionFile()).toBe('/x/y/2026_abc.jsonl');
-  });
-
   it('treats empty string as no session', () => {
     setSessionFile('');
-    expect(getSessionFile()).toBeUndefined();
     expect(sessionSidecarPath('router-debug.log')).toBeUndefined();
   });
 
@@ -51,9 +45,6 @@ const DECISION: RoutingDecision = {
   dimension: 'gather',
   chosen: 'a/b',
   reason: 'x',
-  confidence: 1,
-  routedUp: false,
-  routedDown: false,
   cause: 'heuristic',
   fallbackChain: ['a/b'],
 };

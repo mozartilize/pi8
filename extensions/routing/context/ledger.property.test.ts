@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 
-import { applyEvent, foldEvents, parseContextEvent } from './ledger.js';
+import { applyEvent, parseContextEvent } from './ledger.js';
+import { foldEvents } from '../../test-support/context-events.js';
 import { CONTEXT_ENTRY_TYPE, rebuildLedger } from './persistence.js';
 import type { AnchorRole, RoutingContextEvent, WorkItemAnchor, WorkItemPatch } from './types.js';
 import { RoutingContextState } from '../../serve/router-session-state.js';

@@ -218,21 +218,6 @@ export async function isFresh(cwd: string | undefined, artifact: GroundedArtifac
 }
 
 /**
- * Referenced files require fresh grounding on this item. Directories are
- * handoff scopes, not file content: only an accepted context handoff
- * closes that obligation. It never substitutes for a file's hash evidence.
- * No referenced path means nothing here proves the context in hand.
- */
-export async function referencedArtifactsFresh(
-  cwd: string | undefined,
-  item: Pick<WorkItem, 'grounding' | 'openContext'>,
-  paths: readonly string[],
-): Promise<boolean> {
-  const present = await presentPaths(cwd, paths);
-  return present.length > 0 && (await unmetArtifactPaths(cwd, item, present)).length === 0;
-}
-
-/**
  * The paths that exist. A path that does not exist has no content to read:
  * a request often names a file that it asks to create. A path that exists
  * but cannot be read stays, so it remains unmet.

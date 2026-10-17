@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Dimension } from '../../types.js';
 import {
-  actorAllowedForBoundary, authorizedFallbacks, createBoundaryAuthorization, settleBoundary,
+  actorAllowedForBoundary, createBoundaryAuthorization, settleBoundary,
   type ActualServeReceipt,
 } from './boundary-authorization.js';
 
@@ -33,7 +33,6 @@ describe('permissions from callable actions and work/phase exclusions', () => {
   it('uses the complete callable pool, not the selected model or fallback rank', () => {
     const auth = authorization('W', 'plan', [...actors, actors[0]!]);
     expect(auth.allowedActors).toEqual(actors);
-    expect(authorizedFallbacks(auth, ['x/X:high', 'b/B:high', 'a/A:low'])).toEqual(['b/B:high', 'a/A:low']);
   });
 
   it('copies the input and makes the permission snapshot immutable', () => {

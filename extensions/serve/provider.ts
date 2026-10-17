@@ -135,15 +135,12 @@ const REGISTRY_WAIT_INITIAL_DELAY_MS = 50;
 const REGISTRY_WAIT_MAX_DELAY_MS = 500;
 
 /** Poll the LIVE module variable via a getter until the registry arrives. */
-async function waitForRegistry(
-  getRegistry: () => ModelRegistry,
-  timeoutMs = REGISTRY_WAIT_TIMEOUT_MS,
-): Promise<ModelRegistry> {
+async function waitForRegistry(getRegistry: () => ModelRegistry): Promise<ModelRegistry> {
   const r = getRegistry();
   if (r?.getAvailable) return r;
   const start = Date.now();
   let delay = REGISTRY_WAIT_INITIAL_DELAY_MS;
-  while (Date.now() - start < timeoutMs) {
+  while (Date.now() - start < REGISTRY_WAIT_TIMEOUT_MS) {
     await new Promise((r) => setTimeout(r, delay));
     const current = getRegistry();
     if (current?.getAvailable) return current;
@@ -275,21 +272,6 @@ export function expandModelCandidates(
     return [buildCandidate(rm, rows.find(qualityBearing) ?? rows[0])];
   }
 
-  const exactQualityByEffort: NonNullable<Candidate['exactQualityByEffort']> = {};
-  for (const row of labelled) {
-    const { knowledge, research, longContext, visionReasoning } = row.quality;
-    if (knowledge != null || research != null || longContext != null || visionReasoning != null) {
-      exactQualityByEffort[row.effort] = {
-        ...(knowledge != null ? { knowledge } : {}),
-        ...(research != null ? { research } : {}),
-        ...(longContext != null ? { longContext } : {}),
-        ...(visionReasoning != null ? { visionReasoning } : {}),
-      };
-    }
-  }
-  const attachExactQuality = (candidate: Candidate): Candidate =>
-    Object.keys(exactQualityByEffort).length > 0 ? { ...candidate, exactQualityByEffort } : candidate;
-
   const byLevel = new Map(labelled.map((row) => [row.effort, row]));
   const supported = MODEL_THINKING_LEVELS.filter(
     (level) => level === 'off' ? servesThinkingOff(rm) : isThinkingSupportedByRegistryModel(rm, level),
@@ -303,13 +285,13 @@ export function expandModelCandidates(
       return level === 'minimal' ? undefined : estimateRow(level, labelled, drops);
     })
     .filter((row): row is BenchModel => row != null)
-    .map((row) => attachExactQuality(buildCandidate(rm, row)));
+    .map((row) => buildCandidate(rm, row));
   if (supported.length > 0) return supported;
   // All measured efforts are unsupported by this model's thinkingLevelMap, or
   // the source supplied only quality-empty rows. Keep the model routable with
   // an effort-less candidate, preferring any row the scorer can actually use.
   const fallback = labelled.find(qualityBearing) ?? labelled[0];
-  return [attachExactQuality(buildCandidate(rm, { ...fallback, effort: undefined }))];
+  return [buildCandidate(rm, { ...fallback, effort: undefined })];
 }
 
 // ─── Turn-callback stages ────────────────────────────────────────────
@@ -1360,7 +1342,7 @@ async function delegateRouterTurn(args: {
       return {
         workItemId: state?.workItemId ?? intentKey,
         branchId: JSON.stringify([session.context.getEntrySource(), state?.intentKey]),
-        session: session.getSessionGeneration(), profile: 0, profileDigest: readPreferences().digest,
+        session: session.getSessionGeneration(), profileDigest: readPreferences().digest,
         authorization: state?.boundaryAuthorization?.revision ?? -1,
         context: state?.providerInvocation ?? 0,
       };
@@ -1651,8 +1633,6 @@ function pinnedScored(args: {
     reason,
   };
   // These annotations belonged to the auto pick this override replaces.
-  delete decision.scoredReason;
-  delete decision.routedPickChanged;
   delete decision.trajectoryFriction;
   try {
     decision.baseline = pickBaseline(
@@ -1942,11 +1922,6 @@ async function runManualTurn(args: {
   const { decision } = scoring.scored;
   decision.cause = cause;
   decision.reason = cause === 'semi-hold' ? `Semi mode: kept ${manualModel} for this turn` : `Manual model pin: ${manualModel}`;
-  delete decision.scoredReason;
-  delete decision.routedUp;
-  delete decision.routedDown;
-  delete decision.confidence;
-  delete decision.routedPickChanged;
   delete decision.trajectoryFriction;
   // The scorer may rank several measured effort variants of the same model.
   // Manual mode is pinned-only, so delegation receives exactly one chain entry.

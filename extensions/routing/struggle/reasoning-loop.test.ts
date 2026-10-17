@@ -23,8 +23,6 @@ describe('ReasoningLoopDetector', () => {
     expect(split.severity()).toBe('unavailable');
     split.update('wait '.repeat(1000));
     expect(split.severity()).toBe('unavailable');
-    split.reset();
-    expect(split.severity()).toBe('none');
   });
 
   it('rejects one huge delta before hashing or retaining its text', () => {

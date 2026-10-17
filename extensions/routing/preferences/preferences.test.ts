@@ -1,14 +1,14 @@
 /**
  * Contracts of the v1 preference profile: frozen scenario semantics, strict
- * per-key validation, semantic (never positional) persistence and per-user
- * config isolation.
+ * per-key validation and per-user config isolation.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { getConfigPath, loadPreferenceSnapshot, savePreferences } from '../../config.js';
+import { getConfigPath, loadPreferenceSnapshot } from '../../config.js';
+import { writeStoredPreferences } from '../../test-support/stored-preferences.js';
 import { FEATURE_INDEX } from '../features/schema.js';
 import { compilePreferenceConstraints } from './fit.js';
 import { CORE_SCENARIOS_V1, scenarioDelta } from './scenarios.js';
@@ -141,41 +141,21 @@ describe('preference persistence', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('writes one flat semantic object and keeps unrelated and unknown config keys', () => {
-    writeFileSync(getConfigPath(), JSON.stringify({ semi: true, models: ['a/*'], futureKey: { x: 1 } }));
-    savePreferences({ version: 1, afterRework: 'switch_model', settledImplementation: 'lower_cost', researchTasks: 'skip' });
-    const written = JSON.parse(readFileSync(getConfigPath(), 'utf8'));
-    expect(written).toMatchObject({ semi: true, models: ['a/*'], futureKey: { x: 1 } });
-    expect(written.preferences).toEqual({ version: 1, settledImplementation: 'lower_cost', researchTasks: 'skip', afterRework: 'switch_model' });
-    expect(JSON.stringify(written.preferences)).not.toMatch(/"[AB]"/);
-    const snapshot = loadPreferenceSnapshot();
-    expect(snapshot.status).toBe('valid');
-    expect(snapshot.profile).toEqual(written.preferences);
-  });
-
-  it('removes the object when the profile is reset to empty', () => {
-    savePreferences({ version: 1, afterRework: 'switch_model' });
-    savePreferences({ version: 1 });
-    expect(JSON.parse(readFileSync(getConfigPath(), 'utf8')).preferences).toBeUndefined();
-  });
-
-  it('increases the revision only when the stored profile changes', () => {
-    savePreferences({ version: 1, afterRework: 'switch_model' });
+  it('changes the digest only when the stored profile changes', () => {
+    writeStoredPreferences({ version: 1, afterRework: 'switch_model' });
     const first = loadPreferenceSnapshot();
-    expect(loadPreferenceSnapshot().revision).toBe(first.revision);
-    savePreferences({ version: 1, afterRework: 'increase_effort' });
-    const second = loadPreferenceSnapshot();
-    expect(second.revision).toBeGreaterThan(first.revision);
-    expect(second.digest).not.toBe(first.digest);
+    expect(loadPreferenceSnapshot().digest).toBe(first.digest);
+    writeStoredPreferences({ version: 1, afterRework: 'increase_effort' });
+    expect(loadPreferenceSnapshot().digest).not.toBe(first.digest);
   });
 
   it('keeps users with separate PI8_DIR roots isolated', () => {
-    savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+    writeStoredPreferences({ version: 1, settledImplementation: 'lower_cost' });
     const other = mkdtempSync(join(tmpdir(), 'pi8-pref-other-'));
     try {
       process.env.PI8_DIR = other;
       expect(loadPreferenceSnapshot().profile).toEqual({ version: 1 });
-      savePreferences({ version: 1, settledImplementation: 'higher_coding_capability' });
+      writeStoredPreferences({ version: 1, settledImplementation: 'higher_coding_capability' });
       process.env.PI8_DIR = dir;
       expect(loadPreferenceSnapshot().profile).toEqual({ version: 1, settledImplementation: 'lower_cost' });
     } finally {

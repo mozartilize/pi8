@@ -3,12 +3,10 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
-import type { BenchModel, Candidate, Dimension } from '../types.js';
-import { DEFAULT_DIMENSION_WEIGHTS } from '../constants.js';
+import type { BenchModel, Candidate } from '../types.js';
 import { effortDropsPerStep } from '../routing/score/effort-estimate.js';
 import {
   candidateKey,
-  pickBest,
   servedEffort,
   type RegistryModelInfo,
 } from '../routing/score/scorer.js';
@@ -32,7 +30,6 @@ const registryById = new Map(fixture.registry.map((m) => [`${m.provider}/${m.id}
 const candidates: Candidate[] = fixture.registry.flatMap((m) =>
   expandModelCandidates(m, rowsByModel.get(`${m.provider}/${m.id}`) ?? [], drops));
 const measured = new Set(fixture.benchmarks.map((row) => `${row.registryId}:${row.effort ?? ''}`));
-const DIMENSIONS: Dimension[] = ['gather', 'plan', 'review', 'implement'];
 
 // What each provider sends, stated here rather than read from the router so
 // the test does not repeat a router mistake. Pi lists the levels a model
@@ -43,10 +40,6 @@ const sendsLevel = (model: RegistryModelInfo, level: string): boolean => {
   if (level === 'off' && model.provider === 'claude-bridge') return false;
   return getSupportedThinkingLevels(model as Parameters<typeof getSupportedThinkingLevels>[0]).includes(level as never);
 };
-const decisions = DIMENSIONS.map((dimension) => ({
-  dimension,
-  decision: pickBest(candidates, dimension, DEFAULT_DIMENSION_WEIGHTS[dimension], { estimatedContextTokens: 20_000 }),
-}));
 
 describe('real candidate pool', () => {
   it('records both frozen halves and benchmark provenance', () => {
@@ -96,38 +89,5 @@ describe('real candidate pool', () => {
     expect(estimated.length).toBeGreaterThan(0);
     expect(estimated.filter((c) => c.bench?.costPerTask != null || c.bench?.timePerTaskSeconds != null).map(candidateKey))
       .toEqual([]);
-  });
-});
-
-describe('real pool decisions', () => {
-  it.each([0.30, 0.40, 0.44, 0.45, 0.70])('meets the implement requirement of %s on its selected axis', (requirement) => {
-    const decision = pickBest(candidates, 'implement', undefined, { estimatedContextTokens: 20_000, handoffMinimum: requirement });
-    const chosen = candidates.find((c) => candidateKey(c) === decision.chosen)!;
-    const axis = requirement < 0.45 ? 'agenticIndex' : 'agenticCoding';
-    const reference = requirement < 0.45 ? 57.9 : 63.6;
-    expect(chosen.bench?.quality[axis]).toBeGreaterThanOrEqual(requirement * reference);
-    expect(decision.candidateDiagnostics?.find((d) => d.candidateKey === decision.chosen)).toBeUndefined();
-  });
-
-  it.each(DIMENSIONS)('%s chooses a candidate that meets every minimum', (dimension) => {
-    const { decision } = decisions.find((d) => d.dimension === dimension)!;
-    const reason = decision.candidateDiagnostics?.find((d) => d.candidateKey === decision.chosen)?.excludedReason;
-    expect(reason).toBeUndefined();
-  });
-
-  it.each(DIMENSIONS)('%s compares cost per task, since most of the pool carries it', (dimension) => {
-    expect(decisions.find((d) => d.dimension === dimension)!.decision.reason).toContain('[cost per task]');
-  });
-
-  it('does not choose the highest effort of the chosen model for every task type', () => {
-    // On a $/1M scale every effort of a model costs the same, so the highest
-    // effort always wins. Per-task cost and time tell efforts apart.
-    const highest = decisions.map(({ decision }) => {
-      const chosen = candidates.find((c) => candidateKey(c) === decision.chosen)!;
-      const efforts = candidates.filter((c) => c.registryId === chosen.registryId && c.effort != null).map((c) => c.effort!);
-      const order = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-      return chosen.effort === efforts.sort((a, b) => order.indexOf(a) - order.indexOf(b)).at(-1);
-    });
-    expect(highest.every(Boolean)).toBe(false);
   });
 });

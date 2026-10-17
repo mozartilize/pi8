@@ -232,22 +232,4 @@ export class ReasoningLoopDetector {
       severity: this.severity(),
     };
   }
-
-  reset(): void {
-    this.tokens = [];
-    this.tokenCount = 0;
-    this.windows = [];
-    this.repeatedWindowCount = 0;
-    this.reflectionTransitions = 0;
-    this.maxSimilarity = 0;
-    this.exactCounts.clear();
-    this.exactRepeat = 0;
-    this.normTail = '';
-    this.normEndedWithSpace = false;
-    this.cursor = 0;
-    this.tokenCarry = '';
-    this.markerCarry = '';
-    this.observedChars = 0;
-    this.unavailable = false;
-  }
 }

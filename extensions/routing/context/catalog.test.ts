@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { CATALOG_SIZES, buildCatalog, catalogAddsItems, checkChoice } from './catalog.js';
+import { CATALOG_SIZES, buildCatalog, checkChoice } from './catalog.js';
 import { extractPromptAnchors } from './anchors.js';
-import { foldEvents } from './ledger.js';
+import { foldEvents } from '../../test-support/context-events.js';
 import { activateEvent, createEvent, workItem } from '../../test-support/context-fixtures.js';
 import type { RoutingContextEvent } from './types.js';
 
@@ -40,8 +40,6 @@ describe('buildCatalog', () => {
       const topics = new Set(catalog.topics.map((t) => t.id));
       expect(catalog.workItems.every((item) => topics.has(item.topicId))).toBe(true);
     }
-    expect(catalogAddsItems(normal, expanded)).toBe(true);
-    expect(catalogAddsItems(buildCatalog(ledger, []), buildCatalog(ledger, [], 'expanded'))).toBe(false);
   });
 });
 

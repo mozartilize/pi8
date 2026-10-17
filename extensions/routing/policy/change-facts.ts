@@ -115,7 +115,6 @@ export interface CheckReceipt {
   failed?: number;
   skipped?: number;
   cancelled?: number;
-  elapsedMs?: number;
   snapshot: WorkspaceSnapshot;
   freshness: 'current' | 'stale' | 'unknown';
   outcome: 'unverified';

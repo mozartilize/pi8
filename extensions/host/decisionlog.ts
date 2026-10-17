@@ -12,7 +12,6 @@ import type {
   AttemptUsageEvent,
   ContractOutcome,
   ExecutionContractMeta,
-  CandidateDiagnostic,
   Dimension,
   ReasoningHandoffMeta,
   RoutingDecision,
@@ -74,10 +73,6 @@ export interface DecisionLogEntry {
   viaFallback: boolean;
   /** 1-based rank of the served candidate in the chain (undefined if top pick). */
   fallbackRank?: number;
-  /** The keyword classifier's confidence; routing decisions only. */
-  confidence?: number;
-  routedUp?: boolean;
-  routedDown?: boolean;
   cause: string;
   reason: string;
   /** Final fallback chain, with the served model first. */
@@ -99,9 +94,6 @@ export interface DecisionLogEntry {
   baselineCost?: number;
   /** True when an attempt ended without observed usage; routed spend is a lower bound. */
   spendIncomplete?: boolean;
-  /** Set only when an evaluation process runs the candidate policy. */
-  policyVersion?: string;
-  capabilityEvidence?: RoutingDecision['capabilityEvidence'];
   /** Unified selection evidence: identities, codes and counts only. */
   unified?: RoutingDecision['unified'];
   /** Objective trajectory-friction evidence when it influenced the pick. */
@@ -162,8 +154,6 @@ export interface DecisionLogEntry {
   };
   /** Message-origin census; a spike in compaction-summary explains drift. */
   provenance?: Record<string, number>;
-  /** Capability-tier evidence from the scored fallback chain. */
-  candidateDiagnostics?: CandidateDiagnostic[];
 }
 
 /** One JSONL line, stamped with the schema version it was written under. */
@@ -420,11 +410,8 @@ export function appendDecision(
       spendIncomplete: decision.spend?.incomplete,
         intentKey: decision.intentKey,
         provenance: decision.provenanceCounts,
-      ...(decision.policyVersion ? { policyVersion: decision.policyVersion } : {}),
-      ...(decision.capabilityEvidence ? { capabilityEvidence: decision.capabilityEvidence } : {}),
       ...(decision.unified ? { unified: decision.unified } : {}),
       trajectoryFriction: decision.trajectoryFriction,
-      candidateDiagnostics: decision.candidateDiagnostics,
       ...(decision.executionContract
         ? { executionContract: { action: 'route' as const, meta: decision.executionContract } }
         : {}),
@@ -446,9 +433,9 @@ export function appendDecision(
  * turn. This record keeps each attempt apart, so a later report can price a
  * failed attempt, a retry, and a fallback on its own model.
  */
-export function appendAttemptUsage(event: AttemptUsageEvent, intentKey?: string, storageBase?: string): void {
+export function appendAttemptUsage(event: AttemptUsageEvent, intentKey?: string): void {
   try {
-    const path = decisionLogPath(storageBase);
+    const path = decisionLogPath();
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const entry: DecisionLogEntry = {

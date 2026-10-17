@@ -25,10 +25,6 @@ export function setSessionFile(file: string | undefined): void {
   currentSessionFile = file || undefined;
 }
 
-export function getSessionFile(): string | undefined {
-  return currentSessionFile;
-}
-
 /**
  * Derive a sidecar path next to the current session file by swapping the
  * `.jsonl` extension for `.<suffix>`. Returns undefined when no session file is

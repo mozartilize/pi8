@@ -27,8 +27,8 @@ import {
 } from '../test-support/context-replay.js';
 import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
 import { carriedContext, requestContext, referencedArtifactPaths } from '../routing/context/resolve.js';
-import { referencedArtifactsFresh } from '../routing/context/grounding.js';
-import type { ContextReason } from '../routing/context/types.js';
+import { unmetArtifactPaths } from '../routing/context/grounding.js';
+import type { ContextReason, WorkItem } from '../routing/context/types.js';
 import { DIMENSION_STRENGTH } from '../routing/dimensions.js';
 import { observeContextGrounding } from './context-grounding.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
@@ -71,6 +71,12 @@ const HANDOFF = (entry: CorpusEntry) => ({
   ...(['plan', 'review'].includes(entry.label.deliverable)
     ? { difficulty: { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 } } : {}),
 });
+
+/** At least one referenced file exists, and the item read every existing one as it is now. */
+async function referencedFilesFresh(cwd: string, item: WorkItem): Promise<boolean> {
+  const present = referencedArtifactPaths(item).filter((path) => existsSync(join(cwd, path)));
+  return present.length > 0 && (await unmetArtifactPaths(cwd, item, present)).length === 0;
+}
 
 describe('routing-context corpus replay', () => {
   let temp: ReturnType<typeof createTempRouterDir>;
@@ -173,7 +179,7 @@ describe('routing-context corpus replay', () => {
         ...(declaredItem ? carriedContext(declaredItem) : []),
       ])];
       const requestedSatisfied = initialContext?.contextSatisfied ?? (requested.length === 0
-        || (!!declaredItem && await referencedArtifactsFresh(cwd, declaredItem, referencedArtifactPaths(declaredItem))));
+        || (!!declaredItem && await referencedFilesFresh(cwd, declaredItem)));
       let attemptedHandoff = false;
       for (const action of entry.after ?? []) {
         if ('read' in action) {

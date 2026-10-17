@@ -11,7 +11,6 @@ import { isDebugEnabled } from './debuglog.js';
 import type {
   DecisionCause,
   ExecutionContractMeta,
-  QualityExclusionReason,
   RoutingDecision,
   UnifiedActionTrace,
   UnifiedDecisionMeta,
@@ -67,8 +66,6 @@ export function formatStatus(
     const rank = served.fallbackRank && served.fallbackRank > 1 ? ` #${served.fallbackRank}` : '';
     parts.push(`(fallback${rank})`);
   }
-  if (decision.routedUp && decision.routedPickChanged) parts.push('(upgraded)');
-  if (decision.routedDown && decision.routedPickChanged) parts.push('(downgraded)');
   return parts.join(' ');
 }
 
@@ -89,18 +86,6 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   'semi-hold': 'kept the current model (semi mode)',
   incumbent: 'kept the model serving this session until a handoff',
   'work-context': 'a follow-up that carries on its resolved work item\'s task type',
-};
-
-const EXCLUSION_LABELS: Readonly<Record<QualityExclusionReason, [label: string, text: string]>> = {
-  'below-intelligence-minimum': ['demoted', 'intelligence score below the minimum for this task type'],
-  'below-coding-minimum': ['demoted', 'coding score below the minimum for this task type'],
-  'below-agenticCoding-minimum': ['demoted', 'agentic coding score below the minimum for this task type'],
-  'below-agenticIndex-minimum': ['demoted', 'agentic index below the minimum for easy implementation work'],
-  'below-knowledge-minimum': ['demoted', 'states facts wrong more often than right'],
-  'below-research-minimum': ['demoted', 'work from sources fails too many checks'],
-  'below-longContext-minimum': ['demoted', 'long-context score below the minimum'],
-  'below-visionReasoning-minimum': ['demoted', 'visual reasoning score below the minimum'],
-  'unknown-quality': ['demoted', 'no benchmark data for this task'],
 };
 
 /** Plain-language context reason, as the user reads it. */
@@ -131,12 +116,7 @@ export function formatDecisionDetail(
     ...unifiedLines(decision.unified),
     ...(decision.mutationObserved && decision.dimension !== 'implement' ? ['  phase:      editing'] : []),
     ...workContextLines(decision.workContext),
-    ...routingNotes(decision, served),
-    ...decision.candidateDiagnostics?.flatMap((diagnostic) => {
-      if (!diagnostic.excludedReason) return [];
-      const [label, text] = EXCLUSION_LABELS[diagnostic.excludedReason];
-      return [`  ${`${label}:`.padEnd(11)} ${diagnostic.candidateKey} (${text})`];
-    }) ?? [],
+    ...routingNotes(served),
     ...handoffLine(decision),
     ...(decision.executionContract ? contractLines(decision.executionContract) : []),
     ...(decision.trajectoryFriction ? [trajectoryLine(decision.trajectoryFriction)] : []),
@@ -274,30 +254,13 @@ function unifiedLines(unified: UnifiedDecisionMeta | undefined): string[] {
   ];
 }
 
-function routingNotes(decision: RoutingDecision, served: ServedInfo | undefined): string[] {
+function routingNotes(served: ServedInfo | undefined): string[] {
   const lines: string[] = [];
   if (served?.viaFallback) {
     const rank = served.fallbackRank && served.fallbackRank > 1
       ? ` (#${served.fallbackRank} in the fallback chain)`
       : '';
     lines.push(`  note:       top pick failed; a fallback model served${rank}`);
-  }
-  if (decision.routedUp) {
-    lines.push(
-      decision.routedPickChanged
-        ? '  note:       task type raised, so a stronger model served (see cause)'
-        : '  note:       task type raised (see cause), but no stronger model was available',
-    );
-  }
-  if (decision.routedDown) {
-    const lowerer = decision.cause === 'execution-contract'
-      ? 'the accepted execution plan'
-      : decision.cause === 'investigation' ? 'collecting context before it' : 'a later reading of the request';
-    lines.push(
-      decision.routedPickChanged
-        ? `  note:       task type lowered by ${lowerer}, so a cheaper model served`
-        : `  note:       task type lowered by ${lowerer}; the served model did not change`,
-    );
   }
   return lines;
 }
@@ -384,7 +347,6 @@ export function notifyRouting(
     const parts = [`🚥 pi8 → ${served.registryId}${level}`];
     if (decision) parts.push(`(${decision.dimension})`);
     if (served.viaFallback) parts.push('· fallback');
-    if (decision?.routedUp && decision.routedPickChanged) parts.push('· upgraded');
     ctx?.ui?.notify?.(parts.join(' '), 'info');
   } catch {
     // Notifications are cosmetic; never break a turn.

@@ -70,7 +70,6 @@ export function recordPromptTokens(observation: {
   api?: string;
   estimatedTokens: number;
   billedTokens: number;
-  now?: number;
 }): number | undefined {
   const { registryId, api, estimatedTokens, billedTokens } = observation;
   if (!(estimatedTokens >= PROMPT_SCALE_MIN_ESTIMATE) || !Number.isFinite(billedTokens)) return undefined;
@@ -82,7 +81,7 @@ export function recordPromptTokens(observation: {
   if (previous && Math.abs(scale - previous.scale) < WRITE_CHANGE * previous.scale && previous.api === api) {
     return previous.scale;
   }
-  scales.set(registryId, { scale, ...(api ? { api } : {}), observedAt: observation.now ?? Date.now() });
+  scales.set(registryId, { scale, ...(api ? { api } : {}), observedAt: Date.now() });
   try {
     writeJsonAtomic(scalesPath(), { version: 1, models: Object.fromEntries(scales) } satisfies ScaleFile);
   } catch {

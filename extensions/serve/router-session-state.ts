@@ -296,12 +296,6 @@ export class RuntimeBindings {
   setLastRegisteredModels(key: string): void {
     this.lastRegModels = key;
   }
-
-  clear(): void {
-    this.lastContext = undefined;
-    this.currentRegistry = undefined;
-    this.lastRegModels = '';
-  }
 }
 
 /**
@@ -355,7 +349,6 @@ export class RouterSession {
   private accumCost = 0;
   private resolvedThinkingLevel: string | undefined;
   private syncedThinkingLevel: string | undefined;
-  private activeSkills: readonly string[] = [];
   private memoizedCandidateExpansion: { key: string; candidates: Candidate[] } | undefined;
 
   constructor(
@@ -559,14 +552,6 @@ export class RouterSession {
     this.syncedThinkingLevel = level;
   }
 
-  getActiveSkillNames(): readonly string[] {
-    return this.activeSkills;
-  }
-
-  setActiveSkillNames(names: readonly string[]): void {
-    this.activeSkills = [...names];
-  }
-
   getCandidateExpansion(): { key: string; candidates: Candidate[] } | undefined {
     return this.memoizedCandidateExpansion;
   }
@@ -599,10 +584,6 @@ export class RouterSession {
 
   removeBlacklistedProvider(provider: string): boolean {
     return this.blacklist.removeBlacklistedProvider(provider);
-  }
-
-  clearBlacklistedProviders(): void {
-    this.blacklist.clearBlacklistedProviders();
   }
 
   getBlacklistedProviders(): ReadonlySet<string> {
@@ -771,7 +752,6 @@ export class RouterSession {
     this.accumCost = 0;
     this.resolvedThinkingLevel = undefined;
     this.syncedThinkingLevel = undefined;
-    this.activeSkills = [];
     this.memoizedCandidateExpansion = undefined;
 
     this.intent.reset();

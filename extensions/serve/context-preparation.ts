@@ -17,9 +17,11 @@
  * the same entry. Each summary request is a paid model call, so one entry
  * permits at most MAX_COMPACTION_ATTEMPTS failed preparations.
  */
-import { MAX_COMPACTION_ATTEMPTS } from '../routing/policy/assignment-transaction.js';
-import { CONTEXT_FIT_MARGIN, candidateKey, holdsPrompt } from '../routing/score/scorer.js';
+import { CONTEXT_FIT_MARGIN, holdsPrompt } from '../routing/score/scorer.js';
 import type { Candidate } from '../types.js';
+
+/** Failed preparations that one entry permits. */
+const MAX_COMPACTION_ATTEMPTS = 2;
 
 export interface PreparationRequest {
   key: string;
@@ -72,10 +74,6 @@ export class ContextPreparationState {
     return this.pending ? Math.floor(this.pending.contextWindow / CONTEXT_FIT_MARGIN) : undefined;
   }
 
-  pendingKey(): string | undefined {
-    return this.pending?.key;
-  }
-
   reset(): void {
     this.entryKey = undefined;
     this.pending = undefined;
@@ -83,7 +81,3 @@ export class ContextPreparationState {
     this.failures = 0;
   }
 }
-
-/** Candidates by action key. */
-export const candidatesByKey = (candidates: readonly Candidate[]): Map<string, Candidate> =>
-  new Map(candidates.map((candidate) => [candidateKey(candidate), candidate]));

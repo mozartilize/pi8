@@ -245,10 +245,6 @@ export function applyEvent(ledger: TopicLedger, event: RoutingContextEvent): Top
   }
 }
 
-export function foldEvents(events: readonly RoutingContextEvent[], from: TopicLedger = emptyLedger()): TopicLedger {
-  return events.reduce(applyEvent, from);
-}
-
 export function getWorkItem(ledger: TopicLedger, id: string | undefined): WorkItem | undefined {
   return id ? ledger.items.get(id) : undefined;
 }

@@ -65,7 +65,7 @@ export function createUnifiedDispatch(host: DispatchHost, recoveryHost?: Recover
     const ledger = new AssignmentLedger(host.revisions());
     const boundary = host.authorization();
     if (boundary) ledger.boundary = boundary;
-    return { ledger, plan: ledger.plan([]), assignmentId: host.assignmentId(), recovered: false };
+    return { ledger, plan: ledger.plan(), assignmentId: host.assignmentId(), recovered: false };
   };
   let base = baseOf();
   const epoch = (): Omit<AttemptEpoch, 'attemptId' | 'outputRevision'> => {
@@ -133,7 +133,7 @@ export function createUnifiedDispatch(host: DispatchHost, recoveryHost?: Recover
         || proposal.outcome.selection.chosen !== target || !reachable(proposal.source).includes(target)) return undefined;
       const ledger = new AssignmentLedger({ ...host.revisions(), authorization: proposal.outcome.authorization.revision });
       ledger.boundary = proposal.outcome.authorization;
-      const plan = ledger.plan([]);
+      const plan = ledger.plan();
       const reservation = ledger.commitAndReserve(plan, target, proposal.signal);
       if (!reservation || !recoveryHost.commit(proposal.outcome, proposal.source)) return undefined;
       base = { ledger, plan, assignmentId: host.assignmentId(), reservation, recovered: true };
@@ -150,7 +150,7 @@ export function createUnifiedDispatch(host: DispatchHost, recoveryHost?: Recover
       const modelKey = `${parsed.provider}/${parsed.id}`;
       const permitted = !allowed || allowed.includes(target) ? target : allowed.includes(modelKey) ? modelKey : undefined;
       const reservation = base.reservation ?? (permitted ? ledger.commitAndReserve(plan, permitted, signal) : undefined);
-      if (!reservation || !ledger.dispatch(reservation.id, () => {}, signal)) return false;
+      if (!reservation || !ledger.dispatch(reservation.id, signal)) return false;
       base.reservation = undefined;
       return true;
     },

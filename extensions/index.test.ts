@@ -141,7 +141,6 @@ describe('session lifecycle resets', () => {
       const { handlers, pi } = makePi();
       await autoModelRouterExtension(pi);
 
-      defaultRouterSession.setActiveSkillNames(['writing-plans']);
       defaultRouterSession.intent.setCachedIntent({
         key: 'k',
         dimension: 'gather',
@@ -157,39 +156,9 @@ describe('session lifecycle resets', () => {
         } as unknown as ExtensionContext,
       );
 
-      expect(defaultRouterSession.getActiveSkillNames()).toEqual([]);
       expect(defaultRouterSession.intent.getCachedIntent()).toBeUndefined();
     });
   }
-
-  it('captures skill names only when the router is the active model', async () => {
-    const { handlers, pi } = makePi();
-    await autoModelRouterExtension(pi);
-
-    const beforeAgentStart = handlers.get('before_agent_start');
-    expect(beforeAgentStart).toBeDefined();
-
-    // A concrete model must not update router skill state.
-    defaultRouterSession.reset();
-    beforeAgentStart?.(
-      { systemPromptOptions: { skills: ['writing-plans', { name: 'context-mode' }] } },
-      { model: { provider: 'openai-codex', id: 'gpt-5.3' } } as unknown as ExtensionContext,
-    );
-    expect(defaultRouterSession.getActiveSkillNames()).toEqual([]);
-
-    // Router/auto model: names only, never descriptions or file contents.
-    beforeAgentStart?.(
-      {
-        systemPromptOptions: {
-          skills: ['writing-plans', { name: 'systematic-debugging' }, 42, ''],
-        },
-      },
-      {
-        model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID },
-      } as unknown as ExtensionContext,
-    );
-    expect(defaultRouterSession.getActiveSkillNames()).toEqual(['writing-plans', 'systematic-debugging']);
-  });
 });
 
 describe('work ledger lifecycle', () => {
@@ -1018,21 +987,6 @@ describe('mutation observation hooks', () => {
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
   });
 
-  it('reminds an implement entry only when the incumbent minimums raised its pick', async () => {
-    const handlers = await makeToolHandlers();
-    const toolResult = handlers.get('tool_result')!;
-    const content = [{ type: 'text', text: 'edited' }];
-    defaultRouterSession.intent.commitWorkPhaseState(entryState());
-    const scoredReason = { score: 0.8, quality: 0.5, cost: 0.2, speed: 0.1, costBasis: 'per-1m' as const };
-    defaultRouterSession.setLastDecision({
-      ...routingDecision(['test/impl']), dimension: 'implement' as const, intentKey: 'intent-a',
-      scoredReason: { ...scoredReason, details: [{ kind: 'incumbent-model' as const }] },
-    });
-    const first = await toolResult({ toolName: 'edit', toolCallId: 'e1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
-    expect(first.content.map((c) => c.text)).toEqual(['edited', CONTRACT_REMINDER]);
-    expect(CONTRACT_REMINDER).toContain('if the user asked for this change');
-  });
-
   function planEntry(over: Partial<WorkPhaseState> = {}, decision: Partial<RoutingDecision> = {}) {
     defaultRouterSession.intent.commitWorkPhaseState(entryState(over));
     defaultRouterSession.setLastDecision({
@@ -1096,10 +1050,7 @@ describe('mutation observation hooks', () => {
     planEntry({ deliverable: 'plan' });
     expect(await edit('e3')).toBeUndefined();
 
-    planEntry({}, {
-      dimension: 'implement',
-      scoredReason: { score: 0.8, quality: 0.5, cost: 0.2, speed: 0.1, costBasis: 'per-1m', details: [{ kind: 'incumbent-model' }] },
-    });
+    planEntry({}, { dimension: 'implement' });
     expect(await edit('e4')).toBeUndefined();
 
     planEntry();

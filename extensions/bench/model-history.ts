@@ -87,7 +87,8 @@ export function appendModelEvent(event: ModelEvent, storageBase?: string): void 
 }
 
 /** Old rule versions and unfinished reminder episodes do not become penalties. */
-export function loadModelHistory(storageBase?: string, now = Date.now()): ModelHistory {
+export function loadModelHistory(storageBase?: string): ModelHistory {
+  const now = Date.now();
   const stats = new Map<string, ModelStats>();
   const recentPrefixes = new Map<string, RecentPrefix>();
   const events: StoredEvent[] = [];

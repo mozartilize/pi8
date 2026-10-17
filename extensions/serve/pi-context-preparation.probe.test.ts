@@ -6,10 +6,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Type, createAssistantMessageEventStream, type AssistantMessage, type Context, type Model, type SimpleStreamOptions } from '@earendil-works/pi-ai';
 import {
   createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager,
-  buildSessionContext, convertToLlm, estimateTokens, shouldCompact, type ExtensionContext,
+  estimateTokens, shouldCompact, type ExtensionContext,
 } from '@earendil-works/pi-coding-agent';
-import { AssignmentLedger, routeAssignment, type AssignmentHost, type RouteOutcome } from '../routing/policy/assignment-transaction.js';
-import type { UnifiedDecision } from '../routing/optimization/select.js';
 
 const COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 const config = (id: string, contextWindow: number) => ({
@@ -43,7 +41,6 @@ interface ProbeOptions {
   fallback?: boolean;
   persist?: boolean;
   toolOutputTokens?: number;
-  preparationChain?: { cContextWindow: number; failSummaries: number };
   holdSummary?: { entered: ReturnType<typeof deferred>; release: ReturnType<typeof deferred> };
   finalCheck?: (ctx: ExtensionContext) => void;
 }
@@ -61,18 +58,8 @@ async function makeProbe(options: ProbeOptions = {}) {
   let compacting = false;
   let manualStarted = false;
   const manualFinished = deferred();
-  let summaryRequests = 0;
-  const preparation = {
-    ledger: new AssignmentLedger({
-      workItemId: 'probe', branchId: 'main', session: 1, profile: 1,
-      profileDigest: 'probe-profile', authorization: 1, context: 1,
-    }),
-    outcome: undefined as RouteOutcome | undefined,
-  };
   const stream = (model: Model<any>, context: Context, streamOptions?: SimpleStreamOptions) => {
     const summary = compacting;
-    if (summary) summaryRequests++;
-    const failSummary = options.failSummary || summaryRequests <= (options.preparationChain?.failSummaries ?? 0);
     const input = tokens(context.messages);
     trace.push({ kind: 'request', model: model.id, tokens: input, summary, aborted: streamOptions?.signal?.aborted });
     const output = createAssistantMessageEventStream();
@@ -82,7 +69,7 @@ async function makeProbe(options: ProbeOptions = {}) {
         await options.holdSummary.release.promise;
       }
       const result = message(model, summary ? 'A short summary of finalized history.' : `ANSWER-${model.id}`, input);
-      if (streamOptions?.signal?.aborted || (summary && failSummary) || (!summary && options.fallback && model.id === 'A')) {
+      if (streamOptions?.signal?.aborted || (summary && options.failSummary) || (!summary && options.fallback && model.id === 'A')) {
         const error: AssistantMessage = {
           ...result, content: [], stopReason: streamOptions?.signal?.aborted ? 'aborted' : 'error',
           errorMessage: streamOptions?.signal?.aborted ? 'Probe cancelled' : 'Probe failure',
@@ -109,20 +96,14 @@ async function makeProbe(options: ProbeOptions = {}) {
   };
   runtime.registerProvider('probe', {
     api: 'probe-api', apiKey: 'fake-local-only', baseUrl: 'http://127.0.0.1:1',
-    models: [config('A', 1_000_000), config('B', 272_000), ...(options.preparationChain ? [config('C', options.preparationChain.cContextWindow)] : [])], streamSimple: stream,
+    models: [config('A', 1_000_000), config('B', 272_000)], streamSimple: stream,
   });
   const A = runtime.getModel('probe', 'A')!;
   const B = runtime.getModel('probe', 'B')!;
-  let servingTarget = B;
+  const servingTarget = B;
   runtime.registerProvider('wrapper', {
     api: 'wrapper-api', apiKey: 'fake-local-only', baseUrl: 'http://127.0.0.1:1', models: [config('auto', 1_000_000)],
     streamSimple: (_model, context, streamOptions) => {
-      if (!compacting && options.preparationChain) {
-        const outcome = preparation.outcome;
-        if (outcome?.kind !== 'reserved' || !preparation.ledger.dispatch(outcome.reservation.id, () => {}, streamOptions?.signal)) {
-          throw new Error('No current prepared reservation');
-        }
-      }
       if (compacting || !options.fallback) return runtime.streamSimple(compacting ? A : servingTarget, context, streamOptions);
       const output = createAssistantMessageEventStream();
       void (async () => {
@@ -174,54 +155,11 @@ async function makeProbe(options: ProbeOptions = {}) {
         },
       });
       pi.on('session_before_compact', (event) => { trace.push({ kind: 'before-compact', reason: event.reason }); compacting = true; });
-      pi.on('session_compact', () => {
-        trace.push({ kind: 'compact-persisted' }); compacting = false;
-        if (options.preparationChain) preparation.ledger.bump({ context: preparation.ledger.revisions.context + 1 });
-      });
+      pi.on('session_compact', () => { trace.push({ kind: 'compact-persisted' }); compacting = false; });
       pi.on('session_compact_failed', () => { trace.push({ kind: 'compact-failed' }); compacting = false; });
       pi.registerCommand('probe-prepare', {
         description: 'Prepare context while the session is idle.',
-        handler: async (prompt, ctx) => {
-          if (options.preparationChain) {
-            const inputTokens = () => tokens([
-              ...convertToLlm(buildSessionContext(ctx.sessionManager.getBranch()).messages),
-              { role: 'user', content: prompt, timestamp: 0 },
-              { role: 'system', content: ctx.getSystemPrompt(), timestamp: 0 },
-            ]);
-            const decision: UnifiedDecision = {
-              kind: 'decision', solver: 'exact', domainStatus: 'ready', constraintsEnforced: true,
-              chosen: 'B', ranking: ['B', 'C'], profileDigest: 'probe-profile', featureSchemaDigest: 'probe-features',
-              actions: [], insufficientEvidence: [], allInsufficient: false,
-            };
-            const host: AssignmentHost = {
-              ledger: preparation.ledger, transitions: () => [],
-              select: async () => { trace.push({ kind: 'select' }); return decision; },
-              inputBudget: (target) => {
-                const model = runtime.getModel('probe', target)!;
-                return model.contextWindow - settings.getCompactionSettings(model).reserveTokens;
-              },
-              prepare: async (target, signal, request) => {
-                const model = runtime.getModel('probe', target)!;
-                const resolved = settings.getCompactionSettings(model);
-                const fits = () => inputTokens() <= model.contextWindow - resolved.reserveTokens;
-                trace.push({ kind: 'prepare', model: target, tokens: inputTokens() });
-                if (signal.aborted) return { kind: 'cancelled' };
-                if (fits()) return { kind: 'ready' };
-                if (!resolved.enabled || !request.allowCompaction) return { kind: 'failed' };
-                try {
-                  await new Promise<void>((resolve, reject) => ctx.compact({ onComplete: () => resolve(), onError: reject }));
-                } catch {
-                  return { kind: 'failed', compactionAttempted: true };
-                }
-                const kind = signal.aborted ? 'cancelled' : fits() ? 'ready' : 'failed';
-                return { kind, compactionAttempted: true };
-              },
-            };
-            // The idle command has no enclosing agent invocation to cancel.
-            preparation.outcome = await routeAssignment(host, new AbortController().signal);
-            if (preparation.outcome.kind === 'reserved') servingTarget = runtime.getModel('probe', preparation.outcome.reservation.target)!;
-            return;
-          }
+        handler: async (_prompt, ctx) => {
           if (!options.manualBeforeRun) return;
           trace.push({ kind: 'manual-before-run' });
           await new Promise<void>((resolve, reject) => ctx.compact({ onComplete: () => resolve(), onError: reject }));
@@ -284,7 +222,7 @@ async function makeProbe(options: ProbeOptions = {}) {
   const serving = () => trace.filter((event) => event.kind === 'request' && !event.summary);
   const summaries = () => trace.filter((event) => event.kind === 'request' && event.summary);
   const compactions = () => manager.getBranch().filter((entry) => entry.type === 'compaction');
-  return { session, manager, settings, runtime, loader, root, trace, serving, summaries, compactions, preparation, manualFinished: manualFinished.promise };
+  return { session, manager, settings, runtime, loader, root, trace, serving, summaries, compactions, manualFinished: manualFinished.promise };
 }
 
 describe('real Pi context preparation mechanisms', () => {
@@ -380,30 +318,6 @@ describe('real Pi context preparation mechanisms', () => {
     await probe.session.prompt('Continue after preparation', { expandPromptTemplates: false });
     expect(probe.serving()).toHaveLength(1);
     expect(probe.session.getLastAssistantText()).toBe('ANSWER-B');
-  });
-
-  it.each([
-    { cContextWindow: 512_000, failSummaries: 0, target: 'B', preparations: ['B'], summaries: 1, compactions: 1 },
-    { cContextWindow: 512_000, failSummaries: 1, target: 'C', preparations: ['B', 'C'], summaries: 1, compactions: 0 },
-    { cContextWindow: 200_000, failSummaries: 1, target: 'C', preparations: ['B', 'C'], summaries: 2, compactions: 1 },
-  ])('pre-run preparation serves $target with C=$cContextWindow and $failSummaries failed summaries', async (scenario) => {
-    const probe = await makeProbe({ mode: 'wrapper', guard: 'abort', preparationChain: scenario });
-    await probe.session.prompt('/probe-prepare Continue');
-    await probe.session.prompt('Continue', { expandPromptTemplates: false });
-    expect(probe.trace.filter((event) => event.kind === 'prepare').map((event) => event.model)).toEqual(scenario.preparations);
-    expect(probe.trace.filter((event) => event.kind === 'select')).toHaveLength(1);
-    expect(probe.summaries()).toHaveLength(scenario.summaries);
-    expect(probe.summaries().every((event) => event.model === 'A' && event.tokens! < 1_000_000)).toBe(true);
-    expect(probe.compactions()).toHaveLength(scenario.compactions);
-    expect(probe.preparation.outcome).toMatchObject({ kind: 'reserved', reservation: { target: scenario.target, state: 'dispatched' }, selections: 1 });
-    expect(probe.serving()).toHaveLength(1);
-    expect(probe.serving()[0]).toMatchObject({ model: scenario.target, aborted: false });
-    const target = probe.runtime.getModel('probe', scenario.target)!;
-    expect(probe.serving()[0].tokens).toBeLessThan(target.contextWindow - probe.settings.getCompactionSettings(target).reserveTokens);
-    expect(probe.trace.filter((event) => event.kind === 'consumer-end')).toEqual([
-      { kind: 'consumer-end', model: scenario.target, reason: 'stop' },
-    ]);
-    expect(probe.session.getLastAssistantText()).toBe(`ANSWER-${scenario.target}`);
   });
 
   it('physical-provider fallback receives no additional host preparation or context hook', async () => {

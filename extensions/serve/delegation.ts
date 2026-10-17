@@ -30,12 +30,7 @@ import { renderRouterStatus, notifyRouting, servedKey, type ServedInfo } from '.
 import { debugLog, startTimer } from '../host/debuglog.js';
 import { appendDecision } from '../host/decisionlog.js';
 import { makeTerminalErrorEvent } from './error-event.js';
-import {
-  parseCandidateKey,
-  servedEffort,
-  levelFrom,
-  MODEL_THINKING_LEVELS,
-} from '../routing/score/scorer.js';
+import { parseCandidateKey, servedEffort } from '../routing/score/scorer.js';
 import { POLICY_PASSIVE_CAUSES } from '../routing/policy/routing-policy.js';
 import { ReasoningLoopDetector } from '../routing/struggle/reasoning-loop.js';
 import { classifyProviderFailure, type AttemptFailureInfo } from './failure-category.js';
@@ -227,29 +222,23 @@ export interface DelegationResult {
  * reasoning always wins — the router fills a gap, it does not override an
  * instruction.
  *
- * Router-chosen efforts use an up-only walk (levelFrom). An entry of the
- * incumbent model is also raised to `minimum`, the effort the incumbent
- * served at. An explicit user request uses the nearest-first walk so the
- * user's choice is honoured as closely as the model supports.
+ * Router-chosen efforts use an up-only walk (levelFrom). An explicit user
+ * request uses the nearest-first walk so the user's choice is honoured as
+ * closely as the model supports.
  */
 function resolveAttemptEffort(
   entryEffort: ModelThinkingLevel | undefined,
-  minimum: ModelThinkingLevel | undefined,
   userReasoningOverride: boolean | undefined,
   chosen: Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
   turnReasoning: string | undefined,
 ): ModelThinkingLevel | undefined {
-  const served = servedEffort(
+  return servedEffort(
     { ...chosen, effort: entryEffort },
     {
       userReasoning: typeof turnReasoning === 'string' ? (turnReasoning as ThinkingLevel) : undefined,
       userReasoningOverride,
     },
   );
-  if (minimum == null || userReasoningOverride || !chosen.reasoning) return served;
-  const rank = (level: ModelThinkingLevel | undefined): number => (level == null ? -1 : MODEL_THINKING_LEVELS.indexOf(level));
-  if (rank(served) >= rank(minimum)) return served;
-  return levelFrom(minimum, chosen) ?? served;
 }
 
 /**
@@ -1194,7 +1183,6 @@ function applySubstitution(
   Object.assign(decision, plan.decision, { fallbackChain: chain });
   // The substitute replaces the routed pick and any hop provenance; a hop that
   // still proves stronger is re-attached when the substitute serves.
-  delete decision.routedPickChanged;
   delete decision.trajectoryFriction;
   if (opts.candidates) opts.candidates.splice(0, opts.candidates.length, ...plan.candidates);
   else opts.candidates = [...plan.candidates];
@@ -1328,14 +1316,8 @@ export async function runDelegationLoop(
     }
     lastAttemptedId = candidateId;
 
-    // An entry of the incumbent model serves at the effort the incumbent
-    // served at or higher.
-    const incumbentMinimum = decision.incumbentEffort?.model === `${provider}/${modelId}`
-      ? decision.incumbentEffort.effort
-      : undefined;
     const effectiveReasoning = resolveAttemptEffort(
       entryEffort,
-      incumbentMinimum,
       opts.userReasoningOverride,
       chosen as Pick<Candidate, 'reasoning' | 'thinkingLevelMap'>,
       opts.reasoning,

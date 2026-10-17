@@ -8,7 +8,7 @@
  * reach the model.
  */
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from '../../types.js';
-import type { BranchState, RoutingContextEvent } from './types.js';
+import type { BranchState } from './types.js';
 import { applyEvent, emptyLedger, parseContextEvent, type TopicLedger } from './ledger.js';
 
 export const CONTEXT_ENTRY_TYPE = 'pi8-routing-context-v1';
@@ -95,8 +95,7 @@ export function requestRouting(branch: readonly unknown[] | undefined): RequestR
   return { unrouted, routedAtEnd: routed };
 }
 
-function scanContextEvents(branch: readonly unknown[] | undefined): { events: RoutingContextEvent[]; ledger: TopicLedger } {
-  const events: RoutingContextEvent[] = [];
+export function rebuildLedger(branch: readonly unknown[] | undefined): TopicLedger {
   const { unrouted } = requestRouting(branch);
   let ledger = emptyLedger();
   for (const entry of asEntries(branch)) {
@@ -133,22 +132,11 @@ function scanContextEvents(branch: readonly unknown[] | undefined): { events: Ro
       // A damaged or inapplicable subevent cannot publish a partial handoff.
       if (next === ledger) continue;
       ledger = next;
-      events.push(...event.events);
     } else {
-      events.push(event);
       ledger = applyEvent(ledger, event);
     }
   }
-  return { events, ledger };
-}
-
-/** Readers see flat events, including only complete ready handoffs. */
-export function branchEvents(branch: readonly unknown[] | undefined): RoutingContextEvent[] {
-  return scanContextEvents(branch).events;
-}
-
-export function rebuildLedger(branch: readonly unknown[] | undefined): TopicLedger {
-  return scanContextEvents(branch).ledger;
+  return ledger;
 }
 
 /**

@@ -1,5 +1,4 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-import type { ScoredReason } from './routing/score/decision-reason.js';
 import type { ModelThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
 import type { ContextReason, ContextRelation, ResolverTier } from './routing/context/types.js';
 import type { FactsLog } from './routing/policy/change-facts.js';
@@ -142,17 +141,6 @@ export interface ScoreWeights {
 /** One benchmark axis a capability minimum is set on. */
 export type QualityAxis = keyof BenchModel['quality'];
 
-/** Axes measured at one exact effort and never estimated across efforts. */
-export type ExactQuality = Pick<BenchModel['quality'], 'knowledge' | 'research' | 'longContext' | 'visionReasoning'>;
-
-export type QualityExclusionReason = `below-${QualityAxis}-minimum` | 'unknown-quality';
-
-export interface CandidateDiagnostic {
-  /** Candidate key (`provider/id` or `provider/id:effort`) that left the first capability tier. */
-  candidateKey: string;
-  excludedReason?: QualityExclusionReason;
-}
-
 /** Registry model joined with its benchmark row (if any) and full registry metadata. */
 export interface Candidate {
   registryId: string;
@@ -166,15 +154,6 @@ export interface Candidate {
    * thinking level applies.
    */
   effort?: ModelThinkingLevel;
-  /**
-   * Exact-effort measurements of this model at each effort it was measured
-   * at. Delegation may serve a higher effort than the candidate's own (a gap
-   * in the support map, or the incumbent's minimum thinking level), and
-   * these axes are never estimated across efforts, so eligibility reads them
-   * at the served effort. Every sibling
-   * keeps the map so filtering cannot erase serving evidence.
-   */
-  exactQualityByEffort?: Partial<Record<ModelThinkingLevel, ExactQuality>>;
   contextWindow?: number;
   maxTokens?: number;
   /** Whether the registry claims vision support (from input array). */
@@ -215,7 +194,6 @@ export type MessageProvenance =
 
 export type TaskScope = 'bounded' | 'open-ended';
 export type ComplexityBand = 'trivial' | 'routine' | 'moderate' | 'hard' | 'frontier';
-export type CapabilityBand = 'economy' | 'standard' | 'strong' | 'frontier';
 
 export type RubricCriterion = 'openDecisions' | 'spread' | 'verification' | 'knowledge' | 'coupling';
 /** Submitter's description of the remaining work: one level per criterion, 1 (easiest) to 5 (hardest). */
@@ -481,47 +459,8 @@ export interface RoutingDecision {
   dimension: Dimension;
   /** Present when the unified selector made this decision. */
   unified?: UnifiedDecisionMeta;
-  /** Set only when an evaluation process runs the candidate policy. */
-  policyVersion?: import('./routing/policy/policy-version.js').PolicyVersion;
-  /** Frozen capability inputs of the development comparator. No task text or paths. */
-  capabilityEvidence?: {
-    policyDigest: string;
-    comparisonAxis: QualityAxis;
-    metricVersion: string;
-    benchmarkIndexVersion?: string;
-    benchmarkSnapshotDigest?: string;
-    minimums: Readonly<Partial<Record<QualityAxis, number>>>;
-  };
-  /**
-   * The incumbent's minimum thinking level: the model (`provider/id`) that
-   * served the task and the effort it served at. Chain entries of that model
-   * serve at this effort or higher, so a same-task follow-up that keeps the
-   * incumbent does not drop to a lower effort. An explicit user thinking
-   * level still wins. Absent when the incumbent minimums are skipped.
-   */
-  incumbentEffort?: { model: string; effort: ModelThinkingLevel };
   chosen: string;
   reason: string;
-  /** Typed source for scorer and policy wording; reason remains the rendered log/UI value. */
-  scoredReason?: ScoredReason;
-  /** Historical classification metadata; not emitted by routing. */
-  confidence?: number;
-  routedUp?: boolean;
-  /**
-   * True when the routed dimension is strictly weaker than the heuristic's.
-   * Distinct from `routedUp` because "different" and "stronger" are not the
-   * same question.
-   */
-  routedDown?: boolean;
-  /**
-   * True only when a routedUp/routedDown actually changed the served model
-   * versus the model the un-escalated (heuristic) dimension would have picked.
-   * A dimension raise that re-selects the same model served nothing stronger,
-   * so the status UI suppresses the "routed-up"/"routed-down" label when this
-   * is false. Undefined when neither direction fired. `routedUp`/`routedDown`
-   * keep their dimension-level meaning for the decision log and `cause`.
-   */
-  routedPickChanged?: boolean;
   /** Intent cache key joining this routing decision to later records. */
   intentKey?: string;
   /** A mutation tool call was observed; the task type may still be plan/review. */
@@ -540,8 +479,6 @@ export interface RoutingDecision {
   workContext?: WorkContextMeta;
   cause: DecisionCause;
   fallbackChain: string[];
-  /** Capability-tier evidence for candidates that were demoted or promoted. */
-  candidateDiagnostics?: CandidateDiagnostic[];
   /** True if the chosen model differs from the previous turn's model. */
   switched?: boolean;
   /** Objective trajectory-friction evidence when it influenced the pick. */

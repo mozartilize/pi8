@@ -43,7 +43,7 @@ import {
 } from '../test-support/provider-harness.js';
 import type { BenchModel } from '../types.js';
 import { defaultBlacklistState } from './blacklist.js';
-import { savePreferences } from '../config.js';
+import { writeStoredPreferences } from '../test-support/stored-preferences.js';
 
 /**
  * A struggle of `fromModel` after its recovery attempt on the same model, so
@@ -325,7 +325,6 @@ describe('candidate expansion — model × measured effort', () => {
     const byEffort = new Map(candidates.map((candidate) => [candidate.effort, candidate]));
     expect(byEffort.get('max')?.bench?.quality.knowledge).toBeUndefined();
     expect(byEffort.get('high')?.bench?.quality.knowledge).toBe(10);
-    expect(byEffort.get('high')?.exactQualityByEffort).toEqual({ high: { knowledge: 10, research: 0.4 } });
   });
 
   it('keeps an unlabelled knowledge-only row at the model default effort', () => {
@@ -352,10 +351,6 @@ describe('candidate expansion — model × measured effort', () => {
 
     expect(candidates.map((candidate) => candidate.effort)).toEqual(['high', 'max']);
     expect(candidates.map((candidate) => candidate.bench?.quality.knowledge)).toEqual([-9.7, -10]);
-    expect(candidates.every((candidate) =>
-      candidate.exactQualityByEffort?.high?.knowledge === -9.7
-      && candidate.exactQualityByEffort.max?.knowledge === -10,
-    )).toBe(true);
   });
 });
 
@@ -1841,8 +1836,6 @@ describe('incumbent continuation and deep context', () => {
 
     await harness.serve(ctx);
 
-    const decision = harness.getProviderState().lastDecision;
-    expect(decision).not.toHaveProperty('routedUp');
     const handles = await fetchDecisionContractHandles(temp.path);
     expectDecisionContract({ ...handles, match: { dimension: 'gather', cause: 'investigation' } });
   });
@@ -1876,8 +1869,6 @@ describe('context acquisition', () => {
     cause: string;
     chosen: string;
     fallbackChain: string[];
-    routedUp?: boolean;
-    routedDown?: boolean;
     reasoningHandoff?: { minimum: number; pending: boolean; id: string; owner?: string; trajectoryFired?: boolean };
     executionContract?: { handoffId?: string };
     previousHandoffId?: string;
@@ -2862,7 +2853,6 @@ describe('context acquisition', () => {
         const { createHash } = await import('node:crypto');
         const digest = createHash('sha256').update(JSON.stringify(loadStore() ?? null)).digest('hex');
         expect(decision.unified?.benchmarkSnapshotDigest).toBe(digest);
-        expect(decision.capabilityEvidence).toBeUndefined();
         const records = await session.readDecisionRecords();
         const record = records.filter((row) => row.kind == null && row.dimension === 'implement').at(-1)!;
         expect(record.unified).toEqual(decision.unified);
@@ -2874,7 +2864,6 @@ describe('context acquisition', () => {
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const executing = await session.routeTurnAgainWithSameUserEntry();
         expect(executing).toMatchObject({ dimension: 'implement', cause: 'execution-contract', chosen: 'alpha/cheap', unified: { ranked: 2 } });
-        expect(executing).not.toHaveProperty('policyVersion');
         const meta = harness.getProviderState().lastDecision?.executionContract;
         expect(meta).toMatchObject({ status: 'active', release: true });
       });
@@ -3320,7 +3309,7 @@ describe('unified pre-output recovery integration', () => {
     const caller = new AbortController();
     const credentials: Record<string, ResolvedRequestAuth | Error> = {};
     Object.defineProperty(credentials, 'beta/second', { get() {
-      if (change === 'profile-change') savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+      if (change === 'profile-change') writeStoredPreferences({ version: 1, settledImplementation: 'lower_cost' });
       else caller.abort();
       return { ok: true, apiKey: 'k', headers: {} };
     } });
@@ -3350,7 +3339,7 @@ describe('reservation of every provider request', () => {
     const credentials: Record<string, ResolvedRequestAuth | Error> = {};
     for (const id of ['alpha/first', 'beta/second']) {
       Object.defineProperty(credentials, id, { get() {
-        savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+        writeStoredPreferences({ version: 1, settledImplementation: 'lower_cost' });
         return { ok: true, apiKey: 'k', headers: {} };
       } });
     }
@@ -3366,7 +3355,7 @@ describe('reservation of every provider request', () => {
   it.each(['profile', 'assignment'] as const)('starts no fallback request when the %s changed during the first attempt', async (change) => {
     const h = await twoModels();
     h.scriptReply(() => {
-      if (change === 'profile') savePreferences({ version: 1, settledImplementation: 'lower_cost' });
+      if (change === 'profile') writeStoredPreferences({ version: 1, settledImplementation: 'lower_cost' });
       else {
         const state = h.session.getWorkPhaseState()!;
         h.session.commitWorkPhaseState({ ...state, boundaryAuthorization: { ...state.boundaryAuthorization!,
@@ -3892,7 +3881,6 @@ describe('an entry without an incumbent', () => {
     const decision = harness.getProviderState().lastDecision;
     expect(decision?.dimension).toBe('gather');
     expect(decision?.cause).toBe('investigation');
-    for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
   });
 });
 

@@ -84,7 +84,3 @@ export function settleBoundary(auth: BoundaryAuthorizationV1, receipt: ActualSer
   if (!actorAllowedForBoundary(auth, receipt.actualServed)) return auth;
   return { ...auth, state: 'served' };
 }
-
-/** Operational fallbacks that may own the boundary. Chain membership grants nothing. */
-export const authorizedFallbacks = (auth: BoundaryAuthorizationV1, chain: readonly string[]): string[] =>
-  chain.filter((actor) => actorAllowedForBoundary(auth, actor));

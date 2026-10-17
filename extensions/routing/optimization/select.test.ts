@@ -13,8 +13,6 @@ import { FEATURE_INDEX, type ActionFeatureVector } from '../features/schema.js';
 import { capabilityFeatures } from '../features/model.js';
 import { composeTaskDemand } from '../features/task-demand.js';
 import type { DecisionStateV1 } from '../features/state.js';
-import { AssignmentLedger } from '../policy/assignment-transaction.js';
-import type { WorkPhaseState } from '../policy/work-phase.js';
 import { preferenceProfileDigest, validatePreferences, type UserRoutingPreferencesV1 } from '../preferences/schema.js';
 import type { RegistryModelInfo } from '../score/scorer.js';
 import { compileDomainArtifact, thetaBaseDomain, type DomainArtifact, type WeightDomain } from './domain.js';
@@ -222,35 +220,15 @@ class GatedLp implements LPAdapter {
 }
 
 describe('assignment permission snapshots before feature evaluation', () => {
-  const ledger = () => new AssignmentLedger({
-    workItemId: 'W', branchId: 'branch', session: 1, profile: 1,
-    profileDigest: 'p', authorization: 0, context: 1,
-  });
-  const failedWork: WorkPhaseState = {
-    intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0,
-    workItemId: 'W', excludedExecutors: ['c/cheap:high'],
-  };
-  const keys = candidates.map((candidate) => candidate.action.key);
-
-  it('removes implementation failures before regret comparison, but retains them for planning and other work', async () => {
-    const assignment = ledger();
+  it('compares only the authorized actions, with an exact regret among them', async () => {
     const empty = validatePreferences({ version: 1 });
-    const run = async (phase: 'implement' | 'plan') => {
-      assignment.authorize(phase, keys, failedWork);
-      const plan = assignment.plan([]);
-      return selectByRegret({ ...decisionState, phase }, candidates, rows, empty, portsWith(() => undefined), {
-        allowedActors: plan.allowedActors, expectedProfileDigest: empty.digest, decisionDeadlineMs: 5_000,
-        isSnapshotCurrent: () => assignment.isCurrent(plan),
-      });
-    };
-    const implementation = await run('implement') as UnifiedDecision;
-    expect(implementation.chosen).toBe('s/strong:high');
-    expect(implementation.ranking).toEqual(['s/strong:high']);
-    expect(implementation.actions.map((action) => action.action.key)).toEqual(['s/strong:high']);
-    expect(implementation.maxRegret!.get('s/strong:high')).toBe(0);
-    expect((await run('plan') as UnifiedDecision).ranking.sort()).toEqual([...keys].sort());
-    assignment.bump({ workItemId: 'other' });
-    expect((await run('implement') as UnifiedDecision).ranking.sort()).toEqual([...keys].sort());
+    const result = await selectByRegret({ ...decisionState, phase: 'implement' }, candidates, rows, empty, portsWith(() => undefined), {
+      allowedActors: ['s/strong:high'], expectedProfileDigest: empty.digest, decisionDeadlineMs: 5_000,
+    }) as UnifiedDecision;
+    expect(result.chosen).toBe('s/strong:high');
+    expect(result.ranking).toEqual(['s/strong:high']);
+    expect(result.actions.map((action) => action.action.key)).toEqual(['s/strong:high']);
+    expect(result.maxRegret!.get('s/strong:high')).toBe(0);
   });
 
   it('keeps unauthorized actions out of a central fallback and its diagnostics', async () => {
@@ -415,7 +393,6 @@ describe('selectByRegret result paths', () => {
     if (implement.kind !== 'decision') throw new Error('expected a decision');
     expect(implement.solver).toBe('exact');
     expect(implement.insufficientEvidence).toEqual(['p/pmodel:high']);
-    expect(implement.allInsufficient).toBe(false);
     const pImplement = implement.actions.find((a) => a.action.registryId === 'p/pmodel')!.features;
     expect([pImplement.lower[1], pImplement.upper[1]]).toEqual([0, 1]);
     expect([...implement.maxRegret!.keys()].sort()).toEqual(['p/pmodel:high', 'q/qmodel:high']);
@@ -507,7 +484,6 @@ describe('missing evidence is an uncertainty interval, not a ranking tail', () =
     const result = await selectByRegret(decisionState, pick([U, model('v', 'also-unmeasured', { input: 1, output: 2 })]), guardRows, prefs, portsWith(() => undefined),
       { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000 });
     if (result.kind !== 'decision') throw new Error('expected a decision');
-    expect(result.allInsufficient).toBe(true);
     expect(result.insufficientEvidence).toEqual(['u/unmeasured:high', 'v/also-unmeasured:high']);
     expect(result.maxRegret!.size).toBe(2);
     expect(result.chosen).toBeDefined();

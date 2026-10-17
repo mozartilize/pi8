@@ -82,8 +82,6 @@ export interface UnifiedDecision {
    * compete in the same pool; their missing quality is an uncertainty interval.
    */
   insufficientEvidence: string[];
-  /** Diagnostic: true when every rankable action lacks evidence for a required axis. */
-  allInsufficient: boolean;
   /**
    * Diagnostic: actions whose feature vector is malformed or whose key is
    * duplicated. They are excluded from ranking and dispatch fallback.
@@ -229,14 +227,12 @@ export async function selectByRegret(
   const rankable = new Set(problem.actions.map((action) => action.id));
   const insufficientEvidence = actions.filter((features) => rankable.has(features.features.key) && features.evidenceGaps.length > 0)
     .map((features) => features.features.key).sort();
-  const allInsufficient = rankable.size > 0 && insufficientEvidence.length === rankable.size;
   const base = {
     kind: 'decision' as const,
     profileDigest: preferences.digest,
     featureSchemaDigest: FEATURE_SCHEMA_DIGEST,
     actions,
     insufficientEvidence,
-    allInsufficient,
     ...(invalidActions.length > 0 ? { invalidActions } : {}),
   };
 

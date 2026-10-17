@@ -86,12 +86,6 @@ export function buildCatalog(
   return { v: 1, ...(activeListed ? { activeWorkItemId: ledger.activeWorkItemId } : {}), topics, workItems };
 }
 
-/** Whether `larger` lists anything `smaller` does not. */
-export function catalogAddsItems(smaller: CatalogSnapshot, larger: CatalogSnapshot): boolean {
-  const known = new Set(smaller.workItems.map((item) => item.id));
-  return larger.workItems.some((item) => !known.has(item.id));
-}
-
 export type CheckedChoice =
   | { kind: 'existing'; workItemId: string; topicId: string; relation: 'continue' | 'resume' | 'reopen' }
   | { kind: 'new-item'; topicId: string; relation: 'new' | 'switch' }

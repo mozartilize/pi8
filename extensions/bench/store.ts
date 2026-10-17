@@ -11,7 +11,7 @@ import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { OUTPUT_TOKENS_STATUSES, PROVENANCE_AXES, type BenchModel, type OutputTokensProvenance, type BenchmarkStore, type ExtensionContext, type ProvenanceAxis } from '../types.js';
 import type { AxisProvenance } from '../routing/features/schema.js';
 import { canonicalJson } from '../routing/digest.js';
-import { CONFIG_FILE, STORE_FILE, STALE_MS, STORAGE_DIR } from '../constants.js';
+import { STORE_FILE, STALE_MS, STORAGE_DIR } from '../constants.js';
 import { readJsonCached, writeJsonAtomic } from '../json-file.js';
 
 /**
@@ -31,9 +31,6 @@ export const resolveStoragePath = (base?: string): string => {
 
 export const getStorePath = (base?: string): string =>
   join(resolveStoragePath(base), STORE_FILE);
-
-export const getConfigPath = (base?: string): string =>
-  join(resolveStoragePath(base), CONFIG_FILE);
 
 /** Provider-specific registry variants that cannot be normalized safely. */
 export const DEFAULT_BENCHMARK_ALIASES: Readonly<Record<string, string>> = {

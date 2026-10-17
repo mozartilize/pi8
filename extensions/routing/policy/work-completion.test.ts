@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { foldEvents } from '../context/ledger.js';
+import { foldEvents } from '../../test-support/context-events.js';
 import type { RoutingContextEvent } from '../context/types.js';
 import { activateEvent, createEvent, workItem } from '../../test-support/context-fixtures.js';
 import { completedIncumbent, incumbentWorkItem } from './work-completion.js';

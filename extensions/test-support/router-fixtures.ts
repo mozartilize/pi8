@@ -19,9 +19,6 @@ export function routingDecision(chain: string[]): RoutingDecision {
     dimension: 'implement',
     chosen: chain[0]!,
     reason: 'test decision',
-    confidence: 1,
-    routedUp: false,
-    routedDown: false,
     cause: 'heuristic',
     fallbackChain: [...chain],
   };

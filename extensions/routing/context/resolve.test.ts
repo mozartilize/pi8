@@ -9,7 +9,8 @@ import {
 } from './resolve.js';
 import { extractPromptAnchors } from './anchors.js';
 import { buildCatalog } from './catalog.js';
-import { emptyLedger, foldEvents, type TopicLedger } from './ledger.js';
+import { emptyLedger, type TopicLedger } from './ledger.js';
+import { foldEvents } from '../../test-support/context-events.js';
 import { activateEvent, createEvent, workItem } from '../../test-support/context-fixtures.js';
 import type { Dimension } from '../../types.js';
 

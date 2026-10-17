@@ -20,7 +20,7 @@ function fixture(withThird = false) {
   }));
   const candidates = models.map((model, i) => buildCandidate(model, rows[i]));
   const revisions: AssignmentRevisions = {
-    workItemId: 'work', branchId: 'branch', session: 1, profile: 0,
+    workItemId: 'work', branchId: 'branch', session: 1,
     profileDigest: readPreferences().digest, authorization: 1, context: 1,
   };
   let assignmentId = 'assignment';

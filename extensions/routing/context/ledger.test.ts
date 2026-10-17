@@ -4,7 +4,6 @@ import {
   activeWorkItem,
   applyEvent,
   emptyLedger,
-  foldEvents,
   legacyWorkItem,
   ledgerTopics,
   mergeAnchors,
@@ -14,6 +13,7 @@ import {
 } from './ledger.js';
 import { CONTEXT_COMMIT_EVENT_LIMIT, RESERVED_IDS, type RoutingContextEvent, type WorkItemAnchor } from './types.js';
 import { activateEvent as activate, createEvent as create, workItem } from '../../test-support/context-fixtures.js';
+import { foldEvents } from '../../test-support/context-events.js';
 
 const SHA = 'a'.repeat(64);
 

@@ -26,9 +26,6 @@ const DECISION: RoutingDecision = {
   dimension: 'implement',
   chosen: 'anthropic/claude-opus-4-6',
   reason: 'scored 0.789',
-  confidence: 1.0,
-  routedUp: false,
-  routedDown: false,
   cause: 'heuristic',
   fallbackChain: ['anthropic/claude-opus-4-6', 'openai/gpt-5', 'deepseek/deepseek-v3'],
 };
@@ -189,27 +186,6 @@ describe('decision log', () => {
     expect(existsSync(join(dir, DECISION_LOG_FILE))).toBe(true);
   });
 
-  it('preserves candidate diagnostic metadata', () => {
-    const decision: RoutingDecision = {
-      ...DECISION,
-      cause: 'router-consult',
-      candidateDiagnostics: [
-        { candidateKey: 'cheap/model', excludedReason: 'unknown-quality' },
-        { candidateKey: 'weak/model', excludedReason: 'below-intelligence-minimum' },
-      ],
-    };
-    appendDecision(
-      decision,
-      { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0.01 },
-      dir,
-    );
-    const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.candidateDiagnostics).toEqual([
-      { candidateKey: 'cheap/model', excludedReason: 'unknown-quality' },
-      { candidateKey: 'weak/model', excludedReason: 'below-intelligence-minimum' },
-    ]);
-  });
-
   it('stamps every record kind with the schema version it was written under', () => {
     appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
     appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
@@ -219,18 +195,6 @@ describe('decision log', () => {
     const records = readRecentEntries(10, dir);
     expect(records).toHaveLength(4);
     expect(records.every((record) => record.schemaVersion === DECISION_LOG_SCHEMA_VERSION)).toBe(true);
-  });
-
-  it('omits classifier metadata from every new record kind', () => {
-    appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
-    appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
-    appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
-    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'prior-completion', workItemId: 'w_1' }, dir);
-
-    const [decision, ...others] = readRecentEntries(10, dir);
-    for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
-    expect(others).toHaveLength(3);
-    expect(others.every((record) => !('confidence' in record))).toBe(true);
   });
 
   it('writes lifecycle categories without model-supplied text and tolerates unwritable storage', () => {
@@ -294,10 +258,9 @@ describe('decision log provenance', () => {
     return JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>;
   };
 
-  it('writes provenance counts without classifier metadata', () => {
+  it('writes provenance counts', () => {
     appendDecision(
       decision({
-        routedDown: true,
         provenanceCounts: {
           user: 3,
           'compaction-summary': 1,
@@ -312,7 +275,6 @@ describe('decision log provenance', () => {
     );
 
     const entry = readLastEntry(dir);
-    expect(entry).not.toHaveProperty('routedDown');
     expect(entry.provenance).toEqual({
       user: 3,
       'compaction-summary': 1,
@@ -322,7 +284,6 @@ describe('decision log provenance', () => {
       'tool-result': 7,
     });
     expect(entry.cause).toBe('heuristic');
-    expect(entry).not.toHaveProperty('routedUp');
   });
 });
 

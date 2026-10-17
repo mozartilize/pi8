@@ -8,7 +8,6 @@
  * This extension never writes to settings.json.
  */
 import type {
-  BeforeAgentStartEvent,
   ExtensionAPI,
   ExtensionContext,
   ModelChangeEntry,
@@ -339,30 +338,6 @@ function handleModelSelect(
   }
 }
 
-function handleBeforeAgentStart(
-  event: BeforeAgentStartEvent,
-  ctx: ExtensionContext,
-  session: RouterSession,
-): void {
-  // Skill tracking belongs only to sessions actively using router/auto.
-  if (!isRouterAutoActive(ctx?.model)) return;
-  try {
-    const skills = (event as { systemPromptOptions?: { skills?: unknown } }).systemPromptOptions
-      ?.skills;
-    if (!Array.isArray(skills)) return;
-    // Names only. systemPromptOptions may include full context-file contents
-    // (Pi docs/extensions.md:1094) and is sensitive extension-local data.
-    const names = skills
-      .map((skill) =>
-        typeof skill === 'string' ? skill : ((skill as { name?: unknown })?.name ?? ''),
-      )
-      .filter((name): name is string => typeof name === 'string' && name.length > 0);
-    session.setActiveSkillNames(names);
-  } catch {
-    // Enrichment is optional; identity from context alone is acceptable.
-  }
-}
-
 function handleTurnStart(
   _event: TurnStartEvent,
   ctx: ExtensionContext,
@@ -452,11 +427,9 @@ function handleTrajectoryToolResult(event: ToolResultEvent, session: RouterSessi
   }
 }
 
-export default async function autoModelRouterExtension(
-  pi: ExtensionAPI,
-  session: RouterSession = defaultRouterSession,
-  runtime: RuntimeBindings = defaultRuntimeBindings,
-) {
+export default async function autoModelRouterExtension(pi: ExtensionAPI) {
+  const session = defaultRouterSession;
+  const runtime = defaultRuntimeBindings;
   const updateManualModelCompletionContext = registerCommands(pi, session);
 
   // Register `router/auto` synchronously at extension-init time (no session
@@ -535,9 +508,8 @@ export default async function autoModelRouterExtension(
 
   pi.on('context', (event, ctx) => handleContext(event, ctx, session));
 
-  pi.on('before_agent_start', (event, ctx) => {
+  pi.on('before_agent_start', (_event, ctx) => {
     recordModelSelection(pi, ctx);
-    return handleBeforeAgentStart(event, ctx, session);
   });
 
   pi.on('turn_start', (event, ctx) => handleTurnStart(event, ctx, pi, session, runtime));

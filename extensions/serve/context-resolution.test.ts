@@ -7,7 +7,8 @@ import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel } from '../test-support/router-fixtures.js';
 import { setupProviderTest, type ProviderTestHarness } from '../test-support/provider-harness.js';
 import { SessionTree } from '../test-support/session-tree.js';
-import { branchEvents, CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
+import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
+import { persistedContextEvents } from '../test-support/context-events.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type RoutingDecision } from '../types.js';
 import { carryPhaseAcrossTree } from './context-resolution.js';
 import { observeContextGrounding } from './context-grounding.js';
@@ -90,7 +91,7 @@ describe('work-context resolution through the provider', () => {
     expect(accepted.accepted).toBe(true);
     return [...harness.session.context.getLedger().items.values()][0]!;
   }
-  const ledgerEvents = () => branchEvents(tree.getBranch()).map((event) => event.op);
+  const ledgerEvents = () => persistedContextEvents(tree.getBranch()).map((event) => event.op);
 
   it('collects an unresolved request until a handoff selects work', async () => {
     await setup();
@@ -211,7 +212,7 @@ describe('work-context resolution through the provider', () => {
 
   describe('execution penalties follow the branch', () => {
     const penalties = { contractStrikes: { strong: 2 }, excludedExecutors: ['beta/strong'] };
-    const penaltyEvents = () => branchEvents(tree.getBranch()).filter((event) => event.op === 'executor-penalty');
+    const penaltyEvents = () => persistedContextEvents(tree.getBranch()).filter((event) => event.op === 'executor-penalty');
 
     it('records an executor exclusion on the branch of its work item', async () => {
       await setup();

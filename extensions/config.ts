@@ -11,12 +11,7 @@ import {
 } from './constants.js';
 import { resolveStoragePath } from './bench/store.js';
 import { readJsonCached, writeJsonAtomic } from './json-file.js';
-import {
-  canonicalPreferences,
-  validatePreferences,
-  type UserRoutingPreferencesV1,
-  type ValidatedPreferences,
-} from './routing/preferences/schema.js';
+import { validatePreferences, type ValidatedPreferences } from './routing/preferences/schema.js';
 
 export function getConfigPath(): string {
   return join(resolveStoragePath(), CONFIG_FILE);
@@ -82,8 +77,6 @@ export interface PersistedConfig {
    * applied. See routing/preferences/schema.ts.
    */
   preferences?: unknown;
-  /** `shown` after the one-time preference setup notice was displayed. */
-  routerPreferenceSetupNotice?: 'shown';
 }
 
 const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
@@ -228,54 +221,14 @@ export function saveBlacklist(patterns: readonly string[]): void {
   writeJsonAtomic(path, next, 0o600);
 }
 
-/**
- * Immutable snapshot of the preference profile: the validated profile, its
- * digest and a revision, read together. `revision` increases in this process
- * each time a load observes a different digest.
- */
-export interface PreferenceSnapshot extends ValidatedPreferences {
-  revision: number;
-}
-
-let preferenceRevision = 0;
-let lastPreferenceDigest: string | undefined;
-
-export function loadPreferenceSnapshot(): PreferenceSnapshot {
+/** Immutable snapshot of the preference profile: the validated profile and its digest, read together. */
+export function loadPreferenceSnapshot(): ValidatedPreferences {
   const validated = validatePreferences(readPersisted(getConfigPath()).preferences);
-  if (validated.digest !== lastPreferenceDigest) {
-    lastPreferenceDigest = validated.digest;
-    preferenceRevision += 1;
-  }
   return Object.freeze({
     ...validated,
     ...(validated.profile ? { profile: Object.freeze({ ...validated.profile }) } : {}),
     diagnostics: [...validated.diagnostics],
-    revision: preferenceRevision,
   });
-}
-
-/**
- * Write the preference profile against a fresh config read, keeping every
- * unrelated setting. An empty profile removes the `preferences` object.
- */
-export function savePreferences(profile: UserRoutingPreferencesV1 | undefined): void {
-  const path = getConfigPath();
-  const next = { ...withoutRemovedKeys(readPersisted(path)) } as PersistedConfig;
-  const canonical = profile ? canonicalPreferences(profile) : undefined;
-  if (!canonical || Object.keys(canonical).length === 1) delete next.preferences;
-  else next.preferences = canonical;
-  writeJsonAtomic(path, next, 0o600);
-}
-
-export function loadPreferenceSetupNoticeShown(): boolean {
-  return readPersisted(getConfigPath()).routerPreferenceSetupNotice === 'shown';
-}
-
-/** Record the setup notice only after the UI actually displayed it. */
-export function savePreferenceSetupNoticeShown(): void {
-  const path = getConfigPath();
-  const next: PersistedConfig = { ...withoutRemovedKeys(readPersisted(path)), routerPreferenceSetupNotice: 'shown' };
-  writeJsonAtomic(path, next, 0o600);
 }
 
 /** Persist semi-automatic confirmation (`semi` in config.json). */

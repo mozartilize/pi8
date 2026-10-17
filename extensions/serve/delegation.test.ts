@@ -510,44 +510,6 @@ describe('runDelegationLoop contracts', () => {
     expect(h.reasoningOptions).toEqual(['low']);
   });
 
-  it('raises entries of the incumbent model to the effort the incumbent served at, and no other model', async () => {
-    const h = createDelegationHarness({
-      chain: ['alpha/model:low', 'beta/model:low'],
-      scripts: {
-        'alpha/model': [[{ type: 'error', error: { errorMessage: '421' } }]],
-        'beta/model': [served],
-      },
-      registry: fullThinkingRegistry,
-      decision: { ...routingDecision(['alpha/model:low', 'beta/model:low']), incumbentEffort: { model: 'alpha/model', effort: 'high' } },
-    });
-    expect((await h.run()).success).toBe(true);
-    expect(h.reasoningOptions).toEqual(['high', 'low']);
-  });
-
-  it('never lowers a scored effort above the incumbent effort', async () => {
-    const h = createDelegationHarness({
-      chain: ['alpha/model:max'],
-      scripts: { 'alpha/model': [served] },
-      registry: fullThinkingRegistry,
-      decision: { ...routingDecision(['alpha/model:max']), incumbentEffort: { model: 'alpha/model', effort: 'high' } },
-    });
-    expect((await h.run()).success).toBe(true);
-    expect(h.reasoningOptions).toEqual(['max']);
-  });
-
-  it('lets an explicit user thinking level win over the incumbent effort', async () => {
-    const h = createDelegationHarness({
-      chain: ['alpha/model:low'],
-      scripts: { 'alpha/model': [served] },
-      registry: fullThinkingRegistry,
-      reasoning: 'minimal',
-      userReasoningOverride: true,
-      decision: { ...routingDecision(['alpha/model:low']), incumbentEffort: { model: 'alpha/model', effort: 'high' } },
-    });
-    expect((await h.run()).success).toBe(true);
-    expect(h.reasoningOptions).toEqual(['minimal']);
-  });
-
   it('never lets an explicit user reasoning request be overridden by an entry effort', async () => {
     // The user asked for xhigh; the chain entry carries its own low effort,
     // but an explicit user instruction always wins (the router fills a gap,
