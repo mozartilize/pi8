@@ -984,7 +984,6 @@ describe('provider orchestration', () => {
     const { lastDecision } = harness.getProviderState();
     const handles = await fetchDecisionContractHandles(temp.path);
     expectDecisionContract({ ...handles, match: { cause: lastDecision?.cause, dimension: lastDecision?.dimension } });
-    expect(lastDecision?.cause).not.toBe('context-pressure');
     // Every dispatched action holds the prompt.
     expect(lastDecision?.unified?.holdingPrompt).toBe(lastDecision?.fallbackChain.length);
   });

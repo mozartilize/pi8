@@ -121,7 +121,7 @@ describe.skipIf(!ENABLED)('pool measurement', () => {
             for (const phase of PHASES) {
               const state: DecisionStateV1 = {
                 phase, estimatedContextTokens: phase === 'gather' ? 80_000 : 30_000, needsVision, boundary: 'ordinary',
-                friction: [], nowMs: Date.now(), isSubagentSpawn: false, benchmarkIndexVersion: source.indexVersion,
+                friction: [], nowMs: Date.now(), benchmarkIndexVersion: source.indexVersion,
               };
               for (const run of [0, 1, 2]) {
                 const start = performance.now();

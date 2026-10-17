@@ -22,7 +22,7 @@ for (const [label, marker] of [
   describe(label, () => {
     it.each([
       ['edit', {}], ['write', {}], ['bash', { command: 'echo hi > out.txt' }],
-      ['commit_execution', {}], ['subagent', {}],
+      ['commit_execution', {}],
     ])('refuses %s without counting it or closing the entry', (toolName, input) => {
       const session = sessionFor(marker);
       const before = session.getWorkPhaseState();
@@ -34,6 +34,7 @@ for (const [label, marker] of [
     it.each([
       ['read', { path: 'file.ts' }], ['bash', { command: 'git status --short' }],
       ['hand_off_context', {}], ['reopen_work', {}], ['ask_user_question', {}],
+      ['subagent', {}],
     ])('allows %s', (toolName, input) => {
       expect(gateCompletedWorkToolCall({ toolName, input }, sessionFor(marker))).toBeUndefined();
     });

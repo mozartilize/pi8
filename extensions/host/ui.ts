@@ -69,7 +69,6 @@ export function formatStatus(
   }
   if (decision.routedUp && decision.routedPickChanged) parts.push('(upgraded)');
   if (decision.routedDown && decision.routedPickChanged) parts.push('(downgraded)');
-  if (decision.contextPressure) parts.push('(context nearly full)');
   return parts.join(' ');
 }
 
@@ -85,7 +84,6 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   'no-data': 'no benchmark data; ranked by price and context window',
   'capability-escalation': 'stronger model, picked by quality alone',
   'trajectory-escalation': 'stronger model, because the previous one struggled',
-  'self-healing-gap': 'subagent tool gap',
   'manual-override': 'manual pin',
   resume: 'reused the route from before the pin',
   'semi-hold': 'kept the current model (semi mode)',
@@ -143,7 +141,6 @@ export function formatDecisionDetail(
     ...(decision.executionContract ? contractLines(decision.executionContract) : []),
     ...(decision.trajectoryFriction ? [trajectoryLine(decision.trajectoryFriction)] : []),
     ...(decision.switched ? ['  note:       switched models from the previous turn'] : []),
-    ...(decision.contextPressure ? contextPressureLines(decision.contextPressure) : []),
     ...(chain ? [`  chain:      ${chain}`] : []),
   ];
 }
@@ -309,14 +306,6 @@ function trajectoryLine(tf: NonNullable<RoutingDecision['trajectoryFriction']>):
   if (tf.unavailable) return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}; no permitted recovery action can accept this prompt`;
   const kinds = tf.signals.map((signal) => `${signal.severity} ${signal.kind.replaceAll('-', ' ')}`).join(', ');
   return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}${kinds ? ` (${kinds})` : ''}`;
-}
-
-function contextPressureLines(pressure: NonNullable<RoutingDecision['contextPressure']>): string[] {
-  const pct = (pressure.usageRatio * 100).toFixed(0);
-  return [
-    `  note:       context ${pct}% full (advice starts at ${(pressure.threshold * 100).toFixed(0)}%)`,
-    `  advice:     ${pressure.suggestion}`,
-  ];
 }
 
 /**

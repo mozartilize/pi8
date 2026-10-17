@@ -23,7 +23,7 @@ type PromptCache = RegistryModelInfo['promptCache'];
 const snapshot = (ageMs: number, written: 'short' | 'long', requested: 'short' | 'long' = written, promptCache: PromptCache | 'none' = model.promptCache): [SpendSnapshot, RegistryModelInfo] => [{
   estimatedContextTokens: 100_000,
   nowMs: NOW,
-  isSubagentSpawn: false,
+
   promptIdentity: 'head',
   cache: {
     promptIdentity: 'head',

@@ -1,6 +1,5 @@
 /**
- * Shared test factories for the router's delegation, scoring, and subagent
- * tests.
+ * Shared test factories for the router's delegation and scoring tests.
  *
  * These intentionally construct minimal, schema-shaped objects (not real
  * provider models) so `runDelegationLoop`/scorer/classifier can exercise their
@@ -13,7 +12,6 @@ import type { Api } from '@earendil-works/pi-ai';
 
 import type { RegistryModelInfo } from '../routing/score/scorer.js';
 import type { BenchModel, Candidate, RoutingDecision } from '../types.js';
-import type { SubagentResultRow } from '../agents/subagent-results.js';
 
 /** A minimal, hand-filled routing decision across `chain`. */
 export function routingDecision(chain: string[]): RoutingDecision {
@@ -31,7 +29,7 @@ export function routingDecision(chain: string[]): RoutingDecision {
 
 /**
  * Build a minimal registry model whose id is derived from `registryId`
- * (`provider/id`). Satisfies `RegistryModelInfo` for scoring/subagent tests
+ * (`provider/id`). Satisfies `RegistryModelInfo` for scoring tests
  * and carries the name/api/baseUrl fields the delegation harness needs when
  * casting to a live `Model<Api>`.
  */
@@ -112,19 +110,4 @@ export function candidate(
     result.cost = { ...DEFAULT_COST, ...overrides.cost };
   }
   return result;
-}
-
-/** A `subagent` tool_result row with neutral defaults. */
-export function subagentResultRow(
-  overrides: Partial<SubagentResultRow> = {},
-): SubagentResultRow {
-  return {
-    index: 0,
-    agent: 'worker',
-    model: 'provider/fast:high',
-    exitCode: 0,
-    finalOutput: 'done',
-    modelAttempts: [],
-    ...overrides,
-  };
 }

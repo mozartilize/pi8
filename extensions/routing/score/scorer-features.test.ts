@@ -49,7 +49,6 @@ describe('warm candidate credit', () => {
     const weights = { quality: 0, cost: 0, speed: 0 };
     const opts = { estimatedContextTokens: 10_000, switchMargin: 0.15, warmPrefixTokens: new Map([['p/b', 5_000]]) };
     expect(pickBest([a, b], 'gather', weights, opts).chosen).toBe('p/b');
-    expect(pickBest([a, b], 'gather', weights, { ...opts, isSubagentSpawn: true }).chosen).toBe('p/a');
     delete b.cost.cacheRead;
     expect(pickBest([a, b], 'gather', weights, opts).chosen).toBe('p/a');
   });

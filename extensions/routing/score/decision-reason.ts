@@ -14,7 +14,6 @@ export type ReasonDetail =
   | { kind: 'incumbent-capability' }
   | { kind: 'incumbent-effort' }
   | { kind: 'executor-unavailable' }
-  | { kind: 'context-pressure' }
   | { kind: 'no-data' }
   | { kind: 'trajectory'; fromModel: string }
   | { kind: 'protocol-penalty'; model: string; penalty: number; changed: boolean };
@@ -25,7 +24,6 @@ function renderDetail(detail: ReasonDetail): string {
     case 'incumbent-capability': return 'kept current capability with another model';
     case 'incumbent-effort': return "kept current model's thinking level";
     case 'executor-unavailable': return 'kept plan submitter: no proven executor';
-    case 'context-pressure': return 'context nearly full: prefer a fresh planner subagent';
     case 'no-data': return 'no benchmark quality data';
     case 'trajectory': return `${detail.fromModel} struggled: stronger model`;
     case 'protocol-penalty': return `protocol penalty ${detail.penalty.toFixed(3)} on ${detail.model}${detail.changed ? ': changed preference' : ''}`;

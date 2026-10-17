@@ -51,7 +51,6 @@ Use these terms consistently in issues, documentation, and model-facing instruct
 
 | Minimum | Subject |
 |---|---|
-| Role minimum task type | The kind of work a subagent role must receive |
 | Capability minimum | Measured quality required by task type and input shape |
 | Handoff minimum | Rubric and final-step requirement after an accepted declaration |
 | Executor minimum | Rubric, measurements, and shape of a closed execution plan |

@@ -398,8 +398,6 @@ export interface ScoreOpts {
   benchmarkSnapshotDigest?: string;
   /** Previous turn's chosen candidate key (`provider/id` or `provider/id:effort`). */
   incumbentRegistryId?: string;
-  /** True if this is a subagent spawn (no cache to lose). */
-  isSubagentSpawn?: boolean;
   /** Required vision support (from image attachments). */
   needsVision?: boolean;
   /** Maximum prompt-cache credit for a candidate. */
@@ -479,7 +477,7 @@ export function scoreCandidate(
   const cScore = costNorm * weights.cost;
   const sScore = speedNorm * weights.speed;
 
-  const switched = opts.incumbentRegistryId != null && !opts.isSubagentSpawn
+  const switched = opts.incumbentRegistryId != null
     ? candidateKey(c) !== opts.incumbentRegistryId
     : false;
 
@@ -650,11 +648,9 @@ function scoreWithinTiers(
  * Cache credit prices the warm prefix a candidate can reuse. The incumbent
  * keeps the whole conversation; other keys keep only their own warm prefix.
  * Effort changes share the whole prefix only where the provider supports it.
- * Missing registry cache prices earn no credit. Subagent spawns have no
- * conversation cache to retain.
+ * Missing registry cache prices earn no credit.
  */
 function applySwitchBonus(scored: ScoredCandidate[], opts: ScoreOpts): void {
-  if (opts.isSubagentSpawn) return;
   const margin = clamp(opts.switchMargin ?? DEFAULT_SWITCH_MARGIN, 0, 1);
   const incumbent = opts.incumbentRegistryId ? parseCandidateKey(opts.incumbentRegistryId) : undefined;
   const incumbentScored = scored.find((s) => candidateKey(s) === opts.incumbentRegistryId);

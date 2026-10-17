@@ -36,7 +36,7 @@ This example limits automatic routing to available GitHub Copilot models. It doe
 | `routerContextWindow` | Dynamic | Optional positive token limit for the advertised context window. |
 | `debug` | Off | `true` uses the session debug log. A string selects a file path. |
 | `syntheticPrefixes` | `[]` | Literal prefixes for synthetic integration messages whose source is not available in Pi's session projection. Projected custom messages need no prefix. Maximum length: 200 characters per prefix. |
-| `dimensionWeights` | See below | Legacy main-turn and subagent quality, cost, and speed weights. |
+| `dimensionWeights` | See below | Legacy main-turn quality, cost, and speed weights. |
 | `reputation` | `true` | Collect protocol counts and enable eligible history-based preferences. |
 | `reputationWeights` | Unset | Weights for `reminder` and `ignored`. Each value must be between 0 and 1. |
 | `baselineModel` | Automatic | `provider/id` for the cost comparison in `/router-report`. |
@@ -68,7 +68,7 @@ A [manual pin](commands.md#manual-model-control) is an explicit override. It can
 
 ## Default scoring weights
 
-These are the `legacy` defaults. Subagent role selection also uses them unless `dimensionWeights` supplies overrides.
+These are the `legacy` defaults.
 
 | Task type | Quality | Cost | Speed |
 |---|---:|---:|---:|
@@ -101,8 +101,6 @@ Automatic main-turn selection under `cheapest-sufficient` uses fixed weights for
 `dimensionWeights` does not change these main-turn weights.
 
 Quality still determines capability tiers. Context and vision minimums still apply. Cache credit and configured protocol penalties can still change preference within a tier.
-
-Subagent role selection retains `legacy` scoring and configured `dimensionWeights`, even when main turns use `cheapest-sufficient`.
 
 ## Context window
 
@@ -141,5 +139,4 @@ Sync key precedence is: command argument, environment variable, saved configurat
 - [Configuration parser](../extensions/config.ts)
 - [Default weights](../extensions/constants.ts)
 - [Main-turn policy](../extensions/routing/policy/routing-policy.ts)
-- [Subagent role selection](../extensions/agents/subagents.ts)
 - [Storage resolver](../extensions/bench/store.ts)

@@ -49,7 +49,6 @@ export function candidateFeatures(
   const spendSnapshot: SpendSnapshot = {
     estimatedContextTokens: state.estimatedContextTokens, promptTokenScales: state.promptTokenScales,
     cache: state.cache, promptIdentity: state.promptIdentity, nowMs: state.nowMs,
-    isSubagentSpawn: state.isSubagentSpawn,
   };
   const price: PriceSnapshot = { cost: model.cost, promptCache: model.promptCache, api: model.api, compat: model.compat };
   const continuitySnapshot: Pick<SessionSnapshot, 'boundary' | 'incumbent' | 'rework'> = {

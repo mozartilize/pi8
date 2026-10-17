@@ -185,7 +185,7 @@ export interface ProviderTestHarness {
    * Serve one turn through the router and wait for the stream to end.
    * `options` mirrors the provider entry's `SimpleStreamOptions` (e.g. a user
    * reasoning override echoed back by Pi); `model` defaults to the router's
-   * own `router/auto` entry (concrete subagent tests pass a child model).
+   * own `router/auto` entry.
    */
   serve(context: Context, options?: SimpleStreamOptions, model?: Model<Api>): Promise<void>;
   /**

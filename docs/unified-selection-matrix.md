@@ -279,7 +279,7 @@ maxUSD     = max(miss, hit với pReadCentral)    + O
 | Output price >0 và thiếu output tokens/task | Chỉ có minUSD (prompt cost, O = 0); không có centralUSD, maxUSD |
 | cacheRead price thiếu | Center không có cache discount; lower dùng read price 0 |
 | cacheWrite price >0 | Cold input tính ở write price thay input price, không tính hai lần |
-| Cache source none, sai promptIdentity, quá TTL hoặc subagent spawn | W = 0 |
+| Cache source none, sai promptIdentity, hoặc quá TTL | W = 0 |
 | Action đúng cached incumbentKey | W = toàn bộ I |
 | Cùng incumbent model, đổi effort và có shared cache | W = toàn bộ I |
 | Action khác | W = min(I, warm tokens đã ghi cho action đó) |

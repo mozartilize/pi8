@@ -375,16 +375,6 @@ describe('scorer', () => {
       expect(decision.chosen).toBe('test/cheap');
     });
 
-    it('does not penalize switch on subagent spawn', () => {
-      const decision = pickBest(allCandidates, 'lightweight', undefined, {
-        estimatedContextTokens: 80000,
-        incumbentRegistryId: 'test/expensive',
-        isSubagentSpawn: true,
-      });
-      // Subagent spawn — no cache to lose
-      expect(decision.chosen).toBe('test/cheap');
-    });
-
     function effortChangeFixture(overrides: Partial<Candidate> = {}) {
       const incumbentLow = candidate('test/model', {
         bench: benchRow('test/model', {
@@ -650,33 +640,6 @@ describe('scorer', () => {
       const forward = pickBest([incumbentLow, sameModelHigh, rival], 'lightweight', undefined, opts).chosen;
       const reversed = pickBest([rival, sameModelHigh, incumbentLow], 'lightweight', undefined, opts).chosen;
       expect(forward).toBe(reversed);
-    });
-
-    it('does not penalize switch on subagent spawn even when the incumbent publishes cache pricing', () => {
-      const incumbentLow = candidate('test/model', {
-        bench: benchRow('test/model', {
-          effort: 'low', benchSlug: 'model-low',
-          quality: { intelligence: 50, coding: 50 },
-          priceInputPer1M: 8, priceOutputPer1M: 40,
-        }),
-        reasoning: true, effort: 'low',
-        cost: { input: 0.000008, output: 0.00004, cacheRead: 0.0000003, cacheWrite: 0.00000375 },
-      });
-      const rival = candidate('test/rival', {
-        bench: benchRow('test/rival', {
-          quality: { intelligence: 50, coding: 50 },
-          priceInputPer1M: 2.9, priceOutputPer1M: 14.9,
-        }),
-        cost: { input: 0.0000029, output: 0.0000149 },
-      });
-      const decision = pickBest([incumbentLow, rival], 'lightweight', undefined, {
-        estimatedContextTokens: 80000,
-        incumbentRegistryId: 'test/model:low',
-        switchMargin: 0.15,
-        warmPrefixTokens: new Map([['test/model:high', 60000], ['test/rival', 60000]]),
-        isSubagentSpawn: true,
-      });
-      expect(decision.chosen).toBe('test/rival');
     });
 
     it('keeps unknown quality routable for plan/review', () => {

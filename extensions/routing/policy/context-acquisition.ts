@@ -100,8 +100,7 @@ export function acquisitionRestricted(state: WorkPhaseState | undefined): boolea
 export function acquisitionAllows(status: ContextStatus | undefined, toolName: string, input?: unknown): boolean {
   if (status === 'clarification-only') return false;
   if (status === 'acquiring') {
-    return toolName !== EXECUTION_CONTRACT_TOOL && toolName !== 'subagent'
-      && !isMutationCall(toolName, input);
+    return toolName !== EXECUTION_CONTRACT_TOOL && !isMutationCall(toolName, input);
   }
   // The boundary is already pending. Let the tool refuse a second reopen itself.
   if (status === 'ready-pending' && toolName === REOPEN_WORK_TOOL) return true;

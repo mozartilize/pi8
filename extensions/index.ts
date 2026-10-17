@@ -5,9 +5,7 @@
  * init (synchronously, with no session ctx) so the model is available before
  * Pi resolves the session's default model. session_start / turn_start then
  * re-register with the live registry to refresh capacities (idempotent).
- *
- * Subagent roles are injected per spawn in a `tool_call` handler; this
- * extension never writes to settings.json.
+ * This extension never writes to settings.json.
  */
 import type {
   BeforeAgentStartEvent,
@@ -35,37 +33,17 @@ import {
   registerCommands,
   type ManualModelCompletionUpdater,
 } from './host/commands.js';
-import { adoptPiThinkingLevel, registerAutoRouterProvider, buildSubagentProviderAuthFilter } from './serve/provider.js';
-
-import {
-  SUBAGENT_ROUTING_ENABLED,
-  computeRoleModels,
-  injectSubagentRoutingWithMetadata,
-  pickSubagentDefaultModel,
-  stripThinkingSuffix,
-} from './agents/subagents.js';
-import { SubagentRoutingState } from './agents/subagent-routing-state.js';
-import { extractMissingTools } from './host/gap-detector.js';
-import {
-  collectSubagentResultText,
-  parseSubagentResultRows,
-  isFailedResult,
-  type SubagentResultRow,
-} from './agents/subagent-results.js';
-import { isUsageLimitErrorMessage } from './serve/usage-limit.js';
+import { adoptPiThinkingLevel, registerAutoRouterProvider } from './serve/provider.js';
 import { closeSelectorPorts } from './serve/unified-decision.js';
-import { computeSubagentSpend } from './agents/subagent-spend.js';
-import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './routing/policy/allowlist.js';
+
 import { loadConfig } from './config.js';
 import { setSessionFile } from './sessionpaths.js';
 import { debugLog, setConfigDebug, setDebugUiSink } from './host/debuglog.js';
-import { indexVersionWarning, type RegistryModelInfo } from './routing/score/scorer.js';
+import { indexVersionWarning } from './routing/score/scorer.js';
 import { loadStore } from './bench/store.js';
 import { checkPlaywright } from './adapters/artificial-analysis-site.js';
-import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role } from './types.js';
+import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from './types.js';
 import {
-  appendSubagentGapSignal,
-  appendSubagentSpend,
   resetModelEventSession,
 } from './host/decisionlog.js';
 import { clearRouterStatus, DEBUG_ENTRY_TYPE, renderDebugEntry, renderRouterStatus } from './host/ui.js';
@@ -107,20 +85,12 @@ import {
 import { observeCheckReceipt, observeCheckVerdict } from './serve/check-verdicts.js';
 import { registerContextHandoffTool } from './serve/context-handoff-tool.js';
 
-/** Tool registered by pi-subagents that spawns child agents. */
-const SUBAGENT_TOOL = 'subagent';
-
-interface SubagentCallObservation {
-  observedModels: string[];
-  observedRoles: Role[];
-}
-
 /**
  * True only when the session's currently active model IS the router/auto
- * synthetic provider. All subagent-injection and trajectory routing logic must
- * be gated behind this: when the user has deliberately picked a concrete
- * model, this extension's presence must be completely inert and pi /
- * pi-subagents must behave exactly as if it were not installed.
+ * synthetic provider. All trajectory routing logic must be gated behind this:
+ * when the user has deliberately picked a concrete model, this extension's
+ * presence must be completely inert and Pi must behave exactly as if it were
+ * not installed.
  */
 function isRouterAutoActive(model: { provider?: string; id?: string } | undefined): boolean {
   return model?.provider === ROUTER_PROVIDER_ID && model?.id === AUTO_MODEL_ID;
@@ -198,94 +168,7 @@ function handleContext<M extends NotableMessage>(
   }
 }
 
-/** Matches Pi's own offline semantics (model-runtime.js: any non-empty value). */
-function isOfflineMode(): boolean {
-  const raw = process.env.PI_OFFLINE;
-  return raw !== undefined && raw !== '';
-}
 
-/**
- * The session_start auth sweep probes provider credential resolution, which
- * can trigger a network token refresh for OAuth providers (pi#7508). It must
- * only run when the router actually owns the session AND the user did not
- * request offline mode. Concrete-model sessions skip this sweep; switching
- * to router/auto restarts it via model_select.
- */
-function shouldRunAuthSweep(model: { provider?: string; id?: string } | undefined): boolean {
-  if (isOfflineMode()) return false;
-  return isRouterAutoActive(model);
-}
-
-type ModelRegistry = ExtensionContext['modelRegistry'];
-
-type RoleModelRefresher = (
-  modelRegistry: ModelRegistry,
-  ctx?: ExtensionContext,
-) => Promise<void>;
-
-async function refreshRoleModelsState(
-  routingState: SubagentRoutingState,
-  session: RouterSession,
-  modelRegistry: ModelRegistry,
-  ctx?: ExtensionContext,
-): Promise<void> {
-  if (!SUBAGENT_ROUTING_ENABLED) return;
-  // A refresh is only valid for the generation in which it began. If reset()
-  // or a newer refresh happens while we are awaiting auth probes, this
-  // result must be discarded so stale maps cannot overwrite current ones.
-  const generation = routingState.beginRefresh();
-  if (!modelRegistry?.getAvailable) return;
-  const models = modelRegistry.getAvailable() as unknown as RegistryModelInfo[];
-  if (!Array.isArray(models) || models.length === 0) return;
-  // Pre-filter by allowlist so we only probe credentials for providers the
-  // user intends to route to (avoid probing every registry provider).
-  const isModelAllowed = loadModelFilter();
-  const isBlacklisted = buildExcludeFilter(session.getSessionBlacklistPatterns());
-  const blacklistedSet = session.getBlacklistedModels();
-  const blacklistedProviders = session.getBlacklistedProviders();
-  // Pi's native session scoping (--models / enabledModels) is the
-  // authoritative user-intent signal for which models are usable.
-  const isScoped = buildScopedModelFilter(ctx?.scopedModels as
-    | readonly { model: { provider: string; id: string } }[]
-    | undefined);
-  const allowedModels = models.filter((m) => {
-    if (!m.provider || m.provider === 'router') return false;
-    const registryId = `${m.provider}/${m.id}`;
-    return (
-      isModelAllowed(registryId) &&
-      !isBlacklisted(registryId) &&
-      !blacklistedSet.has(registryId) &&
-      !blacklistedProviders.has(m.provider) &&
-      isScoped(registryId)
-    );
-  });
-  if (allowedModels.length === 0) return;
-  // Gate by credentials: pi-subagents consumes the injected model verbatim
-  // and hard-fails ("No API key found for <provider>") on a provider we are
-  // not logged into.
-  const isProviderUsable = buildSubagentProviderAuthFilter(modelRegistry, allowedModels);
-  // Pass ctx through so project-scoped pins (.pi/settings.json under
-  // ctx.cwd) are discovered, not just user-scope ones — without this, a
-  // project pin silently loses to router injection at spawn time.
-  const config = loadConfig();
-  const usage = (ctx as ExtensionContext & {
-    getContextUsage?: () => { tokens?: number } | undefined;
-  }).getContextUsage?.();
-  const estimatedContextTokens = typeof usage?.tokens === 'number' && usage.tokens > 0
-    ? usage.tokens
-    : 0;
-  const computed = computeRoleModels(allowedModels, {
-    isProviderUsable,
-    ctx,
-    weights: config.dimensionWeights,
-    estimatedContextTokens,
-  });
-  routingState.commitRefresh(generation, {
-    roleModels: computed.roleModels,
-    roleFallbacks: computed.roleFallbacks,
-    routingSnapshot: computed.routingSnapshot,
-  });
-}
 
 async function handleSessionStart(
   event: SessionStartEvent,
@@ -293,9 +176,6 @@ async function handleSessionStart(
   pi: ExtensionAPI,
   session: RouterSession,
   runtime: RuntimeBindings,
-  subagentCalls: Map<string, SubagentCallObservation>,
-  routingState: SubagentRoutingState,
-  refreshRoleModels: RoleModelRefresher,
   updateManualModelCompletionContext: ManualModelCompletionUpdater,
 ): Promise<void> {
   // Establish the log target before reset diagnostics so an automatic
@@ -328,8 +208,6 @@ async function handleSessionStart(
     // remove/clear. Config writes stay authoritative: next session_start
     // re-seeds the authoritative list.
     session.addSessionBlacklistPatterns(loadConfig().blacklist ?? []);
-    subagentCalls.clear();
-    routingState.reset();
     resetModelEventSession();
   } catch {
     // Session cleanup is best-effort and must not block startup.
@@ -381,13 +259,6 @@ async function handleSessionStart(
   } catch {
     // Provider registration/model selection must never crash the session.
   }
-  try {
-    // Gated: a concrete-model session must not poke provider auth (it can
-    // trigger a token refresh under Pi's credential-store lock, pi#7508).
-    if (shouldRunAuthSweep(ctx?.model)) await refreshRoleModels(ctx.modelRegistry, ctx);
-  } catch {
-    // Advisory only.
-  }
   debugLog('lifecycle.session_start.end', {
     reason: event.reason,
     model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
@@ -434,7 +305,6 @@ function handleModelSelect(
   pi: ExtensionAPI,
   event: ModelSelectEventLike,
   ctx: ExtensionContext,
-  refreshRoleModels: RoleModelRefresher,
   session: RouterSession,
   runtime: RuntimeBindings,
 ): void {
@@ -457,10 +327,6 @@ function handleModelSelect(
     clearRouterStatus(ctx);
     return;
   }
-  // Switching TO router/auto mid-session restarts subagent role routing that
-  // the session_start gate skipped in a concrete-model session. Detached and
-  // generation-guarded: a slow probe sweep must never block the switch, and
-  // a stale refresh cannot overwrite a newer one.
   if (event.model.id === AUTO_MODEL_ID) {
     noticeSetup(ctx, runtime);
     // Pi applies the new model's thinking level during the switch; that is
@@ -470,11 +336,6 @@ function handleModelSelect(
     // the rebuilt ledger no longer continues the active item, and the
     // requests become history that a later entry can return to.
     restoreWorkLedger(ctx, session);
-  }
-  if (event.model.id === AUTO_MODEL_ID && !isOfflineMode()) {
-    void refreshRoleModels(ctx.modelRegistry, ctx).catch(() => {
-      // Advisory only.
-    });
   }
 }
 
@@ -509,11 +370,10 @@ function handleTurnStart(
   session: RouterSession,
   runtime: RuntimeBindings,
 ): void {
-  // Ensure provider is registered even if session_start hasn't fired
-  // (subagents fire turn_start without a prior session_start).
+  // Ensure provider is registered even if session_start hasn't fired.
   // registerAutoRouterProvider is idempotent (lastRegisteredModels guard).
   if (!ctx.modelRegistry?.getAvailable) return;
-  // Keep the per-session log target current (subagents / resumed sessions).
+  // Keep the per-session log target current (resumed sessions).
   try {
     setSessionFile(ctx.sessionManager?.getSessionFile());
   } catch {
@@ -541,55 +401,6 @@ function handleTurnStart(
 }
 
 /**
- * Each role's live model and the exclusion test behind it. Resolved against
- * the LIVE session blacklist: a model assigned at session_start may have
- * since failed and been blacklisted by a main-session turn, and must not be
- * injected into a spawn. A usage-limit-blacklisted provider excludes every
- * model on it the same way.
- */
-function liveRoleRouting(session: RouterSession, routingState: SubagentRoutingState) {
-  const blacklisted = session.getBlacklistedModels();
-  const blacklistedProviders = session.getBlacklistedProviders();
-  const isExcluded = (id: string): boolean => {
-    const slash = id.indexOf('/');
-    return (
-      blacklisted.has(id) ||
-      (slash > 0 ? blacklistedProviders.has(id.slice(0, slash)) : false)
-    );
-  };
-  return { isExcluded, live: routingState.resolveLive(isExcluded) };
-}
-
-function handleSubagentToolCall(
-  event: ToolCallEvent,
-  ctx: ExtensionContext,
-  session: RouterSession,
-  routingState: SubagentRoutingState,
-  subagentCalls: Map<string, SubagentCallObservation>,
-): void {
-  if (!SUBAGENT_ROUTING_ENABLED) return;
-  try {
-    const { isExcluded, live } = liveRoleRouting(session, routingState);
-    const usage = (ctx as ExtensionContext & {
-      getContextUsage?: () => { tokens?: number } | undefined;
-    }).getContextUsage?.();
-    const currentTokens = typeof usage?.tokens === 'number' && usage.tokens > 0
-      ? usage.tokens
-      : 0;
-    const traversal = injectSubagentRoutingWithMetadata(event.input, live.roleModels, {
-      selectChildren: (requests) => routingState.selectChildren(requests, isExcluded, currentTokens),
-      defaultModel: pickSubagentDefaultModel(live.roleModels),
-    });
-    subagentCalls.set(event.toolCallId, {
-      observedModels: [...new Set(traversal.children.flatMap((child) => child.model ? [child.model] : []))],
-      observedRoles: [...new Set(traversal.children.flatMap((child) => child.role ? [child.role] : []))],
-    });
-  } catch {
-    // Never block or break a subagent spawn because of routing.
-  }
-}
-
-/**
  * Count mutation calls for the `editing` status. Observation only: a mutation
  * never changes the routed task type.
  */
@@ -612,102 +423,6 @@ function observeMutationToolCall(
     }
   } catch {
     // Observation must never fail a tool call.
-  }
-}
-
-/** Provider of a `provider/id[:effort]` model id, or undefined if unparseable. */
-function providerOf(model: string | undefined): string | undefined {
-  if (!model) return undefined;
-  const bare = stripThinkingSuffix(model);
-  const slash = bare.indexOf('/');
-  return slash > 0 ? bare.slice(0, slash) : undefined;
-}
-
-/**
- * Providers a failed child proved are usage-capped. A quota/billing/subscription
- * limit is the one non-retryable failure worth persisting from a child result:
- * the cap is shared by every model on the provider, so a later
- * spawn or main turn on any sibling model would fail the same way. Transient
- * errors are retried by pi-subagents/the model, and request-specific failures
- * (invalid request, refusal) say nothing about provider health, so neither is
- * matched here. Per-attempt errors attribute the cap to the exact model.
- */
-function usageLimitProvidersFromRows(rows: readonly SubagentResultRow[]): string[] {
-  const providers = new Set<string>();
-  for (const row of rows) {
-    if (!isFailedResult(row)) continue;
-    const sources: Array<{ model?: string; error?: string }> = [
-      { model: row.model, error: row.error },
-      ...row.modelAttempts.filter((attempt) => attempt.success !== true),
-    ];
-    for (const { model, error } of sources) {
-      if (!isUsageLimitErrorMessage(error)) continue;
-      const provider = providerOf(model);
-      if (provider) providers.add(provider);
-    }
-  }
-  return [...providers];
-}
-
-function handleSubagentToolResult(
-  event: ToolResultEvent,
-  ctx: ExtensionContext,
-  session: RouterSession,
-  routingState: SubagentRoutingState,
-  subagentCalls: Map<string, SubagentCallObservation>,
-  refreshRoleModels: RoleModelRefresher,
-): void {
-  if (!SUBAGENT_ROUTING_ENABLED) return;
-  try {
-    const snapshot = routingState.snapshot();
-    const pending = subagentCalls.get(event.toolCallId);
-    subagentCalls.delete(event.toolCallId);
-    const observedModels = pending?.observedModels ?? [];
-    const observedRoles = pending?.observedRoles ?? [];
-    const rows = parseSubagentResultRows(event.details);
-
-    // A child that hit a provider-wide usage cap excludes that provider for the
-    // session, so later spawns and main turns skip every model on it. This does
-    // not retry or respawn the child — recovery is the parent's decision.
-    const cappedProviders = usageLimitProvidersFromRows(rows);
-    for (const provider of cappedProviders) {
-      session.blacklistProvider(provider);
-      debugLog('subagent.usage-limit', { provider });
-    }
-
-    // Harvest tool-gap signals independently of model ownership: explicit
-    // children remain visible for observability.
-    const missingTools = extractMissingTools(collectSubagentResultText(event));
-    if (missingTools.length > 0) {
-      const role = observedRoles[0];
-      const model = observedModels[0];
-      for (const tool of missingTools) {
-        appendSubagentGapSignal({ role, tool, model });
-      }
-    }
-
-    // Foreground child spend, recorded on the same registry-price basis
-    // as parent turns so `/router-report` can add them without mixing
-    // cost scales. Explicitly-pinned children are recorded too, marked
-    // not-router-owned, so the report never claims credit for spend it
-    // did not route.
-    const candidates = snapshot.routingSnapshot?.candidates;
-    if (candidates && candidates.length > 0) {
-      const records = computeSubagentSpend(rows, {
-        candidates,
-        configBaselineModel: loadConfig().baselineModel,
-        ...(observedRoles.length === 1 ? { role: observedRoles[0] } : {}),
-        routerOwnedModels: observedModels,
-      });
-      for (const record of records) appendSubagentSpend(record);
-    }
-
-    // Recompute role assignments only when a provider was excluded, so the next
-    // spawn's role maps drop the now-capped provider. Generation-guarded: a
-    // newer refresh already in flight wins.
-    if (cappedProviders.length > 0) void refreshRoleModels(ctx.modelRegistry, ctx);
-  } catch {
-    // A routing/observability failure must never surface as a tool error.
   }
 }
 
@@ -765,12 +480,6 @@ export default async function autoModelRouterExtension(
     if (typeof pi.appendEntry === 'function') pi.appendEntry(REQUEST_NOTE_ENTRY_TYPE, note);
   });
 
-  const routingState = new SubagentRoutingState();
-  const subagentCalls = new Map<string, SubagentCallObservation>();
-
-  const refreshRoleModels: RoleModelRefresher = (modelRegistry, ctx) =>
-    refreshRoleModelsState(routingState, session, modelRegistry, ctx);
-
   pi.on('session_start', (event, ctx) =>
     handleSessionStart(
       event,
@@ -778,9 +487,6 @@ export default async function autoModelRouterExtension(
       pi,
       session,
       runtime,
-      subagentCalls,
-      routingState,
-      refreshRoleModels,
       updateManualModelCompletionContext,
     ),
   );
@@ -793,7 +499,7 @@ export default async function autoModelRouterExtension(
     return closeSelectorPorts().catch(() => undefined);
   });
 
-  pi.on('model_select', (event, ctx) => handleModelSelect(pi, event, ctx, refreshRoleModels, session, runtime));
+  pi.on('model_select', (event, ctx) => handleModelSelect(pi, event, ctx, session, runtime));
 
   // A missing hand_off_context or complete_work can still be declared, so
   // those reminders run here. agent_settled only records how the entry ended.
@@ -844,10 +550,6 @@ export default async function autoModelRouterExtension(
     if (completed) return completed;
     const restricted = gateContextToolCall(event, session);
     if (restricted) return restricted;
-    if (event.toolName === SUBAGENT_TOOL) {
-      handleSubagentToolCall(event, ctx, session, routingState, subagentCalls);
-      return;
-    }
     try {
       // A change stopped for an owed plan never runs: it is not counted,
       // attributed to a plan, or observed as trajectory.
@@ -872,10 +574,6 @@ export default async function autoModelRouterExtension(
 
   pi.on('tool_result', async (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
-    if (event.toolName === SUBAGENT_TOOL) {
-      handleSubagentToolResult(event, ctx, session, routingState, subagentCalls, refreshRoleModels);
-      return;
-    }
     handleTrajectoryToolResult(event, session);
     await observeContextRead(event, ctx, session);
     const cycle = {

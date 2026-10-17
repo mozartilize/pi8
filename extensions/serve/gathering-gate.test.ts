@@ -87,7 +87,7 @@ describe('gathering gate refusal accounting', () => {
     expect(result.text).toBe(`Context not handed off: the request rests on files not read in full as they are now: src/queue.ts. ${CLARIFICATION_TEXT}`);
   });
 
-  it.each(['fffind', 'ffgrep', 'extension_control', 'extension_inspect', 'ctx_execute', 'ctx_execute_file', 'mcp', 'read_file', 'web_search'])('allows %s without a refusal or phase transition', (toolName) => {
+  it.each(['fffind', 'ffgrep', 'extension_control', 'extension_inspect', 'ctx_execute', 'ctx_execute_file', 'mcp', 'read_file', 'web_search', 'subagent'])('allows %s without a refusal or phase transition', (toolName) => {
     const session = acquiringSession();
     const before = session.getWorkPhaseState();
     expect(gateContextToolCall({ toolName, input: { pattern: 'retryDelayMs', path: 'src/' } }, session)).toBeUndefined();
@@ -95,7 +95,7 @@ describe('gathering gate refusal accounting', () => {
     expect(vi.mocked(appendContextHandoffSignal)).not.toHaveBeenCalled();
   });
 
-  it.each(['commit_execution', 'subagent'])('refuses %s before a handoff', (toolName) => {
+  it.each(['commit_execution'])('refuses %s before a handoff', (toolName) => {
     const session = acquiringSession();
     const refusal = gateContextToolCall({ toolName, input: { command: 'rg retryDelayMs' } }, session);
     expect(refusal?.block).toBe(true);
@@ -104,7 +104,7 @@ describe('gathering gate refusal accounting', () => {
     expect(refusal?.reason).toContain('Do not hand off only to run a refused tool.');
     expect(refusal?.reason).toContain('Follow the applicable skill instructions.');
     expect(refusal?.reason).not.toContain('the next step can run it');
-    expect(session.getWorkPhaseState()?.contextDenials).toBe(toolName === 'subagent' ? 1 : 0);
+    expect(session.getWorkPhaseState()?.contextDenials).toBe(0);
     expect(vi.mocked(appendContextHandoffSignal).mock.calls.at(-1)?.[0]).toMatchObject({
       action: 'deny', deniedTool: toolName,
     });

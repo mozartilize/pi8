@@ -4,14 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { RegistryModelInfo } from './routing/score/scorer.js';
-import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type Role, type RoutingDecision } from './types.js';
+import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID, type RoutingDecision } from './types.js';
 
 import { CONTRACT_GATE, CONTRACT_REMINDER } from './serve/execution-contract-tool.js';
 import { CONTEXT_HANDOFF_REMINDER } from './serve/gathering-gate.js';
 import autoModelRouterExtension from './index.js';
-import { registerCommands } from './host/commands.js';
-import { buildSubagentProviderAuthFilter } from './serve/provider.js';
-import { computeRoleModels } from './agents/subagents.js';
+
 import { routingDecision } from './test-support/router-fixtures.js';
 import { DECISION_LOG_FILE, setDecisionLogBase } from './host/decisionlog.js';
 import { defaultRouterSession } from './serve/router-session-state.js';
@@ -28,7 +26,6 @@ vi.mock('./host/commands.js', () => ({ registerCommands: vi.fn(() => vi.fn()) })
 vi.mock('./serve/provider.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./serve/provider.js')>()),
   registerAutoRouterProvider: vi.fn(),
-  buildSubagentProviderAuthFilter: vi.fn(() => () => true),
   getBlacklistDebugState: vi.fn(() => ({ instance: 'test' })),
 }));
 vi.mock('./serve/unified-decision.js', async (importOriginal) => ({
@@ -44,31 +41,6 @@ vi.mock('./bench/store.js', () => ({
 vi.mock('./config.js', () => ({
   loadConfig: vi.fn(() => ({ debug: false })),
 }));
-vi.mock('./routing/policy/allowlist.js', () => ({
-  loadModelFilter: vi.fn(() => () => true),
-  buildExcludeFilter: vi.fn(() => () => false),
-  buildScopedModelFilter: vi.fn(() => () => true),
-}));
-const mockRoleModels = new Map<Role, string>([
-  ['worker', 'alpha/cheap'],
-  ['reviewer', 'gamma/moderate'],
-]);
-const mockRoleFallbacks = new Map<Role, string[]>([
-  ['worker', ['alpha/cheap', 'beta/strong']],
-  ['reviewer', ['gamma/moderate', 'delta/strong']],
-]);
-
-vi.mock('./agents/subagents.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./agents/subagents.js')>();
-  return {
-    ...actual,
-    computeRoleModels: vi.fn(() => ({
-      assignments: [],
-      roleModels: new Map(mockRoleModels),
-      roleFallbacks: new Map(mockRoleFallbacks),
-    })),
-  };
-});
 
 function registryModel(registryId: string): RegistryModelInfo {
   const [provider, id] = registryId.split('/');
@@ -96,131 +68,6 @@ function contextWithRegistry(
 }
 
 describe('session lifecycle', () => {
-
-describe('disconnected subagent routing', () => {
-  it('leaves an omitted child model to pi-subagents even without a benchmark store', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-    expect(sessionStart).toBeDefined();
-    expect(toolCall).toBeDefined();
-
-    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
-    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
-    await sessionStart!({ reason: 'new' }, ctx);
-    const completionUpdater = vi.mocked(registerCommands).mock.results.at(-1)?.value;
-    expect(completionUpdater).toHaveBeenCalledWith(ctx);
-
-    const input: { agent: string; task: string; model?: string } = {
-      agent: 'worker',
-      task: 'implement the change',
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-1', input }, ctx);
-
-    expect(input).toEqual({ agent: 'worker', task: 'implement the change' });
-  });
-
-  it('leaves workflow scripts and their omitted default model unchanged', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-
-    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
-    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
-    await sessionStart!({ reason: 'new' }, ctx);
-
-    // Pi-subagents owns script-defined children and the tool-level model default.
-    const input: { workflowScript: string; model?: string } = {
-      workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })",
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-wf', input }, ctx);
-
-    expect(input).toEqual({ workflowScript: "runs.run('k', { agent: 'scout', task: 'recon' })" });
-  });
-
-  it('is completely inert for a subagent spawn when no ctx/model is available (matches a session that never opted into router/auto)', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-
-    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
-    await sessionStart!({ reason: 'new' }, contextWithRegistry(models));
-
-    const input: { agent: string; task: string; model?: string } = {
-      agent: 'worker',
-      task: 'implement the change',
-    };
-    // No ctx passed at all — pi-subagents' own default selection must be left
-    // completely untouched.
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-1b', input });
-
-    expect(input.model).toBeUndefined();
-  });
-
-  it('leaves an omitted subagent model untouched when the parent session is on a concrete (non-router) model', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-
-    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
-    const ctx = contextWithRegistry(models, { provider: 'github-copilot', id: 'gpt-5.4' });
-    await sessionStart!({ reason: 'new' }, ctx);
-
-    const input: { agent: string; task: string; model?: string } = {
-      agent: 'worker',
-      task: 'implement the change',
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-1c', input }, ctx);
-
-    // pi behaves normally: this extension never patched the omitted model, so
-    // pi-subagents' own default selection applies.
-    expect(input.model).toBeUndefined();
-  });
-
-  it('does not compute role models or read project subagent pins at session start', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
-    const ctx = contextWithRegistry(
-      models,
-      { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID },
-      '/workspace/some-project',
-    );
-    await sessionStart!({ reason: 'new' }, ctx);
-
-    expect(computeRoleModels).not.toHaveBeenCalled();
-  });
-
   it('ends the selector worker thread when the session shuts down, and a failure there is not raised', async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
@@ -236,490 +83,43 @@ describe('disconnected subagent routing', () => {
     await expect(handlers.get('session_shutdown')!({ reason: 'reload' })).resolves.toBeUndefined();
   });
 
-  describe('auth sweep gating (pi#7508 amplification)', () => {
-    const authFilter = vi.mocked(buildSubagentProviderAuthFilter);
-    const calls = () => authFilter.mock.calls.length;
-    const tick = () => new Promise((r) => setTimeout(r, 0));
-    const offline = process.env.PI_OFFLINE;
-    afterEach(() => {
-      if (offline === undefined) delete process.env.PI_OFFLINE;
-      else process.env.PI_OFFLINE = offline;
-    });
-
-    it('skips the credential sweep at session_start when the session is on a concrete model', async () => {
-      const handlers = new Map<string, (...args: any[]) => unknown>();
-      const pi = {
-        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-        registerTool: vi.fn(),
-      } as unknown as ExtensionAPI;
-      await autoModelRouterExtension(pi);
-
-      const before = calls();
-      const sessionStart = handlers.get('session_start');
-      const ctx = contextWithRegistry([registryModel('alpha/cheap')], {
-        provider: 'github-copilot',
-        id: 'gpt-5.4',
-      });
-      await sessionStart!({ reason: 'new' }, ctx);
-
-      // A concrete-model session must not probe credentials: the
-      // sweep can trigger an OAuth token refresh under Pi's credential-store
-      // lock (pi#7508) even when the router is inert.
-      expect(calls()).toBe(before);
-    });
-
-    it('skips the credential sweep at session_start in offline mode even when router/auto is active', async () => {
-      process.env.PI_OFFLINE = '1';
-      const handlers = new Map<string, (...args: any[]) => unknown>();
-      const pi = {
-        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-        registerTool: vi.fn(),
-      } as unknown as ExtensionAPI;
-      await autoModelRouterExtension(pi);
-
-      const before = calls();
-      const sessionStart = handlers.get('session_start');
-      const ctx = contextWithRegistry([registryModel('alpha/cheap')], {
-        provider: ROUTER_PROVIDER_ID,
-        id: AUTO_MODEL_ID,
-      });
-      await sessionStart!({ reason: 'new' }, ctx);
-
-      expect(calls()).toBe(before);
-    });
-
-    it('does not start a child credential sweep when the user switches to router/auto', async () => {
-      const handlers = new Map<string, (...args: any[]) => unknown>();
-      const pi = {
-        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-        registerTool: vi.fn(),
-      } as unknown as ExtensionAPI;
-      await autoModelRouterExtension(pi);
-
-      const before = calls();
-      const modelSelect = handlers.get('model_select');
-      const ctx = contextWithRegistry([registryModel('alpha/cheap')], {
-        provider: 'github-copilot',
-        id: 'gpt-5.4',
-      });
-      modelSelect!({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctx);
-      await tick();
-
-      expect(calls()).toBe(before);
-    });
-
-    it('does not sweep when a model_select lands on a concrete model', async () => {
-      const handlers = new Map<string, (...args: any[]) => unknown>();
-      const pi = {
-        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-        registerTool: vi.fn(),
-      } as unknown as ExtensionAPI;
-      await autoModelRouterExtension(pi);
-
-      const before = calls();
-      const modelSelect = handlers.get('model_select');
-      modelSelect!(
-        { model: { provider: 'github-copilot', id: 'gpt-5.4' } },
-        contextWithRegistry([registryModel('alpha/cheap')]),
-      );
-      await tick();
-
-      expect(calls()).toBe(before);
-    });
-
-    it.each(['medium', 'off', undefined])('adopts Pi level %s only when selecting router/auto', async (level) => {
-      const handlers = new Map<string, (...args: any[]) => unknown>();
-      const pi = {
-        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-        registerTool: vi.fn(),
-        getThinkingLevel: () => level,
-      } as unknown as ExtensionAPI;
-      await autoModelRouterExtension(pi);
-      const modelSelect = handlers.get('model_select')!;
-      const ctx = contextWithRegistry([registryModel('alpha/cheap')]);
-      defaultRouterSession.setSyncedThinkingLevel('high');
-      defaultRouterSession.setLastResolvedThinkingLevel('high');
-
-      modelSelect({ model: { provider: 'github-copilot', id: 'gpt-5.4' } }, ctx);
-      expect(defaultRouterSession.getSyncedThinkingLevel()).toBe('high');
-      expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe('high');
-
-      // The level Pi applies during the switch is not a user choice.
-      modelSelect({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctx);
-      expect(defaultRouterSession.getSyncedThinkingLevel()).toBe(level);
-      expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe(level);
-    });
-
-    it.each([true, false])('adopts the startup level only for router/auto: %s', async (auto) => {
-      const handlers = new Map<string, (...args: any[]) => unknown>();
-      const pi = {
-        on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-        registerTool: vi.fn(),
-        getThinkingLevel: () => 'medium',
-      } as unknown as ExtensionAPI;
-      await autoModelRouterExtension(pi);
-      defaultRouterSession.setLastResolvedThinkingLevel('high');
-      const model = auto ? { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } : { provider: 'alpha', id: 'cheap' };
-      await handlers.get('session_start')!({ reason: 'new' }, contextWithRegistry([registryModel('alpha/cheap')], model));
-      expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe(auto ? 'medium' : undefined);
-      expect(defaultRouterSession.getSyncedThinkingLevel()).toBe(auto ? 'medium' : undefined);
-    });
-  });
-
-  it('preserves an explicit concrete child model under a router/auto parent', async () => {
+  it.each(['medium', 'off', undefined])('adopts Pi level %s only when selecting router/auto', async (level) => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
       registerTool: vi.fn(),
+      getThinkingLevel: () => level,
     } as unknown as ExtensionAPI;
     await autoModelRouterExtension(pi);
+    const modelSelect = handlers.get('model_select')!;
+    const ctx = contextWithRegistry([registryModel('alpha/cheap')]);
+    defaultRouterSession.setSyncedThinkingLevel('high');
+    defaultRouterSession.setLastResolvedThinkingLevel('high');
 
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-    expect(sessionStart).toBeDefined();
-    expect(toolCall).toBeDefined();
+    modelSelect({ model: { provider: 'github-copilot', id: 'gpt-5.4' } }, ctx);
+    expect(defaultRouterSession.getSyncedThinkingLevel()).toBe('high');
+    expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe('high');
 
-    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
-    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
-    await sessionStart!({ reason: 'new' }, ctx);
-
-    const input: { agent: string; task: string; model?: string } = {
-      agent: 'worker',
-      model: 'github-copilot/claude-sonnet-4.6',
-      task: 'implement the change',
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-2', input }, ctx);
-
-    // Explicit concrete model is preserved — explicit choices always win.
-    expect(input.model).toBe('github-copilot/claude-sonnet-4.6');
+    // The level Pi applies during the switch is not a user choice.
+    modelSelect({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctx);
+    expect(defaultRouterSession.getSyncedThinkingLevel()).toBe(level);
+    expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe(level);
   });
 
-  it('preserves an explicit router/auto child model without resolving it', async () => {
+  it.each([true, false])('adopts the startup level only for router/auto: %s', async (auto) => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const pi = {
       on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
       registerTool: vi.fn(),
+      getThinkingLevel: () => 'medium',
     } as unknown as ExtensionAPI;
     await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-
-    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
-    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
-    await sessionStart!({ reason: 'new' }, ctx);
-
-    const input: { agent: string; task: string; model?: string } = {
-      agent: 'worker',
-      model: 'router/auto',
-      task: 'implement the change',
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-3', input }, ctx);
-
-    expect(input.model).toBe('router/auto');
+    defaultRouterSession.setLastResolvedThinkingLevel('high');
+    const model = auto ? { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } : { provider: 'alpha', id: 'cheap' };
+    await handlers.get('session_start')!({ reason: 'new' }, contextWithRegistry([registryModel('alpha/cheap')], model));
+    expect(defaultRouterSession.getLastResolvedThinkingLevel()).toBe(auto ? 'medium' : undefined);
+    expect(defaultRouterSession.getSyncedThinkingLevel()).toBe(auto ? 'medium' : undefined);
   });
-
-  it('leaves an explicit child model unchanged when the parent session is not router/auto', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-
-    const models = [registryModel('alpha/cheap'), registryModel('beta/strong')];
-    const ctx = contextWithRegistry(models, { provider: 'github-copilot', id: 'gpt-5.4' });
-    await sessionStart!({ reason: 'new' }, ctx);
-
-    const input: { agent: string; task: string; model?: string } = {
-      agent: 'worker',
-      model: 'github-copilot/claude-sonnet-4.6',
-      task: 'implement the change',
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-4', input }, ctx);
-
-    expect(input.model).toBe('github-copilot/claude-sonnet-4.6');
-  });
-});
-
-describe('child results do not affect parent routing', () => {
-  it('preserves parallel child arguments and leaves child recovery to pi-subagents', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-    const toolResult = handlers.get('tool_result');
-    expect(sessionStart).toBeDefined();
-    expect(toolCall).toBeDefined();
-    expect(toolResult).toBeDefined();
-
-    const models = [registryModel('gamma/moderate'), registryModel('delta/strong')];
-    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
-    await sessionStart!({ reason: 'new' }, ctx);
-    defaultRouterSession.clearSessionBlacklist();
-
-    const input: {
-      tasks: Array<{ agent: string; task: string; model?: string }>;
-    } = {
-      tasks: [
-        { agent: 'reviewer', task: 'review routing' },
-        { agent: 'reviewer', task: 'review routing' },
-        { agent: 'reviewer', task: 'review manually', model: 'user/explicit' },
-      ],
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-region', input }, ctx);
-    expect(input.tasks[0].model).toBeUndefined();
-    expect(input.tasks[1].model).toBeUndefined();
-    expect(input.tasks[2].model).toBe('user/explicit');
-
-    // Child results cannot change parent routing or append retry instructions.
-    const plan = (await toolResult!(
-      {
-        toolName: 'subagent',
-        toolCallId: 'call-region',
-        content: [],
-        isError: false,
-        details: {
-          results: [
-            {
-              index: 0,
-              agent: 'reviewer',
-              model: 'gamma/moderate:high',
-              exitCode: 1,
-              error: 'region blocked',
-              modelAttempts: [{ model: 'gamma/moderate:high', success: false }],
-            },
-            {
-              index: 1,
-              agent: 'reviewer',
-              model: 'gamma/moderate:high',
-              exitCode: 1,
-              error: 'region blocked',
-              modelAttempts: [{ model: 'gamma/moderate:high', success: false }],
-            },
-          ],
-        },
-      },
-      {
-        ...ctx,
-        modelRegistry: { getAvailable: () => models as unknown as unknown[] },
-      },
-    )) as { content?: Array<{ type: string; text?: string }> } | undefined;
-
-    expect(defaultRouterSession.getBlacklistedModels().size).toBe(0);
-    expect(plan?.content).toBeUndefined();
-
-    // Later calls also keep their caller-supplied arguments.
-    const retry: {
-      tasks: Array<{ agent: string; task: string; model?: string }>;
-    } = {
-      tasks: [
-        { agent: 'reviewer', task: 'review routing' },
-        { agent: 'reviewer', task: 'review routing' },
-      ],
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-retry', input: retry }, ctx);
-    expect(retry.tasks.map((task) => task.model)).toEqual([undefined, undefined]);
-    expect(input.tasks[2].model).toBe('user/explicit');
-  });
-
-  it('does not blacklist parent providers when a child hits a usage limit', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-    const toolResult = handlers.get('tool_result');
-
-    const models = [registryModel('gamma/moderate'), registryModel('delta/strong')];
-    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
-    await sessionStart!({ reason: 'new' }, ctx);
-    defaultRouterSession.clearSessionBlacklist();
-
-    const input: { agent: string; task: string; model?: string } = { agent: 'reviewer', task: 'review routing' };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-cap', input }, ctx);
-    expect(input.model).toBeUndefined();
-
-    const cap = '429 {"type":"GoUsageLimitError","message":"Weekly usage limit reached"}';
-    await toolResult!(
-      {
-        toolName: 'subagent',
-        toolCallId: 'call-cap',
-        content: [],
-        isError: false,
-        details: {
-          results: [
-            {
-              index: 0,
-              agent: 'reviewer',
-              model: 'gamma/moderate:high',
-              exitCode: 1,
-              error: cap,
-              modelAttempts: [{ model: 'gamma/moderate:high', success: false, error: cap }],
-            },
-          ],
-        },
-      },
-      { ...ctx, modelRegistry: { getAvailable: () => models as unknown as unknown[] } },
-    );
-
-    expect(defaultRouterSession.getBlacklistedProviders().size).toBe(0);
-
-    // Pi-subagents owns quota handling and model selection for later calls.
-    const retry: { agent: string; task: string; model?: string } = { agent: 'reviewer', task: 'review routing' };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-cap-retry', input: retry }, ctx);
-    expect(retry.model).toBeUndefined();
-  });
-
-  it('leaves a non-usage-limit child failure fail-open (no provider blacklist)', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-    const toolResult = handlers.get('tool_result');
-
-    const models = [registryModel('gamma/moderate'), registryModel('delta/strong')];
-    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
-    await sessionStart!({ reason: 'new' }, ctx);
-    defaultRouterSession.clearSessionBlacklist();
-
-    const input: { agent: string; task: string; model?: string } = { agent: 'reviewer', task: 'review routing' };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-transient', input }, ctx);
-
-    await toolResult!(
-      {
-        toolName: 'subagent',
-        toolCallId: 'call-transient',
-        content: [],
-        isError: false,
-        details: {
-          results: [
-            {
-              index: 0,
-              agent: 'reviewer',
-              model: 'gamma/moderate:high',
-              exitCode: 1,
-              error: 'connection reset before headers',
-              modelAttempts: [{ model: 'gamma/moderate:high', success: false, error: 'connection reset before headers' }],
-            },
-          ],
-        },
-      },
-      { ...ctx, modelRegistry: { getAvailable: () => models as unknown as unknown[] } },
-    );
-
-    expect(defaultRouterSession.getBlacklistedProviders().has('gamma')).toBe(false);
-    expect(defaultRouterSession.getBlacklistedModels().has('gamma/moderate')).toBe(false);
-  });
-
-  it('keeps async and unknown-span dynamic fanout failures fail-open', async () => {
-    const handlers = new Map<string, (...args: any[]) => unknown>();
-    const pi = {
-      on: (event: string, handler: (...args: any[]) => unknown) => handlers.set(event, handler),
-      registerTool: vi.fn(),
-    } as unknown as ExtensionAPI;
-    await autoModelRouterExtension(pi);
-
-    const sessionStart = handlers.get('session_start');
-    const toolCall = handlers.get('tool_call');
-    const toolResult = handlers.get('tool_result');
-
-    const models = [registryModel('gamma/moderate'), registryModel('delta/strong')];
-    const ctx = contextWithRegistry(models, { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID });
-    await sessionStart!({ reason: 'new' }, ctx);
-
-    const asyncInput: { agent: string; task: string; async: boolean; model?: string } = {
-      agent: 'reviewer',
-      task: 'review in background',
-      async: true,
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-async', input: asyncInput }, ctx);
-    expect(asyncInput).toEqual({ agent: 'reviewer', task: 'review in background', async: true });
-
-    const dynamicInput: {
-      chain: Array<{
-        expand?: { from: { output: string; path: string } };
-        parallel: { agent: string; task: string; model?: string };
-      }>;
-    } = {
-      chain: [
-        {
-          expand: { from: { output: 'targets', path: '/items' } },
-          parallel: { agent: 'reviewer', task: 'review each {item}' },
-        },
-      ],
-    };
-    toolCall!({ toolName: 'subagent', toolCallId: 'call-dynamic', input: dynamicInput }, ctx);
-    expect(dynamicInput.chain).toEqual([{ expand: { from: { output: 'targets', path: '/items' } }, parallel: { agent: 'reviewer', task: 'review each {item}' } }]);
-
-    defaultRouterSession.clearSessionBlacklist();
-    const asyncPlan = (await toolResult!(
-      {
-        toolName: 'subagent',
-        toolCallId: 'call-async',
-        content: [],
-        isError: false,
-        details: {
-          results: [
-            {
-              index: 0,
-              agent: 'reviewer',
-              model: 'gamma/moderate:high',
-              exitCode: 1,
-              error: 'region blocked',
-              modelAttempts: [{ model: 'gamma/moderate:high', success: false }],
-            },
-          ],
-        },
-      },
-      ctx,
-    )) as { content?: Array<{ type: string; text?: string }> };
-    expect(defaultRouterSession.getBlacklistedModels().size).toBe(0);
-    expect(asyncPlan?.content).toBeUndefined();
-
-    const dynamicPlan = (await toolResult!(
-      {
-        toolName: 'subagent',
-        toolCallId: 'call-dynamic',
-        content: [],
-        isError: false,
-        details: {
-          results: [
-            {
-              index: 0,
-              agent: 'reviewer',
-              model: 'gamma/moderate:high',
-              exitCode: 1,
-              error: 'region blocked',
-              modelAttempts: [{ model: 'gamma/moderate:high', success: false }],
-            },
-          ],
-        },
-      },
-      ctx,
-    )) as { content?: Array<{ type: string; text?: string }> };
-    expect(defaultRouterSession.getBlacklistedModels().size).toBe(0);
-    expect(dynamicPlan?.content).toBeUndefined();
-  });
-});
-
 });
 
 describe('session lifecycle resets', () => {
@@ -1101,7 +501,7 @@ describe('mutation observation hooks', () => {
     rmSync(logDir, { recursive: true, force: true });
   });
 
-  it('uses the completed-work gate before mutation observation and subagent routing', async () => {
+  it('uses the completed-work gate before mutation observation', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
     defaultRouterSession.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'intent-a' });
@@ -1110,7 +510,7 @@ describe('mutation observation hooks', () => {
       { completion: { workItemId: 'w_1', status: 'done' as const } },
     ]) {
       defaultRouterSession.commitWorkPhaseState(entryState(marker));
-      for (const toolName of ['write', 'commit_execution', 'subagent']) {
+      for (const toolName of ['write', 'commit_execution']) {
         expect(await toolCall({ toolName, input: {} }, routerAutoCtx)).toMatchObject({ block: true });
       }
       expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
@@ -1770,14 +1170,6 @@ describe('mutation observation hooks', () => {
     expect((await hand('plan')).reasoningHandoff).toMatchObject({ target: 'plan' });
     expect((await hand('gather')).contextStatus).toBeUndefined();
     expect((await hand('lightweight')).contextStatus).toBeUndefined();
-  });
-
-  it('refuses a subagent spawn while collecting context', async () => {
-    const handlers = await makeToolHandlers();
-    investigating();
-    expect(await handlers.get('tool_call')!({ toolName: 'subagent', toolCallId: 's1', input: { agent: 'worker' } }, routerAutoCtx))
-      .toMatchObject({ block: true });
-    expect(defaultRouterSession.getWorkPhaseState()?.contextDenials).toBe(1);
   });
 
   it('refuses a call it cannot check while collecting context, and never one outside the phase', async () => {

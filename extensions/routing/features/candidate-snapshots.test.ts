@@ -19,7 +19,7 @@ it('projects only the declared domain fields before evaluation', () => {
   const recoveryCall = vi.spyOn(recovery, 'recoveryFeatures');
   const state: DecisionStateV1 = {
     phase: 'implement', estimatedContextTokens: 100, needsVision: false,
-    boundary: 'ordinary', friction: [], nowMs: 1000, isSubagentSpawn: false,
+    boundary: 'ordinary', friction: [], nowMs: 1000,
     benchmarkIndexVersion: '4.3',
   };
   const model = { provider: 'p', id: 'm', reasoning: false, cost: { input: 1, output: 2 } };
@@ -31,7 +31,7 @@ it('projects only the declared domain fields before evaluation', () => {
   expect(fields(capabilityCall.mock.calls[0]![2])).toEqual(['benchmarkIndexVersion']);
   expect(fields(gapsCall.mock.calls[0]![2])).toEqual(['benchmarkIndexVersion']);
   expect(fields(spendCall.mock.calls[0]![0])).toEqual([
-    'cache', 'estimatedContextTokens', 'isSubagentSpawn', 'nowMs', 'promptIdentity', 'promptTokenScales',
+    'cache', 'estimatedContextTokens', 'nowMs', 'promptIdentity', 'promptTokenScales',
   ]);
   expect(fields(spendCall.mock.calls[0]![2])).toEqual(['api', 'compat', 'cost', 'promptCache']);
   expect(fields(continuityCall.mock.calls[0]![0])).toEqual(['boundary', 'incumbent', 'rework']);

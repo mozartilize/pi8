@@ -64,7 +64,7 @@ export interface DecisionLogEntry {
   /** {@link DECISION_LOG_SCHEMA_VERSION} at write time; absent on unversioned records. */
   schemaVersion?: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'subagent-spend' | 'attempt-usage' | 'execution-contract' | 'investigation-handoff' | 'work-lifecycle';
+  kind?: 'decision' | 'attempt-usage' | 'execution-contract' | 'investigation-handoff' | 'work-lifecycle';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -108,12 +108,6 @@ export interface DecisionLogEntry {
   trajectoryFriction?: RoutingDecision['trajectoryFriction'];
   /** Set on `kind: 'attempt-usage'` records only. */
   attemptUsage?: AttemptUsageEvent;
-  /** Set on `kind: 'subagent-spend'` records only. */
-  subagentSpend?: {
-    role?: string;
-    routerOwned: boolean;
-    reportedCost?: number;
-  };
   /** Intent cache key joining this entry's classification to later log records. */
   intentKey?: string;
   /** Set on `kind: 'investigation-handoff'` records only. */
@@ -168,23 +162,8 @@ export interface DecisionLogEntry {
   };
   /** Message-origin census; a spike in compaction-summary explains drift. */
   provenance?: Record<string, number>;
-  /** Populated when high parent-context pressure is detected. */
-  contextPressure?: {
-    usageRatio: number;
-    threshold: number;
-    suggestion: string;
-  };
   /** Capability-tier evidence from the scored fallback chain. */
   candidateDiagnostics?: CandidateDiagnostic[];
-  /** Subagent tool-gap observation (v2 read-only detector substrate). */
-  gap?: {
-    role?: string;
-    tool: string;
-    model?: string;
-    requestedTools?: string[];
-    allowedTools?: string[];
-    workaroundTool?: string;
-  };
 }
 
 /** One JSONL line, stamped with the schema version it was written under. */
@@ -445,7 +424,6 @@ export function appendDecision(
       ...(decision.capabilityEvidence ? { capabilityEvidence: decision.capabilityEvidence } : {}),
       ...(decision.unified ? { unified: decision.unified } : {}),
       trajectoryFriction: decision.trajectoryFriction,
-      contextPressure: decision.contextPressure,
       candidateDiagnostics: decision.candidateDiagnostics,
       ...(decision.executionContract
         ? { executionContract: { action: 'route' as const, meta: decision.executionContract } }
@@ -460,47 +438,6 @@ export function appendDecision(
     appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {
     // Logging is best-effort.
-  }
-}
-
-/** Append a subagent tool-gap observation for the read-only gap detector. */
-export function appendSubagentGapSignal(
-  event: {
-    role?: string;
-    tool: string;
-    model?: string;
-    requestedTools?: string[];
-    allowedTools?: string[];
-    workaroundTool?: string;
-  },
-  storageBase?: string,
-): void {
-  try {
-    const path = decisionLogPath(storageBase);
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const model = event.model ?? 'unknown/unknown';
-    const entry: DecisionLogEntry = {
-      ts: Date.now(),
-      dimension: 'lightweight',
-      chosen: model,
-      served: model,
-      viaFallback: false,
-      cause: 'self-healing-gap',
-      reason: `subagent tool gap: ${event.tool}`,
-      chain: [model],
-      gap: {
-        role: event.role,
-        tool: event.tool,
-        model: event.model,
-        requestedTools: event.requestedTools,
-        allowedTools: event.allowedTools,
-        workaroundTool: event.workaroundTool,
-      },
-    };
-    appendFileSync(path, serializeRecord(entry), 'utf8');
-  } catch {
-    // Best-effort logging only.
   }
 }
 
@@ -526,60 +463,6 @@ export function appendAttemptUsage(event: AttemptUsageEvent, intentKey?: string,
       chain: [event.candidateKey],
       ...(intentKey ? { intentKey } : {}),
       attemptUsage: event,
-    };
-    appendFileSync(path, serializeRecord(entry), 'utf8');
-  } catch {
-    // Best-effort logging only.
-  }
-}
-
-/**
- * One foreground subagent child's spend, joinable with the turn that spawned
- * it. Kept out of `kind: 'decision'` because a child is not a routing turn:
- * folding it into decisions would distort `/router-status` history and the
- * dimension histogram, both of which count turns. Async spawns return before
- * their child finishes and report no terminal usage here, so they are absent
- * by construction rather than counted as zero.
- */
-export function appendSubagentSpend(
-  record: {
-    role?: string;
-    model: string;
-    routerOwned: boolean;
-    usage: { inputTokens: number; outputTokens: number; cacheRead: number; cacheWrite: number };
-    routedCost?: number;
-    baselineModel?: string;
-    baselineSource?: 'config' | 'auto';
-    baselineCost?: number;
-    /** pi-subagents' provider-reported billing, kept only as a cross-check. */
-    reportedCost?: number;
-  },
-  storageBase?: string,
-): void {
-  try {
-    const path = decisionLogPath(storageBase);
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const entry: DecisionLogEntry = {
-      ts: Date.now(),
-      kind: 'subagent-spend',
-      dimension: record.role ?? 'subagent',
-      chosen: record.model,
-      served: record.model,
-      viaFallback: false,
-      cause: 'heuristic',
-      reason: `subagent spend (${record.routerOwned ? 'router-owned' : 'explicit model'})`,
-      chain: [record.model],
-      usage: record.usage,
-      routedCost: record.routedCost,
-      baselineModel: record.baselineModel,
-      baselineSource: record.baselineSource,
-      baselineCost: record.baselineCost,
-      subagentSpend: {
-        role: record.role,
-        routerOwned: record.routerOwned,
-        reportedCost: record.reportedCost,
-      },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {

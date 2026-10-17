@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { initTheme } from '@earendil-works/pi-coding-agent';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,11 +17,10 @@ import { getProviderState } from '../serve/provider.js';
 import { defaultBlacklistState } from '../serve/blacklist.js';
 import {
   appendDecision,
-  appendSubagentGapSignal,
-  appendSubagentSpend,
+  DECISION_LOG_FILE,
 } from './decisionlog.js';
 import { saveStore, emptyStore } from '../bench/store.js';
-import type { BenchmarkStore, RoutingDecision } from '../types.js';
+import type { RoutingDecision } from '../types.js';
 import { RouterSession } from '../serve/router-session-state.js';
 
 let dir: string;
@@ -110,18 +109,6 @@ function fakeCtx(
     custom,
   };
 }
-
-describe('/router-agents', () => {
-  it('reports disabled integration without inspecting models or credentials', async () => {
-    const { pi, handlers } = fakePi();
-    registerCommands(pi, new RouterSession());
-    const { ctx, messages } = fakeCtx();
-    const getAvailable = vi.fn(() => { throw new Error('Subagent routing must not inspect the registry'); });
-    await handlers.get('router-agents')!('', { ...(ctx as object), modelRegistry: { getAvailable } });
-    expect(getAvailable).not.toHaveBeenCalled();
-    expect(messages).toEqual(['Automatic subagent routing is disabled. Pi-subagents uses its own model settings.']);
-  });
-});
 
 describe('/router-manual', () => {
   const models = [
@@ -304,6 +291,56 @@ describe('/router-manual', () => {
     await handlers.get('router-status')!('', ctx);
 
     expect(messages.at(-1)).toContain('Semi-auto: on');
+  });
+
+  it('keeps an unkinded gap observation out of the routing history', async () => {
+    const session = new RouterSession();
+    const { pi, handlers } = fakePi();
+    registerCommands(pi, session);
+    const { ctx, messages } = fakeCtx([{ provider: 'beta', id: 'second' }]);
+    const store = emptyStore();
+    store.syncedAt = Date.now();
+    store.models = [
+      { registryId: 'beta/second', benchSlug: 'beta-second', active: true, quality: { coding: 80 }, source: 'test' },
+    ];
+    saveStore(store);
+
+    appendDecision(
+      {
+        dimension: 'implement',
+        chosen: 'beta/second',
+        reason: 'scored',
+        confidence: 0.7,
+        routedUp: false,
+        routedDown: false,
+        cause: 'heuristic',
+        fallbackChain: ['beta/second'],
+      },
+      { registryId: 'beta/second', viaFallback: false, accumulatedCost: 0.01 },
+    );
+    // Older writers stamped neither `kind` nor a version on a gap record, so
+    // only its cause tells a reader that it never served a turn.
+    appendFileSync(
+      join(dir, DECISION_LOG_FILE),
+      `${JSON.stringify({
+        ts: Date.now(),
+        dimension: 'lightweight',
+        chosen: 'unknown/unknown',
+        served: 'unknown/unknown',
+        viaFallback: false,
+        cause: 'self-healing-gap',
+        reason: 'subagent tool gap: ctx_search',
+        chain: ['unknown/unknown'],
+      })}\n`,
+      'utf8',
+    );
+
+    await handlers.get('router-status')!('', ctx);
+
+    const msg = messages.at(-1) ?? '';
+    expect(msg).toContain('Recent routing history:');
+    expect(msg).toContain('→ beta/second');
+    expect(msg).not.toContain('unknown/unknown');
   });
 
   it('lists one routing history row for each run of turns on the same model', async () => {
@@ -584,53 +621,6 @@ describe('/router-blacklist — no args shows every list', () => {
   });
 });
 
-describe('/router-status history filtering', () => {
-  it('excludes self-healing-gap events from recent routing history while still reporting gaps', async () => {
-    const { pi, handlers } = fakePi();
-    registerCommands(pi);
-    const registryModel = { provider: 'beta', id: 'second' };
-    const { ctx, messages } = fakeCtx([registryModel]);
-
-    const store: BenchmarkStore = {
-      version: 2,
-      syncedAt: Date.now(),
-      aliases: {},
-      models: [
-        {
-          registryId: 'beta/second',
-          benchSlug: 'beta-second',
-          active: true,
-          quality: { coding: 80 },
-          source: 'test',
-        },
-      ],
-    };
-    saveStore(store);
-
-    const decision: RoutingDecision = {
-      dimension: 'implement',
-      chosen: 'beta/second',
-      reason: 'scored',
-      confidence: 0.7,
-      routedUp: false,
-      routedDown: false,
-      cause: 'heuristic',
-      fallbackChain: ['beta/second'],
-    };
-    appendDecision(decision, { registryId: 'beta/second', viaFallback: false, accumulatedCost: 0.01 });
-    appendSubagentGapSignal({ role: 'worker', tool: 'ctx_search', model: 'unknown/unknown' });
-
-    await handlers.get('router-status')!('', ctx);
-
-    const msg = messages[messages.length - 1] ?? '';
-    expect(msg).toContain('Recent routing history:');
-    expect(msg).toContain('implement');
-    expect(msg).toContain('→ beta/second');
-    expect(msg).toContain('Subagent roles that tried to use a tool they do not have');
-    expect(msg).not.toContain('→ unknown/unknown');
-  });
-});
-
 describe('/router-report', () => {
   it('warns when no decisions have been recorded yet', async () => {
     const { pi, handlers } = fakePi();
@@ -758,48 +748,6 @@ describe('/router-report', () => {
     await handlers.get('router-report')!('', ctx);
 
     expect(messages.at(-1)).toContain('baseline changed mid-session');
-  });
-
-  it('includes persisted foreground child spend in report totals', async () => {
-    const { pi, handlers } = fakePi();
-    registerCommands(pi);
-    const { ctx, messages } = fakeCtx();
-
-    appendDecision(
-      {
-        dimension: 'implement',
-        chosen: 'beta/cheap',
-        reason: 'scored',
-        confidence: 0.8,
-        routedUp: false,
-        routedDown: false,
-        cause: 'heuristic',
-        fallbackChain: ['beta/cheap'],
-        baseline: { registryId: 'alpha/strong', source: 'auto', cost: { input: 10, output: 50 } },
-        spend: { routedCost: 0.2, baselineCost: 2.0 },
-      },
-      { registryId: 'beta/cheap', viaFallback: false, accumulatedCost: 0.2 },
-    );
-    appendSubagentSpend({
-      role: 'worker',
-      model: 'beta/cheap',
-      routerOwned: true,
-      usage: { inputTokens: 100, outputTokens: 20, cacheRead: 0, cacheWrite: 0 },
-      routedCost: 0.3,
-      baselineModel: 'alpha/strong',
-      baselineSource: 'auto',
-      baselineCost: 3.0,
-    });
-
-    await handlers.get('router-report')!('', ctx);
-
-    const msg = messages.at(-1) ?? '';
-    expect(msg).toContain('Routed spend: $0.5000');
-    expect(msg).toContain('incl. subagents: $0.3000 across 1 foreground children');
-    expect(msg).toContain('Baseline spend (alpha/strong): $5.0000');
-    // The child is not a turn: it must not enter the turn count or histogram.
-    expect(msg).toContain('across 1/1 priced turns');
-    expect(msg).not.toContain('worker');
   });
 
   it('excludes turns with no resolved baseline from the spend totals', async () => {

@@ -11,8 +11,6 @@ import { tmpdir } from 'node:os';
 
 import {
   appendDecision,
-  appendSubagentGapSignal,
-  appendSubagentSpend,
   appendExecutionContractSignal,
   appendContextHandoffSignal,
   appendWorkLifecycleSignal,
@@ -191,15 +189,10 @@ describe('decision log', () => {
     expect(existsSync(join(dir, DECISION_LOG_FILE))).toBe(true);
   });
 
-  it('preserves context-pressure and candidate diagnostic metadata', () => {
+  it('preserves candidate diagnostic metadata', () => {
     const decision: RoutingDecision = {
       ...DECISION,
       cause: 'router-consult',
-      contextPressure: {
-        usageRatio: 0.71,
-        threshold: 0.6,
-        suggestion: 'offload planning',
-      },
       candidateDiagnostics: [
         { candidateKey: 'cheap/model', excludedReason: 'unknown-quality' },
         { candidateKey: 'weak/model', excludedReason: 'below-intelligence-minimum' },
@@ -211,7 +204,6 @@ describe('decision log', () => {
       dir,
     );
     const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.contextPressure.usageRatio).toBe(0.71);
     expect(entry.candidateDiagnostics).toEqual([
       { candidateKey: 'cheap/model', excludedReason: 'unknown-quality' },
       { candidateKey: 'weak/model', excludedReason: 'below-intelligence-minimum' },
@@ -220,36 +212,24 @@ describe('decision log', () => {
 
   it('stamps every record kind with the schema version it was written under', () => {
     appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
-    appendSubagentGapSignal({ tool: 'bash' }, dir);
-    appendSubagentSpend({
-      model: 'a/b',
-      routerOwned: true,
-      usage: { inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheWrite: 0 },
-    }, dir);
     appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
     appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
     appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'complete-accept', workItemId: 'w_1', status: 'done' }, dir);
 
     const records = readRecentEntries(10, dir);
-    expect(records).toHaveLength(6);
+    expect(records).toHaveLength(4);
     expect(records.every((record) => record.schemaVersion === DECISION_LOG_SCHEMA_VERSION)).toBe(true);
   });
 
   it('omits classifier metadata from every new record kind', () => {
     appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
-    appendSubagentGapSignal({ tool: 'bash' }, dir);
-    appendSubagentSpend({
-      model: 'a/b',
-      routerOwned: true,
-      usage: { inputTokens: 1, outputTokens: 1, cacheRead: 0, cacheWrite: 0 },
-    }, dir);
     appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
     appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
     appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'prior-completion', workItemId: 'w_1' }, dir);
 
     const [decision, ...others] = readRecentEntries(10, dir);
     for (const key of ['confidence', 'routedUp', 'routedDown']) expect(decision).not.toHaveProperty(key);
-    expect(others).toHaveLength(5);
+    expect(others).toHaveLength(3);
     expect(others.every((record) => !('confidence' in record))).toBe(true);
   });
 
@@ -282,14 +262,6 @@ describe('decision log', () => {
     expect(readRecentEntries(10, dir)[0]).toEqual({ ts: 1, dimension: 'plan', chosen: 'a/b' });
   });
 
-  it('appends dedicated subagent tool-gap events', () => {
-    appendSubagentGapSignal({ role: 'worker', tool: 'ctx_search', model: 'openai/gpt-5' }, dir);
-    const entry = JSON.parse(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim());
-    expect(entry.cause).toBe('self-healing-gap');
-    expect(entry.gap.role).toBe('worker');
-    expect(entry.gap.tool).toBe('ctx_search');
-    expect(entry.served).toBe('openai/gpt-5');
-  });
 });
 
 describe('decision log provenance', () => {

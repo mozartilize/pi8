@@ -31,7 +31,7 @@ function fixture(withThird = false) {
   const input: UnifiedTurnInput = {
     state: { phase: 'implement', workItemId: 'work', estimatedContextTokens: 1000,
       needsVision: false, boundary: 'ordinary', friction: [], nowMs: 0,
-      isSubagentSpawn: false, benchmarkIndexVersion: '4.3' },
+      benchmarkIndexVersion: '4.3' },
     authorizationScope: { boundaryId: 'entry', workItemId: 'work', phase: 'implement', assignmentId, revision: 1 },
     cause: 'incumbent', candidates, registryModels: models, rows,
     isExcluded: () => false, isCurrent: () => true,

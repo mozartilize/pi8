@@ -162,7 +162,7 @@ export function workChoiceNote(state: WorkPhaseState): string {
 export function gatheringNote(state: WorkPhaseState): string {
   return `Router: ${owedNote(state)}${workChoiceNote(state)} While collecting context, use the available tools to collect evidence. ` +
     'Follow the applicable skill instructions. Do not change the product or start implementation before an accepted boundary. ' +
-    'Recognized mutations, execution plans, and subagents are refused in this phase. ' +
+    'Recognized mutations and execution plans are refused in this phase. ' +
     'Mutation detection is best-effort, not a sandbox. When you have what the next step needs, call ' +
     `${CONTEXT_HANDOFF_TOOL} with outcome "ready", deliverable, complexity, and scope. When the answer needs an investigation, ` +
     'for example the cause of a bug, hand off with deliverable "gather". To answer from the context you collected, without a plan, review, change, or investigation, ' +
@@ -219,7 +219,7 @@ export function remindContextHandoff(
  * Refuse every call the restricted phase does not allow, before it runs. A
  * reminder on a tool result comes after the change is made, and no provider
  * API forces a tool call; a refused call returns the rules as its error. The
- * phase holds for a pinned model too. A refused mutation or subagent spawn
+ * phase holds for a pinned model too. A refused mutation
  * while acquiring counts against the entry (see countDenial); a refused
  * control call does not. A refusal while a ready handoff
  * waits for its next step is never counted. When the router cannot check a
@@ -251,7 +251,7 @@ export function gateContextToolCall(
     if (state.contextStatus === 'clarification-only') {
       return { block: true, reason: `Router: this call was not made. ${CLARIFICATION_TEXT}` };
     }
-    const counts = event.toolName === 'subagent' || isMutationCall(event.toolName, event.input);
+    const counts = isMutationCall(event.toolName, event.input);
     const next = counts ? countContextRefusal(session, state, served) : state;
     if (next.contextStatus === 'clarification-only') {
       return { block: true, reason: `Router: this call was not made. ${CLARIFICATION_TEXT}` };

@@ -11,7 +11,7 @@ const action = enumerateEffectiveActions(model)[0]!;
 const state: DecisionStateV1 & { contextAcquisition: boolean } = {
   phase: 'gather', contextAcquisition: true, estimatedContextTokens: 8_000,
   needsVision: false, boundary: 'ordinary', friction: [], nowMs: 0,
-  isSubagentSpawn: false, benchmarkIndexVersion: '4.3',
+  benchmarkIndexVersion: '4.3',
 };
 const row: BenchModel = {
   registryId: action.registryId, benchSlug: 'collector', active: true, source: 'aa', effort: action.effort,

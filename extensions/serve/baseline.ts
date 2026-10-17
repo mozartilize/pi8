@@ -1,10 +1,9 @@
 /**
  * Counterfactual baseline selection and token pricing for `/router-report`.
  *
- * Pure and shared by both spend-recording paths (parent turns in
- * `provider.ts`/`delegation.ts` and foreground subagent children in
- * `subagent-spend.ts`) so the two can never drift into pricing the same
- * question on different rules.
+ * Pure and shared by the spend-recording paths in `provider.ts` and
+ * `delegation.ts` so they cannot drift into pricing the same question on
+ * different rules.
  */
 import type { Candidate, Dimension } from '../types.js';
 import { capabilityForDimension } from '../routing/score/scorer.js';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { benchRow, candidate, registryModel, subagentResultRow } from './router-fixtures.js';
+import { benchRow, candidate, registryModel } from './router-fixtures.js';
 
 describe('router fixtures', () => {
   it('returns independent override-friendly fixtures', () => {
@@ -30,11 +30,4 @@ describe('router fixtures', () => {
     expect(model.baseUrl).toBe('https://alpha.example.test');
   });
 
-  it('builds fresh subagent result rows per call', () => {
-    const first = subagentResultRow({ model: 'provider/strong' });
-    const second = subagentResultRow();
-    first.modelAttempts.push({ model: 'provider/strong', success: true });
-    expect(second.modelAttempts).toEqual([]);
-    expect(second.model).toBe('provider/fast:high');
-  });
 });

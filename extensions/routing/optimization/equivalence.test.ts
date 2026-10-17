@@ -96,7 +96,7 @@ describe.skipIf(MODE !== '1' && MODE !== 'record')('selection equivalence on the
       for (const phase of PHASES) for (const estimatedContextTokens of CONTEXTS) for (const boundary of BOUNDARIES) {
         const state: DecisionStateV1 = {
           phase, estimatedContextTokens, needsVision: false, boundary, friction: [], nowMs: 1_000_000,
-          isSubagentSpawn: false, benchmarkIndexVersion: fixture.indexVersion,
+          benchmarkIndexVersion: fixture.indexVersion,
           ...(boundary === 'rework'
             ? { rework: { failed: { registryId: 'anthropic/claude-opus-5-5', effort: 'high' }, workItemId: 'w' }, workItemId: 'w' }
             : { incumbent: { registryId: 'anthropic/claude-sonnet-5-5', effort: 'high' } }),

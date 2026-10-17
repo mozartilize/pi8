@@ -8,16 +8,6 @@ A Pi extension registering a synthetic `router/auto` provider: it resolves each 
 
 Rules are **traps to avoid**, not **maps to follow**. No module layout, data flow, or key-type descriptions — they go stale fast and the agent can gather them by reading the code.
 
-## Hard rules (do not violate)
-
-1. **Router bugs must not block a turn.** Catch errors at new hooks, commands, and the provider boundary; degrade to defaults or a router error event.
-2. **Uncertainty must not lower capability minimums.** Unknown quality ranks above measured weak quality. Change task types only through accepted declarations. Preserve incumbent capability and thinking minimums except at defined routing boundaries. Price, cache credit, and protocol penalties apply only within capability tiers. See [Routing](docs/routing.md) for detailed rules.
-3. **Do not leak a failed attempt's events into the consumer stream.** Pi treats its first terminal `done` as the end of the turn; an answerless attempt must be discarded so fallback can answer. Delegation sets no auth or output deadline. Lifecycle-only events do not count as meaningful output. Never replay after visible text, a tool call, or a thinking-overflow commit.
-
-## Decision-log privacy
-
-The router makes no separate model calls. Every model call serves the user's turn. Decision-log records carry ids, codes, categories, and counts — never findings, questions, file paths, tool arguments, or model-written text.
-
 ## Terminology for reviews and user-facing text
 
 Name the specific minimum instead of saying “floor.” Do not confuse task types, capability tiers, and capability bands, or a task's final step with a stream-ending event. Keep internal identifiers stable; use plain language in user-facing text. Definitions are in the [Glossary](docs/glossary.md).

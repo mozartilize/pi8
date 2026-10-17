@@ -14,7 +14,7 @@ Source-dependent ratings require source inspection. A model must not rate an unk
 
 The gathering gate is a workflow control. It is not a security sandbox.
 
-A refused mutation or subagent call counts against collection. A handoff rejected because referenced files were not read also counts.
+A refused mutation counts against collection. A handoff rejected because referenced files were not read also counts.
 
 Two counted refusals move the entry to `clarification-only`. The model can then ask the user, but cannot continue collection.
 
@@ -347,7 +347,7 @@ It affects only the active item. It rejects `done` while an execution contract r
 
 Supersession does not claim successful execution.
 
-A completed-work gate blocks mutations, execution plans, and subagent calls until a valid handoff or reopening.
+A completed-work gate blocks mutations and execution plans until a valid handoff or reopening.
 
 These refusals do not count against acquisition. Questions about completed work remain answerable without reopening.
 

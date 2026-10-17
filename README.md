@@ -1,6 +1,6 @@
 # pi8: automatic model router for Pi
 
-pi8 is an extension for [Pi](https://github.com/earendil-works/pi-coding-agent). It routes each main-session turn to a model from your authenticated providers. Automatic [pi-subagents](https://www.npmjs.com/package/pi-subagents) integration is disabled; Pi-subagents owns child model selection.
+pi8 is an extension for [Pi](https://github.com/earendil-works/pi-coding-agent). It routes each main-session turn to a model from your authenticated providers.
 
 ## Why
 
@@ -71,7 +71,6 @@ Automatic selection uses separate reasoning, agentic coding, and research target
 | `/router-semi [on\|off]` | Ask before the router switches away from the last served model. Saves `semi` in the config. |
 | `/router-why` | Explain why the router chose the last model |
 | `/router-models` | Show the allowlist and the models that match it |
-| `/router-agents` | Report that automatic subagent integration is disabled |
 | `/router-fix <slug> <id>` | Override a benchmark-to-registry mapping |
 | `/router-blacklist [add/remove/clear]` | Exclude models. `remove <provider>/*` also clears a usage-limit exclusion of that provider. |
 
@@ -104,4 +103,4 @@ See [Observability](docs/observability.md) for configuration, log locations, and
 
 ## Further reading
 
-- [Overview](docs/overview.md): setup, architecture, configuration, commands, routing, subagents, benchmarks, logs, and glossary.
+- [Overview](docs/overview.md): setup, architecture, configuration, commands, routing, benchmarks, logs, and glossary.

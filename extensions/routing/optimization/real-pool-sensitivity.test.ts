@@ -43,7 +43,7 @@ const pool = (registry: readonly RegistryModelInfo[]): SelectionCandidate[] => r
 
 const state = (patch: Partial<DecisionStateV1> = {}): DecisionStateV1 => ({
   phase: 'implement', estimatedContextTokens: 100_000, needsVision: false, boundary: 'ordinary', friction: [],
-  nowMs: NOW, isSubagentSpawn: false, benchmarkIndexVersion: fixture.indexVersion, ...patch,
+  nowMs: NOW, benchmarkIndexVersion: fixture.indexVersion, ...patch,
 });
 
 const lp = new WorkerLpAdapter();

@@ -14,7 +14,7 @@ export function completedWorkNote(state: WorkPhaseState): string {
       'If this request only asks a question about completed work, answer it directly; do not reopen it. ' +
       'For more changes to that item, call reopen_work. ' +
       'For different work, call hand_off_context with the matching workItemId or NEW_WORK_ITEM. ' +
-      'Do not change files or start a subagent before that boundary.' + workChoiceNote(state);
+      'Do not change files before that boundary.' + workChoiceNote(state);
 }
 
 /** Added to the gathering note of an entry after completed work. */
@@ -50,8 +50,7 @@ export function gateCompletedWorkToolCall(
     if (!state || session.getLastDecision()?.intentKey !== state.intentKey) return undefined;
     const workItemId = state.completion?.workItemId ?? state.priorCompletion?.workItemId;
     if (!workItemId) return undefined;
-    if (event.toolName !== EXECUTION_CONTRACT_TOOL && event.toolName !== 'subagent'
-      && !isMutationCall(event.toolName, event.input)) return undefined;
+    if (event.toolName !== EXECUTION_CONTRACT_TOOL && !isMutationCall(event.toolName, event.input)) return undefined;
     const served = session.getLastServed();
     appendWorkLifecycleSignal({
       intentKey: state.intentKey, served: served ? servedKey(served) : 'unknown/unknown',

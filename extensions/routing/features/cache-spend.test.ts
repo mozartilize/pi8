@@ -11,7 +11,7 @@ const record = (tokens: number, hitProbability: number): WarmPrefixEvidence => (
   tokens, hitProbability, observedAtMs: 1000, retention: 'short',
 });
 const state = (records: WarmPrefixEvidence[]): SpendSnapshot => ({
-  estimatedContextTokens: 1000, nowMs: 2000, isSubagentSpawn: false, promptIdentity: 'head',
+  estimatedContextTokens: 1000, nowMs: 2000, promptIdentity: 'head',
   cache: { promptIdentity: 'head', retention: 'short', warmPrefixes: new Map([[action.key, records]]) },
 });
 const measured = (tokensPerTask: number): BenchmarkOutputEvidence => ({ kind: 'measured', tokensPerTask, indexVersion: '4.3' });

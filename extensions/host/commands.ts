@@ -15,24 +15,16 @@ import { checkPlaywright } from '../adapters/artificial-analysis-site.js';
 import { buildModelFilter } from '../routing/policy/allowlist.js';
 import { syncBenchmarks, syncSummary } from '../bench/sync.js';
 import { prepareSelectorDomain } from '../serve/unified-decision.js';
-import { ROLE_DIMENSIONS, ROUTER_PROVIDER_ID } from '../types.js';
+import { ROUTER_PROVIDER_ID } from '../types.js';
 import { activeModels, checkBenchmarkStore, isStale, loadStore, addAlias, saveStore } from '../bench/store.js';
 import { CALIBRATED_INDEX_VERSION, indexVersionWarning } from '../routing/score/scorer.js';
 import {
   getProviderState,
-  buildSubagentProviderAuthFilter,
 } from '../serve/provider.js';
 import { formatDecisionDetail, formatUnifiedSummary, formatWorkContext, preferenceBinding } from './ui.js';
 import { CORE_PREFERENCE_KEYS, hasSubstantiveAnswers } from '../routing/preferences/schema.js';
-import {
-  SUBAGENT_ROUTING_ENABLED,
-  computeRoleModels,
-  readExistingOverrides,
-  ALL_ROLES,
-  type RoleAssignment,
-} from '../agents/subagents.js';
+
 import { readRecentEntries, type DecisionLogEntry } from './decisionlog.js';
-import { detectToolGaps } from './gap-detector.js';
 import {
   RouterSession,
   defaultRouterSession,
@@ -325,10 +317,11 @@ async function handleStatusCommand(
   // M4: show recent routing history, surfacing any real fallbacks.
   // Only actual routing decisions belong here: secondary records join
   // decisions by intentKey offline, and letting them through would push real
-  // turns out of the recent window.
+  // turns out of the recent window. A record with no `kind` from an older
+  // writer can be a gap observation, so its cause is excluded by name.
   const history = readRecentDecisions(200);
   const routingHistory = history.filter(
-    (e) => e.cause !== 'self-healing-gap' && (e.kind === undefined || e.kind === 'decision'),
+    (e) => (e.kind === undefined || e.kind === 'decision') && e.cause !== 'self-healing-gap',
   );
   const fallbacks = routingHistory.filter((e) => e.viaFallback);
   // One row for each run of turns served by the same model, stamped with the
@@ -350,15 +343,6 @@ async function handleStatusCommand(
     }
   }
 
-  const gaps = detectToolGaps(history).slice(0, 3);
-  if (gaps.length > 0) {
-    lines.push('', 'Subagent roles that tried to use a tool they do not have:');
-    for (const gap of gaps) {
-      lines.push(
-        `  ${gap.role.padEnd(11)} ${gap.tool} (seen ${gap.observations} times, confidence ${gap.strength.toFixed(2)})`,
-      );
-    }
-  }
   const msg = lines.join('\n');
   ctx.ui.notify(msg, stale ? 'warning' : 'info');
 }
@@ -422,7 +406,6 @@ async function handlePreferencesCommand(
 async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> {
   const all = readRecentEntries(Number.MAX_SAFE_INTEGER);
   const decisions = all.filter((e) => e.kind === undefined || e.kind === 'decision');
-  const childSpend = all.filter((e) => e.kind === 'subagent-spend');
   if (decisions.length === 0) {
     ctx.ui.notify('No routing decisions recorded yet this session.', 'warning');
     return;
@@ -447,27 +430,12 @@ async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> 
       }
     }
   }
-  let childRouted = 0;
-  let childBaseline = 0;
-  let childPriced = 0;
-  for (const e of childSpend) {
-    if (typeof e.routedCost === 'number' && typeof e.baselineCost === 'number') {
-      childRouted += e.routedCost;
-      childBaseline += e.baselineCost;
-      childPriced++;
-    }
-  }
-    routedTotal += childRouted;
-    baselineTotal += childBaseline;
     const lastUnified = [...decisions].reverse().find((entry) => entry.unified)?.unified;
 
     const saved = baselineTotal - routedTotal;
   const pctSaved = baselineTotal > 0 ? (saved / baselineTotal) * 100 : 0;
   const lines = [
     `Routed spend: $${routedTotal.toFixed(4)} across ${priced}/${decisions.length} priced turns`,
-    ...(childPriced > 0
-      ? [`  incl. subagents: $${childRouted.toFixed(4)} across ${childPriced} foreground children`]
-      : []),
     `Baseline spend (${firstBaseline ?? 'n/a'}${baselineDrift ? ', baseline changed mid-session' : ''}): $${baselineTotal.toFixed(4)}`,
     `Saved: $${saved.toFixed(4)} (${pctSaved.toFixed(1)}%)`,
       ...(incompleteTurns > 0
@@ -481,8 +449,7 @@ async function handleReportCommand(ctx: ExtensionCommandContext): Promise<void> 
       .map(([dim, n]) => `  ${dim.padEnd(11)} ${n}`),
     '',
     "Baseline spend prices the observed tokens at the baseline model's registry rate. " +
-      'It is an estimate, not a real bill. Async subagents report no final usage to the ' +
-      'parent, so their spend is not included.',
+      'It is an estimate, not a real bill.',
   ];
   ctx.ui.notify(lines.join('\n'), 'info');
 }
@@ -714,72 +681,6 @@ async function handleModelsCommand(ctx: ExtensionCommandContext): Promise<void> 
   ctx.ui.notify(lines.join('\n'), 'info');
 }
 
-async function handleAgentsCommand(ctx: ExtensionCommandContext): Promise<void> {
-  if (!SUBAGENT_ROUTING_ENABLED) {
-    ctx.ui.notify('Automatic subagent routing is disabled. Pi-subagents uses its own model settings.', 'info');
-    return;
-  }
-  const registryModels = (ctx.modelRegistry?.getAvailable() ?? []) as unknown as Array<{
-    provider: string;
-    id: string;
-    contextWindow?: number;
-    maxTokens?: number;
-    reasoning?: boolean;
-    input?: readonly ('text' | 'image')[];
-    cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
-  }>;
-
-  let assignments: RoleAssignment[];
-  const store = loadStore();
-  if (registryModels.length > 0 && store && store.models.length > 0) {
-    // Same credential gate the spawn-time injection uses, so what we show
-    // is what a subagent would actually get.
-    const isProviderUsable = buildSubagentProviderAuthFilter(
-      ctx.modelRegistry,
-      registryModels as never,
-    );
-    assignments = computeRoleModels(registryModels as never, {
-      isProviderUsable,
-      ctx,
-      weights: loadConfig().dimensionWeights,
-    }).assignments;
-  } else {
-    // No registry or no benchmark data yet: display whatever is pinned.
-    const existing = readExistingOverrides(undefined, ctx.cwd);
-    assignments = ALL_ROLES.map((role) => ({
-      role,
-      dimension: ROLE_DIMENSIONS[role],
-      model: existing[role]?.model,
-      fallbackChain: [],
-      applied: false,
-      userPinned: !!existing[role],
-      reason: existing[role]
-        ? 'current override'
-        : store
-          ? 'no model registry available'
-          : 'no benchmark data — run /router-sync',
-    }));
-  }
-
-  const lines = ['Subagent role assignment:'];
-  for (const a of assignments) {
-    const tag = a.userPinned ? ' [user-pinned]' : a.applied ? ' [auto]' : '';
-    const model = a.model ?? '(none)';
-    lines.push(`  ${a.role.padEnd(11)} ${a.dimension.padEnd(10)} → ${model}${tag}`);
-    if (a.reason && a.reason !== 'user override preserved' && a.reason !== 'current override') {
-      lines.push(`       ${a.reason}`);
-    }
-  }
-  lines.push(
-    '',
-    '[auto] roles receive a concrete provider/model selected at spawn time.',
-    'The model shown is the default. A subagent whose role and task the router can read',
-    'is scored again at spawn, and its task can only raise the model.',
-    'Nothing is written to settings.',
-    'An explicit model on the call (e.g. reviewer[model=...]) always wins.',
-  );
-  ctx.ui.notify(lines.join('\n'), 'info');
-}
 
 export function registerCommands(
   pi: ExtensionAPI,
@@ -884,11 +785,6 @@ export function registerCommands(
   pi.registerCommand('router-models', {
     description: 'Show the `models` allowlist and which registry models it selects',
     handler: safeCommand('/router-models', (_args, ctx) => handleModelsCommand(ctx)),
-  });
-
-  pi.registerCommand('router-agents', {
-    description: 'Show whether automatic subagent routing is enabled',
-    handler: safeCommand('/router-agents', (_args, ctx) => handleAgentsCommand(ctx)),
   });
 
   return updateManualModelCompletionContext;

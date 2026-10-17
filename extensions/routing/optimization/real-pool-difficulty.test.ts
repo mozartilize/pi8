@@ -31,7 +31,7 @@ const empty = validatePreferences(undefined);
 async function chosenQuality(phase: Dimension, difficulty: TaskDifficulty | undefined): Promise<number> {
   const state: DecisionStateV1 = {
     phase, estimatedContextTokens: 30_000, needsVision: false, boundary: 'ordinary', friction: [],
-    nowMs: 0, isSubagentSpawn: false, benchmarkIndexVersion: fixture.indexVersion, ...(difficulty ? { difficulty } : {}),
+    nowMs: 0, benchmarkIndexVersion: fixture.indexVersion, ...(difficulty ? { difficulty } : {}),
   };
   const result = await selectByRegret(state, pool, fixture.benchmarks, empty, ports, { expectedProfileDigest: empty.digest, decisionDeadlineMs: 60_000 });
   const decision = result as UnifiedDecision;

@@ -120,7 +120,7 @@ Credit uses the candidate's published cache prices. It multiplies reusable token
 
 The discount uses cache-write price when available, otherwise input price. All prices use the same token unit.
 
-Missing cache prices receive no credit. Subagent spawns receive no cache credit.
+Missing cache prices receive no credit.
 
 Compaction, tree navigation, and changes to the system prompt or tool schema clear session prefixes.
 

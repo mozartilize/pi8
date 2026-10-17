@@ -12,9 +12,7 @@ The final output check, abort and reservation run in one synchronous step, and t
 provider request starts only after the reservation is revalidated. Every provider
 request, fallbacks and retries included, starts through its own single-use
 reservation, checked against the session, work item, branch, preference profile,
-authorization and context revisions that scoring recorded. Automatic subagent integration is disabled and excluded from the cutover;
-its inactive implementation files remain. Tests cover the disconnected hooks,
-not child selection. The preference command,
+authorization and context revisions that scoring recorded. The preference command,
 legacy state migration and production Pi host exit checks remain incomplete. This is
 not a complete production release.
 
@@ -176,13 +174,9 @@ Fixture-only measurements do not satisfy that condition.
   recovery test to fail. Both tests passed after restoration.
 - Estimated fixture axes remain estimated unless they declare measured
   provenance explicitly.
-- Active subagent hooks preserve caller arguments and perform no role selection
-  or child credential sweep. Child results do not change parent exclusions.
-  Enabling injection or removing the result guard makes these tests fail.
 - Elicitation fixture projects use `node:test` and are excluded from Vitest
   discovery without changing their files.
 
-Provider tests use scripted streams. They make no model-provider calls. No
-subagent was started. The new production adapters still need the Pi host exit
+Provider tests use scripted streams. They make no model-provider calls. The new
+production adapters still need the Pi host exit
 checks above. Preference UI and the Pi host exit checks remain incomplete.
-Subagent selection is excluded from this cutover.

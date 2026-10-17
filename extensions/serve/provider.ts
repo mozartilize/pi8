@@ -130,40 +130,6 @@ import { activeWorkNote, COMPLETED_WORK_GATHER_NOTE, completedWorkNote } from '.
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
 
-// ─── Registry-wait (mandatory for subagents) ────────────────────────
-
-/**
- * Build a synchronous per-provider membership test for subagent role injection.
- *
- * Subagent spawns are pick-once: the injected model is consumed verbatim by
- * pi-subagents, which hard-fails on an unauthenticated provider.
- * `getProviderAuthStatus` reads the locally cached credential snapshot
- * synchronously — no network call, no credential-store lock, no OAuth token
- * refresh hazard. `getAvailable()` already pre-filters by provider auth, so
- * this is a belt-and-suspenders per-provider check for the one path where
- * retry-on-failure is impossible.
- */
-export function buildSubagentProviderAuthFilter(
-  registry: ExtensionContext['modelRegistry'] | undefined,
-  models: readonly RegistryModelInfo[],
-): (provider: string) => boolean {
-  if (!registry?.getProviderAuthStatus) return () => false;
-
-  const providers = [...new Set(models.map((m) => m.provider))].filter(
-    (p) => p && p !== ROUTER_PROVIDER_ID,
-  );
-
-  const usable = new Set<string>();
-  for (const provider of providers) {
-    if (registry.getProviderAuthStatus(provider)?.configured) {
-      usable.add(provider);
-    }
-  }
-
-  if (usable.size === 0) return () => false;
-  return (provider: string) => usable.has(provider);
-}
-
 const REGISTRY_WAIT_TIMEOUT_MS = 5000;
 const REGISTRY_WAIT_INITIAL_DELAY_MS = 50;
 const REGISTRY_WAIT_MAX_DELAY_MS = 500;
@@ -211,8 +177,8 @@ function textFromBlock(block: unknown): string {
 
 // Pi's compaction estimator charges a flat 4800 chars (~1200 tokens) per
 // image block; the router's char-based estimate must account on the same
-// scale so context-pressure detection, the long-context guard, and the
-// cache-retention bonus don't treat an image-heavy session as near-empty.
+// scale so the long-context guard and the cache-retention bonus do not treat
+// an image-heavy session as near-empty.
 const ESTIMATED_IMAGE_CHARS = 4800;
 
 /**
@@ -1047,7 +1013,6 @@ async function scoreRouterTurn(args: {
     },
     promptIdentity: prepared.cacheHead.identity,
     nowMs: Date.now(),
-    isSubagentSpawn: false,
     ...(prepared.benchmarkIndexVersion ? { benchmarkIndexVersion: prepared.benchmarkIndexVersion } : {}),
   };
   session.preparation.observe(turnInput.key, estContextTokens);

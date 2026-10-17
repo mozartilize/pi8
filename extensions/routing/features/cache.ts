@@ -37,7 +37,6 @@ export function cacheTtlMs(promptCache: ModelPromptCache | undefined, retention:
 /** Why an action has warm-prefix credit or has none. */
 export type CacheEligibility =
   | 'eligible'
-  | 'subagent'
   | 'no-recorded-prefix'
   | 'prompt-mismatch'
   | 'retention-none'
@@ -68,7 +67,6 @@ export function usableWarmPrefix(
 ): { tokens: number; hitTokens: number; eligibility: CacheEligibility } {
   const none = (eligibility: CacheEligibility) => ({ tokens: 0, hitTokens: 0, eligibility });
   const cache = state.cache;
-  if (state.isSubagentSpawn) return none('subagent');
   if (!cache || cache.warmPrefixes.size === 0) return none('no-recorded-prefix');
   if (state.promptIdentity === undefined || cache.promptIdentity !== state.promptIdentity) return none('prompt-mismatch');
   if (cache.retention === 'none') return none('retention-none');

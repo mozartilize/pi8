@@ -98,10 +98,10 @@ describe('restricted tools', () => {
       expect(acquisitionAllows('ready-pending', tool), tool).toBe(true);
       expect(acquisitionAllows('clarification-only', tool), tool).toBe(false);
     }
-    for (const tool of ['edit', 'write', 'subagent', 'commit_execution']) {
+    for (const tool of ['edit', 'write', 'commit_execution']) {
       expect(acquisitionAllows('acquiring', tool)).toBe(false);
     }
-    for (const tool of ['bash', 'ctx_execute', 'ctx_execute_file', 'extension_control', 'extension_inspect', 'read_file', 'mcp', 'web_search']) {
+    for (const tool of ['bash', 'subagent', 'ctx_execute', 'ctx_execute_file', 'extension_control', 'extension_inspect', 'read_file', 'mcp', 'web_search']) {
       expect(acquisitionAllows('acquiring', tool)).toBe(true);
       expect(acquisitionAllows('ready-pending', tool)).toBe(false);
       expect(acquisitionAllows('clarification-only', tool)).toBe(false);

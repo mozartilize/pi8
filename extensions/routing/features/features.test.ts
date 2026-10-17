@@ -42,7 +42,7 @@ const state = (patch: Partial<DecisionStateV1> = {}): DecisionStateV1 => ({
   boundary: 'ordinary',
   friction: [],
   nowMs: 1_000_000,
-  isSubagentSpawn: false,
+
   benchmarkIndexVersion: '4.3',
   ...patch,
 });
@@ -483,10 +483,9 @@ describe('cache-aware cost', () => {
     expect(read(shared(1_200_000, 'long'), anthropic, aHigh)).toBeCloseTo(3_000, 9);
   });
 
-  it('gives no cache credit on a prompt-identity mismatch or to a spawned subagent', () => {
+  it('gives no cache credit on a prompt-identity mismatch', () => {
     expect(usd(cacheState({ promptIdentity: 'head-2' }), anthropic, aHigh).cacheEligibility).toBe('prompt-mismatch');
     expect(read(cacheState({ promptIdentity: 'head-2' }), anthropic, aHigh)).toBe(0);
-    expect(read(cacheState({ isSubagentSpawn: true }), anthropic, aHigh)).toBe(0);
   });
 
   it('bills the prompt and its warm prefix in the tokens of the action model', () => {

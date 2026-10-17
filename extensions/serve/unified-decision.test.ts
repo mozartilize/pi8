@@ -32,7 +32,7 @@ function input(models = [model('one')]): UnifiedTurnInput {
     state: {
       phase: 'implement', workItemId: 'work-a', estimatedContextTokens: 10_000,
       needsVision: false, boundary: 'ordinary', friction: [], nowMs: 0,
-      isSubagentSpawn: false, benchmarkIndexVersion: '4.3',
+      benchmarkIndexVersion: '4.3',
     },
     authorizationScope: { boundaryId: 'entry-a', workItemId: 'work-a', phase: 'implement', assignmentId: 'attempt-a', revision: 1 },
     cause: 'execution-contract',

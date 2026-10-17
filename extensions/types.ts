@@ -367,7 +367,6 @@ export type DecisionCause =
   | 'no-data'
   | 'capability-escalation'
   | 'trajectory-escalation'
-  | 'self-healing-gap'
   | 'manual-override'
   | 'resume'
   | 'semi-hold'
@@ -511,7 +510,7 @@ export interface RoutingDecision {
   /**
    * True when the routed dimension is strictly weaker than the heuristic's.
    * Distinct from `routedUp` because "different" and "stronger" are not the
-   * same question, and context-pressure advice is only meaningful upward.
+   * same question.
    */
   routedDown?: boolean;
   /**
@@ -564,12 +563,6 @@ export interface RoutingDecision {
     cacheRead: number;
     cacheWrite: number;
   };
-  /** Advisory metadata when high parent context suggests planner offload. */
-  contextPressure?: {
-    usageRatio: number;
-    threshold: number;
-    suggestion: string;
-  };
   /**
    * Counterfactual baseline this turn is priced against for `/router-report`.
    * `source: 'config'` means `config.baselineModel` was routable this turn;
@@ -597,16 +590,6 @@ export interface RoutingDecision {
    */
   spend?: { routedCost: number; baselineCost?: number; incomplete?: boolean };
 }
-
-export type Role = 'researcher' | 'planner' | 'worker' | 'reviewer' | 'advisor';
-
-export const ROLE_DIMENSIONS: Record<Role, Dimension> = {
-  researcher: 'plan',
-  planner: 'plan',
-  worker: 'implement',
-  reviewer: 'review',
-  advisor: 'plan',
-};
 
 /** Provider id this extension registers under. */
 export const ROUTER_PROVIDER_ID = 'router';

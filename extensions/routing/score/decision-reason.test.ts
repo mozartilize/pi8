@@ -21,15 +21,13 @@ describe('scored decision reasons', () => {
   it('renders the score and typed policy details in insertion order', () => {
     const routed = decision({ ...base, details: [] });
     addReasonDetail(routed, { kind: 'incumbent-effort' });
-    addReasonDetail(routed, { kind: 'context-pressure' });
     expect(routed.reason).toBe(
       "score 0.812 (quality 0.55, cost 0.21, speed 0.05) [cost per task]" +
-      " [kept current model's thinking level]" +
-      ' [context nearly full: prefer a fresh planner subagent]',
+      " [kept current model's thinking level]",
     );
     expect(routed.reason).toBe(renderScoredReason(routed.scoredReason!));
     expect(routed.scoredReason?.details.map((detail) => detail.kind)).toEqual([
-      'incumbent-effort', 'context-pressure',
+      'incumbent-effort',
     ]);
   });
 

@@ -85,7 +85,7 @@ describe('demand bounds in exact regret', () => {
     ].map(({ key, quality, cost }) => {
       const s: DecisionStateV1 = {
         phase: 'gather', estimatedContextTokens: 0, needsVision: false, boundary: 'ordinary', friction: [],
-        nowMs: 0, isSubagentSpawn: false, benchmarkIndexVersion: '4.3',
+        nowMs: 0, benchmarkIndexVersion: '4.3',
         difficulty: { value: 0.5, source: 'declared-complexity',
           bounds: { reasoning: { lower, upper }, agentic: { lower, upper }, research: { lower, upper } } },
       };
@@ -186,7 +186,7 @@ const decisionState: DecisionStateV1 = {
   phase: 'implement', estimatedContextTokens: 50_000, needsVision: false, boundary: 'ordinary',
   // The shortfall fixtures require a known hard target, independent of demand uncertainty.
   difficulty: { value: 1, source: 'execution-rubric' },
-  friction: [], nowMs: 0, isSubagentSpawn: false, benchmarkIndexVersion: '4.3',
+  friction: [], nowMs: 0, benchmarkIndexVersion: '4.3',
 };
 
 /** Both candidates meet these targets, so solver-path tests compare two actions with zero shortfall. */

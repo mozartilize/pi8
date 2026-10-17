@@ -110,8 +110,6 @@ export interface DecisionStateV1 {
   /** Identity of the current prompt head. */
   promptIdentity?: string;
   nowMs: number;
-  /** A spawned subagent shares no prompt cache with its parent. */
-  isSubagentSpawn: boolean;
   /** AA Intelligence Index version of the benchmark snapshot. */
   benchmarkIndexVersion?: string;
 }
@@ -143,7 +141,7 @@ export type TaskSnapshot = TaskDeclarations & WorkloadMeasurement;
 export type BenchmarkSnapshot = Immutable<Pick<DecisionStateV1, 'benchmarkIndexVersion'>>;
 
 /** Prompt-cache records of the current request and the time that ages them. */
-export type CacheSnapshot = Immutable<Pick<DecisionStateV1, 'cache' | 'promptIdentity' | 'nowMs' | 'isSubagentSpawn'>>;
+export type CacheSnapshot = Immutable<Pick<DecisionStateV1, 'cache' | 'promptIdentity' | 'nowMs'>>;
 
 /** Spend: the measured prompt size, the per-model token scale, and the cache records. */
 export type SpendSnapshot = Pick<WorkloadMeasurement, 'estimatedContextTokens'> & CacheSnapshot

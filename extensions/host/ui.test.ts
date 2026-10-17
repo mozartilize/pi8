@@ -133,15 +133,6 @@ describe('formatStatus', () => {
     expect(kept).toContain('  plan:       accepted (1 file, 2 steps); beta/strong keeps running it: it leaves a choice open');
   });
 
-  it('marks context-pressure decisions in the status line', () => {
-    const s = formatStatus({ ...decision, contextPressure: { usageRatio: 0.6, threshold: 0.5, suggestion: 'offload' } }, {
-      registryId: 'opencode-go/kimi-k2.7-code',
-      thinkingLevel: 'high',
-      viaFallback: false,
-      accumulatedCost: 0,
-    });
-    expect(s).toContain('(context nearly full)');
-  });
 });
 
 describe('clearRouterStatus', () => {
@@ -287,26 +278,6 @@ describe('formatDecisionDetail', () => {
 
     expect(lines).toContain('demoted:    cheap/model (no benchmark data for this task)');
     expect(lines).toContain('demoted:    weak/model (intelligence score below the minimum for this task type)');
-  });
-
-  it('adds advisory detail for context pressure', () => {
-    const lines = formatDecisionDetail(
-      {
-        ...decision,
-        contextPressure: {
-          usageRatio: 0.68,
-          threshold: 0.6,
-          suggestion: 'handoff planning to a fresh planner',
-        },
-      },
-      {
-        registryId: 'opencode-go/kimi-k2.7-code',
-        viaFallback: false,
-        accumulatedCost: 0,
-      },
-    ).join('\n');
-    expect(lines).toContain('context 68% full (advice starts at 60%)');
-    expect(lines).toContain('handoff planning to a fresh planner');
   });
 
   it('is explicit when nothing has been routed yet', () => {

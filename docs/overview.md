@@ -1,6 +1,6 @@
 # pi8 overview
 
-pi8 selects models for main-session Pi turns. Automatic subagent integration is disabled. It uses benchmark measurements, registry metadata, and accepted task declarations.
+pi8 selects models for main-session Pi turns. It uses benchmark measurements, registry metadata, and accepted task declarations.
 
 The router runs inside Pi. It does not start a gateway or make separate model calls to classify requests.
 
@@ -24,7 +24,6 @@ Every model call serves the user's request.
 | [Scoring](scoring.md) | Candidate expansion, quality references, price/speed scales, cache credit, and effort |
 | [Delegation](delegation.md) | Attempts, retries, provider exclusions, output safety, and manual/resume state |
 | [Work lifecycle](work-lifecycle.md) | Context collection, execution plans, review, completion, and reopen |
-| [Subagents](subagents.md) | Disabled integration and Pi-subagents ownership of child selection |
 | [Benchmark data](benchmark-data.md) | Data sources, model matching, effort identity, and refresh behavior |
 | [Observability](observability.md) | Logs, attempt timing, cost reports, and privacy limits |
 | [Glossary](glossary.md) | Project terms and their meanings |
@@ -49,7 +48,6 @@ pi8 registers the synthetic `router/auto` provider inside Pi. It resolves a requ
 | pi8 | Task state, benchmark matching, candidate selection, delegation, and work tracking |
 | Artificial Analysis | Published benchmark measurements |
 | Model provider | Authentication result, model availability, generated output, and usage |
-| pi-subagents | Child execution and workflow controls |
 
 Tool gates control the workflow. They do not isolate files, shell commands, or credentials.
 
@@ -58,7 +56,7 @@ Tool gates control the workflow. They do not isolate files, shell commands, or c
 | Source | Responsibility |
 |---|---|
 | [Entry point](../index.ts) | Register the extension and connect Pi hooks |
-| [Provider](../extensions/serve/provider.ts) | Registry access, task resolution, scoring, delegation, and subagent authentication probe |
+| [Provider](../extensions/serve/provider.ts) | Registry access, task resolution, scoring, and delegation |
 | [Scorer](../extensions/routing/score/scorer.ts) | Pure candidate scoring, capability tiers, and effort resolution |
 | [Delegation](../extensions/serve/delegation.ts) | Authentication, retries, provider failures, cancellation, and timing |
 | [Work phase](../extensions/routing/policy/work-phase.ts) | Entry state, final-step requirements, and handoff minimums |
@@ -66,9 +64,6 @@ Tool gates control the workflow. They do not isolate files, shell commands, or c
 | [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan release, execution, review, and strikes |
 | [Contract tool](../extensions/serve/execution-contract-tool.ts) | Plan acceptance and tool-event tracking |
 | [Benchmark adapters](../extensions/adapters/artificial-analysis.ts) | Join API and public-page measurements |
-| [Subagent helpers](../extensions/agents/subagents.ts) | Retained offline implementation; automatic integration is disabled |
-
-The subagent credential probe and child-selection helpers are not called by active hooks.
 
 ### Session state
 
