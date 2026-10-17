@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { clearRouterStatus, formatStatus, formatDecisionDetail, formatWorkContext, servedKey, preferenceBinding } from './ui.js';
+import { afterEach, describe, it, expect } from 'vitest';
+import { visibleWidth } from '@earendil-works/pi-tui';
+import { setDebugPath } from './debuglog.js';
+import { clearRouterStatus, renderDebugEntry, formatStatus, formatDecisionDetail, formatWorkContext, servedKey, preferenceBinding } from './ui.js';
 import { emptyLedger, foldEvents } from '../routing/context/ledger.js';
 import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
 import { candidateKey } from '../routing/score/scorer.js';
@@ -488,5 +490,24 @@ describe('work context in /router-why', () => {
     }, undefined).join('\n');
     expect(unresolved).toContain('no work item (not recorded on this branch)');
     expect(unresolved).toContain('context:    still needed (left open by an earlier request)');
+  });
+});
+
+describe('renderDebugEntry', () => {
+  afterEach(() => setDebugPath(undefined));
+  const theme = { fg: (_color: 'dim', text: string) => `\x1b[2m${text}\x1b[22m` };
+  const line = `pi8 attempt.timing ${JSON.stringify({ candidate: 'anthropic/claude-haiku-5-5:high', stack: 'x'.repeat(600) })}`;
+
+  it('shows the line dim and inside the terminal width', () => {
+    setDebugPath('/tmp/pi8-ui-test-debug.log');
+    const rows = renderDebugEntry({ data: { line } }, theme)!.render(80);
+    expect(rows.length).toBeGreaterThan(1);
+    expect(rows.every((row) => visibleWidth(row) <= 80)).toBe(true);
+    expect(rows[0]).toContain('\x1b[2m');
+  });
+
+  it('shows nothing while debug is off', () => {
+    setDebugPath(null);
+    expect(renderDebugEntry({ data: { line } }, theme)).toBeUndefined();
   });
 });

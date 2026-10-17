@@ -566,7 +566,14 @@ export function registerContextHandoffTool(pi: ExtensionAPI, session: RouterSess
         } catch {
           result = { accepted: false, text: REJECTIONS.internal };
         }
-        debugLog('context-handoff.submit', { accepted: result.accepted });
+        const live = session.getWorkPhaseState();
+        debugLog('context-handoff.submit', {
+          accepted: result.accepted,
+          workItemId: live?.workItemId,
+          topicId: live?.contextResolution?.topicId,
+          phase: live?.reasoningHandoff?.target ?? live?.deliverable,
+          contextStatus: live?.contextStatus,
+        });
         return { content: [{ type: 'text' as const, text: result.text }], details: { accepted: result.accepted } };
       },
     });

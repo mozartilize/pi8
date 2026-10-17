@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { debugLog, setDebugPath, startTimer, DEFAULT_DEBUG_PATH, setConfigDebug } from './debuglog.js';
+import { debugLog, setDebugPath, setDebugUiSink, startTimer, DEFAULT_DEBUG_PATH, setConfigDebug } from './debuglog.js';
 
 /** True when a log line lands on the default path under the current config. */
 const probeLog = (): boolean => {
@@ -19,6 +19,7 @@ const probeLog = (): boolean => {
 afterEach(() => {
   setDebugPath(undefined);
   setConfigDebug(undefined);
+  setDebugUiSink(undefined);
   rmSync(DEFAULT_DEBUG_PATH, { force: true });
 });
 
@@ -84,6 +85,24 @@ describe('debuglog', () => {
       debugLog('from-config', { a: 1 });
       expect(existsSync(path)).toBe(true);
       expect(readFileSync(path, 'utf8')).toContain('from-config');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives the UI sink each line exactly once, in arrival order', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ar-dbg-'));
+    const path = join(dir, 'debug.log');
+    const seen: string[] = [];
+    try {
+      setDebugPath(path);
+      setDebugUiSink((line) => seen.push(line));
+      debugLog('decision', { workItemId: 'work-7' });
+      debugLog('attempt.stream', { outcome: 'first-output' });
+      expect(seen).toEqual([
+        'pi8 decision {"workItemId":"work-7"}',
+        'pi8 attempt.stream {"outcome":"first-output"}',
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

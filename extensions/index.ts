@@ -58,7 +58,7 @@ import { computeSubagentSpend } from './agents/subagent-spend.js';
 import { loadModelFilter, buildExcludeFilter, buildScopedModelFilter } from './routing/policy/allowlist.js';
 import { loadConfig } from './config.js';
 import { setSessionFile } from './sessionpaths.js';
-import { debugLog, setConfigDebug } from './host/debuglog.js';
+import { debugLog, setConfigDebug, setDebugUiSink } from './host/debuglog.js';
 import { indexVersionWarning, type RegistryModelInfo } from './routing/score/scorer.js';
 import { loadStore } from './bench/store.js';
 import { checkPlaywright } from './adapters/artificial-analysis-site.js';
@@ -68,7 +68,7 @@ import {
   appendSubagentSpend,
   resetModelEventSession,
 } from './host/decisionlog.js';
-import { clearRouterStatus, renderRouterStatus } from './host/ui.js';
+import { clearRouterStatus, DEBUG_ENTRY_TYPE, renderDebugEntry, renderRouterStatus } from './host/ui.js';
 import {
   gateContractMutation,
   handleContractToolCall,
@@ -306,6 +306,9 @@ async function handleSessionStart(
   } catch {
     // Ephemeral / no session manager: logs fall back to the shared store.
   }
+  setDebugUiSink(ctx.hasUI === false || typeof pi.appendEntry !== 'function'
+    ? undefined
+    : (line) => pi.appendEntry(DEBUG_ENTRY_TYPE, { line }));
   declareRouterTools(pi);
   debugLog('lifecycle.session_start.begin', {
     reason: event.reason,
@@ -749,6 +752,9 @@ export default async function autoModelRouterExtension(
   registerAutoRouterProvider(pi, undefined, session, runtime);
   registerExecutionContractTool(pi, session);
   registerContextHandoffTool(pi, session);
+  if (typeof pi.registerEntryRenderer === 'function') {
+    pi.registerEntryRenderer(DEBUG_ENTRY_TYPE, (entry, _options, theme) => renderDebugEntry(entry, theme));
+  }
   registerRoutingContextTool(pi, session);
   registerCompleteWorkTool(pi, session);
   registerReopenWorkTool(pi, session);

@@ -42,7 +42,6 @@ import {
   appendAttemptUsage,
   appendDecision,
   appendExecutionContractSignal,
-  appendContextHandoffSignal,
   appendWorkLifecycleSignal,
 } from '../host/decisionlog.js';
 import { renderRouterStatus, servedKey, type ServedInfo } from '../host/ui.js';
@@ -121,6 +120,7 @@ import {
   CLARIFICATION_NOTE,
   closeContextEntry,
   gatheringNote,
+  logContextHandoff,
 } from './gathering-gate.js';
 import { applyNotePlans, messageAnchor, planRequestNote, type NotePlan } from './request-notes.js';
 import { planToolsNote } from './router-tools-note.js';
@@ -831,6 +831,9 @@ async function resolveRouterTurn(args: {
   debugLog('entry.context', {
     cacheHit,
     key: settled.key,
+    pendingIdentity: Boolean(entry.pendingIdentity),
+    workChoices: entry.pendingIdentity?.catalog.workItems.length,
+    topics: entry.pendingIdentity?.catalog.topics.length,
   });
 
   return {
@@ -957,10 +960,7 @@ async function scoreRouterTurn(args: {
     let next = entry.contextStatus == null ? { ...entry, contextStatus: 'acquiring' as const, contextRequests: 0 } : entry;
     if (next.contextStatus === 'acquiring' && (next.contextRequests ?? 0) >= ACQUISITION_REQUEST_LIMIT) {
       next = { ...next, contextStatus: 'clarification-only' };
-      appendContextHandoffSignal({
-        intentKey: next.intentKey,
-        served: session.getPreviousServed() ? servedKey(session.getPreviousServed()!) : 'unknown/unknown',
-        action: 'budget-exhausted',
+      logContextHandoff(next, session.getPreviousServed() ? servedKey(session.getPreviousServed()!) : 'unknown/unknown', 'budget-exhausted', {
         contextReasons: owedContext(entry),
       });
     }
@@ -1170,6 +1170,13 @@ async function scoreRouterTurn(args: {
 
   debugLog('decision', {
     dimension: decision.dimension,
+    cause: decision.cause,
+    workItemId,
+    topicId: decision.workContext?.topicId ?? entry?.contextResolution?.topicId,
+    phase: routedDimension,
+    contextStatus: entry?.contextStatus,
+    handoffId: decision.reasoningHandoff?.id,
+    previousHandoffId: decision.previousHandoffId,
     candidates: candidates.length,
     routable: routableCandidates.length,
     chosen: decision.chosen,
@@ -1476,6 +1483,12 @@ async function delegateRouterTurn(args: {
       });
       if (confirmed.state !== 'served') return finalDecision;
       session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, boundaryAuthorization: confirmed });
+      debugLog('boundary.confirm', {
+        workItemId: authorization.workItemId,
+        phase: finalDecision.dimension,
+        state: confirmed.state,
+        actualServed,
+      });
     }
     const releasing = session.getWorkPhaseState();
     if (scored.releasesContract && releasing?.contract?.status === 'active') {
@@ -1488,10 +1501,7 @@ async function delegateRouterTurn(args: {
     const owned = serveContextHandoff(current, served);
     session.commitWorkPhaseState(owned);
     const handoff = owned.reasoningHandoff;
-    appendContextHandoffSignal({
-      intentKey: owned.intentKey,
-      served: handoff?.owner ?? served,
-      action: 'served',
+    logContextHandoff(owned, handoff?.owner ?? served, 'served', {
       ...(handoff ? { handoff } : { deliverable: owned.deliverable }),
     });
     return handoff ? { ...finalDecision, reasoningHandoff: handoff } : finalDecision;

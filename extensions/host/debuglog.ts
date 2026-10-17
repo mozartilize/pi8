@@ -70,9 +70,24 @@ function debugPath(): string | null {
   return sessionSidecarPath(DEBUG_SIDECAR_SUFFIX) ?? DEFAULT_DEBUG_PATH;
 }
 
+/** Receives each debug line once while debug is on, to show it in Pi's UI. */
+let uiSink: ((line: string) => void) | undefined;
+
+/** Set (or clear) the UI sink. Called from the extension at session_start. */
+export function setDebugUiSink(sink: ((line: string) => void) | undefined): void {
+  uiSink = sink;
+}
+
 export function debugLog(message: string, data?: Record<string, unknown>): void {
   const path = debugPath();
   if (!path) return;
+  if (uiSink) {
+    try {
+      uiSink(`pi8 ${message}${data ? ' ' + JSON.stringify(data) : ''}`);
+    } catch {
+      // The UI context can be stale after a session change.
+    }
+  }
   try {
     const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

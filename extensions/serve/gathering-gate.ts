@@ -8,6 +8,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import { stat } from 'node:fs/promises';
 import { appendContextHandoffSignal, type ContextHandoffSignal } from '../host/decisionlog.js';
+import { debugLog } from '../host/debuglog.js';
 import { servedKey } from '../host/ui.js';
 import { EXECUTION_CONTRACT_TOOL } from '../routing/policy/execution-contract.js';
 import {
@@ -34,6 +35,18 @@ export function logContextHandoff(
   extra: Partial<ContextHandoffSignal> = {},
 ): void {
   const contextReasons = owedContext(state);
+  const handoff = extra.handoff ?? state.reasoningHandoff;
+  debugLog('context-handoff', {
+    action,
+    workItemId: state.workItemId,
+    topicId: state.contextResolution?.topicId,
+    phase: handoff?.target ?? extra.deliverable ?? state.deliverable,
+    contextStatus: state.contextStatus,
+    intentKey: state.intentKey,
+    served,
+    ...(extra.rejectReason ? { rejectReason: extra.rejectReason } : {}),
+    ...(handoff ? { handoffId: handoff.id, pending: handoff.pending } : {}),
+  });
   appendContextHandoffSignal({
     intentKey: state.intentKey, served, action, ...(contextReasons.length > 0 ? { contextReasons } : {}), ...extra,
   });

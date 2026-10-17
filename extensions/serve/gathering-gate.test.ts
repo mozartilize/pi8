@@ -1,13 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { appendContextHandoffSignal } from '../host/decisionlog.js';
+import { setDebugPath } from '../host/debuglog.js';
 import { ACQUISITION_DENIAL_LIMIT } from '../routing/policy/context-acquisition.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { routingDecision } from '../test-support/router-fixtures.js';
 import { RouterSession } from './router-session-state.js';
 import { submitContextHandoff } from './context-handoff-tool.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER } from './execution-contract-tool.js';
-import { CLARIFICATION_TEXT, closeContextEntry, countContextRefusal, gateContextToolCall } from './gathering-gate.js';
+import { CLARIFICATION_TEXT, closeContextEntry, countContextRefusal, gateContextToolCall, logContextHandoff } from './gathering-gate.js';
 import { factsLog } from '../routing/policy/change-facts.js';
 
 vi.mock('../host/decisionlog.js', () => ({ appendContextHandoffSignal: vi.fn() }));
@@ -173,5 +177,46 @@ describe('closing an entry', () => {
     const state: WorkPhaseState = { intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0 };
     expect(closeContextEntry(state, 'a/model')).toBe(state);
     expect(vi.mocked(appendContextHandoffSignal)).not.toHaveBeenCalled();
+  });
+});
+
+describe('context-handoff debug lines', () => {
+  afterEach(() => setDebugPath(undefined));
+
+  it('records work item, topic and phase on a handoff action', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pi8-handoff-dbg-'));
+    const path = join(dir, 'debug.log');
+    try {
+      setDebugPath(path);
+      logContextHandoff({
+        intentKey: 'entry-a',
+        workItemId: 'work-7',
+        deliverable: 'plan',
+        contextStatus: 'ready-pending',
+        providerInvocation: 1,
+        observedMutationTools: 0,
+        contextResolution: {
+          sourceEntryId: 'entry-a',
+          topicId: 'topic-3',
+          workItemId: 'work-7',
+          relation: 'continue',
+          deliverable: 'implement',
+          contextReasons: [],
+          resolver: 'context-handoff',
+        },
+      }, 'openai/gpt', 'accept', { deliverable: 'implement' });
+      const payload = JSON.parse(readFileSync(path, 'utf8').trim().split(' ').slice(2).join(' '));
+      expect(payload).toMatchObject({
+        action: 'accept',
+        workItemId: 'work-7',
+        topicId: 'topic-3',
+        phase: 'implement',
+        contextStatus: 'ready-pending',
+        intentKey: 'entry-a',
+        served: 'openai/gpt',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

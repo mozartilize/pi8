@@ -6,6 +6,8 @@
  * /router status and the per-session widget.
  */
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { Text } from '@earendil-works/pi-tui';
+import { isDebugEnabled } from './debuglog.js';
 import type {
   DecisionCause,
   ExecutionContractMeta,
@@ -398,4 +400,21 @@ export function notifyRouting(
   } catch {
     // Notifications are cosmetic; never break a turn.
   }
+}
+
+/** Session entry type of one pi8 debug line. Pi never sends custom entries to the model. */
+export const DEBUG_ENTRY_TYPE = 'pi8-debug';
+
+/**
+ * One debug line in the chat, dim like the routing notice. Each line is its
+ * own entry because Pi merges consecutive `notify` calls into one status line.
+ * Lines stay hidden while debug is off, also on a resumed session.
+ */
+export function renderDebugEntry(
+  entry: { data?: unknown },
+  theme: { fg(color: 'dim', text: string): string },
+): Text | undefined {
+  if (!isDebugEnabled()) return undefined;
+  const line = (entry.data as { line?: unknown } | undefined)?.line;
+  return typeof line === 'string' ? new Text(theme.fg('dim', line), 1, 0) : undefined;
 }
