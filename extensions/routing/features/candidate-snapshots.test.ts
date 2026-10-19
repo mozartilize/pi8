@@ -35,5 +35,5 @@ it('projects only the declared domain fields before evaluation', () => {
   ]);
   expect(fields(spendCall.mock.calls[0]![2])).toEqual(['api', 'compat', 'cost', 'promptCache']);
   expect(fields(continuityCall.mock.calls[0]![0])).toEqual(['boundary', 'incumbent', 'rework']);
-  expect(fields(recoveryCall.mock.calls[0]![0])).toEqual(['boundary', 'friction', 'rework', 'workItemId']);
+  expect(fields(recoveryCall.mock.calls[0]![0])).toEqual(['boundary', 'friction', 'rework']);
 });

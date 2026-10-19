@@ -90,10 +90,8 @@ type Minimums = Readonly<Partial<Record<QualityAxis, number>>>;
  *   from many source files holds up when checked.
  * - implement: agentic coding 34, the Terminal-Bench 4.0 pass rate in
  *   percent (calibrated on 2026-10-08). 34 is 0.53 of the reference.
- * - lightweight: none; trivial work goes to the cheapest model.
  */
 const CAPABILITY_MINIMUMS: Readonly<Record<Dimension, Minimums>> = {
-  lightweight: {},
   gather: { intelligence: 20 },
   plan: { intelligence: 30, knowledge: 0, research: 0.35 },
   review: { intelligence: 30, knowledge: 0, research: 0.35 },

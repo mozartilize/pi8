@@ -50,7 +50,7 @@ export interface WorkPhaseState {
   /** Where collecting context stands for the entry; absent until an invocation routes it. */
   contextStatus?: ContextStatus;
   /** A gathering model declared the type of its direct answer; it remains in gathering. */
-  contextAnswer?: 'gather' | 'lightweight';
+  contextAnswer?: 'gather';
   /** Direct-answer demand belongs to this entry and creates no handoff or work identity. */
   contextAnswerDemand?: { complexity: ComplexityBand; scope: TaskScope; rubric?: ReasoningRubric; evidence: ReasoningEvidence };
   /** An incumbent was serving when this entry arrived: it serves the entry, which collects no context. */

@@ -36,14 +36,14 @@ export const COMPLETION_SETTLE_TEXT = [
 
 /**
  * A direct answer while collecting context is normal only for a request typed
- * `gather` or `lightweight`. Any other type, or a refused attempt to act,
+ * `gather`. Any other type, or a refused attempt to act,
  * shows a boundary the model never declared: a plan, review, or change written
  * by the gathering model skips that type's minimum. A declared direct answer
  * stays in collecting context but owes nothing more.
  */
 function owesHandoff(state: WorkPhaseState): boolean {
   if (state.contextStatus !== 'acquiring' || state.contextSettleReminded || state.contextAnswer !== undefined) return false;
-  const directAnswer = state.deliverable === 'gather' || state.deliverable === 'lightweight';
+  const directAnswer = state.deliverable === 'gather';
   return !directAnswer || (state.contextDenials ?? 0) > 0;
 }
 

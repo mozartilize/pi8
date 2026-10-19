@@ -345,7 +345,7 @@ describe('work-context resolution through the provider', () => {
     tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
     await setup();
     await entry('implement the auth login flow');
-    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'lightweight', workItemId: 'NONE' })).accepted).toBe(true);
+    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', workItemId: 'NONE' })).accepted).toBe(true);
     await entry('back to the auth login flow');
     expect(harness.session.getWorkPhaseState()?.pendingIdentity?.legacy ?? []).toEqual([]);
   });

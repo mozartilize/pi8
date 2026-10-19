@@ -958,7 +958,7 @@ async function scoreRouterTurn(args: {
     return { registryId: `${parsed.provider}/${parsed.id}`, ...(parsed.effort ? { effort: parsed.effort } : {}) };
   };
   const rework = trajectoryEscalation ? identity(trajectoryEscalation.fromModel) : undefined;
-  // Without a work item, the entry scopes friction evidence.
+  // Without a work item, the entry scopes the authorization.
   const workItemId = session.getWorkPhaseState()?.workItemId ?? turnInput.key;
   const registryModels = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
   const promptTokenScales = promptTokenScaleMap(registryModels);
@@ -970,19 +970,17 @@ async function scoreRouterTurn(args: {
     contextAcquisition: routedDimension === 'gather' && phase.cause === 'investigation'
       && ((entry?.contextStatus === 'acquiring' && entry.contextAnswer === undefined)
         || entry?.contextStatus === 'clarification-only'),
-    workItemId,
     difficulty: phaseDifficulty(entry, routedDimension),
     openDecisions: entry?.changeFacts?.declared?.decisions?.length,
     estimatedContextTokens: estContextTokens,
     ...(promptTokenScales.size > 0 ? { promptTokenScales } : {}),
     needsVision,
     boundary: rework ? 'rework' : 'ordinary',
-    ...(rework ? { rework: { failed: rework, workItemId } } : {}),
+    ...(rework ? { rework: { failed: rework } } : {}),
     ...(!rework && incumbentRegistryId ? { incumbent: identity(incumbentRegistryId) } : {}),
     // Objective struggle is friction of the exact served model and effort.
     friction: rework && trajectoryEscalation ? [{
       ...rework,
-      workItemId,
       kind: trajectoryEscalation.signals.some((signal) => signal.kind === 'reasoning-loop' && signal.severity === 'severe')
         ? 'severe-reasoning-loop' as const : 'attributed-rework' as const,
     }] : [],

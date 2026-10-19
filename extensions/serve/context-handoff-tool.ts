@@ -68,7 +68,7 @@ const DESCRIPTION =
   'unclear or what it rests on cannot be read, with the question to ask. The router picks the next model. Do not ' +
   'write the plan, review, change, or investigation yourself.';
 
-const DIMENSIONS: readonly Dimension[] = ['lightweight', 'gather', 'implement', 'review', 'plan'];
+const DIMENSIONS: readonly Dimension[] = ['gather', 'implement', 'review', 'plan'];
 const COMPLEXITIES: readonly ComplexityBand[] = ['trivial', 'routine', 'moderate', 'hard', 'frontier'];
 const SCOPES: readonly TaskScope[] = ['bounded', 'open-ended'];
 const NEEDS_USER_REASONS = ['ambiguous-request', 'missing-artifact', 'unavailable-tool', 'insufficient-evidence'] as const;
@@ -78,13 +78,13 @@ function contextHandoffParameters() {
   const oneOf = (values: readonly string[], description: string) =>
     Type.Union(values.map((value) => Type.Literal(value)), { description });
   return Type.Object({
-    outcome: oneOf(['ready', 'answer', 'needs-user'], 'ready: hand off to a work phase, which can be an investigation (gather). answer: answer directly as gather or lightweight. needs-user: ask the user first.'),
+    outcome: oneOf(['ready', 'answer', 'needs-user'], 'ready: hand off to a work phase, which can be an investigation (gather). answer: answer directly as gather. needs-user: ask the user first.'),
     question: Type.Optional(Type.String({
       description: 'Required for ready or needs-user: what the next step must do, or the question for the user.',
     })),
     findings: Type.Optional(Type.String({ description: 'ready: what you found.' })),
-    deliverable: Type.Optional(oneOf(DIMENSIONS, 'Required for ready or answer: declare the task type. ready accepts plan, review, implement, or gather. answer accepts only gather or lightweight.')),
-    workItemId: Type.Optional(Type.String({ description: 'ready, when work is not yet selected: an offered work item or legacy id, NEW_WORK_ITEM, or NONE for a lightweight side question.' })),
+    deliverable: Type.Optional(oneOf(DIMENSIONS, 'Required for ready or answer: declare the task type. ready accepts plan, review, implement, or gather. answer accepts only gather.')),
+    workItemId: Type.Optional(Type.String({ description: 'ready, when work is not yet selected: an offered work item or legacy id, or NEW_WORK_ITEM.' })),
     topicId: Type.Optional(Type.String({ description: 'ready: the offered topic id, or NEW_TOPIC. Required when creating work in an existing topic.' })),
     topicTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_TOPIC.' })),
     workItemTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_WORK_ITEM.' })),
@@ -128,7 +128,7 @@ const REJECTIONS = {
   'answer-work-identity': 'Context not handed off: outcome "answer" does not select work. ' +
     'For an investigation, use outcome "ready", deliverable "gather", findings, question, and work identity. ' +
     'To answer directly, call it again with outcome "answer". You may use workItemId "NONE". Remove these fields:',
-  'missing-work-choice': 'Context not handed off: choose a listed workItemId, NEW_WORK_ITEM, or NONE for a lightweight side question.',
+  'missing-work-choice': 'Context not handed off: choose a listed workItemId or NEW_WORK_ITEM.',
   'invalid-work-choice': 'Context not handed off: the work and topic ids must be from this entry’s offered choices. Choose again.',
   'missing-work-title': 'Context not handed off: give a short workItemTitle for NEW_WORK_ITEM.',
   'missing-topic-title': 'Context not handed off: give a short topicTitle for NEW_TOPIC.',
@@ -321,7 +321,7 @@ export function submitContextHandoff(
   if (!reported) return reject(session, 'missing-deliverable', state, served);
   if (params?.outcome === 'answer') {
     if (!opened.acquiring) return reject(session, 'not-acquiring', state, served);
-    if (reported !== 'gather' && reported !== 'lightweight') return reject(session, 'no-next-step', state, served);
+    if (reported !== 'gather') return reject(session, 'no-next-step', state, served);
     // An empty value selects nothing. Name each field that does, so the model can remove exactly those.
     const given = (value: unknown) => value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '');
     const identity = [
@@ -459,7 +459,7 @@ export async function prepareHandoffFacts(
   const opened = openFor(ctx, session);
   const reported = member(DIMENSIONS, params.deliverable);
   if (params.outcome === 'answer') {
-    if ('reject' in opened || !opened.acquiring || (reported !== 'gather' && reported !== 'lightweight')) return {};
+    if ('reject' in opened || !opened.acquiring || reported !== 'gather') return {};
     const generation = session.getSessionGeneration();
     const paths = evidencePaths(declaredFiles(params, ctx.cwd), opened.state.readPaths);
     const evidence = await measureEvidence(exec, ctx.cwd, paths, signal);
@@ -496,7 +496,7 @@ export async function prepareHandoffFacts(
     if (topicId === 'NEW_TOPIC' && workItemId !== 'NONE' && !shortTitle(params.topicTitle)) {
       facts.selectionError = 'missing-topic-title'; return facts;
     }
-    if (workItemId === 'NONE' && deliverable !== 'lightweight') {
+    if (workItemId === 'NONE') {
       facts.selectionError = 'invalid-work-choice'; return facts;
     }
     if (workItemId !== 'NEW_WORK_ITEM' && workItemId !== 'NONE' && !listed && !legacy) {

@@ -32,7 +32,7 @@ const solveActions = (actions: readonly SelectableAction[], domain: NumericDomai
   solveMinimaxRegret(validProblem(actions), domain, lp, controls);
 
 const ENABLED = process.env.PI8_POOL_MEASURE === '1';
-const PHASES: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
+const PHASES: Dimension[] = ['gather', 'plan', 'implement', 'review'];
 const PROVIDERS_WITHOUT_DELEGATION = new Set(['cursor']);
 
 interface PoolSource { name: string; registry: RegistryModelInfo[]; rows: BenchModel[]; indexVersion?: string; models?: string[]; blacklist?: string[] }

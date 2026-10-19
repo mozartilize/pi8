@@ -3916,7 +3916,7 @@ describe('gathering direct answers', () => {
     await harness.serve(context);
     const { submitContextHandoff } = await import('./context-handoff-tool.js');
     expect(submitContextHandoff({
-      outcome: 'answer', deliverable: 'lightweight', complexity: 'trivial', scope: 'bounded',
+      outcome: 'answer', deliverable: 'gather', complexity: 'trivial', scope: 'bounded',
     }, { model: { provider: 'router', id: 'auto' } } as unknown as ExtensionContext, harness.session).accepted).toBe(true);
     harness.resetEventStream();
     harness.scriptReply([{ type: 'text_delta', delta: 'declared answer' }, { type: 'done' }]);

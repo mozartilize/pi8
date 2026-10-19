@@ -29,7 +29,7 @@ function fixture(withThird = false) {
     actors, excluded.map((model) => ({ workItemId: 'work', phase: 'implement' as const, model })));
   let boundary: BoundaryAuthorizationV1 | undefined = boundaryOf(models.map((model) => `test/${model.id}`));
   const input: UnifiedTurnInput = {
-    state: { phase: 'implement', workItemId: 'work', estimatedContextTokens: 1000,
+    state: { phase: 'implement', estimatedContextTokens: 1000,
       needsVision: false, boundary: 'ordinary', friction: [], nowMs: 0,
       benchmarkIndexVersion: '4.3' },
     authorizationScope: { boundaryId: 'entry', workItemId: 'work', phase: 'implement', assignmentId, revision: 1 },
@@ -56,6 +56,9 @@ describe('production unified recovery', () => {
     const f = fixture();
     const selected = await f.select();
     expect(selected).toMatchObject({ kind: 'decision', chosen: 'test/alternate', constraintsEnforced: true });
+    // The loop friction belongs to the recovery decision only; the turn's own state keeps none.
+    expect(f.input.state.friction).toEqual([]);
+    expect(f.input.state.boundary).toBe('ordinary');
     expect(f.commit).not.toHaveBeenCalled();
     expect(f.adapter.reserve('test/alternate')).toBeDefined();
     expect(f.commit).toHaveBeenCalledOnce();
@@ -202,7 +205,7 @@ describe('the best-ranked actor without authorization', () => {
     });
     const candidates = models.map((model, i) => buildCandidate(model, rows[i]));
     const input = (excludedExecutors?: string[]): UnifiedTurnInput => ({
-      state: { phase: 'implement', workItemId: 'work', estimatedContextTokens: 1000, needsVision: false,
+      state: { phase: 'implement', estimatedContextTokens: 1000, needsVision: false,
         boundary: 'ordinary', friction: [], nowMs: 0, benchmarkIndexVersion: '4.3' },
       authorizationScope: { boundaryId: 'entry', workItemId: 'work', phase: 'implement', assignmentId: 'a1', revision: 1 },
       ...(excludedExecutors ? { workState: { intentKey: 'entry', workItemId: 'work', providerInvocation: 1, observedMutationTools: 0, excludedExecutors } } : {}),

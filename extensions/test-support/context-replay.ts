@@ -17,6 +17,9 @@ import type { ContextReason } from '../routing/context/types.js';
 
 export type CorpusRelation = 'continue' | 'resume' | 'reopen' | 'switch' | 'new';
 
+/** A task type in the labeled corpus. Labels written before `lightweight` was removed keep it. */
+export type HistoricalDimension = Dimension | 'lightweight';
+
 export interface CorpusLabel {
   topic: string;
   /** `same`: the entry stays in the active topic; `switch`: another known topic; `new`: a topic not seen before. */
@@ -26,7 +29,7 @@ export interface CorpusLabel {
   relation: CorpusRelation;
   /** The expected work item existed before this entry. */
   existing: boolean;
-  deliverable: Dimension;
+  deliverable: HistoricalDimension;
   /** What the request owes before its deliverable; `identity-unresolved` when only the user can say which work it is. */
   context: ContextReason[];
   contextSatisfied: boolean;

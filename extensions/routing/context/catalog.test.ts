@@ -70,9 +70,9 @@ describe('checkChoice', () => {
       .toEqual({ kind: 'new-item', topicId: 'NEW_TOPIC', relation: 'new' });
   });
 
-  it('accepts NONE only for a lightweight side question', () => {
-    expect(checkChoice({ topicId: 'NEW_TOPIC', workItemId: 'NONE' }, catalog, 'lightweight'))
-      .toEqual({ kind: 'none', topicId: 'NEW_TOPIC', relation: 'switch' });
+  it('rejects NONE for every routed task type', () => {
+    expect(checkChoice({ topicId: 'NEW_TOPIC', workItemId: 'NONE' }, catalog, 'gather').kind)
+      .toBe('invalid');
     expect(checkChoice({ topicId: 'NEW_TOPIC', workItemId: 'NONE' }, catalog, 'implement').kind)
       .toBe('invalid');
   });

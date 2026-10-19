@@ -2,8 +2,9 @@
  * Attributed recovery features of one action: friction avoidance from
  * attributed failures, and the recovery options at a rework boundary.
  *
- * Failure evidence applies only to the exact model, served effort and work
- * item it was attributed to; it never moves to another effort or work item.
+ * Failure evidence applies only to the exact model and served effort it was
+ * attributed to; it never moves to another effort. The decision state holds
+ * only the friction of the current decision.
  * The recovery fits describe recovery options, not observed success.
  */
 import { raisesFailedEffort, type EffectiveAction } from './actions.js';
@@ -18,7 +19,7 @@ export interface RecoveryFeatures {
   evidence: FeatureEvidence[];
 }
 
-export function recoveryFeatures(state: Pick<SessionSnapshot, 'boundary' | 'rework' | 'friction' | 'workItemId'>, action: EffectiveAction): RecoveryFeatures {
+export function recoveryFeatures(state: Pick<SessionSnapshot, 'boundary' | 'rework' | 'friction'>, action: EffectiveAction): RecoveryFeatures {
   let effortRecoveryFit = 0;
   let modelSwitchRecoveryFit = 0;
   if (state.boundary === 'rework' && state.rework) {
@@ -32,7 +33,6 @@ export function recoveryFeatures(state: Pick<SessionSnapshot, 'boundary' | 'rewo
   let unattributed = false;
   for (const event of state.friction) {
     if (event.registryId !== action.registryId || event.effort !== action.effort) continue;
-    if (state.workItemId === undefined || event.workItemId !== state.workItemId) continue;
     if (event.kind === 'attributed-rework') {
       frictionAvoidance = Math.min(frictionAvoidance, FRICTION.attributedRework);
       attributed = true;

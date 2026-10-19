@@ -52,7 +52,7 @@ const PROFILES: readonly [string, UserRoutingPreferencesV1, boolean, number | un
   ['operator-not-ready', OPERATOR, false, undefined],
   ['operator-pair-cap', OPERATOR, true, 10],
 ];
-const PHASES = ['lightweight', 'gather', 'plan', 'implement', 'review'] as const;
+const PHASES = ['gather', 'plan', 'implement', 'review'] as const;
 const CONTEXTS = [30_000, 150_000] as const;
 const BOUNDARIES = ['ordinary', 'rework'] as const;
 
@@ -98,7 +98,7 @@ describe.skipIf(MODE !== '1' && MODE !== 'record')('selection equivalence on the
           phase, estimatedContextTokens, needsVision: false, boundary, friction: [], nowMs: 1_000_000,
           benchmarkIndexVersion: fixture.indexVersion,
           ...(boundary === 'rework'
-            ? { rework: { failed: { registryId: 'anthropic/claude-opus-5-5', effort: 'high' }, workItemId: 'w' }, workItemId: 'w' }
+            ? { rework: { failed: { registryId: 'anthropic/claude-opus-5-5', effort: 'high' } } }
             : { incumbent: { registryId: 'anthropic/claude-sonnet-5-5', effort: 'high' } }),
         };
         const result = await selectByRegret(state, pool, fixture.benchmarks, preferences, ports, {

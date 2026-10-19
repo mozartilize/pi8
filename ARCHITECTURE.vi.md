@@ -17,11 +17,10 @@ Mô-đun `task-demand.ts` và `difficulty.ts` đóng vai trò là chủ thể du
 
 ### 1.1. Phân định giai đoạn và trọng số liên quan (`TaskRelevance`)
 
-Mỗi loại công việc (`Dimension`: `lightweight`, `gather`, `plan`, `implement`, `review`) có mức độ gắn kết nền tảng (`PHASE_RELEVANCE`) đối với 3 trục năng lực:
+Mỗi loại công việc (`Dimension`: `gather`, `plan`, `implement`, `review`) có mức độ gắn kết nền tảng (`PHASE_RELEVANCE`) đối với 3 trục năng lực:
 
 ```typescript
 export const PHASE_RELEVANCE: Readonly<Record<Dimension, TaskRelevance>> = {
-  lightweight: { reasoning: 0.15, agentic: 0,    research: 0.1  },
   gather:      { reasoning: 0.40, agentic: 0,    research: 1.0  },
   plan:        { reasoning: 1.00, agentic: 0.25, research: 0.5  },
   implement:   { reasoning: 0.60, agentic: 1.00, research: 0.15 },

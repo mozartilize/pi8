@@ -65,7 +65,7 @@ describe('capabilities while collecting context', () => {
     expect(at({ ...state, estimatedContextTokens: 64_000, needsVision: true }).evidenceGaps).toEqual(['visionReasoning', 'longContext']);
   });
 
-  it.each(['lightweight', 'plan', 'review', 'implement'] as const)('ignores the collecting-context mark in %s', (phase) => {
+  it.each(['plan', 'review', 'implement'] as const)('ignores the collecting-context mark in %s', (phase) => {
     for (const value of [undefined, 0, 0.65, 1]) {
       const s = { ...state, phase, ...(value === undefined ? {} : { difficulty: { value, source: 'reasoning-rubric' as const } }) };
       expect(at(s)).toEqual(at({ ...s, contextAcquisition: false }));

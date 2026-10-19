@@ -49,9 +49,9 @@ let source: { registryId: string; effort: NonNullable<SelectionCandidate['action
 let otherAtSameEffort: SelectionCandidate['action'];
 
 const reworkState = (withFriction: boolean): DecisionStateV1 => ({
-  phase: 'implement', workItemId: 'W', estimatedContextTokens: 50_000, needsVision: false,
-  boundary: 'rework', rework: { failed: source, workItemId: 'W' },
-  friction: withFriction ? [{ ...source, workItemId: 'W', kind: 'severe-reasoning-loop' }] : [],
+  phase: 'implement', estimatedContextTokens: 50_000, needsVision: false,
+  boundary: 'rework', rework: { failed: source },
+  friction: withFriction ? [{ ...source, kind: 'severe-reasoning-loop' }] : [],
   nowMs: NOW, benchmarkIndexVersion: fixture.indexVersion,
 });
 

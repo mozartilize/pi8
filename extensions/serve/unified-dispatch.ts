@@ -104,7 +104,6 @@ export function createUnifiedDispatch(host: DispatchHost, recoveryHost?: Recover
       const { input } = recoveryHost;
       const sourceIdentity = parseCandidateKey(source);
       const failed = { registryId: `${sourceIdentity.provider}/${sourceIdentity.id}`, ...(sourceIdentity.effort ? { effort: sourceIdentity.effort } : {}) };
-      const workItemId = input.state.workItemId!;
       const scope = input.authorizationScope;
       const before = epoch();
       const current = (): boolean => isCurrent() && input.isCurrent()
@@ -113,8 +112,8 @@ export function createUnifiedDispatch(host: DispatchHost, recoveryHost?: Recover
       const outcome = await resolveUnifiedDecision({
         ...input,
         state: {
-          ...input.state, boundary: 'rework', rework: { failed, workItemId }, incumbent: undefined,
-          friction: [...input.state.friction, { ...failed, workItemId, kind: 'severe-reasoning-loop' }],
+          ...input.state, boundary: 'rework', rework: { failed }, incumbent: undefined,
+          friction: [...input.state.friction, { ...failed, kind: 'severe-reasoning-loop' }],
           nowMs: Date.now(),
         },
         candidates: recoveryHost.candidates(), registryModels: recoveryHost.models(),

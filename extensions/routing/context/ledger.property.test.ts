@@ -22,7 +22,7 @@ const ITEMS = ['w_a', 'w_b', 'w_c'];
 const itemId = fc.constantFrom(...ITEMS);
 const topicId = fc.constantFrom('t_a', 't_b');
 const source = fc.constantFrom('e1', 'e2', 'e3');
-const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
+const DIMENSIONS: Dimension[] = ['gather', 'plan', 'implement', 'review'];
 
 const anchors = fc.uniqueArray(
   fc.record(

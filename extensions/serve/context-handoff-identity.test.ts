@@ -8,7 +8,9 @@ import { setupProviderTest, type ProviderTestHarness } from '../test-support/pro
 import { SessionTree } from '../test-support/session-tree.js';
 import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
 import { observeContextGrounding } from './context-grounding.js';
-import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
+import { prepareHandoffFacts, registerContextHandoffTool, submitContextHandoff } from './context-handoff-tool.js';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { RouterSession } from './router-session-state.js';
 import { gatheringNote } from './gathering-gate.js';
 import { phaseDifficulty } from '../routing/features/difficulty.js';
 
@@ -324,12 +326,31 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(difficulty?.bounds?.agentic.upper).toBeGreaterThanOrEqual(0.125);
   });
 
-  it('declares a lightweight answer without selecting or creating work', async () => {
+  it('declares a direct answer without selecting or creating work', async () => {
     await entry('hello');
     expect((await handoff({ ...READY, workItemId: 'NONE' })).accepted).toBe(false);
-    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'lightweight', workItemId: 'NONE' })).accepted).toBe(true);
+    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', workItemId: 'NONE' })).accepted).toBe(true);
     expect(harness.session.context.getLedger().items.size).toBe(0);
     expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeUndefined();
+  });
+
+  it('offers no lightweight task type in the tool schema', () => {
+    let parameters: unknown;
+    registerContextHandoffTool({ registerTool: (tool: { parameters: unknown }) => { parameters = tool.parameters; } } as unknown as ExtensionAPI,
+      new RouterSession());
+    const deliverable = JSON.stringify((parameters as { properties: { deliverable: unknown } }).properties.deliverable);
+    expect(deliverable).toContain('"gather"');
+    expect(deliverable).not.toContain('lightweight');
+  });
+
+  it('rejects the task type lightweight for every outcome', async () => {
+    await entry('hello');
+    for (const outcome of ['answer', 'ready'] as const) {
+      const result = await handoff({ ...READY, outcome, deliverable: 'lightweight', workItemId: 'NONE' });
+      expect(result.accepted, outcome).toBe(false);
+      expect(result.text, outcome).toContain('name the task type');
+    }
+    expect(harness.session.getWorkPhaseState()?.contextAnswer).toBeUndefined();
   });
 
   it('offers earlier unrouted work as a bounded choice without inheriting grounding', async () => {

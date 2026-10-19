@@ -104,15 +104,14 @@ export type CheckedChoice =
 export function checkChoice(
   choice: { topicId: string; workItemId: string },
   snapshot: CatalogSnapshot,
-  deliverable: Dimension,
+  _deliverable: Dimension,
 ): CheckedChoice {
   const { topicId, workItemId } = choice;
   if (topicId === UNKNOWN || workItemId === UNKNOWN) return { kind: 'unknown' };
   const topicKnown = topicId === NEW_TOPIC || snapshot.topics.some((topic) => topic.id === topicId);
   if (!topicKnown) return { kind: 'invalid', reason: `topic ${topicId} is not in the catalog` };
   if (workItemId === NONE) {
-    if (deliverable !== 'lightweight') return { kind: 'invalid', reason: 'NONE applies only to a lightweight side question' };
-    return { kind: 'none', topicId, relation: 'switch' };
+    return { kind: 'invalid', reason: 'NONE selects no routed work' };
   }
   if (workItemId === NEW_WORK_ITEM) {
     const relation = topicId === NEW_TOPIC && snapshot.activeWorkItemId != null ? 'switch' : 'new';

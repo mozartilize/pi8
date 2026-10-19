@@ -134,6 +134,17 @@ it('drops malformed values and clamps routing policy to documented defaults', ()
   });
 });
 
+it('ignores weights for a task type that the router does not route, and loads the others', () => {
+  writeFileSync(getConfigPath(), JSON.stringify({ dimensionWeights: {
+    lightweight: { quality: 0.9, cost: 0.05, speed: 0.05 },
+    gather: { quality: 0.5, cost: 0.3, speed: 0.2 },
+  } }), 'utf8');
+  const config = loadConfig();
+  expect(Object.keys(config.dimensionWeights).sort()).toEqual(['gather', 'implement', 'plan', 'review']);
+  expect(config.dimensionWeights.gather).toEqual({ quality: 0.5, cost: 0.3, speed: 0.2 });
+  expect(config.dimensionWeights.plan).toEqual(DEFAULT_DIMENSION_WEIGHTS.plan);
+});
+
 describe('routerContextWindow', () => {
   it('is absent by default (advertise the largest routable window)', () => {
     expect(loadConfig().routerContextWindow).toBeUndefined();

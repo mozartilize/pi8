@@ -44,7 +44,6 @@ describe('entry phase', () => {
     ['implement', { contextReasons: [], contextSatisfied: true }, 'gather', 'investigation'],
     ['implement', {}, 'gather', 'investigation'],
     ['gather', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', 'investigation'],
-    ['lightweight', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', 'investigation'],
   ] as const)('a %s deliverable with %j routes as its acquisition until handoff', (deliverable, over, dimension, cause) => {
     const entry = state({ deliverable, ...over } as Partial<WorkPhaseState>);
     expect(entryPhase(entry, deliverable)).toEqual({ dimension, ...(cause ? { cause } : {}) });

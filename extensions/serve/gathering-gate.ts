@@ -166,7 +166,7 @@ export function gatheringNote(state: WorkPhaseState): string {
     'Mutation detection is best-effort, not a sandbox. When you have what the next step needs, call ' +
     `${CONTEXT_HANDOFF_TOOL} with outcome "ready", deliverable, complexity, and scope. When the answer needs an investigation, ` +
     'for example the cause of a bug, hand off with deliverable "gather". To answer from the context you collected, without a plan, review, change, or investigation, ' +
-    'call it with outcome "answer", deliverable "gather" or "lightweight", complexity, and scope before giving a text answer. If the request is unclear or what it rests on cannot be read, ' +
+    'call it with outcome "answer", deliverable "gather", complexity, and scope before giving a text answer. If the request is unclear or what it rests on cannot be read, ' +
     `call it with outcome "needs-user" and your question. You may send at most ${ACQUISITION_REQUEST_LIMIT} ` +
     'model requests. Do not write the plan, review, change, or investigation yourself.';
 }

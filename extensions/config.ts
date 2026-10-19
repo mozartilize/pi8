@@ -79,7 +79,7 @@ export interface PersistedConfig {
   preferences?: unknown;
 }
 
-const DIMENSIONS: Dimension[] = ['lightweight', 'gather', 'plan', 'implement', 'review'];
+const DIMENSIONS: Dimension[] = ['gather', 'plan', 'implement', 'review'];
 
 const finiteInRange = (
   value: unknown,

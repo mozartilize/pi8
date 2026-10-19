@@ -84,7 +84,6 @@ export interface TaskRelevance {
 }
 
 export const PHASE_RELEVANCE: Readonly<Record<Dimension, TaskRelevance>> = {
-  lightweight: { reasoning: 0.15, agentic: 0, research: 0.1 },
   gather: { reasoning: 0.4, agentic: 0, research: 1 },
   plan: { reasoning: 1, agentic: 0.25, research: 0.5 },
   implement: { reasoning: 0.6, agentic: 1, research: 0.15 },
@@ -123,11 +122,10 @@ export function capabilityTarget(axis: keyof TaskRelevance, difficulty: number):
  * same-metric, same-model, same-effort source estimate. A model without it
  * is reported in the decision's evidence gaps and still competes in the same
  * pool, with the full uncertainty interval for the missing quality.
- * `lightweight` relies on no single axis. Collecting context requires
+ * Collecting context requires
  * Intelligence instead of the gather deliverable's Research evidence.
  */
 export const REQUIRED_EVIDENCE_AXES: Readonly<Record<Dimension, readonly ProvenanceAxis[]>> = {
-  lightweight: [],
   gather: ['research'],
   plan: ['intelligence'],
   implement: ['intelligence', 'agenticCoding'],

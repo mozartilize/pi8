@@ -215,7 +215,7 @@ function difficultyMissingReason(input: UnifiedTurnInput): UnifiedDecisionMeta['
 /** A new authorization for the legal actions, minus the executors that this work item excluded. */
 function authorize(input: UnifiedTurnInput, selection: readonly SelectionCandidate[]): BoundaryAuthorizationV1 {
   return createBoundaryAuthorization(input.authorizationScope, selection.map(({ action }) => action.key),
-    input.workState?.workItemId === input.state.workItemId
+    input.workState?.workItemId === input.authorizationScope.workItemId
       ? selection.filter(({ action }) => isExcludedExecutor(input.workState, action.key))
         .map(({ action }) => ({ workItemId: input.authorizationScope.workItemId, phase: 'implement' as const, model: action.key }))
       : []);
@@ -231,11 +231,10 @@ export function restoreUnifiedDecision(input: UnifiedTurnInput, saved: RoutingDe
   kind: 'decision'; decision: RoutingDecision; candidates: Candidate[]; authorization: BoundaryAuthorizationV1;
 } | undefined {
   if (!saved.unified || saved.unified.featureSchemaDigest !== FEATURE_SCHEMA_DIGEST
-    || saved.dimension !== input.state.phase || input.authorizationScope.phase !== input.state.phase
-    || input.authorizationScope.workItemId !== input.state.workItemId) return undefined;
+    || saved.dimension !== input.state.phase || input.authorizationScope.phase !== input.state.phase) return undefined;
   // A saved work item must be the current one. Without one, the saved entry must be the current entry.
   const savedWork = saved.workContext?.workItemId;
-  if (savedWork !== undefined ? savedWork !== input.state.workItemId : saved.intentKey !== input.authorizationScope.boundaryId) {
+  if (savedWork !== undefined ? savedWork !== input.authorizationScope.workItemId : saved.intentKey !== input.authorizationScope.boundaryId) {
     return undefined;
   }
   const { selection, candidates } = legalActions(input);
@@ -267,8 +266,7 @@ export async function resolveUnifiedDecision(
   input: UnifiedTurnInput,
   planPreparation: (ranking: readonly string[], chosen: string, candidates: ReadonlyMap<string, Candidate>) => string | undefined,
 ): Promise<UnifiedTurnOutcome> {
-  if (input.authorizationScope.phase !== input.state.phase
-    || input.authorizationScope.workItemId !== input.state.workItemId) return { kind: 'stale' };
+  if (input.authorizationScope.phase !== input.state.phase) return { kind: 'stale' };
   const { selection, candidates } = legalActions(input);
   const authorization = authorize(input, selection);
   const preferences = readPreferences();

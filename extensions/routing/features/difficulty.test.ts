@@ -126,7 +126,7 @@ describe('difficulty of the routed phase', () => {
   it('direct-answer demand applies only to the gather phase of its entry', () => {
     const answer = state({ contextAnswer: 'gather', contextAnswerDemand: { complexity: 'hard', scope: 'bounded', evidence: noFiles } });
     expect(phaseDifficulty(answer, 'gather')).toMatchObject({ source: 'declared-complexity' });
-    for (const phase of ['lightweight', 'plan', 'review', 'implement'] as const) expect(phaseDifficulty(answer, phase), phase).toBeUndefined();
+    for (const phase of ['plan', 'review', 'implement'] as const) expect(phaseDifficulty(answer, phase), phase).toBeUndefined();
     expect(phaseDifficulty(state({ contextAnswerDemand: answer.contextAnswerDemand! }), 'gather')).toBeUndefined();
   });
 

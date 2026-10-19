@@ -216,7 +216,6 @@ describe('required evidence per phase', () => {
     candidateFeatures(state(patch), model, action, rows).evidenceGaps;
 
   it('a model with no benchmark row has a gap on every axis its phase relies on', () => {
-    expect(gaps([], { phase: 'lightweight' })).toEqual([]);
     expect(gaps([], { phase: 'gather' })).toEqual(['research']);
     expect(gaps([], { phase: 'plan' })).toEqual(['intelligence']);
     expect(gaps([], { phase: 'review' })).toEqual(['intelligence']);
@@ -309,16 +308,12 @@ describe('N5: total continuity and exact recovery attribution', () => {
   const act = (registryId: string, effort: ModelThinkingLevel): EffectiveAction => ({ registryId, effort, key: `${registryId}:${effort}`, levels: [effort] });
   const actions = [act('p/X', 'low'), act('p/X', 'medium'), act('p/X', 'high'), act('p/Y', 'medium'), act('q/X', 'medium')];
   const rework = state({
-    workItemId: 'W',
     boundary: 'rework',
-    rework: { failed: { registryId: 'p/X', effort: 'medium' }, workItemId: 'W' },
-    friction: [
-      { registryId: 'p/X', effort: 'medium', workItemId: 'W', kind: 'attributed-rework' },
-      { registryId: 'p/Y', effort: 'medium', workItemId: 'W2', kind: 'attributed-rework' },
-    ],
+    rework: { failed: { registryId: 'p/X', effort: 'medium' } },
+    friction: [{ registryId: 'p/X', effort: 'medium', kind: 'attributed-rework' }],
   });
 
-  it('matches the hand table at the W rework boundary', () => {
+  it('matches the hand table at the rework boundary', () => {
     const table = actions.map((a) => {
       const f = recoveryFeatures(rework, a);
       return [a.key, continuityFeature(rework, a).value, f.frictionAvoidance, f.effortRecoveryFit, f.modelSwitchRecoveryFit];
@@ -341,18 +336,18 @@ describe('N5: total continuity and exact recovery attribution', () => {
     }
   });
 
-  it('counts friction only for the exact model, effort and work item', () => {
-    const loop = state({ workItemId: 'W', friction: [{ registryId: 'p/X', effort: 'high', workItemId: 'W', kind: 'severe-reasoning-loop' }] });
+  it('counts friction only for the exact model and effort', () => {
+    const loop = state({ friction: [{ registryId: 'p/X', effort: 'high', kind: 'severe-reasoning-loop' }] });
     expect(actions.map((a) => recoveryFeatures(loop, a).frictionAvoidance)).toEqual([1, 1, 0.25, 1, 1]);
-    const unattributed = state({ workItemId: 'W', friction: [{ registryId: 'p/X', effort: 'high', workItemId: 'W', kind: 'unattributed' }] });
+    const unattributed = state({ friction: [{ registryId: 'p/X', effort: 'high', kind: 'unattributed' }] });
     expect(recoveryFeatures(unattributed, actions[2]!).frictionAvoidance).toBe(1);
+    // Same model id on another provider is another model.
+    const otherProvider = state({ friction: [{ registryId: 'q/X', effort: 'medium', kind: 'attributed-rework' }] });
+    expect(actions.map((a) => recoveryFeatures(otherProvider, a).frictionAvoidance)).toEqual([1, 1, 1, 1, 0]);
   });
 
-  it('friction does not move to another work item, or apply without a current work item', () => {
-    const event = { registryId: 'p/X', effort: 'high' as const, workItemId: 'W', kind: 'attributed-rework' as const };
-    expect(recoveryFeatures(state({ workItemId: 'W2', friction: [event] }), actions[2]!).frictionAvoidance).toBe(1);
-    expect(recoveryFeatures(state({ friction: [event] }), actions[2]!).frictionAvoidance).toBe(1);
-    expect(recoveryFeatures(state({ workItemId: 'W', friction: [event] }), actions[2]!).frictionAvoidance).toBeLessThan(1);
+  it('a decision without friction evidence has full friction avoidance for every action', () => {
+    expect(actions.map((a) => recoveryFeatures(state(), a).frictionAvoidance)).toEqual([1, 1, 1, 1, 1]);
   });
 });
 

@@ -54,8 +54,8 @@ export function candidateFeatures(
   const continuitySnapshot: Pick<SessionSnapshot, 'boundary' | 'incumbent' | 'rework'> = {
     boundary: state.boundary, incumbent: state.incumbent, rework: state.rework,
   };
-  const recoverySnapshot: Pick<SessionSnapshot, 'boundary' | 'rework' | 'friction' | 'workItemId'> = {
-    boundary: state.boundary, rework: state.rework, friction: state.friction, workItemId: state.workItemId,
+  const recoverySnapshot: Pick<SessionSnapshot, 'boundary' | 'rework' | 'friction'> = {
+    boundary: state.boundary, rework: state.rework, friction: state.friction,
   };
   const task = composeTaskDemand(taskSnapshot);
   for (const capability of capabilityFeatures(row, task, benchmark)) {

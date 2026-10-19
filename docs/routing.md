@@ -28,8 +28,7 @@ Each model call serves the user's request.
 
 | Task type | Purpose |
 |---|---|
-| `lightweight` | A direct, simple answer or side question |
-| `gather` | Context collection and investigation |
+| `gather` | Context collection, investigation, and a direct answer |
 | `plan` | Reasoning about a proposed course of work |
 | `implement` | Authorized changes |
 | `review` | Examination of work against its requirements |
@@ -38,7 +37,7 @@ With no incumbent, a request starts as `gather`. An accepted declaration establi
 
 The incumbent retains its task type until an accepted boundary changes it. A mutation call alone does not change `plan` or `review` to `implement`.
 
-Simple implementation remains `implement`. It does not become `lightweight` because the edit is small.
+Simple implementation remains `implement`. A small edit does not change its task type.
 
 See [Work lifecycle](work-lifecycle.md) for the declaration tools and execution plans.
 

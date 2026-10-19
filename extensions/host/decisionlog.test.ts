@@ -157,6 +157,13 @@ describe('decision log', () => {
     expect(recent[recent.length - 1].served).toBe('m4');
   });
 
+  it('reads a schema 4 record of a task type the router no longer routes, without changing it', () => {
+    const historical = { ts: 1, schemaVersion: 4, dimension: 'lightweight', chosen: 'a/b', served: 'a/b',
+      viaFallback: false, cause: 'investigation', reason: 'r', chain: ['a/b'] };
+    appendFileSync(join(dir, DECISION_LOG_FILE), JSON.stringify(historical) + '\n', 'utf8');
+    expect(readRecentEntries(10, dir)).toEqual([historical]);
+  });
+
   it('skips malformed JSONL lines while retaining valid entries', () => {
     appendFileSync(
       join(dir, DECISION_LOG_FILE),

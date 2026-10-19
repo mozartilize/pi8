@@ -16,9 +16,12 @@ export interface ServedIdentity {
 
 export type FrictionKind = 'attributed-rework' | 'severe-reasoning-loop' | 'unattributed';
 
-/** One friction event, scoped to the exact served model, effort and work item. */
+/**
+ * One friction event of the exact served model and effort. A decision builds
+ * its friction from its own evidence only; an event never moves to a later
+ * decision.
+ */
 export interface FrictionEvent extends ServedIdentity {
-  workItemId: string;
   kind: FrictionKind;
 }
 
@@ -87,7 +90,6 @@ export interface DecisionStateV1 {
   phase: Dimension;
   /** True only while the host restricts the entry to collecting context, before a handoff or a declared answer. */
   contextAcquisition?: boolean;
-  workItemId?: string;
   /** Explicitly observed open decisions; undefined when not declared. */
   openDecisions?: number;
   /** Demand of the accepted declaration; undefined when neither rubric nor complexity is known. */
@@ -104,7 +106,8 @@ export interface DecisionStateV1 {
   /** Served identity at an ordinary boundary; absent when there is no incumbent. */
   incumbent?: ServedIdentity;
   /** Attributed rework that opened a rework boundary. */
-  rework?: { failed: ServedIdentity; workItemId: string };
+  rework?: { failed: ServedIdentity };
+  /** Friction evidence of this decision only; never persisted or carried into a later decision. */
   friction: readonly FrictionEvent[];
   cache?: CacheEvidenceV1;
   /** Identity of the current prompt head. */
@@ -151,4 +154,4 @@ export type SpendSnapshot = Pick<WorkloadMeasurement, 'estimatedContextTokens'> 
 export type PriceSnapshot = Immutable<Pick<RegistryModelInfo, 'cost' | 'promptCache' | 'api' | 'compat'>>;
 
 /** Continuity and recovery: the boundary, incumbent, attributed rework and friction. */
-export type SessionSnapshot = Immutable<Pick<DecisionStateV1, 'boundary' | 'incumbent' | 'rework' | 'friction' | 'workItemId'>>;
+export type SessionSnapshot = Immutable<Pick<DecisionStateV1, 'boundary' | 'incumbent' | 'rework' | 'friction'>>;

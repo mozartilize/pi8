@@ -108,11 +108,12 @@ These are the fallback defaults for central scoring.
 
 | Task type | Quality | Cost | Speed |
 |---|---:|---:|---:|
-| `lightweight` | 0.20 | 0.60 | 0.20 |
 | `gather` | 0.40 | 0.40 | 0.20 |
 | `plan` | 0.80 | 0.15 | 0.05 |
 | `implement` | 0.60 | 0.30 | 0.10 |
 | `review` | 0.70 | 0.25 | 0.05 |
+
+The router ignores weights for a task type that it does not route, such as `lightweight`.
 
 An override can specify one task type:
 

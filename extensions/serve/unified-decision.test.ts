@@ -30,7 +30,7 @@ function input(models = [model('one')]): UnifiedTurnInput {
   const rows = models.map((m) => row(`${m.provider}/${m.id}`));
   return {
     state: {
-      phase: 'implement', workItemId: 'work-a', estimatedContextTokens: 10_000,
+      phase: 'implement', estimatedContextTokens: 10_000,
       needsVision: false, boundary: 'ordinary', friction: [], nowMs: 0,
       benchmarkIndexVersion: '4.3',
     },
@@ -241,7 +241,7 @@ describe('production selection adapter', () => {
     if (planning.kind !== 'decision') throw new Error('Expected a decision');
     expect(planning.authorization.allowedActors).toContain('test/one:low');
     const unrelated = await resolveUnifiedDecision({
-      ...turn, state: { ...turn.state, workItemId: 'work-b' },
+      ...turn,
       authorizationScope: { ...turn.authorizationScope, workItemId: 'work-b' },
     }, noPreparation);
     expect(unrelated.kind).toBe('decision');

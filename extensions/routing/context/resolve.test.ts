@@ -101,13 +101,6 @@ describe('planFromChoice (catalog)', () => {
     expect(plan).toMatchObject({ createdTopic: false, createdWorkItem: true });
   });
 
-  it('keeps the active item for a side question', () => {
-    const plan = planFromChoice(base('what is a good buttermilk substitute?', { ledger, deliverable: 'lightweight' }), catalog,
-      { topicId: 'NEW_TOPIC', workItemId: 'NONE' }, {})!;
-    expect(plan.events).toEqual([]);
-    expect(plan.resolution.workItemId).toBe('NONE');
-  });
-
   it('returns nothing for UNKNOWN or an invalid choice', () => {
     expect(planFromChoice(base('x', { ledger }), catalog, { topicId: 'UNKNOWN', workItemId: 'UNKNOWN' }, {})).toBeUndefined();
     expect(planFromChoice(base('x', { ledger }), catalog, { topicId: 't_1', workItemId: 'w_9' }, {})).toBeUndefined();
@@ -178,10 +171,11 @@ describe('planFromLegacy (earlier work)', () => {
 });
 
 describe('context reasons', () => {
-  it('owes an @-referenced file only for plan, change, or review work', () => {
+  it('owes an @-referenced file for every routed task type', () => {
     const anchors = extractPromptAnchors('@spec.md do it');
-    expect(requestContext(anchors, 'implement')).toEqual(['referenced-artifact']);
-    expect(requestContext(anchors, 'lightweight')).toEqual([]);
+    for (const deliverable of ['gather', 'plan', 'implement', 'review'] as const) {
+      expect(requestContext(anchors, deliverable)).toEqual(['referenced-artifact']);
+    }
     expect(requestContext(extractPromptAnchors('fix the typo in src/a.ts'), 'implement')).toEqual([]);
   });
 

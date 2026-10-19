@@ -84,7 +84,7 @@ export function phaseDifficulty(state: WorkPhaseState | undefined, phase: Dimens
   }
   const handoff = state?.reasoningHandoff;
   if (handoff) return handoff.target === phase ? declaredDifficulty(handoff) : undefined;
-  // A direct lightweight answer is still served in the gather phase.
+  // A declared direct answer is served in the gather phase.
   if (state?.contextAnswer && state.contextAnswerDemand && phase === 'gather') {
     return declaredDifficulty(state.contextAnswerDemand);
   }

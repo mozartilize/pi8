@@ -63,8 +63,9 @@ const MODELS = [
 ];
 
 const HANDOFF = (entry: CorpusEntry) => ({
+  // A historical `lightweight` label is a direct answer, served under `gather`.
   outcome: ['gather', 'lightweight'].includes(entry.label.deliverable) ? 'answer' : 'ready',
-  deliverable: entry.label.deliverable,
+  deliverable: entry.label.deliverable === 'lightweight' ? 'gather' : entry.label.deliverable,
   complexity: 'trivial', scope: 'bounded',
   findings: 'the request and visible context were checked',
   question: 'serve the selected work',
@@ -231,8 +232,8 @@ describe('routing-context corpus replay', () => {
         sessionId: session.id,
         apiFamily: session.apiFamily ?? 'openai-completions',
         ordinal,
-        topicId: selected?.resolution.topicId ?? (phase?.contextAnswer === 'lightweight' ? 'NONE' : 'UNKNOWN'),
-        workItemId: selected?.resolution.workItemId ?? (phase?.contextAnswer === 'lightweight' ? 'NONE' : 'UNKNOWN'),
+        topicId: selected?.resolution.topicId ?? (phase?.contextAnswer !== undefined ? 'NONE' : 'UNKNOWN'),
+        workItemId: selected?.resolution.workItemId ?? (phase?.contextAnswer !== undefined ? 'NONE' : 'UNKNOWN'),
         createdTopic: selected?.createdTopic === true,
         createdWorkItem: selected?.createdWorkItem === true,
         relation: selected?.resolution.relation ?? 'unknown',
@@ -264,7 +265,8 @@ describe('routing-context corpus replay', () => {
     const families = Object.fromEntries(scoreByApiFamily(predictions, labels));
     const disagreements = predictions.flatMap((p) => {
       const l = labels.get(p.entryId)!;
-      const direction = DIMENSION_STRENGTH[p.deliverable] > DIMENSION_STRENGTH[l.deliverable] ? 'over' : 'under';
+      const labeled = l.deliverable === 'lightweight' ? -1 : DIMENSION_STRENGTH[l.deliverable];
+      const direction = DIMENSION_STRENGTH[p.deliverable] > labeled ? 'over' : 'under';
       const diff = [
         p.relation !== l.relation ? `relation ${p.relation}≠${l.relation}` : '',
         p.deliverable !== l.deliverable ? `deliverable ${direction} ${p.deliverable}≠${l.deliverable}` : '',

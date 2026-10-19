@@ -6,7 +6,7 @@ Use these terms consistently in issues, documentation, and model-facing instruct
 
 | Term | Meaning |
 |---|---|
-| Task type | The kind of work: `lightweight`, `gather`, `plan`, `implement`, or `review`. Code uses `Dimension`. |
+| Task type | The kind of work: `gather`, `plan`, `implement`, or `review`. Code uses `Dimension`. A direct answer is `gather`. Decision logs of schema 4 and earlier can hold `lightweight`. |
 | Capability tier | Historical group in the legacy scorer. The automatic selector has no capability tiers: all authorized actions compete in one pool. |
 | Capability band | Historical requirement range in legacy routing (`economy`, `standard`, `strong`, `frontier`). Not used in unified selection. |
 | Requirement | The work's declared needs. Accepted rubric levels determine separate axis demands for automatic selection. |

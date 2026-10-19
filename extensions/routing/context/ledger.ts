@@ -77,7 +77,16 @@ const ANCHOR_KINDS: ReadonlySet<AnchorKind> = new Set(['path', 'symbol', 'issue'
 const ANCHOR_ROLES: ReadonlySet<AnchorRole> = new Set(['requirement', 'design', 'implementation', 'test', 'reference']);
 const ANCHOR_SOURCES = new Set(['user', 'model', 'router']);
 const STATUSES: ReadonlySet<WorkItemStatus> = new Set(['active', 'blocked', 'done', 'superseded']);
-const DIMENSIONS: ReadonlySet<Dimension> = new Set(['lightweight', 'gather', 'plan', 'implement', 'review']);
+const DIMENSIONS: ReadonlySet<Dimension> = new Set(['gather', 'plan', 'implement', 'review']);
+
+/**
+ * A stored task type. Events written before `lightweight` was removed can
+ * hold it; a direct answer is served under `gather`, so it reads as `gather`.
+ */
+function storedDimension(value: unknown): Dimension | undefined {
+  if (value === 'lightweight') return 'gather';
+  return DIMENSIONS.has(value as Dimension) ? value as Dimension : undefined;
+}
 const BOUNDARIES: ReadonlySet<BoundaryKind> = new Set(['investigation-handoff', 'execution-contract', 'work-complete', 'work-reopen']);
 /** Reasons a work item can hold open; the others belong to one entry. */
 const OPEN_CONTEXT: ReadonlySet<ContextReason> = new Set(['referenced-artifact', 'carried-open-context']);
@@ -341,7 +350,8 @@ function parseWorkItem(value: unknown): WorkItem | undefined {
     createdAtEntryId: value.createdAtEntryId,
     updatedAtEntryId: value.updatedAtEntryId,
   };
-  if (DIMENSIONS.has(value.lastDeliverable as Dimension)) item.lastDeliverable = value.lastDeliverable as Dimension;
+  const lastDeliverable = storedDimension(value.lastDeliverable);
+  if (lastDeliverable) item.lastDeliverable = lastDeliverable;
   const openContext = parseOpenContext(value);
   if (openContext) item.openContext = openContext;
   // A damaged reference loses the link to history, never the item.
@@ -399,8 +409,9 @@ function parsePatch(value: unknown): WorkItemPatch | undefined {
     patch.status = value.status;
   }
   if (value.lastDeliverable != null) {
-    if (!DIMENSIONS.has(value.lastDeliverable as Dimension)) return undefined;
-    patch.lastDeliverable = value.lastDeliverable as Dimension;
+    const lastDeliverable = storedDimension(value.lastDeliverable);
+    if (!lastDeliverable) return undefined;
+    patch.lastDeliverable = lastDeliverable;
   }
   if (value.openContext != null || value.prerequisiteOpen != null) {
     const openContext = parseOpenContext(value);
@@ -493,7 +504,8 @@ function parseFlatContextEvent(data: unknown): FlatContextEvent | undefined {
       }
       case 'incumbent': {
         const served = isRecord(data.served) ? data.served : undefined;
-        if (!served || !text(served.registryId) || !DIMENSIONS.has(data.dimension as Dimension)) return undefined;
+        const dimension = storedDimension(data.dimension);
+        if (!served || !text(served.registryId) || !dimension) return undefined;
         if (served.thinkingLevel != null && typeof served.thinkingLevel !== 'string') return undefined;
         const workItemId = data.workItemId == null ? undefined : parseId(data.workItemId);
         if (data.workItemId != null && !workItemId) return undefined;
@@ -504,7 +516,7 @@ function parseFlatContextEvent(data: unknown): FlatContextEvent | undefined {
             registryId: served.registryId,
             ...(served.thinkingLevel ? { thinkingLevel: served.thinkingLevel as string } : {}),
           },
-          dimension: data.dimension as Dimension,
+          dimension,
           ...(workItemId ? { workItemId } : {}),
           sourceEntryId,
         };

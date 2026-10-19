@@ -102,8 +102,8 @@ describe('settle reminder', () => {
     }
   });
 
-  it('lets a direct answer to a gather or lightweight request settle when nothing was refused', () => {
-    for (const deliverable of ['gather', 'lightweight'] as const) {
+  it('lets a direct answer to a gather request settle when nothing was refused', () => {
+    for (const deliverable of ['gather'] as const) {
       const session = ready({ contextStatus: 'acquiring', deliverable });
       expect(settleReminder(settle(), session)).toBeUndefined();
       expect(session.getWorkPhaseState()?.contextSettleReminded).toBeUndefined();

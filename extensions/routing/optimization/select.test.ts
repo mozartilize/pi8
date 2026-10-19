@@ -489,15 +489,6 @@ describe('missing evidence is an uncertainty interval, not a ranking tail', () =
     expect(result.chosen).toBeDefined();
   });
 
-  it('the requirement follows the phase: lightweight needs no axis, so U has no evidence gap', async () => {
-    const prefs = snapshot(empty);
-    const result = await selectByRegret({ ...decisionState, phase: 'lightweight' }, pick([A, B, U]), guardRows, prefs, portsWith(() => undefined),
-      { expectedProfileDigest: prefs.digest, decisionDeadlineMs: 5_000 });
-    if (result.kind !== 'decision') throw new Error('expected a decision');
-    expect(result.insufficientEvidence).toEqual([]);
-    expect(result.maxRegret?.has('u/unmeasured:high')).toBe(true);
-  });
-
   it('counts every pool action against the spike pair cap', async () => {
     const prefs = snapshot(empty);
     const result = await selectByRegret(decisionState, pick([A, B, U]), guardRows, prefs, portsWith(() => undefined),

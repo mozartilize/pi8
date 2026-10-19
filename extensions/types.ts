@@ -10,8 +10,12 @@ export type { ExtensionContext };
  * Shared types for the benchmark-aware auto model router.
  */
 
+/**
+ * Task type of a routed request. Decision logs of schema 4 and earlier can
+ * hold `lightweight`, a task type that the router does not route; readers
+ * keep such a value as a historical string.
+ */
 export type Dimension =
-  | 'lightweight'
   | 'gather'
   | 'plan'
   | 'implement'
