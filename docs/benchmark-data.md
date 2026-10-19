@@ -40,6 +40,7 @@ A missing browser prevents refresh, not routing with an existing usable store.
 | File | Contents |
 |---|---|
 | `benchmarks.json` | Normalized rows, sync time, index version, and aliases |
+| `benchmarks.json.bak.<UTC time>` (for example `benchmarks.json.bak.2026-01-15T09-05-02.000Z`) | Copy of the previous `benchmarks.json` before a successful sync replaces it. Sync keeps the 3 newest copies. |
 | `config.json` | Sync key and router options |
 | `model-events.jsonl` | Global protocol history, separate from benchmark data |
 

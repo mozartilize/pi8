@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 
@@ -83,6 +83,36 @@ describe('syncBenchmarks', () => {
     expect(results[0].error).toBeUndefined();
     expect(loadStore()).toMatchObject({ indexVersion: '4.4', models: [expect.objectContaining({ benchSlug: 'claude-opus-4-6' })] });
     expect(syncSummary(results)).toContain('Warning: ');
+  });
+
+  it('backs up the previous store on each successful sync and keeps the 3 newest copies', async () => {
+    const row = {
+      benchSlug: 'claude-opus-4-6', effort: 'max' as const, source: 'artificial-analysis',
+      quality: { intelligence: 52, knowledge: 30, research: 0.5 },
+    };
+    vi.spyOn(aa, 'fetchAndNormalize').mockResolvedValue([row]);
+    const backups = () => readdirSync(tmpDir).filter((name) => name.startsWith('benchmarks.json.bak.')).sort();
+    const storeFile = join(tmpDir, 'benchmarks.json');
+
+    await syncBenchmarks(fakeCtx, { apiKey: 'key' });
+    expect(backups()).toEqual([]);
+
+    const replaced: string[] = [];
+    for (let i = 1; i <= 4; i++) {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 0, 15, 9, 5, i));
+      replaced.push(readFileSync(storeFile, 'utf8'));
+      await syncBenchmarks(fakeCtx, { apiKey: 'key' });
+    }
+    const kept = backups();
+    expect(kept).toEqual([2, 3, 4].map((i) => `benchmarks.json.bak.2026-01-15T09-05-0${i}.000Z`));
+    expect(kept.map((name) => readFileSync(join(tmpDir, name), 'utf8'))).toEqual(replaced.slice(1));
+  });
+
+  it('makes no backup when the fetch fails', async () => {
+    saveStore(emptyStore());
+    vi.spyOn(aa, 'fetchAndNormalize').mockRejectedValue(new Error('offline'));
+    await syncBenchmarks(fakeCtx, { apiKey: 'key' });
+    expect(readdirSync(tmpDir).filter((name) => name.includes('.bak.'))).toEqual([]);
   });
 
   it('accepts the calibrated index version, including patch releases', () => {

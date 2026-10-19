@@ -3,6 +3,7 @@
  *
  * Pure functions for validation/defaults; I/O lives in the exported helpers.
  */
+import { copyFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -218,6 +219,29 @@ export const loadStore = (base?: string): BenchmarkStore | undefined => {
 
 export const saveStore = (store: BenchmarkStore, base?: string): void => {
   writeJsonAtomic(getStorePath(base), store);
+};
+
+export const STORE_BACKUP_LIMIT = 3;
+const BACKUP_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/;
+
+/**
+ * Copy the current store file to `benchmarks.json.bak.<UTC time>` and keep only
+ * the newest `STORE_BACKUP_LIMIT` copies. The copy is byte-for-byte, so a store
+ * that the current code cannot read is kept as it was. The time is ISO 8601 with
+ * `-` in place of `:`, which some file systems reject; its fixed width makes
+ * name order equal to time order.
+ */
+export const backupStore = (base?: string, now: number = Date.now()): void => {
+  const path = getStorePath(base);
+  if (!existsSync(path)) return;
+  copyFileSync(path, `${path}.bak.${new Date(now).toISOString().replaceAll(':', '-')}`);
+  const dir = resolveStoragePath(base);
+  const prefix = `${STORE_FILE}.bak.`;
+  const backups = readdirSync(dir)
+    .filter((name) => name.startsWith(prefix) && BACKUP_TIME.test(name.slice(prefix.length)))
+    .sort()
+    .reverse();
+  for (const name of backups.slice(STORE_BACKUP_LIMIT)) unlinkSync(join(dir, name));
 };
 
 export const isActive = (m: BenchModel): boolean => m.active;

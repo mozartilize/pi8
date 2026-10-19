@@ -8,6 +8,7 @@ import type { ExtensionContext, SyncResult } from '../types.js';
 import {
   loadStore,
   saveStore,
+  backupStore,
   emptyStore,
   mergeBenchRows,
   registryModelsFromCtx,
@@ -80,6 +81,12 @@ export async function syncBenchmarks(
   if (versionWarning) warnings.push(versionWarning);
   if (max > 0 && Math.abs(max / AXIS_REFERENCE.intelligence - 1) > 0.15) {
     warnings.push('The strongest intelligence score differs by more than 15% from the calibration reference. Review the capability minimums.');
+  }
+  try {
+    backupStore();
+  } catch (error) {
+    // A backup failure must not block the new data.
+    warnings.push(`The previous benchmark data was not backed up: ${error instanceof Error ? error.message : String(error)}.`);
   }
   if (warnings.length) fetched.warning = warnings.join(' ');
   saveStore({ ...store, version: 2, indexVersion: rows.indexVersion, syncedAt: Date.now(), models: merged });
