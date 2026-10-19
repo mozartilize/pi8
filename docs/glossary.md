@@ -7,10 +7,10 @@ Use these terms consistently in issues, documentation, and model-facing instruct
 | Term | Meaning |
 |---|---|
 | Task type | The kind of work: `lightweight`, `gather`, `plan`, `implement`, or `review`. Code uses `Dimension`. |
-| Capability tier | Legacy scorer group: 0 meets every minimum, 1 lacks a measurement, 2 is measured below a minimum. The automatic unified selector has no tiers. |
-| Capability band | Named requirement range used by legacy routing: `economy`, `standard`, `strong`, or `frontier`. |
+| Capability tier | Historical group in the legacy scorer. The automatic selector has no capability tiers: all authorized actions compete in one pool. |
+| Capability band | Historical requirement range in legacy routing (`economy`, `standard`, `strong`, `frontier`). Not used in unified selection. |
 | Requirement | The work's declared needs. Accepted rubric levels determine separate axis demands for automatic selection. |
-| Axis demand | Difficulty in [0, 1] for reasoning, agentic coding, or research. Unknown demand uses the highest target. |
+| Axis demand | Difficulty in [0, 1] for reasoning, agentic coding, or research. Unknown demand uses the interval [0, 1]. |
 | Capability target | Absolute benchmark value requested by one axis demand. |
 | Capability shortfall | Largest relevant-axis deficit, measured in each axis's shortfall scale. A diagnostic only; it does not order actions. |
 | Capability minimum | A required measurement value for the task and input shape. |
@@ -57,9 +57,9 @@ Use these terms consistently in issues, documentation, and model-facing instruct
 | Incumbent capability minimum | Serving-model quality retained between boundaries |
 | Minimum thinking level | Effort that the incumbent actually served |
 
-A change in task type is not a change in capability tier. Final-step and executor bands use different thresholds.
+A change in task type changes the relevant capability targets and required evidence.
 
-See [Scoring](scoring.md#incumbent-minimums) and [Work lifecycle](work-lifecycle.md#requirement-formulas) for the rules.
+See [Scoring](scoring.md#incumbent-minimums) and [Work lifecycle](work-lifecycle.md#demand-formulas) for the rules.
 
 ## Benchmark names
 

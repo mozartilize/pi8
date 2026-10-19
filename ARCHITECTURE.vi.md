@@ -1,379 +1,352 @@
-# Kiến trúc — pi8
+# Kiến trúc cốt lõi — pi8
 
-Tài liệu mô tả kiến trúc triển khai của bộ định tuyến. Hướng dẫn cài đặt và các lệnh dành cho người dùng nằm trong [`README.md`](README.md); quy ước đóng góp nằm trong [`AGENTS.md`](AGENTS.md).
+Tài liệu này là đặc tả kỹ thuật chuyên sâu về 5 thành phần kiến trúc cốt lõi của bộ định tuyến `pi8`:
+- **§1. Độ khó và nhu cầu năng lực (Difficulty & Task Demand)**
+- **§2. Xây dựng candidate và 10 đặc trưng mong muốn (Candidate Building & Feature Extraction)**
+- **§3. Bộ chọn tối ưu hóa thống nhất (Unified Optimization Selector — Minimax Regret)**
+- **§4. Hợp đồng thực thi (Execution Contract)**
+- **§5. Vòng lặp ủy quyền và phục hồi lỗi (Delegation & Fallback Loop)**
 
-## Thuật ngữ và các mức tối thiểu
-
-- **Loại công việc (`Dimension`)**: `lightweight`, `gather`, `plan`, `implement` hoặc `review`. **Bậc năng lực (`tier`)**: 0 (đủ điều kiện theo chất lượng đã đo), 1 (chưa biết chất lượng), 2 (đã đo nhưng chưa đạt yêu cầu). **Nhóm năng lực (`band`)**: `economy`, `standard`, `strong`, `frontier`, dùng cho bước cuối của công việc nhiều bước. Đây là ba thang đo khác nhau; nâng loại công việc không đồng nghĩa với nâng bậc năng lực.
-- **Bước cuối (`terminal` trong code)**: kết quả cần có sau khi điều tra, thường là sửa file. `terminal` của stream lại là sự kiện kết thúc một lần thử model. **Giai đoạn điều tra (`inspect`)** diễn ra trước khi sửa. Mức ưu đãi có giới hạn cho phép dùng model thấp hơn yêu cầu của bước cuối một band cho đến khi bắt đầu sửa.
-- **Economic promotion**: cho phép model tier-2 rẻ hơn tham gia khi chất lượng *đã đo* đạt tối thiểu 70% cho loại công việc và thỏa các điều kiện khác ở §2. Chất lượng ước lượng không đủ điều kiện.
-- **Trajectory friction (TFI)**: dấu hiệu khách quan cho thấy lần thử bị kẹt, như lặp lại thao tác hoặc kiểm tra liên tục thất bại; không đánh giá ý nghĩa câu trả lời. **Provider circuit/strike**: bộ đếm lỗi của provider; ba strike tạm loại provider. Giới hạn sử dụng chung sẽ loại provider ngay.
-- **Session generation/currentness**: generation đổi khi reset session; kết quả bất đồng bộ phải kiểm tra generation trước khi ghi trạng thái. **Assessment egress**: phần ngữ cảnh công việc giới hạn gửi đến provider đánh giá riêng. **Provenance** cho biết văn bản đến từ người dùng, trợ lý hay bản tóm tắt; **output ontology** là tập giá trị được phép trong kết quả đánh giá có cấu trúc.
-- **Sidecar**: file nhật ký quyết định cạnh transcript của Pi. **Seam**: điểm thay thế path, timeout hoặc runtime dependency dành cho test.
-
-Mỗi *mức tối thiểu* giới hạn một thứ khác nhau: **loại công việc tối thiểu theo heuristic** ngăn assessment thiếu chắc chắn hạ kết quả phân loại keyword; **loại công việc tối thiểu theo role** giới hạn lựa chọn subagent; **năng lực tối thiểu của model đang phục vụ** đòi hỏi chất lượng trên trục công việc được định tuyến ít nhất bằng chất lượng của model thực sự phục vụ trước đó, còn **mức suy luận tối thiểu của model này** giới hạn effort riêng. **Thinking tối thiểu theo loại công việc** đặt mức suy luận cho mỗi loại. **Năng lực tối thiểu của assessor** giới hạn model được dùng để đánh giá. Với chất lượng model, **mức task cho tier 0** mặc định là 85% so với peer mạnh nhất, **mức economic promotion** là 70%, và **mức broad-capability** là 45% cho implement/review. Công việc nhiều bước dùng **mức năng lực tối thiểu của bước cuối** theo band; **mức năng lực tối thiểu của giai đoạn điều tra** thấp hơn một band khi được ưu đãi. **Mức chất lượng triển khai tối thiểu của executor** trong execution contract là giá trị lớn hơn giữa mức yêu cầu tính từ rubric của submitter cộng số đo của router (ít nhất 30%) và mức tối thiểu của band (`economy` 30%, `standard` 45%, `strong` 70%). Hãy nói rõ thứ bị giới hạn thay vì chỉ viết “floor”.
-
-## Tổng quan pipeline
-
-```
-/router-sync (chạy theo yêu cầu, cảnh báo khi dữ liệu đã cũ hơn 14 ngày)
-   └─ adapter: artificial-analysis  (REST, API key miễn phí)
-         chuẩn hóa + fuzzy-match với registry model đang hoạt động của Pi
-~/.pi/agent/pi8/benchmarks.json
-        ▼
-phân loại + đánh giá (cho mỗi entry của người dùng) → một trong 5 dimension
-        ▼
-pickBest(candidates × measured effort, dimension, weights) → chuỗi fallback đã xếp hạng
-        ▼
-ủy quyền cho candidate (model, effort) đứng đầu; nếu có lỗi khách quan trước khi trả lời, chuyển tiếp dọc theo chuỗi
-```
-
-Ở mỗi lượt:
-
-1. **Xác định intent** — hai classifier chạy cho mỗi entry thực của người dùng.
-2. **Chấm điểm** — mở rộng các candidate `(model, effort)`, lọc theo capability, xếp hạng theo chất lượng/chi phí/tốc độ.
-3. **Ủy quyền với fallback khách quan** — stream, xử lý lỗi trước khi có câu trả lời, rồi đi dọc theo chuỗi.
-4. **Định tuyến subagent** — chèn model cụ thể cho mỗi lần spawn thông qua hook `tool_call`.
+Các thông tin về hướng dẫn cài đặt và lệnh người dùng nằm trong [`README.md`](README.md); quy ước đóng góp nằm trong [`AGENTS.md`](AGENTS.md).
 
 ---
 
-## 1. Xác định intent
+## 1. Độ khó và nhu cầu năng lực (Difficulty & Task Demand)
 
-### Bộ phân loại từ khóa (dự phòng, cho kết quả xác định)
+Mô-đun `task-demand.ts` và `difficulty.ts` đóng vai trò là chủ thể duy nhất (single owner) tổng hợp các khai báo đã được chấp thuận (giai đoạn công việc, rubric độ khó, các quyết định còn để ngỏ, cờ thu thập ngữ cảnh) cùng với các đặc trưng đo đạc trực tiếp từ mã nguồn và đầu vào (kích thước ngữ cảnh, hình ảnh). Các thành phần chấm điểm và trích xuất đặc trưng phía sau chỉ đọc kết quả từ `TaskDemand`, tuyệt đối không tự tính toán lại nhu cầu.
 
-Một classifier intent/keyword cục bộ, tốc độ cao, được port từ `complexity_router.py` của LiteLLM (Apache-2.0). Nó ánh xạ request sang một task dimension bằng năm danh sách keyword (`code`, `reasoning`, `technical`, `simple`, `gather`) cùng các marker riêng theo dimension (`review`, `plan`, các động từ thể hiện intent). Cơ chế chấm điểm tổng có trọng số dùng các dimension weight của LiteLLM để tạo confidence score; trường hợp hòa điểm được phân xử theo độ mạnh của dimension. Intent đã xác định được cache theo key của user entry và được tái sử dụng xuyên suốt vòng lặp tool của Pi cho entry đó, trừ khi có execution contract đang hoạt động (§7).
+### 1.1. Phân định giai đoạn và trọng số liên quan (`TaskRelevance`)
 
-Với lời chấp thuận hoặc câu tiếp nối ngắn (ví dụ `ok go for it` hoặc `what's next?`), bộ phân loại dùng tối đa 1.500 ký tự ngữ cảnh người dùng/trợ lý có gắn nhãn vai trò, kết thúc tại entry đó. Các entry này dùng khóa khác để một lượt phân loại đầy đủ và phần tiếp nối ngắn chia sẻ cùng loại công việc.
+Mỗi loại công việc (`Dimension`: `lightweight`, `gather`, `plan`, `implement`, `review`) có mức độ gắn kết nền tảng (`PHASE_RELEVANCE`) đối với 3 trục năng lực:
 
-Phạm vi ngữ nghĩa của bộ phân loại từ khóa được giữ ổn định: nó chỉ là phương án dự phòng bền vững, không phải bộ máy quyết định chính sách. Vẫn có thể điều chỉnh các ngưỡng cấu trúc (số token kích hoạt tăng mức theo độ sâu ngữ cảnh, thời hạn đánh giá, giới hạn đầu vào), nhưng không điều chỉnh danh sách từ khóa và quy tắc phạm vi.
+```typescript
+export const PHASE_RELEVANCE: Readonly<Record<Dimension, TaskRelevance>> = {
+  lightweight: { reasoning: 0.15, agentic: 0,    research: 0.1  },
+  gather:      { reasoning: 0.40, agentic: 0,    research: 1.0  },
+  plan:        { reasoning: 1.00, agentic: 0.25, research: 0.5  },
+  implement:   { reasoning: 0.60, agentic: 1.00, research: 0.15 },
+  review:      { reasoning: 1.00, agentic: 0.50, research: 0.8  },
+};
+```
 
-### Đánh giá ngữ nghĩa (bật mặc định)
+- **Quyết định để ngỏ (`openDecisions`)**: Khi có ít nhất một quyết định thiết kế hoặc hành vi chưa chốt (`openDecisions > 0`), mức độ liên quan của trục suy luận tự động nâng lên tối thiểu là `OPEN_DECISIONS_REASONING = 0.9`:
+  $$\text{relevance.reasoning} = \max(\text{base.reasoning}, 0.9)$$
+- **Giai đoạn thu thập (`gather`)**: Khi cờ `contextAcquisition === true` (thu thập ngữ cảnh ban đầu), tác vụ chưa có nhu cầu chuyển giao cụ thể. Trục suy luận được cố định tại mục tiêu tiết kiệm `ACQUISITION_REASONING_TARGET = 0.20`, bảo đảm ưu tiên các model nhanh và kinh tế.
 
-Bộ định tuyến gửi một yêu cầu đánh giá có giới hạn tới model đáp ứng mức năng lực tối thiểu `assessorQualityRatio` (mặc định bằng 0,5 lần năng lực suy luận của model mạnh nhất có thể định tuyến). Model đánh giá chỉ xác định loại công việc; bộ chấm điểm tất định vẫn quyết định model phục vụ.
+### 1.2. Chuẩn hóa rubric độ khó
 
-Mỗi entry thực của người dùng chỉ được đánh giá một lần, với thời hạn tổng `assessmentDeadlineMs` (mặc định 1.500 ms). Đầu vào bị giới hạn bởi `assessmentMaxInputChars` (mặc định 6.000 ký tự), cắt phần cũ nhất trước và lọc thông tin xác thực trước khi gửi.
+Các rubric được khai báo từ model nộp kế hoạch hoặc bàn giao ngữ cảnh theo thang đo 1 (dễ nhất) đến 5 (khó nhất). Hàm `level(v)` chuẩn hóa các giá trị nguyên này về đoạn $[0, 1]$:
+$$\text{level}(v) = \text{clamp01}\left(\frac{v - 1}{4}\right)$$
+Nếu một tiêu chí không được điền hoặc không phải số hữu hạn, nó mặc định nhận giá trị 1.0 (mức độ khó tối đa), tuân thủ nguyên tắc an toàn thận trọng (fail-safe).
 
-Kết quả đánh giá chỉ được áp dụng trong các giới hạn sau:
+#### A. Rubric thực thi (`ExecutionRubric`)
+Được cung cấp qua công cụ `commit_execution`, gồm 5 tiêu chí:
+1. `openDecisions`: Quyết định kiến trúc, hành vi chưa chốt.
+2. `spread`: Phạm vi dàn trải của thay đổi qua các file và module.
+3. `verification`: Khả năng kiểm chứng bằng test hoặc typecheck tự động.
+4. `knowledge`: Tri thức ngầm định ngoài các file đã chỉ định.
+5. `coupling`: Mức độ phụ thuộc và tác động lan truyền sang hệ thống khác.
 
-- Khi không chắc chắn, luôn route lên: assessment confidence thấp sẽ cho kết quả `max(heuristic, oneTierAbove(verdict))`, không bao giờ thấp hơn heuristic.
-- Ở đầu entry, chỉ verdict **độ tin cậy cao, `scope: bounded`** mới được phép hạ loại công việc, tối đa **một bậc** (hoặc bỏ phần nâng do keyword không rõ ràng để trở về `rawHeuristic`), không bao giờ hạ từ `implement` hoặc `review`, và không bao giờ khi depth latch đang hoạt động.
-- Giữa một intent, `plan`/`review` chỉ chuyển thành `implement` khi execution contract được chấp nhận (§7, cause `execution-contract`). Verdict `plan`/`review` với độ tin cậy cao khiến router từ chối contract; không có verdict thì không bị từ chối vì lý do đó. Chỉ phát hiện lệnh sửa file không làm đổi loại công việc; trạng thái hiển thị `editing` riêng.
-- Khi chọn lại model theo trajectory, một lần consult đã nâng loại công việc vẫn giữ quyền quyết định đó (cause `router-consult` còn hiệu lực cho lần chọn lại).
+Công thức xác định nhu cầu các trục:
+$$\begin{aligned}
+\text{demand.reasoning} &= \max(\text{open}, \text{knowledge}, \text{coupling}) \\
+\text{demand.agentic} &= \text{clamp01}\big(\max(\text{open}, \text{spread}, \text{verification}, \text{coupling}) + \text{measuredDemand}\big) \\
+\text{demand.research} &= \max(\text{open}, \text{knowledge})
+\end{aligned}$$
 
-Mỗi lần đánh giá ghi một bản ghi `assessment-metric` vào nhật ký quyết định, liên kết bằng `intentKey` để lưu mức thay đổi so với heuristic hoặc lý do dự phòng. Nếu depth latch chuyển trạng thái, router ghi thêm bản ghi thứ hai từ chính lần đánh giá đó, không gửi thêm yêu cầu. Chi phí đánh giá được theo dõi riêng với chi phí phục vụ.
+#### B. Rubric suy luận (`ReasoningRubric`)
+Được cung cấp qua công cụ `hand_off_context`, gồm 5 tiêu chí:
+1. `alternatives`: Số lượng phương án thiết kế khả thi cần cân nhắc.
+2. `stakes`: Hậu quả nếu đưa ra quyết định sai lầm.
+3. `spread`: Phạm vi ảnh hưởng của quyết định.
+4. `knowledge`: Tri thức cần thiết ngoài bằng chứng hiện hữu.
+5. `uncertainty`: Mức độ mù mờ về dữ kiện và yêu cầu.
 
-Đặt `consultRouter: false` để định tuyến hoàn toàn cục bộ, không gửi yêu cầu đánh giá.
+Công thức xác định nhu cầu các trục:
+$$\begin{aligned}
+\text{demand.reasoning} &= \max(\text{alternatives}, \text{stakes}, \text{knowledge}, \text{uncertainty}) \\
+\text{demand.agentic} &= \text{clamp01}\big(\max(\text{spread}, \text{stakes}, \text{uncertainty}) + \text{measuredDemand}\big) \\
+\text{demand.research} &= \max(\text{knowledge}, \text{uncertainty})
+\end{aligned}$$
+
+*Nguyên tắc giá trị cực đại (Independent Maxima)*: Nhu cầu trên từng trục là giá trị lớn nhất giữa các tiêu chí độc lập. Một tiêu chí dễ không bao giờ được phép làm loãng một quyết định thiết kế phức tạp hay một rủi ro kiến trúc cao.
+
+### 1.3. Đo lường mã nguồn bổ sung (`measuredDemand`)
+
+Router đo lường 4 chỉ số khách quan từ repository tại thời điểm kiểm tra để bổ sung tối đa $+0.20$ vào nhu cầu lập trình (`agentic demand`), mỗi chỉ số đóng góp tối đa $+0.05$:
+
+$$\text{measuredDemand} = 0.05 \times \left( f_{\text{files}} + f_{\text{dirs}} + f_{\text{lines}} + f_{\text{fixes}} \right)$$
+
+1. **Số file tác động** ($f_{\text{files}}$): $\text{clamp01}\left(\frac{\text{files} - 1}{4}\right)$ — bão hòa khi $\ge 5$ file.
+2. **Số thư mục tác động** ($f_{\text{dirs}}$): $\text{clamp01}\left(\frac{\text{directories} - 1}{3}\right)$ — bão hòa khi $\ge 4$ thư mục.
+3. **Số dòng mã hiện hữu** ($f_{\text{lines}}$): $\text{clamp01}\left(\frac{\log_2(\max(\text{lines}, 1) / 250)}{4}\right)$ — đạt cực đại tại $250 \times 2^4 = 4.000$ dòng.
+4. **Commit sửa lỗi gần đây trong 180 ngày** ($f_{\text{fixes}}$): $\text{clamp01}\left(\frac{\text{fixes}}{5}\right)$ — bão hòa khi $\ge 5$ commit từ `git log`.
+
+Nếu phép đo nào thất bại hoặc thiếu dữ liệu, giá trị đóng góp của phép đo đó được tính bằng 1.0 (nhận đủ $+0.05$), ngăn chặn việc thiếu dữ kiện làm hạ thấp độ khó ước tính.
+
+### 1.4. Khoảng nhu cầu thô khi thiếu rubric (`COMPLEXITY_DEMAND`)
+
+Khi model không cung cấp rubric mà chỉ khai báo mức độ phức tạp (`ComplexityBand`), nhu cầu được định hình theo khoảng chính sách (policy bounds):
+
+| Độ phức tạp | Cận dưới (`lower`) | Trung tâm (`center`) | Cận trên (`upper`) |
+|---|---|---|---|
+| `trivial` | $0.000$ | $0.000$ | $0.125$ |
+| `routine` | $0.125$ | $0.250$ | $0.375$ |
+| `moderate` | $0.375$ | $0.500$ | $0.625$ |
+| `hard` | $0.625$ | $0.750$ | $0.875$ |
+| `frontier` | $0.875$ | $1.000$ | $1.000$ |
+
+- Nếu phạm vi tác vụ là `open-ended`, cận trên của trục lập trình tự động mở rộng lên $1.0$, vì không thể giới hạn khối lượng công việc khi chưa có kế hoạch cụ thể.
+- Khi không có bất kỳ khai báo nào, nhu cầu là khoảng bất định toàn phần $[0, 1]$ với trung tâm là $0.5$.
+
+### 1.5. Mục tiêu năng lực chuẩn hóa (`capabilityTarget`)
+
+Nhu cầu $[0, 1]$ trên từng trục được ánh xạ sang thang điểm chuẩn hóa của benchmark thông qua phép nội suy tuyến tính giữa cận dưới (`easy`) và cận trên (`hard`):
+$$\text{target} = \text{easy} + (\text{hard} - \text{easy}) \times \text{clamp01}(\text{difficulty})$$
+
+Các khoảng mục tiêu tuyệt đối:
+- **Trục suy luận (`reasoning`)**: $[0.20, 0.55]$ trên thang Intelligence Index (Artificial Analysis).
+- **Trục lập trình (`agentic`)**: $[0.01, 0.60]$ trên thang Terminal-Bench 4.0 pass rate.
+- **Trục nghiên cứu (`research`)**: $[0.25, 0.65]$ trên thang Briefcase / Omniscience rubric.
+
+Hệ thống tính toán độ hụt năng lực (`shortfall`):
+$$\text{shortfall} = \max(0, \text{target} - \text{quality})$$
+Độ vừa vặn năng lực được chuẩn hóa theo thang đo hụt:
+$$\text{fit} = \text{clamp01}\left(1 - \frac{\text{shortfall}}{\text{shortfallScale}}\right)$$
+với $\text{shortfallScale} = 0.15$ cho suy luận, và $0.20$ cho lập trình và nghiên cứu. Model có năng lực vượt quá mục tiêu không nhận thêm điểm thưởng nhằm tránh lãng phí tài nguyên không cần thiết.
 
 ---
 
-## 2. Chấm điểm (`scorer.ts`)
+## 2. Xây dựng candidate và 10 đặc trưng mong muốn
 
-### Mở rộng candidate
+Mô-đun `candidate.ts` là điểm duy nhất tạo dựng vector đặc trưng cho mỗi hành động có thể phục vụ (`EffectiveAction`). Mỗi hành động là một cặp xác định `(model, effort)` với khóa định danh dạng `provider/id[:effort]`.
 
-Router tạo các ứng viên theo từng cặp `(model, effort)` được hỗ trợ. Một model trong registry có thể tạo nhiều ứng viên nếu dữ liệu benchmark đo nhiều mức effort, mỗi ứng viên có số liệu riêng về chất lượng, chi phí và tốc độ. Với mức được hỗ trợ nhưng chưa được đo, router ước lượng chất lượng bằng cách giảm dần từ mức đã đo gần nhất ở phía trên, rồi đánh dấu `qualityEstimated` (xem «Ước lượng effort»). Hàng `off` vẫn được đưa vào với model không có chế độ suy luận (đó là chế độ duy nhất model có thể phục vụ). Nếu `thinkingLevelMap` không hỗ trợ mức effort nào đã đo, model chỉ tạo một ứng viên không gắn mức effort.
+### 2.1. Mở rộng ứng viên và ước lượng nấc suy luận (Effort Estimates)
 
-### Ước lượng effort
+1. **Khám phá mức effort**: Router đọc các mức suy luận model hỗ trợ qua `getSupportedThinkingLevels`. Nếu model hỗ trợ tắt suy luận, mức `off` được bổ sung vào danh sách.
+2. **Ước lượng chiều giảm (Downward Effort Estimates)**: Dữ liệu benchmark thực tế thường chỉ đo một số mức effort cụ thể (ví dụ `high`, `max`). Nếu một mức effort được model hỗ trợ nhưng chưa được đo (ví dụ `medium`), router ước lượng chất lượng bằng cách lấy mức đã đo gần nhất ở phía trên trừ đi mức giảm p90 (`p90 stepdown delta`) tính toán từ toàn bộ cơ sở dữ liệu benchmark. Quá trình ước lượng chỉ đi xuống, không bao giờ ước lượng hướng lên vượt quá mức đo cao nhất.
+3. **Kiểm tra cửa sổ ngữ cảnh**: Hàm `holdsPrompt` loại bỏ các model có `contextWindow < promptTokens \times 1.2`. Cửa sổ tối thiểu phải bao quát kích thước prompt thực tế cộng biên an toàn 20%.
 
-Nguồn dữ liệu chỉ công bố các mức effort đã đo. Vì vậy, một mức dùng được (ví dụ `sonnet-5:medium`) có thể không có hàng dữ liệu dù `high` và `max` có. Router ước lượng mức này từ mức đã đo gần nhất **ở phía trên**, rồi trừ mức giảm chất lượng theo từng nấc. Chỉ ước lượng theo chiều giảm; không tạo ra mức chất lượng cao hơn hàng đã đo cao nhất.
+### 2.2. Schema 10 đặc trưng (`feature-v11`)
 
-Sau mỗi lần đồng bộ, mức giảm theo nấc được tính riêng cho từng trục chất lượng từ phân vị 90 (p90) của các mức giảm giữa hai nấc liền kề trong kho dữ liệu, thay vì dùng hằng số. Nếu dùng trung vị, giá trị ước lượng sẽ cao hơn giá trị thực khoảng một nửa số lần; dùng p90 giúp giá trị ước lượng thấp hơn giá trị thực khoảng 90% số lần. Mức thận trọng này cho phép ứng viên có chất lượng ước lượng tham gia lựa chọn. Trục có quá ít quan sát sẽ không được ước lượng từ dữ liệu nhiễu.
+Mọi đặc trưng $j \in \{0, \dots, 9\}$ đều được biểu diễn dưới dạng một khoảng bất định $[lower_j, upper_j]$ kèm giá trị trung tâm $center_j \in [lower_j, upper_j]$, chuẩn hóa trên đoạn $[0, 1]$ với quy ước: **giá trị càng lớn càng có lợi**.
 
-Ứng viên ước lượng có giá và cửa sổ ngữ cảnh (thuộc tính registry dùng chung giữa các mức effort), nhưng không có `costPerTask`, tốc độ hay độ trễ: đó là số đo theo lần chạy của một mức cụ thể. Chất lượng ước lượng có thể vượt qua mức năng lực tối thiểu thông thường, nhưng **economic promotion đòi hỏi số đo thực tế**: cơ chế này nới mức tối thiểu vì lợi thế giá; nếu dùng thêm năng lực suy đoán thì sẽ chồng hai giả định lên nhau.
+#### Đặc trưng 1–3: Độ vừa vặn năng lực (`reasoningFit`, `agenticFit`, `researchFit`)
+Tính từ công thức độ vừa vặn với mục tiêu ở §1. Khi model thiếu điểm benchmark trên trục tương ứng:
+$$lower = 0, \quad center = 0.5, \quad upper = 1.0$$
+Khoảng bất định mở rộng tối đa thể hiện sự thiếu hụt bằng chứng, không loại bỏ model khỏi cuộc cạnh tranh.
 
-### Các bậc năng lực
+#### Đặc trưng 4: Độ phù hợp đầu vào (`inputFit`)
+Đánh giá khả năng xử lý ngữ cảnh dài và dữ liệu đa phương thức (hình ảnh):
+- **Ngữ cảnh dài (`longContext`)**: Khi kích thước prompt ước lượng $\ge \text{LONG\_CONTEXT\_RELEVANCE\_TOKENS} = 64.000$ tokens, đặc trưng đánh giá theo chỉ số LCR (Long-Context Retrieval/Reasoning) hoặc NIAH.
+- **Thị giác (`vision`)**: Khi đầu vào chứa hình ảnh, đặc trưng đánh giá theo benchmark MMMU-Pro / Vision Reasoning.
 
-Model được phân loại vào ba tier dựa trên capability tương đối so với peer mạnh nhất trong phạm vi request hiện tại:
+#### Đặc trưng 5: Độ mong muốn chi phí kinh tế (`costDesirability`)
+Chi phí proxy là tổng của chi phí prompt ở lượt hiện tại cộng chi phí sinh token dự kiến cho toàn bộ tác vụ theo benchmark:
+$$\text{CostProxy} = \text{Cost}_{\text{prompt}} + \text{Cost}_{\text{benchmark\_output}}$$
 
-| Tier | Tiêu chí |
-|---|---|
-| 0 | Tỷ lệ trên task axis ≥ frontier ratio (85%), và nếu là `implement`/`review`: tỷ lệ broad-capability ≥ sanity floor (45%) |
-| 1 | Chất lượng chưa biết (xếp sau tier-0 đã biết nhưng trước tier-2 yếu) |
-| 2 | Dưới ngưỡng (yếu trên task axis hoặc không đạt sanity floor) |
+1. **Phân tách token prompt**:
+   - `cacheRead`: Token thuộc tiền tố cache còn ấm (`usableWarmPrefix`).
+   - `cacheWrite`: Token ghi cache mới (chỉ tính phí khi provider có biểu giá ghi riêng).
+   - `uncachedInput`: Token đầu vào thông thường.
+   - Token prompt được nhân với hệ số trung bình trượt luỹ thừa `promptTokenScales` để phản ánh đúng khối lượng token thực tế sau khi pi-ai dựng payload.
+2. **Chi phí output benchmark**: Lấy số token sinh ra trung bình cho mỗi tác vụ từ Artificial Analysis (`outputTokensPerTask`) nhân với đơn giá output trong registry.
+3. **Ánh xạ hàm Logarit**:
+   $$\text{costDesirability} = \text{clamp01}\left(1 - \frac{\log_{10}(\text{usd} / 0.00001)}{6}\right)$$
+   Thang đo trải rộng qua 6 bậc độ lớn từ $\$0.00001$ đến $\$10.00$. Bất kỳ mức giá nào $\le \$0.00001$ đều đạt điểm tối đa 1.0. Nhờ tính chất logarit, tỷ lệ tiết kiệm tương đối giữa hai model (ví dụ rẻ hơn gấp đôi) tạo ra độ chênh lệch đặc trưng không đổi $\frac{\log_{10}(2)}{6} \approx 0.0502$ ở bất kỳ phân khúc giá nào.
 
-Mọi tier đều vẫn nằm trong fallback chain: capability judgement kiểm soát model được ưu tiên, không bao giờ loại bỏ khả năng phục hồi trước lỗi khách quan.
+#### Đặc trưng 6: Độ mong muốn thời gian thực thi (`timeDesirability`)
+Thời gian thực thi proxy phản ánh độ trễ sinh kết quả cho toàn bộ tác vụ benchmark:
+$$\text{seconds} = \frac{\text{tokensPerTask}}{\text{outputSpeedTps}}$$
+Nếu mức effort cụ thể thiếu tốc độ token/giây, router lấy khoảng tốc độ từ các mức effort khác của cùng model (`speed-other-effort`).
+Ánh xạ qua hàm logarit với tham số định hình 60 giây và bão hòa tại 3.600 giây (1 giờ):
+$$\text{timeDesirability} = \text{clamp01}\left(1 - \frac{\ln(1 + \text{seconds} / 60)}{\ln(1 + 3600 / 60)}\right)$$
+Tác vụ hoàn thành ngay lập tức đạt 1.0; tác vụ kéo dài từ 1 giờ trở lên nhận điểm 0.0.
 
-### Ánh xạ loại công việc sang trục chất lượng
+#### Đặc trưng 7: Tính liên tục (`continuity`)
+Duy trì sự ổn định của model đang phục vụ (`incumbent`), bảo tồn ngữ cảnh và phong cách lập luận:
+- **Biên thông thường (`boundary: ordinary`)**:
+  - Giữ nguyên model: $0.65$
+  - Đổi sang model khác: $0.45$
+- **Biên làm lại (`boundary: rework`)**:
+  - Giữ cùng model nhưng tăng effort: $0.78$
+  - Giữ cùng model với effort bằng hoặc thấp hơn: $0.65$
+  - Đổi sang model khác: $0.48$
+- Không có incumbent hoặc không rõ danh tính: $0.50$
 
-| Dimension | Task axis (cổng eligibility) | Quality axis (xếp hạng) |
+#### Đặc trưng 8: Tránh ma sát quỹ đạo (`frictionAvoidance`)
+Ngăn chặn việc chọn lại model/effort vừa gây ra sự cố trong cùng một công việc (`workItemId`):
+- Gặp lỗi làm lại đã quy kết (`attributed-rework`): $0.00$
+- Vướng vòng lặp suy luận nghiêm trọng (`severe-reasoning-loop`): $0.25$
+- Không có ma sát: $1.00$
+
+#### Đặc trưng 9–10: Phục hồi khi làm lại (`effortRecoveryFit`, `modelSwitchRecoveryFit`)
+Chỉ kích hoạt tại ranh giới làm lại (`boundary === 'rework'`) sau khi kế hoạch bị trả về:
+- `effortRecoveryFit`: Bằng $1.0$ nếu chọn cùng model với mức effort cao hơn mức đã thất bại; ngược lại bằng $0.0$.
+- `modelSwitchRecoveryFit`: Bằng $1.0$ nếu chuyển hẳn sang một model khác; ngược lại bằng $0.0$.
+
+---
+
+## 3. Bộ chọn tối ưu hóa thống nhất (Unified Optimization Selector — Minimax Regret)
+
+Mô-đun `minimax.ts`, `domain.ts`, và `compile.ts` thực hiện việc lựa chọn ứng viên tối ưu toán học. Không còn sự tồn tại của các nhóm lọc hard-filter hay các quy tắc gán cứng.
+
+### 3.1. Định thức toán học Minimax Regret
+
+Với hai hành động $a$ và $b$, mức hối tiếc từng cặp (Pairwise Regret — $PR(a, b)$) khi chọn $a$ thay vì $b$ trên miền trọng số $\Theta$ là sự chênh lệch hữu ích lớn nhất trong trường hợp xấu nhất:
+$$PR(a, b) = \max_{\theta \in \Theta} \theta \cdot (\mathbf{upper}(b) - \mathbf{lower}(a)), \quad PR(a, a) = 0$$
+
+Mức hối tiếc tối đa của hành động $a$ (Maximum Regret — $MR(a)$) trên toàn bộ tập đối thủ cạnh tranh:
+$$MR(a) = \max_{b} \max\big(0, PR(a, b)\big)$$
+
+Hành động được chọn là hành động cực tiểu hóa mức hối tiếc tối đa:
+$$a^* = \arg\min_{a} MR(a)$$
+
+Việc sử dụng $\mathbf{lower}(a)$ (kịch bản tồi nhất của $a$) và $\mathbf{upper}(b)$ (kịch bản tốt nhất của $b$) tạo ra một bao đóng an toàn bảo thủ (conservative envelope), phản ánh đầy đủ rủi ro do sự bất định của dữ liệu.
+
+### 3.2. Thứ tự phân xử hòa điểm (Tie-Breaking Hierarchy)
+
+Khi hai candidate có mức hối tiếc chênh lệch không vượt quá ngưỡng dung sai số học (`LP_RESIDUAL_TOLERANCE = 1e-6`), thứ tự ưu tiên được giải quyết tuần tự qua các tiêu chí:
+1. **Tính liên tục phi tài chính (`continuity`)**: Giá trị trung tâm cao hơn xếp trước (dung sai $10^{-6}$).
+2. **Độ tin cậy giá**: Giá đã biết xếp trước giá chưa biết.
+3. **Chi phí kinh tế trung tâm (`centralUSD`)**: Chi phí thấp hơn xếp trước (dung sai $10^{-12}$).
+4. **Khóa định danh (`canonical key`)**: So sánh chuỗi ký tự theo thứ tự từ điển (`a.id < b.id`).
+
+### 3.3. Tối ưu hóa hiệu năng giải LP
+
+Việc giải bài toán LP cho mọi cặp $(a, b)$ với tập candidate lớn đòi hỏi tối ưu hóa cấu trúc:
+
+1. **Loại bỏ đối thủ bị thống trị (Dominator Pruning)**:
+   Nếu tồn tại hành động $c \ne a$ có $\mathbf{upper}(c) \ge \mathbf{upper}(b)$ trên mọi chiều đặc trưng, thì $PR(a, b) \le PR(a, c)$ với mọi $\theta \ge 0$. Do đó, $b$ bị bỏ qua khỏi danh sách đối thủ cần giải LP của $a$.
+2. **Cận trên dạng đóng (`baseDomainMax`)**:
+   Trên miền cơ sở $\Theta_{\text{base}}$ với các cận độc lập và điều kiện $\sum \theta_j = 1$, giá trị cực đại của $\mathbf{c} \cdot \theta$ có nghiệm giải tích dạng đóng (tham lam gán trọng số cho hệ số lớn nhất). Vì miền hợp lệ $\Theta \subseteq \Theta_{\text{base}}$, giá trị này là chặn trên tuyệt đối của bài toán LP:
+   - Các đối thủ được sắp xếp theo cận trên giảm dần.
+   - Quá trình duyệt dừng ngay khi cận trên của đối thủ tiếp theo nhỏ hơn mức hối tiếc lớn nhất hiện tại của $a$ cộng dung sai.
+3. **Giải hàng loạt theo khối (LP Chunking)**:
+   Các bài toán LP được nhóm thành từng khối 16 mục tiêu (`LP_CHUNK = 16`) để tận dụng tính năng vector hóa của bộ giải HiGHS WebAssembly.
+
+### 3.4. Biên dịch miền trọng số người dùng ($\Theta$)
+
+Miền $\Theta$ bắt đầu từ miền cơ sở $\Theta_{\text{base}}$ (các cận biên kỹ thuật của từng đặc trưng thỏa mãn $\sum_{j=0}^{9} \theta_j = 1$) và được thu hẹp bởi hồ sơ sở thích người dùng `preferences` (phiên bản 1):
+
+1. **Chế độ `base`**: Người dùng không trả lời hoặc bỏ qua tất cả câu hỏi. Miền chính là $\Theta_{\text{base}}$. Nghiệm giải quyết hoàn toàn bằng dạng đóng, 0 lần gọi LP.
+2. **Chế độ `hard`**: Các câu trả lời của người dùng tạo thành các siêu phẳng ràng buộc tuyến tính:
+   $$\theta \cdot \mathbf{\Delta}_k \ge \text{CHOICE\_MARGIN} = 0.04$$
+   Nếu hệ ràng buộc này tương thích với $\Theta_{\text{base}}$, miền tối ưu hóa là đa diện giao giữa chúng.
+3. **Chế độ `min-slack`**: Khi các câu trả lời của người dùng mâu thuẫn hình học với miền cơ sở, router tự động đưa vào mỗi ràng buộc một biến bù không âm $s_k \ge 0$ với hình phạt đồng đều `UNIFORM_CONFLICT_SLACK_PENALTY`:
+   $$\theta \cdot \mathbf{\Delta}_k + s_k \ge \text{CHOICE\_MARGIN}$$
+   Miền chấp nhận được định nghĩa là tập hợp các điểm có tổng biến bù không vượt quá mức bù tối thiểu cộng dung sai số học. Đây là giới hạn toán học của biểu diễn tuyến tính, không phải lỗi của người dùng.
+
+### 3.5. Trọng số đại diện và Dự phòng trung tâm (Central Fallback)
+
+Từ miền $\Theta$, router tính toán một điểm đại diện tất định $\theta_{\text{rep}}$ bằng cách tìm điểm gần nhất với trọng số mặc định $\theta_0$ theo chuẩn khoảng cách $L_1$, phân xử hòa điểm bằng thứ tự từ điển qua từng chiều trọng số.
+
+Nếu bộ giải HiGHS gặp lỗi ngoại lệ hoặc quá thời hạn tính toán, router lập tức kích hoạt **Central Fallback**:
+$$\text{utility}(a) = \sum_{j=0}^{9} \theta_{0, j} \times center_j(a)$$
+Ứng viên có độ hữu dụng trung tâm cao nhất được chọn ngay lập tức, đảm bảo không bao giờ làm nghẽn tiến trình của người dùng.
+
+---
+
+## 4. Hợp đồng thực thi (Execution Contract)
+
+Mô-đun `execution-contract.ts` và `execution-difficulty.ts` điều phối việc bàn giao có kiểm soát từ các giai đoạn phân tích/thiết kế (`plan`, `review`) sang giai đoạn sửa đổi mã nguồn (`implement`).
+
+### 4.1. Cấu trúc và Xác thực hợp đồng (`commit_execution`)
+
+Khi model đề xuất một kế hoạch thực thi, nó gọi công cụ `commit_execution` kèm danh sách các bước cụ thể:
+- `edit`, `create`: Phải có đường dẫn file rõ ràng và mô tả nội dung thay đổi.
+- `delete`: Phải có đường dẫn file rõ ràng.
+- `verify`: Chỉ định lệnh kiểm tra tự động (`test`, `typecheck`, `lint`, `build`).
+
+Hàm `validateContract` kiểm tra các ràng buộc:
+1. Số bước không được vượt quá `MAX_CONTRACT_STEPS = 12`.
+2. Đường dẫn không được chứa ký tự đại diện glob (`*`, `?`, `[`, `{`).
+3. Phải tác động ít nhất một file cụ thể.
+
+### 4.2. Điều kiện bàn giao (`delegatableShape`) và Lý do giữ lại (`keepReason`)
+
+Kế hoạch chỉ được bàn giao cho một model thực thi khác khi có hình dạng nhỏ gọn:
+$$\text{delegatableShape} \iff \text{targets} \le 5 \quad \text{và} \quad \text{steps} \le 8$$
+
+Nếu kế hoạch không thỏa mãn hoặc tiềm ẩn rủi ro, router chấp thuận kế hoạch nhưng **buộc chính model nộp kế hoạch (submitter) phải tự thực hiện**, được đánh dấu qua 4 lý do giữ lại (`keepReason`):
+- **`size`**: Kế hoạch vượt quá 5 file hoặc quá 8 bước.
+- **`unknown-target`**: Tồn tại file đích không có trên đĩa hoặc không thể đo đạc kích thước.
+- **`delete`**: Kế hoạch có chứa bước xóa file (thao tác có tính phá hủy cao).
+- **`open-decisions`**: Rubric thực thi khai báo `openDecisions >= 4` (vẫn còn quyết định thiết kế hoặc hành vi chưa được chốt dứt điểm).
+
+### 4.3. Giám sát vòng đời thực thi
+
+Khi một kế hoạch được giải phóng (`release: true`), bộ chọn Minimax Regret sẽ chọn một executor phù hợp. Vòng đời hợp đồng diễn ra qua các trạng thái:
+
+```text
+[active] ──(sửa đủ mọi target edit/create)──> [executed: complete] ──> [review]
+   │
+   ├──(dùng hết ngân sách gọi model)────────> [executed: budget]   ──> [review]
+   │
+   └──(vi phạm cam kết hoặc ma sát)────────> [broken]             ──> [trả về submitter]
+```
+
+1. **Ngân sách thực thi**: Executor được cấp tối đa $\text{budget} = 2 \times \text{steps} + 4$ lượt gọi provider. Nếu hết ngân sách mà chưa xong, hợp đồng chuyển sang `executed` với lý do `budget`.
+2. **Ghi nhận hoàn thành**: Mỗi lệnh `edit`/`write` tích hợp thành công trên một file đích sẽ loại file đó khỏi danh sách `pending`. Khi `pending` rỗng, kế hoạch đạt trạng thái `executed: complete`.
+3. **Phá vỡ hợp đồng (`broken`)**: Kế hoạch lập tức bị hủy và trả quyền điều khiển về cho submitter nếu executor:
+   - Thực hiện lệnh `edit`/`write` trên một file nằm ngoài danh sách khai báo ban đầu.
+   - Tự ý gọi lại `commit_execution`.
+   - Vướng phải ma sát quỹ đạo (lặp thao tác, kiểm tra thất bại liên tiếp).
+
+### 4.4. Cơ chế Rà soát bắt buộc (Review) và Xử lý Làm lại (Rework)
+
+- **Bắt buộc rà soát**: Khi một model khác submitter hoàn thành kế hoạch, lượt gọi tiếp theo bắt buộc chuyển về cho submitter với vai trò `review`. Vì một kế hoạch đã sửa xong các file vẫn có thể sai sót logic tinh vi mà các bài kiểm tra tự động không bắt được; chỉ có submitter ban đầu mới hiểu rõ toàn bộ ý định thiết kế.
+- **Xử lý làm lại (Rework)**: Nếu trong quá trình review, submitter nhận thấy kết quả không đạt và nộp lại một kế hoạch `commit_execution` mới, hành động này được định danh là `rework`.
+- **Cơ chế loại trừ (`CONTRACT_STRIKE_LIMIT = 2`)**:
+  - Mỗi lần làm vỡ hợp đồng (`broken`) hoặc khiến công việc phải làm lại (`rework`) tính 1 strike cho model thực thi đó.
+  - Khi một model tích lũy đủ **2 strike** trong cùng một công việc, model đó lập tức bị đưa vào danh sách loại trừ (`excludedExecutors`), bị cấm thực thi mọi kế hoạch tiếp theo của công việc này trên tất cả các mức effort và provider.
+
+---
+
+## 5. Vòng lặp ủy quyền và phục hồi lỗi (Delegation & Fallback Loop)
+
+Mô-đun `delegation.ts` là cơ cấu chấp hành điều phối luồng stream trực tiếp từ Pi đến các model theo thứ tự của chuỗi fallback chain đã được bộ chọn xếp hạng.
+
+### 5.1. Bộ đệm trước nội dung (Pre-Output Buffering)
+
+Để ngăn chặn việc rò rỉ các phản hồi hỏng hoặc trống từ các model thất bại ra giao diện người dùng, lớp `AttemptController` duy trì một bộ đệm sự kiện trước khi model tạo ra nội dung có nghĩa:
+
+- **Giới hạn bộ đệm**: Tối đa `MAX_BUFFERED_EVENTS = 10.000` sự kiện hoặc `MAX_PREOUTPUT_BUFFER_CHARS = 1.000.000` ký tự.
+- **Xả đệm trực tiếp (Passthrough)**: Ngay khi nhận được một sự kiện nội dung có nghĩa đầu tiên (`text_delta` có nội dung hiển thị hoặc `toolcall_start`), toàn bộ sự kiện đang bị giữ trong đệm lập tức được xả (flush) vào stream của Pi, và các sự kiện sau đó được truyền thẳng theo thời gian thực.
+- **Tràn đệm suy luận**: Nếu bộ đệm bị tràn nhưng bên trong **đã có chứa nội dung suy luận** (`thinking_delta`), controller tự động cam kết phát trực tiếp ra stream (`committedToStream = true`). Ngược lại, nếu tràn do sự kiện rác vòng đời mà không có suy luận, candidate bị coi là lỗi và chuyển fallback.
+
+### 5.2. Phân loại lỗi và Chính sách thử lại (Retries Policy)
+
+| Loại lỗi | Số lần thử lại tối đa | Hành động tiếp theo |
 |---|---|---|
-| `lightweight` | intelligence (không áp dụng floor) | intelligence |
-| `gather` | intelligence | intelligence |
-| `plan` | intelligence (không bao giờ được promote) | intelligence |
-| `implement` | agenticCoding → coding (fallback) | agenticCoding → coding (fallback) |
-| `review` | coding → intelligence (chỉ cho xếp hạng) | coding → intelligence |
+| Lỗi mạng tạm thời, quá tải máy chủ (5xx, overload) | 2 lần (`MAX_TRANSIENT_RETRIES`) kèm exponential backoff | Chuyển sang candidate tiếp theo trong chain |
+| Lỗi provider chung (`stopReason: 'error'`) | 1 lần (`MAX_GENERIC_RETRIES`) | Chuyển sang candidate tiếp theo trong chain |
+| Quá hạn phản hồi sự kiện đầu tiên (30s) | 0 lần | Chuyển sang candidate tiếp theo |
+| Hết hạn mức suy luận trước khi có câu trả lời (`stopReason: 'length'`) | 0 lần | Chuyển sang candidate tiếp theo (không tính provider strike) |
+| Model từ chối tiếp tục tool loop từ model khác | 1 lần gửi kèm prompt dẫn dắt (`TOOL_LOOP_HANDOFF_PROMPT`) | Nếu vẫn từ chối thì chuyển tiếp (không blacklist) |
 
-`implement` dùng agentic-coding làm axis chính (`artificial_analysis_agentic_index` của AA), fallback sang coding khi không có. Ranking axis có fallback để mọi model đều được sắp xếp dựa trên dữ liệu thực; eligibility axis thì không (yêu cầu bằng chứng trực tiếp).
+### 5.3. Tính bất khả đảo ngược (The Irreversibility Rule)
 
-### Economic promotion (có giới hạn)
+Một khi candidate đang phục vụ đã thỏa mãn ít nhất một trong các điều kiện:
+1. Đã phát ra ít nhất một ký tự văn bản hiển thị ra giao diện (`visibleTextReceived === true`),
+2. Đã phát ra ít nhất một lời gọi công cụ (`toolCallReceived === true`),
+3. Đã cam kết giải phóng buffer suy luận do tràn dung lượng (`committedToStream === true`),
 
-Một candidate tier-2 chỉ có thể được nâng lên tier 0 khi đáp ứng **tất cả** các điều kiện sau:
+thì **tuyệt đối không bao giờ được phép hủy ngang để replay trên một model khác trong chuỗi fallback**. Bất kỳ lỗi nào phát sinh sau thời điểm này đều được báo thẳng vào luồng dữ liệu của người dùng. Quy tắc này triệt tiêu hoàn toàn nguy cơ sinh văn bản trùng lặp và ngăn chặn các tác dụng phụ nguy hiểm (side-effects) do việc thực thi lại các lệnh shell hoặc chỉnh sửa file đã diễn ra một phần.
 
-1. Tỷ lệ trên task axis ≥ economy floor (70%)
-2. Đạt sanity floor (nếu là `implement`/`review`)
-3. Giá ≤ model tier-0 rẻ nhất ÷ 4 (lợi thế gấp bốn)
-4. Không bị Pareto-dominate bởi peer rẻ hơn và có capability tương đương
-5. Không phải sibling: provider khác của cùng một benchmark row không được tính là peer
+### 5.4. Ngắt mạch nhà cung cấp (Provider Circuit Breaker)
 
-Promotion chỉ được đánh giá cho `gather`, `implement` và `review`. `plan` không bao giờ được promote và `lightweight` hoàn toàn không bị gate.
+- **Tích lũy 3 strike sức khỏe (`MAX_FAILURES_PER_PROVIDER = 3`)**: Nếu một provider tích lũy đủ 3 lỗi nghiêm trọng (lỗi xác thực, mạng hỏng, lỗi 5xx lặp lại), toàn bộ các model khác thuộc provider đó trong chuỗi fallback đều bị bỏ qua ngay lập tức.
+- **Ngắt mạch tức thì do cạn hạn mức (Usage Limit 429 / Billing Cap)**: Khi bắt gặp lỗi cạn tiền, hết quota gói cước, hoặc mã lỗi 429 có tính chất tài khoản (`isUsageLimitErrorMessage`), router lập tức cô lập toàn bộ provider trên toàn phiên làm việc mà không cần chờ tích lũy đủ 3 strike. Lỗi này có thể gỡ bỏ thủ công khi đã nạp tiền qua lệnh `/router-blacklist remove <provider>/*`.
 
-### Tín hiệu chi phí
+### 5.5. Phát hiện vòng lặp suy luận và Can thiệp trước nội dung
 
-Cơ sở chi phí theo mỗi lần gọi: dùng `costPerTask` khi mọi candidate trong nhóm tier-0 trước khi xét economic promotion đều có số liệu (nếu không có candidate nào đạt tier 0 thì xét toàn bộ nhóm đã lọc). Nếu không, dùng giá pha trộn `$/1M` token (input×0,25 + output×0,75). Chỉ xét nhóm thực sự có thể thắng để một candidate chất lượng thấp thiếu `costPerTask` không buộc cả nhóm dùng thước đo thô hơn. Điều này quan trọng vì các mức effort của cùng model có giá `$/1M` như nhau và chỉ phân biệt được bằng `costPerTask`. Giá trong registry là nguồn có thẩm quyền khi tồn tại; giá benchmark là dự phòng. Model miễn phí có dữ liệu benchmark được coi là miễn phí thật; model miễn phí không có dữ liệu benchmark thì chưa rõ chi phí (không được ưu đãi chi phí).
+Lớp `ReasoningLoopDetector` phân tích các chuỗi `thinking_delta` theo thời gian thực để nhận diện các trạng thái lặp lại ý niệm hoặc bế tắc suy luận:
+- Nếu phát hiện mức độ nghiêm trọng (`severe`) trong khi nội dung hiển thị **chưa hề được phát ra**, router kích hoạt quy trình can thiệp trước nội dung (`decidePreOutputIntervention`).
+- Router kiểm tra xem có model nào mạnh hơn trong chuỗi fallback có khả năng giải quyết bế tắc hay không. Nếu có, lượt gọi hiện tại được hủy bỏ sạch sẽ, toàn bộ đệm bị hủy và quyền thực thi được chuyển ngay sang model cứu hộ mà người dùng không hề thấy dấu vết gián đoạn.
 
-### Ưu tiên giữ cache của model hiện tại
+### 5.6. Xử lý phản hồi rỗng trên đuôi tổng hợp (Synthetic Tail Handling)
 
-Nếu cặp `(model, effort)` thực sự phục vụ còn trong nhóm ứng viên có thể định tuyến, router lấy cặp đó làm incumbent; nếu không, router dùng lựa chọn được chấm điểm gần nhất. Mức năng lực tối thiểu của incumbent chọn ứng viên đầu tiên trong chuỗi có chất lượng đã biết trên trục công việc ít nhất bằng incumbent, chứ không bắt buộc giữ nguyên model. Nếu incumbent không còn trong chuỗi đã chấm điểm (ví dụ vì cửa sổ ngữ cảnh không đủ), mức tối thiểu không đưa nó trở lại. Incumbent được cộng điểm để giữ cache theo giá của chính model đó trong registry, không phải một hệ số cố định: `perTokenLoss = cacheWrite (hoặc input, nếu không có cacheWrite) − cacheRead`, giá trị đô-la của một token cache còn ấm. Khớp đúng incumbent được credit `min(estContextTokens × perTokenLoss, switchMargin)` — toàn bộ cuộc hội thoại. Đổi effort trên cùng model chỉ nhận full credit khi effort dùng chung cache của model: các model `anthropic-messages` có `compat.supportsMidConvoEffort`, nơi pi-ai gửi effort theo từng message. Ở các đường gọi khác, effort là một phần của khóa cache (OpenAI báo `reasoning_effort_changed`; đổi effort ở top-level của Anthropic làm invalidate ít nhất phần message blocks), và transcript cho thấy khoảng một nửa số lần đổi như vậy không đọc được chút cache nào. Khi đó credit là `min(warmTokens × perTokenLoss, switchMargin)`, trong đó `warmTokens` là lượng ngữ cảnh mà đúng khóa (model, effort) đó đã gửi ở lần phục vụ gần nhất, nếu lần đó cách đây dưới 5 phút và từ đó chưa có compaction hay điều hướng cây làm thay đổi lịch sử; mức effort chưa có cache ấm nhận credit 0. Candidate cùng model không có effort đo được (call shape mặc định của model) nhận full credit như khớp đúng incumbent. Đổi sang model khác nhận credit 0 — đổi model không có cache entry nào để giữ. Khi registry entry của incumbent không công bố đủ giá để tính `perTokenLoss` (thiếu `cacheRead`, và thiếu cả `cacheWrite`/`input`), không có retention credit nào được cấp. Bonus bị giới hạn bởi `switchMargin` (mặc định 0,15). Chỉ áp dụng khi caller cung cấp incumbent và không đặt `isSubagentSpawn`; role injection không cung cấp cả hai, vì vậy subagent spawn không bao giờ nhận bonus này (không có cache để mất).
-
-### Mức suy luận tối thiểu
-
-Reasoning effort tối thiểu cho từng dimension — đây là **floor**, không phải assignment. Effort đã đo có thể nâng lên, không bao giờ hạ xuống:
-
-| Dimension | Thinking tối thiểu |
-|---|---|
-| `lightweight` | off |
-| `gather` | low |
-| `implement` | medium |
-| `review` | high |
-| `plan` | max |
-
-Effort do router chọn sử dụng **up-only walk** (`levelFrom`) từ floor đã clamp — một khoảng trống trong `thinkingLevelMap` không bao giờ được resolve xuống dưới floor. Yêu cầu reasoning tường minh từ người dùng sử dụng nearest-first walk để tôn trọng lựa chọn của người dùng sát nhất có thể.
-
----
-
-## 3. Vòng lặp delegation fallback (`delegation.ts`)
-
-Vòng lặp đi dọc fallback chain đã xếp hạng (mỗi entry là key `provider/id:effort`) và stream candidate đầu tiên tạo ra output có ý nghĩa.
-
-Tính khả dụng của provider chỉ được xác định tại thời điểm stream. Registry auth-filtering là theo provider, không phải theo model, và per-attempt credential check mới là cổng kiểm tra thực sự — một provider đã xác thực vẫn có thể trả 421, treo hoặc lỗi trên một model cụ thể. Fallback chain sẽ hấp thụ lỗi đó, nhưng latency của lần thử đầu tiên đã bị tiêu tốn.
-
-### Manual pin theo session
-
-`/router-manual [provider/model[:thinking]|resume]` vẫn giữ `router/auto` là model đang hoạt động của Pi và chỉ lưu pin trong `RouterSession`; `reset()` sẽ xóa pin. Manual turn bỏ qua assessment dispatch, giới hạn việc chấm điểm vào các candidate của model đã pin, ghi cause `manual-override`, và rút fallback chain xuống effort variant được chọn. Vì vậy delegation chỉ có một model trong chain: failure được báo ra thay vì thay bằng model khác (chính sách retry cùng model thông thường vẫn áp dụng).
-
-Thay đổi thinking level mà router không tự ghi (Shift+Tab, settings, hoặc `pi.setThinkingLevel` của extension khác) cũng gài pin: model đã serve lần gọi trước, ở level mới đã clamp theo mức model đó hỗ trợ. Pin đang có thì chuyển sang level mới. `thinking_level_select` của Pi không có source và cũng bắn ra khi router tự đồng bộ footer hoặc khi đổi model, nên router phát hiện thay đổi ở lần gọi provider kế tiếp: so `options.reasoning` với level Pi giữ ngay sau lần đồng bộ gần nhất của router (`syncedThinkingLevel`). Chuyển sang `router/auto` xoá mốc này. Khi chưa có model nào serve, thay đổi vẫn chỉ là effort override cho một turn.
-
-`/router-manual resume` rời manual mode và tái sử dụng route trước khi pin. Lần pin đầu tiên chụp lại auto decision đang có hiệu lực (`resumeSnapshot`); `resume` kích hoạt snapshot đó và xóa pending trajectory escalation thu thập dưới pin để automatic routing không hành động theo evidence cũ. Router turn kế tiếp serve thẳng chosen model và fallback chain của snapshot — không classify, assessment hay scoring — dưới cause `resume`, đã lọc theo các entry trong chain còn routable (nếu rỗng thì rơi về routing thông thường). One-shot này giới hạn trong đúng một user entry qua `resumeIntentKey`: các tool-loop continuation cùng entry tái dùng nó, entry kế tiếp làm hết hiệu lực và tính lại. Khi không có pin (hoặc snapshot đã kích hoạt), `resume` là no-op.
-
-Argument completer của command cung cấp danh sách model có thể tìm kiếm kiểu `/model ` sau khi nhấn Space. Command không có argument tái sử dụng `ModelSelectorComponent` do Pi export (UI search/navigation native của `/model`). Vì pin là override tường minh, danh sách phản ánh chính xác `/model` của Pi — model theo session scope khi session bị scope, ngược lại là mọi model đã xác thực trong registry — và cố tình **không** áp dụng allowlist, config/session blacklist, usage-limit hay scoped filter của router; chỉ loại provider tổng hợp `router/*`. Khi serve một pin nằm ngoài candidate pool của router, pin được expand ngay từ registry (bỏ qua các filter routing lúc build); blacklist do lỗi phát sinh trong session cũng không loại pin: nếu lỗi lặp lại, router báo lỗi của provider, đúng với quy tắc chỉ thử model đã pin và không thay thế nó. Không ghi gì vào `settings.json` hoặc config.
-
-Khi `semi: true`, pick đã chấm điểm khác với model vừa serve sẽ chờ `ctx.ui.select` trước khi delegate: Yes dùng model mới, No giữ incumbent cho đúng user entry này (cause `semi-hold`; tool-loop continuation cùng entry tái dùng), và `provider/model-id[:thinking]` cụ thể gài pin session như `/router-manual`. Fallback sau lần thử thất bại hỏi lại. Dismiss/abort hủy turn thay vì chuyển. Session không interactive bỏ qua cổng này. `/router-semi [on|off]` ghi cờ này.
-
-### Các lỗi trước khi có câu trả lời
-
-| Lỗi | Cách xử lý |
-|---|---|
-| Không có trong registry | Đưa vào blacklist, chuyển candidate tiếp theo |
-| Không có credential / auth timeout (5 giây) | Đưa vào blacklist, ghi một provider strike |
-| First event timeout (30 giây) mà chưa có text/thinking/tool | Chuyển candidate tiếp theo |
-| Provider trả `stopReason: error` | Retry cùng candidate (tối đa 2 lần với lỗi transient / 1 lần với lỗi generic), sau đó chuyển candidate tiếp theo |
-| `done` bình thường nhưng không có text/thinking/tool output | Chuyển candidate tiếp theo |
-| Tương tự, khi đang trả lời kết quả tool | Cho cùng candidate thử thêm một lần với một user turn do router thêm vào request: «Continue the task from the tool results above.» Nếu vẫn không trả lời thì chuyển candidate tiếp theo. Provider có agent loop riêng (ví dụ Claude Code bridge) chỉ nhận kết quả tool do chính nó gọi, nhưng có thể tiếp tục vòng tool của model khác khi nhận user turn mới kèm toàn bộ lịch sử. Turn thêm vào chỉ tồn tại trong request được ủy quyền, không ghi vào transcript của Pi; lần từ chối này không bị blacklist hay tính là provider strike. |
-| Chỉ suy luận rồi hết giới hạn (`stopReason: length`, không có text/tool hiển thị) | Chuyển candidate tiếp theo |
-| Người dùng abort | Kết thúc, không blacklist |
-
-### Provider circuit breaker
-
-Ba provider-health strike (credential, auth, transport, `stopReason: error`) sẽ bỏ qua các model còn lại của provider đó. Lỗi hết output limit theo từng model và lỗi không có trong registry không làm cả provider bị đánh giá xấu — sibling model cùng provider vẫn có thể được dùng.
-
-Lỗi usage-limit — hết quota/billing, OpenCode `GoUsageLimitError`, hoặc plain 429/rate-limit — sẽ blacklist toàn bộ provider cho session ngay lập tức, bỏ qua cơ chế tích lũy ba strike: giới hạn được chia sẻ cho mọi model trên provider đó, vì vậy retry sibling chỉ làm lãng phí thời gian. Lỗi hết output limit riêng theo model không bao giờ kích hoạt cơ chế này. `/router-blacklist remove <provider>/*` sẽ gỡ exclusion sau khi top-up.
-
-### Resolve effort cho từng chain entry
-
-Mỗi chain entry mang effort riêng từ benchmark row. Effort do router chọn được clamp theo dimension floor và resolve bằng up-only walk (`levelFrom`). Yêu cầu reasoning tường minh từ người dùng dùng nearest-first walk (`resolveThinkingLevel`) để tôn trọng lựa chọn của người dùng sát nhất với khả năng model hỗ trợ.
-
-### Tính không thể đảo ngược sau khi có nội dung
-
-Khi text hiển thị hoặc tool call đã được stream, router không bao giờ replay trên model khác — việc đó sẽ tạo output hoặc side effect trùng lặp. Lỗi xảy ra sau đó sẽ được báo vào stream.
-
----
-
-## 4. Định tuyến subagent
-
-### Chèn role
-
-Các role của pi-subagents (`researcher`, `planner`, `worker`, `reviewer`, `advisor`) cung cấp dimension tối thiểu qua `ROLE_DIMENSIONS`. Router xây và lọc auth snapshot candidate khi refresh session, sau đó chấm điểm lại từng structured child nhìn thấy lúc spawn theo role và task. `assessTerminal(task)` chỉ được nâng floor của role, không được hạ; dimension weights đã cấu hình và context guard đang hoạt động được áp dụng trước khi chèn `provider/model` qua hook `tool_call`. Child bên trong workflow script là opaque với structured walker, nên call đó vẫn dùng default cấp tool theo thứ tự worker-first (worker → planner → researcher → advisor → reviewer) thay vì định tuyến task-aware từng child. `model` riêng của từng child trong script vẫn được ưu tiên, và lỗi của child trong script vẫn là tool error thông thường. Child reviewer luôn được giữ khác model family với worker đã chọn.
-
-Không ghi gì vào `settings.json` — việc chèn chỉ áp dụng cho từng spawn. Lựa chọn model tường minh và các pin của người dùng/project (`source` ≠ `pi8`) luôn được ưu tiên. Một child cụ thể không thể đổi model giữa chừng.
-
-### Loại trừ theo usage-limit
-
-Một foreground child thất bại với lỗi usage-limit của provider (quota/billing/subscription cap, khớp bởi `isUsageLimitErrorMessage` — cùng classifier mà main stream dùng) sẽ loại toàn bộ provider đó khỏi session, nên spawn sau và main turn đều bỏ qua mọi model trên nó (rule 8: cap được chia sẻ cho cả provider). Lỗi theo từng attempt gán cap cho đúng model. Đây là failure duy nhất của child được giữ lại: lỗi transient được pi-subagents/model retry, và lỗi đặc thù theo request (invalid request, refusal) không nói gì về sức khỏe provider. Router không bao giờ retry hay respawn child — việc khôi phục là quyết định của parent.
-
-### Bộ lọc auth theo provider
-
-Trước khi gán role cho subagent, một credential probe theo provider (timeout 3 giây) sẽ lọc các provider chưa xác thực. Nếu không có bước này, một lần subagent spawn kiểu pick-once trỏ đến provider chưa xác thực sẽ hard-fail. Nếu toàn bộ probe thất bại, trạng thái authentication được xem là chưa biết, không phải đã xác thực thành công — khi đó không thực hiện injection.
-
----
-
-## 5. Depth escalation
-
-Cơ chế này bao phủ một chuyển tiếp mà classifier không nhìn thấy: một gather session liên tục tích lũy context đã trở thành quá trình tổng hợp trên material đã thu thập, loại công việc mà các tier rẻ xử lý kém.
-
-- **Trigger**: live context vượt `depthEscalationTokens` (mặc định 32768), pre-depth dimension là `lightweight`/`gather`, và cause thuộc nhóm depth-passive (`heuristic`, `continuation-context`, `no-data`, hoặc `router-consult`)
-- **Effect**: nâng loại công việc một bước cho invocation đó (cause: `context-depth`)
-- **Thuộc tính**: chỉ nâng lên, không bao giờ cache, đánh giá theo từng invocation
-- **Ngoại lệ một lần**: chỉ lần nâng này đầu tiên trong mỗi session mới có thể bị hủy khi assessment có confidence cao và `scope: bounded`. Loại công việc và cause giữ nguyên; router dùng lại kết quả đánh giá của entry này, không gửi yêu cầu thứ hai. Nếu assessment timeout, không có hoặc bị tắt, hay trả về kết quả không hợp lệ, việc nâng vẫn diễn ra.
-
----
-
-## 6. Các cơ chế escalation (2 đường riêng biệt)
-
-### 1. Objective trajectory escalation
-
-Các dấu hiệu tắc nghẽn khách quan (lặp thao tác/kết quả quan sát, kiểm tra liên tục thất bại, xác nhận không có tiến triển, vòng lặp suy luận trước khi có output) yêu cầu chọn lại model cùng loại công việc và ưu tiên chất lượng ở lần gọi provider kế tiếp, hoặc chuyển ngay nếu việc phát lại vẫn an toàn. Model không tự yêu cầu nâng cấp; `commit_execution` bàn giao việc cho executor, còn router quyết định executor (§7).
-
-### 2. Automatic fallback trên main stream
-
-Vòng lặp ủy quyền chỉ phản ứng với lỗi khách quan trước khi có câu trả lời. Không suy luận chất lượng ngữ nghĩa, không phát lại sau khi đã có nội dung hiển thị, một tool call, hoặc một lần xác nhận tràn giới hạn suy luận.
-
----
-
-## 7. Terminal work và multi-work routing
-
-Bao phủ các yêu cầu implement dạng compound tường minh — "tìm X, rồi sửa nó" — nơi deliverable cuối (một mutation) khó hơn chính inspect phase của nó. Các intent thông thường không bị ảnh hưởng: cơ chế này chỉ engage cho các turn dimension `implement` có terminal classification là compound và discount-eligible.
-
-### Terminal classification (`terminal-classifier.ts`)
-
-Một classifier cấu trúc thuần, deterministic — tách biệt với các classifier dimension theo keyword/semantic — trích một `TerminalAssessment` cho mỗi entry: `kind` (cùng từ vựng với `Dimension`), `complexity` (`trivial`|`routine`|`moderate`|`hard`|`frontier`), `scope` (`bounded`|`open-ended`), `compound`, `confidence`, và `discountEligible`. `compound` đòi hỏi cấu trúc tường minh prerequisite → sequence → mutation (vd. "điều tra race condition, rồi sửa nó"); bất kỳ giá trị nào bị suy ra mặc định (complexity hoặc scope không match trực tiếp) sẽ giữ lại `discountEligible = false` — discount của inspect phase là một giấy phép, nên chỉ bằng chứng rõ ràng mới được cấp.
-
-### Terminal requirement và capability band (`work-phase.ts`)
-
-```
-requirement = clamp01(KIND_BASE[kind] + 0.5 × COMPLEXITY[complexity] + (scope === 'open-ended' ? 0.1 : 0))
-```
-
-| Band | Requirement | Floor |
-|---|---|---|
-| `economy` | < 0.30 | none |
-| `standard` | < 0.50 | 0.45 |
-| `strong` | < 0.75 | 0.70 |
-| `frontier` | ≥ 0.75 | 0.85 |
-
-### Vòng đời phase
-
-Mỗi intent sở hữu một `WorkPhase`: `answer` (lightweight), `inspect` (gather, hoặc phase mở đầu của một compound implementation đã engage), `reason` (plan/review), `mutate` (implement, hoặc một compound implementation sau khi đã rời `inspect`). Multi-work chỉ *engage* — cấp discount cho inspect phase — khi terminal kind là implement compound-eligible, band là `strong` hoặc `frontier`, confidence không thấp, và resolved dimension là `implement`. Sau khi engage, phase tiến `inspect` → `mutate` khi một routing owner mạnh hơn tiếp quản (resolved dimension đổi khỏi `implement`) — không bao giờ tự động lùi lại, và không bao giờ một khi turn đã rời `inspect`.
-
-### Scoring policy (`scorer.ts`)
-
-Một intent đã engage cung cấp một `MultiWorkScoringPolicy` request-local — `terminalFloor` (floor của terminal band) và `inspectFloor` (thấp hơn một band, khi còn ở `inspect`) — thay vì tham số tier/promotion sống thông thường. Đây là *nơi duy nhất* chất lượng được phép thấp hơn mức ưu tiên của bước cuối: một ngoại lệ về chi phí có giới hạn và xác định được cho giai đoạn điều tra, không phải hạ mức vì thiếu chắc chắn. Mỗi candidate được chấm điểm cũng mang `CandidateCapabilityMeta` (`taskRatio`, `clearsTerminalFloor`, `viaInspectPromotion`) để caller biết, theo từng candidate, liệu nó thực sự đạt terminal floor hay chỉ đạt inspect floor.
-
-### Materialize served capability (`delegation.ts`)
-
-Capability được đánh giá cho *candidate thực sự phục vụ* turn, không phải candidate xếp hạng cao nhất — fallback có thể phục vụ một sibling yếu hơn. `ServedCapabilityMeta` (provider invocation, terminal floor, liệu có candidate nào trong scoring set từng đạt floor, và capability của candidate đang phục vụ) được materialize trước khi decision state được publish, để mutation gate luôn đọc bằng chứng đã settle cho invocation đang thực sự stream.
-
-### Mutation gate (`mutation-gate.ts`)
-
-Các state transition thuần, fail-open, giới hạn theo invocation, gate các tool call `edit`/`write`. Khi đã engage và còn ở `inspect`, một mutation call bị block đúng một lần mỗi provider invocation trừ khi served capability đã đạt terminal floor (`clearsTerminalFloor === true`) hoặc thực sự unknown (`'unknown'` được cho qua — chưa đo không phải bằng chứng thiếu năng lực, và block trên đó sẽ chờ vô thời hạn). Một invocation sau đó, sau khi bị block, luôn thoát gate — một handoff giới hạn, không phải veto cứng, vì router không thể đảm bảo tồn tại một model mạnh hơn. Bằng chứng served-capability thiếu hoặc không nhất quán sẽ fail-open ngay thay vì làm nghẽn turn. Một call bị block trả về như một tool result lỗi, khiến agent yêu cầu một provider turn khác (theo hợp đồng tool-call/tool-result của Pi).
-
-### Cam kết thực thi (`execution-contract.ts`, `execution-contract-tool.ts`)
-
-Đây là cơ chế bàn giao tường minh từ `plan`/`review` sang `implement`. Model đang phục vụ gọi `commit_execution` để nộp kế hoạch khép kín cho phần việc còn lại: bước `edit`/`create` ghi đường dẫn và nội dung thay đổi cụ thể; bước `delete` ghi đường dẫn; bước `verify` xác định phép kiểm tra (`test`/`typecheck`/`lint`/`build`). Kế hoạch có tối đa 12 bước và không nhận đường dẫn dạng glob. Công cụ được đăng ký một lần và luôn sẵn dùng: nếu thay đổi danh sách công cụ giữa phiên, nhiều API của nhà cung cấp phải dựng lại phần đầu prompt và mất cache. Router từ chối mà không đổi trạng thái nếu phiên không dùng `router/auto`, quyết định hiện tại không thuộc `plan`/`review`, hoặc kết quả đánh giá có độ tin cậy cao cho biết người dùng chỉ yêu cầu lập kế hoạch hay rà soát. Vì chỉ dẫn ở đầu prompt dễ bị bỏ sót khi ngữ cảnh dài, router nối một lời nhắc cân nhắc gọi công cụ vào kết quả của lệnh `edit`/`write` tích hợp đầu tiên trong entry chưa có kế hoạch, nếu vẫn thỏa các điều kiện trên. Nối vào kết quả công cụ giữ nguyên phần đầu lịch sử hội thoại và cache của prompt. Mỗi lời nhắc được ghi thành bản ghi `reminder`; các entry có `reminder` nhưng không có `accept` cho biết một cơ hội bàn giao đã bị bỏ lỡ.
-
-Router tự định giá kế hoạch thay vì để model quyết định (`execution-difficulty.ts`). Submitter chỉ mô tả phần việc còn lại: `remainingWork` chấm năm tiêu chí từ 1 (dễ nhất) đến 5 (khó nhất) — quyết định còn để ngỏ, độ dàn trải, cách kiểm chứng, lượng code cần hiểu ngoài các file liệt kê, và mức ảnh hưởng lan ra ngoài. Hỏi model công việc có dễ không thì nó thường trả lời rất tự tin bất kể đúng sai; còn mô tả theo thang cố định, do router gán trọng số, thì đối chiếu được với kết quả thật và hiệu chỉnh lại được. Mức yêu cầu bằng 30% cộng một bảng tra theo số quyết định còn để ngỏ (riêng mức 5 đã đạt 90%, nên submitter tự làm), tối đa 8 điểm cho mỗi tiêu chí còn lại, và tối đa 4 điểm cho mỗi số đo: số file, số thư mục, số dòng hiện có của các file cần sửa/xóa, và số commit sửa lỗi chạm vào các file đó trong 180 ngày gần nhất (`git log`). Tiêu chí không được chấm tính như mức 5; số đo thất bại tính ở mức giữa, nên không cái nào làm mức yêu cầu thấp đi. Số commit, số file test và số bước chỉ được ghi log, không có trọng số. Mức yêu cầu quy ra band (`economy` < 45%, `standard` < 70%, `strong` < 85%, cao hơn thì submitter tự làm). Hình dạng kế hoạch chỉ được nâng band: hơn 2 file hoặc 4 bước cần ít nhất `standard`; hơn 5 file hoặc 8 bước thì submitter tự làm, và file cần sửa/xóa không tồn tại cũng vậy. Mỗi model thực thi đã bị loại trong cùng công việc đẩy band lên một bậc. Khi band cho phép bàn giao, các lần gọi tiếp theo được định tuyến như `implement`: mức chất lượng triển khai tối thiểu của executor thay cho tỷ lệ tier-0 85%, còn hai mức tối thiểu về năng lực và suy luận của incumbent được bỏ để bộ chấm điểm có thể chọn model rẻ hơn. Nếu kế hoạch giữ việc ở model nộp, loại công việc vẫn chuyển thành `implement`, nhưng cả hai mức tối thiểu của incumbent được giữ nguyên. Trọng số hiện đặt tay; mỗi contract ghi log rubric, số đo và kết quả để sau này thay bằng trọng số học từ dữ liệu.
-
-Cam kết được coi là đã thực thi (`executed`) khi lệnh `edit`/`write` tích hợp đã thành công trên mọi file `edit`/`create` khai báo, hoặc khi model thực thi đã dùng hết `2 × số bước + 4` lượt gọi provider (router không quy được lệnh sửa bằng Bash hay thao tác xóa file cho file nào, nên giới hạn này là cách kết thúc những kế hoạch như vậy). Executor là model đầu tiên khác submitter phục vụ một lượt gọi của kế hoạch đã bàn giao. Kế hoạch đã bàn giao vẫn có thể chỉ do submitter phục vụ: submitter có thể thắng khi chấm điểm, hoặc được dùng làm fallback. Kế hoạch do model khác thực thi được định tuyến như `review` đến hết entry, với submitter là incumbent và loại công việc của submitter làm mức suy luận tối thiểu: một kế hoạch làm xong vẫn có thể sai theo cách mà không vi phạm nào phát hiện được, và chỉ submitter mới đánh giá được kết quả theo đúng ý định ban đầu. Chuyển ngay ở lượt gọi sau lần sửa file khai báo cuối cùng là điểm duy nhất router bảo đảm được: một khi model trả lời chỉ bằng text, vòng lặp của Pi kết thúc và không còn lượt gọi nào để chuyển về. Vì vậy, các bước `verify` sau lần sửa file khai báo cuối cùng được chạy trong lúc review. Kế hoạch chỉ do submitter phục vụ thì tiếp tục như `implement`. Kết quả của lần chạy verifier đầu tiên sau khi thực thi được ghi là `pass`/`fail`. Một lần gọi `commit_execution` mới trong lúc review được coi là **làm lại** (rework): nó tính một strike cho model thực thi, giống như vi phạm, và kế hoạch sửa đổi giữ nguyên loại công việc ban đầu. Cam kết kết thúc cùng entry — khi lượt chạy của Pi đã dừng hẳn, hoặc khi một entry đang xếp hàng bắt đầu — và được gắn nhãn `clean` (không sửa gì lúc review), `fixed` (submitter đã sửa), `rework`, `broken` hoặc `unfinished` (vẫn đang chạy); router ghi một bản ghi `outcome`.
-
-Cam kết bị phá khi model thực thi sửa file ngoài danh sách đã khai báo bằng `edit`/`write` tích hợp, gọi lại `commit_execution`, hoặc kích hoạt chuyển giao do tắc nghẽn trong quá trình làm việc. Router không chặn lệnh gây vi phạm; thao tác đọc file, chạy lệnh và sửa file bằng Bash không được quy cho một đường dẫn đích. Ở lần gọi provider kế tiếp, router trở lại loại công việc của model nộp kế hoạch, lấy model đó làm incumbent và áp dụng mức suy luận tối thiểu tương ứng với loại công việc ấy; một lần chuyển giao trajectory đang chờ vẫn được ưu tiên. Cam kết được xóa để model nộp kế hoạch có thể nộp bản sửa đổi. Mỗi model thực thi có tối đa hai strike (vi phạm hoặc làm lại) trong cùng công việc; sau lần thứ hai, model đó bị loại ở mọi mức effort và trên mọi provider. Các model thực thi tiếp theo còn phải có chất lượng triển khai **đã đo** lớn hơn model bị loại mạnh nhất. Vì vậy, sau tối đa ba lần loại, việc bàn giao dừng lại ở model nộp kế hoạch. Số lần vi phạm và danh sách loại trừ được giữ qua các lời nhắn tiếp nối ngắn; cam kết đang hoạt động thì không.
-
-### Assessor v2 contract (`assessment-prompt.ts`)
-
-`ASSESSMENT_PROMPT_VERSION = '2.0.0'`. Assessor trả về shape `{ kind, complexity, scope, compound, confidence, reasoning }` như terminal classifier (`ParsedAssessment`/`RoutingAssessment`). Verdict hợp lệ được áp dụng theo các giới hạn ở §1 và ghi thành record `assessment-metric`. Verdict `kind` là `plan`/`review` với độ tin cậy cao khiến router từ chối execution contract; `complexity`/`compound` không quyết định việc chấp nhận kế hoạch. Bộ phân loại terminal tất định riêng xác định band cho multi-work. Không tự hạ mức định tuyến ở giai đoạn kiểm tra.
-
-### Hiển thị decision
-
-`RoutingDecision.multiWork` (một `MultiWorkRoutingMeta`) chỉ có mặt cho các intent đã engage. `/router-status` và `/router-why` (`formatDecisionDetail` trong `ui.ts`) in terminal kind/complexity/band và phase/invocation, tỉ lệ served capability thực tế (hoặc `unknown` khi không có ratio đo được), và một dòng gate chỉ khi thực sự có block/escape xảy ra. Quyết định không có metadata multi-work vẫn có thể hiển thị `editing` sau khi phát hiện lệnh sửa file; loại công việc chỉ đổi khi execution contract được chấp nhận. `/router-why` hiển thị trạng thái contract ở dòng `plan:` — band và mức tối thiểu của executor, lý do submitter tự làm, ai đã thực thi, hoặc lý do bị phá — và dòng `excluded:` khi một model executor đã bị loại.
-
----
-
-## 8. Luồng dữ liệu
-
-### Benchmark
-
-**Artificial Analysis** Data API (free tier, header `x-api-key`) là nguồn benchmark duy nhất. Các row chứa `evaluations` (intelligence, coding, agentic indices), `pricing` ($/1M input/output) và `performance` (tokens/giây, TTFT, TTFA). Mức độ bao phủ chất lượng bị giới hạn bởi dữ liệu mà Artificial Analysis công bố: model không có row khớp sẽ không có quality signal và chỉ route dựa trên registry metadata.
-
-**Effort label** được parse từ phần trong ngoặc của tên model: `GPT-5.6 Luna (low)`, `Claude Opus 5 (Adaptive Reasoning, Xhigh Effort)`, `DeepSeek V4 Flash (Non-reasoning)` → `off`. Quá trình parse fail closed (không nhận diện được → undefined).
-
-**Run variant**: AA chạy lại benchmark dưới các cấu hình khác nhau, thêm hậu tố `-<4 chữ số>` vào slug (ví dụ `gpt-5-6-luna-low-1234`). Các hậu tố này được loại bỏ bằng một variant list tường minh trong `matcher.ts`. Variant list được viết tường minh thay vì dùng quy tắc strip tổng quát vì việc strip hậu tố chung sẽ làm hỏng identity thật của model như `qwen3.7-max`.
-
-**Định dạng store**: identity là `(registryId, effort)` — phân tách bằng NUL trong storage, dùng `provider/id:effort` trong candidate key. Store v2 sẽ loại bỏ store v1 và chỉ ghi một dòng cảnh báo. Các source được chọn được refresh như một transaction duy nhất — nếu một source bị outage một phần, store trước đó được giữ lại thay vì ghi đè bằng dataset không đầy đủ.
-
-### Fuzzy matching
-
-Benchmark slug được fuzzy-match với model ID trong live registry của Pi. Có thể dùng manual override qua `/router-fix` khi matching thất bại; cho đến khi có override, model chưa match sẽ không có quality data và chỉ route dựa trên registry metadata.
-
-### Session state & lifecycle
-
-Routing state được đóng gói thành các domain aggregate có thể khởi tạo độc lập:
-- `RouterSession`: Container root sở hữu session generation, decision/model được serve gần nhất, candidate expansion cache, embedding tallies và các domain sub-object. Được clear khi `session_start` hoặc khi reset test.
-- `BlacklistState`: Đóng gói các exclusion lúc runtime cho model và provider, cũng như các session glob pattern chuẩn hóa không phân biệt hoa thường.
-- `AssessmentState`: Theo dõi chi phí assessor, EMA ước lượng usage input/output và strike count theo từng model.
-- `IntentState`: Quản lý cached routing intent qua các vòng tool loop, depth-latch generation, latch veto intent key và compound work-phase state.
-- `RuntimeBindings`: Lưu trữ `ExtensionContext` của Pi, `modelRegistry` hiện hành và signature đăng ký provider. Tồn tại qua các lần reset `session_start` và chỉ bị xóa khi extension shutdown hoặc reload.
-
-### Decision log
-
-Sidecar dạng append-only theo từng session, nằm cạnh transcript của Pi (`<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl`; các session tạm thời không có persisted session file dùng chung `~/.pi/agent/pi8/decisions.jsonl`): loại công việc, model được chọn, cause, fallback chain, chẩn đoán capability gate, assessment verdict, record `assessment-metric` và record `execution-contract` (accept/reject/break/reminder/execute/outcome, kèm band, mức tối thiểu của executor, điểm rubric, các số đo, nhãn kết quả, mã lý do từ chối và khóa model; không ghi đường dẫn hoặc nội dung thay đổi của kế hoạch). Các giá trị cause: `heuristic`, `continuation-context`, `router-consult`, `execution-contract`, `embedding-classify`, `error-fallback`, `no-data`, `capability-escalation`, `trajectory-escalation`, `context-depth`, `self-healing-gap`, `manual-override`, `resume`, `semi-hold`.
-
-### Timing log
-
-Timing từng bước theo mili-giây (opt-in qua config `debug`): chờ registry, phân loại, auth/stream attempt theo từng candidate, tổng thời gian mỗi lượt. Được ghi dưới dạng sidecar `*.router-debug.log` theo từng session (`/tmp/pi8-debug.log` khi là session tạm thời).
-
----
-
-## 9. Tham chiếu cấu hình
-
-Các tùy chọn trong `~/.pi/agent/pi8/config.json`:
-
-| Key | Mặc định | Mô tả |
-|---|---|---|
-| `artificialAnalysisApiKey` | — | Được lưu bởi `/router-sync` |
-| `models` | `[]` (tất cả) | Allowlist: glob pattern `provider/id` (wildcard `*`, không phân biệt hoa thường; tên provider trần nghĩa là `provider/*`) |
-| `blacklist` | `[]` | Các exclude pattern được lưu bền vững, cú pháp giống `models` |
-| `consultRouter` | `true` | Công tắc tổng cho semantic assessment; `false` thì không gửi assessment request nào |
-| `consultModel` | — | Model assessor override, tùy chọn |
-| `assessmentDeadlineMs` | `1500` | Ngân sách end-to-end cho assessor |
-| `assessmentMaxInputChars` | `6000` | Giới hạn input của assessor |
-| `assessorQualityRatio` | `0.5` | Competence floor của assessor |
-| `depthEscalation` | `true` | Tự động nâng khi context sâu |
-| `depthEscalationTokens` | `32768` | Ngưỡng context token |
-| `prompt` | `true` | Thông báo TUI khi đổi model |
-| `semi` | `false` | Hỏi trước khi chuyển khỏi model vừa serve |
-| `switchMargin` | `0.15` | Giới hạn cache-preservation cho incumbent; `0` tắt bonus |
-| `routerContextWindow` | Cửa sổ của model đã phục vụ | Cửa sổ ngữ cảnh mà `router/auto` công bố. Pi dựa vào đó để quyết định khi nào rút gọn hội thoại: sau khi một model đã phục vụ, router công bố cửa sổ và giới hạn output của model đó; trước lần phục vụ đầu tiên, router công bố cửa sổ lớn nhất trong các model có thể định tuyến. Đặt giá trị thấp hơn để Pi rút gọn sớm hơn, giữ các model có cửa sổ nhỏ đủ điều kiện lâu hơn. Giá trị vượt mặc định sẽ bị giới hạn về mặc định. |
-| `debug` | `false` | Đường dẫn timing log hoặc `true` |
-| `syntheticPrefixes` | `[]` | Các literal prefix đánh dấu synthetic message |
-| `dimensionWeights` | mặc định theo từng dimension | Override `{quality, cost, speed}` cho từng dimension |
-| `lowConfidenceThreshold` | `0.15` | Ngưỡng classifier confidence mà dưới đó áp dụng uncertainty handling |
-| `sources` | — | Lựa chọn nguồn benchmark |
-| `consultRouterAgent` | — | Alias đầu vào cũ; dùng `consultRouter` (chính tắc) cho config mới |
-| `embeddingClassifier` | `false` | Classifier E5-small local cho prompt không có bằng chứng keyword; chỉ nâng lên; cần các package tùy chọn `onnxruntime-node` và `@xenova/transformers` |
-| `embeddingDeadlineMs` | `5000` | Ngân sách cho load model + inference; hết hạn thì giữ kết quả keyword |
-| `embeddingMinConfidence` | `0.15` | Margin tối thiểu giữa hai prototype score cao nhất để verdict embedding được áp dụng |
-
----
-
-## 10. Ngoài phạm vi
-
-- Chấm chất lượng câu trả lời theo ngữ nghĩa hoặc tự động retry dựa trên chất lượng cảm nhận
-- Replay sau khi đã có text hiển thị hoặc tool call, hoặc thay thế child đang chạy ngay tại chỗ
-- Định tuyến dựa trên kết quả đã ghi nhớ: kết quả của execution contract chỉ được ghi log để hiệu chỉnh trọng số độ khó ngoại tuyến; lúc chạy, chỉ strike do làm lại trong cùng một công việc dùng đến chúng
-- Hoạt động như model gateway/proxy cho các tool không thuộc Pi
-
----
-
-## 11. Phát triển
-
-```bash
-npm run check   # tsc --noEmit + vitest run
-```
-
-Các module cốt lõi:
-
-- `scorer.ts` — scoring thuần, `pickBest`, capability tier, effort resolution (không I/O)
-- `classifier.ts` — keyword classification thuần (không I/O)
-- `consult.ts` — dispatch assessment: streaming model call, parse, timeout
-- `delegation.ts` — fallback loop: auth, retry, circuit breaker, timeout
-- `provider.ts` — orchestrator: chờ registry, classify/escalate/consult, score, delegate; đồng thời sở hữu `buildSubagentProviderAuthFilter`, credential probe 3 giây theo từng provider
-- `index.ts` — hook wiring; chạy credential probe trước khi gán role
-- `adapters/` — nguồn benchmark data (hiện chỉ có `artificial-analysis.ts`)
-- `subagents.ts` — role injection (không tự thực hiện probe)
+Khi các tin nhắn nằm sau tin nhắn trợ lý cuối cùng hoàn toàn là các tin nhắn tổng hợp nội bộ do hệ thống chèn vào (ví dụ bản tóm tắt ngữ cảnh compaction hoặc lời nhắc hợp đồng):
+- Một phản hồi rỗng (`empty answer`) kết thúc bằng `done` với mã `stopReason: 'stop'` được công nhận là **phục vụ thành công hợp lệ**.
+- Router hoàn tất lượt gọi trong êm thấm, không xem đây là lỗi model, không kích hoạt fallback và không ghi nhận bất kỳ provider strike nào.

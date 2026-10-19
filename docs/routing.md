@@ -1,6 +1,6 @@
 # Routing
 
-[Overview](overview.md) · [Glossary](glossary.md) · [Selection matrix](unified-selection-matrix.md)
+[Overview](overview.md) · [Glossary](glossary.md)
 
 ## Pipeline
 
@@ -158,25 +158,11 @@ Objective struggle is separate from provider failure. It includes repeated actio
 
 The serving model normally receives one recovery attempt before a later struggle triggers escalation.
 
-Legacy escalation selects the cheapest strictly stronger candidate in the next capability band. Higher bands remain in the fallback chain.
-
-The evaluation comparator considers the complete proven-stronger set before cost preference. It does not use named capability bands for this selection.
+Escalation selects a replacement candidate through the unified selector. The selector evaluates recovery features alongside capability, cost, and speed.
 
 These mechanisms do not grade semantic answer quality. An incorrect answer without an observable failure can remain undetected.
 
 See [Delegation](delegation.md) for retry counts, provider exclusions, attempt buffering, and manual/resume state.
-
-## Evaluation comparator
-
-`PI8_POLICY_VERSION=cheapest-sufficient` selects the retained evaluation comparator. The automatic selector uses the targets and the single comparison pool described above.
-
-The comparator uses Intelligence for every implementation requirement. The default minimum is `0.65 × 57.6`, or approximately 37.4.
-
-Explicit implementation requirements use `requirement × 57.6`. Other task minimums and input-shape minimums remain unchanged.
-
-This mapping is an experimental parameter. A passing test suite does not prove task sufficiency.
-
-Paid evaluations and production activation require separate approval.
 
 ## Implementation map
 
@@ -188,8 +174,8 @@ Paid evaluations and production activation require separate approval.
 | [Spend](../extensions/routing/features/spend.ts) and [cache](../extensions/routing/features/cache.ts) | Cache eligibility, economic cost proxy, and cost desirability |
 | [Decision compiler](../extensions/routing/optimization/compile.ts) | Numerical validation and the numerical problem |
 | [Difficulty](../extensions/routing/features/difficulty.ts) | Axis demands from accepted declarations |
-| [Work phase](../extensions/routing/policy/work-phase.ts) | Final-step requirements and handoff minimums |
-| [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan state and retention decisions |
+| [Work phase](../extensions/routing/policy/work-phase.ts) | Entry state, task types, and handoff transitions |
+| [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan validation, release, review, and strikes |
 | [Provider](../extensions/serve/provider.ts) | Candidate preparation and stream orchestration |
 | [Delegation](../extensions/serve/delegation.ts) | Attempts, retries, cancellation, and safe fallback |
 

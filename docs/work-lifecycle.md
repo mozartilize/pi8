@@ -92,137 +92,77 @@ The execution rubric rates five criteria from 1 to 5:
 
 The router also measures target count, directories, source size, and recent fix history.
 
-The final step does not increase the executor minimum. The plan resolves the decisions that made the original request difficult.
+The plan resolves the decisions that made the original request difficult.
 
-## Requirement formulas
+## Demand formulas
 
 The implementation rubric uses `openDecisions`, `spread`, `verification`, `knowledge`, and `coupling`.
 
 The reasoning rubric uses `alternatives`, `stakes`, `spread`, `knowledge`, and `uncertainty`.
 
-Each level ranges from 1 to 5. Missing or invalid levels in a partly scored rubric inherit its highest valid level.
+Each level ranges from 1 to 5. The router maps each level to `(level − 1) / 4`. Missing or invalid levels in a partly scored rubric inherit its highest valid level.
 
-Without a valid scored criterion, task defaults apply instead of a rubric calculation.
+### Rubric demand
 
-### Rubric calculation
-
-```text
-implementation = min(1, 0.30 + open-decision addition
-                     + other criterion additions + measurement additions)
-reasoning      = min(1, 0.40 + alternatives addition
-                     + other criterion additions + measurement additions)
-```
-
-| Level | Open-decision addition | Alternatives addition |
-|---|---:|---:|
-| 1 | 0 | 0 |
-| 2 | 0.10 | 0.06 |
-| 3 | 0.25 | 0.18 |
-| 4 | 0.42 | 0.34 |
-| 5 | 0.60 | 0.46 |
-
-Each remaining criterion adds `0.08 × (level − 1) / 4`.
-
-The router normalizes four source measurements to values between zero and one:
-
-| Measurement | Normalized value before clamping |
-|---|---|
-| Files | `(files − 1) / 4` |
-| Directories | `(directories − 1) / 3` |
-| Existing lines | `log2(max(lines, 1) / 250) / 4` |
-| Fix commits in the last 180 days | `fixes / 5` |
-
-Each measurement contributes at most 0.04 for implementation or 0.03 for reasoning.
-
-A failed applicable measurement contributes its maximum. A handoff without source-file evidence receives no source-measurement addition.
-
-The router records step count, commit count, and test-target count. They are not additional weighted terms in this formula.
-
-These weights are hand-set. Logged rubrics, measurements, and outcomes support fitting, but do not prove task sufficiency.
-
-### Final-step calculation
-
-A ready handoff or reopening declares its final step through task type, complexity, and scope.
+Independent requirements use their maximum:
 
 ```text
-final-step requirement = clamp01(kind base + 0.5 × complexity value
-                                 + open-ended scope addition)
+implementation:
+  reasoning = max(openDecisions, knowledge, coupling)
+  agentic   = clamp01(max(openDecisions, spread, verification, coupling) + measuredDemand)
+  research  = max(openDecisions, knowledge)
+
+reasoning:
+  reasoning = max(alternatives, stakes, knowledge, uncertainty)
+  agentic   = clamp01(max(spread, stakes, uncertainty) + measuredDemand)
+  research  = max(knowledge, uncertainty)
 ```
 
-| Task type | Kind base |
-|---|---:|
-| `lightweight` | 0.10 |
-| `gather` | 0.20 |
-| `implement`, `review` | 0.30 |
-| `plan` | 0.35 |
+File measurements supplement agentic demand by at most 0.20 (0.05 per metric):
 
-Complexity values are `trivial: 0`, `routine: 0.25`, `moderate: 0.50`, `hard: 0.75`, and `frontier: 1`.
+```text
+measuredDemand = 0.05 × (filesScore + directoriesScore + linesScore + fixesScore)
+```
 
-Open-ended scope adds 0.10. Bounded scope adds nothing.
+| Measurement | Full contribution at | Score formula |
+|---|---|---|
+| Files | 5 files | `clamp01((files − 1) / 4)` |
+| Directories | 4 directories | `clamp01((directories − 1) / 3)` |
+| Existing lines | 4,000 lines | `clamp01(log2(max(lines, 1) / 250) / 4)` |
+| Fix commits (180 days) | 5 fixes | `clamp01(fixes / 5)` |
 
-Within an entry, a stronger final-step declaration replaces a weaker one. A weaker declaration cannot reduce it.
+Failed applicable measurements contribute their maximum (0.05 each). Declarations without source-file evidence receive no measurement addition.
 
-Under `legacy`, the final step maps to these bands:
+### Coarse complexity bounds
 
-| Band | Final-step requirement | Handoff minimum |
-|---|---|---:|
-| `economy` | Below 0.30 | None |
-| `standard` | From 0.30, below 0.50 | 0.45 |
-| `strong` | From 0.50, below 0.75 | 0.70 |
-| `frontier` | At least 0.75 | 0.85 |
+Without a rubric, a declared complexity band supplies demand bounds for each axis:
 
-The handoff takes the higher of the capped rubric requirement and final-step minimum.
+| Complexity | Lower | Central | Upper |
+|---|---:|---:|---:|
+| `trivial` | 0 | 0 | 0.125 |
+| `routine` | 0.125 | 0.25 | 0.375 |
+| `moderate` | 0.375 | 0.50 | 0.625 |
+| `hard` | 0.625 | 0.75 | 0.875 |
+| `frontier` | 0.875 | 1 | 1 |
 
-The rubric ceiling is 0.65 for bounded implementation with `openDecisions` at most 3. Other handoffs use 0.85.
+File measurements add to the agentic center and bounds. An open-ended scope keeps the agentic upper bound at 1 when no rubric is provided.
 
-Without a scored rubric, defaults apply. Only a final step above the task default raises the requirement.
-
-The evaluation comparator uses the final-step requirement directly, not named bands. It cannot lower task defaults.
-
-A strong or frontier gather entry receives its handoff reminder on the first tool result. The comparator uses a final-step requirement of at least 0.50.
-
-### Executor calculation
-
-A closed plan does not inherit the final-step increase. The router uses the implementation rubric, target measurements, and plan shape.
-
-The legacy executor bands differ from final-step bands:
-
-| Executor band | Computed requirement | Minimum |
-|---|---|---:|
-| `economy` | Below 0.45 | 0.30 |
-| `standard` | From 0.45, below 0.70 | 0.45 |
-| `strong` | From 0.70, below 0.85 | 0.70 |
-| Retain submitter | At least 0.85 | No release |
-
-The executor minimum is the higher of the computed requirement and band minimum.
-
-More than two files or four steps requires at least `standard`. More than five files or eight steps retains the submitter.
-
-Each excluded executor raises the legacy release band one step. The comparator uses direct shape requirements and measured stronger-replacement checks.
-
-An accepted release skips incumbent capability and thinking minimums. A retained plan keeps both.
+Without a rubric or complexity declaration, demand spans the full uncertainty interval `[0, 1]` with center 0.5.
 
 ## When the submitter retains a plan
 
 Acceptance does not guarantee transfer to another model.
 
-The submitter retains a plan when:
+A plan is released to the executor chosen by the selector unless it is unsafe or unfinished for another model:
 
-- The plan is too large for release.
-- A required edit or delete target is missing or cannot be checked.
-- The plan deletes a file.
-- The requirement is too high for release.
-- An executor exclusion prevents release.
-- The rubric leaves a behavior, interface, or design choice open.
-- The executor minimum exceeds the submitter's measured quality.
+- `size`: The plan has more than 2 target files or more than 4 steps.
+- `unknown-target`: A declared target is missing or its line count could not be measured.
+- `delete`: The plan contains a file deletion step.
+- `open-decisions`: The execution rubric leaves `openDecisions` at 4 or 5.
 
-`openDecisions` of 4 or 5 indicates an open choice. Existing retention reasons can take precedence in the log.
+Benchmark quality and task difficulty do not keep a plan. When released, the selector evaluates executor candidates with the plan's rubric.
 
-The measured-quality check uses the implementation axis selected by the active policy and requirement.
-
-Missing or estimated submitter quality does not trigger that check. Unknown quality does not count as weak quality.
-
-A retained plan continues as `implement` with incumbent minimums in force. Ordinary struggle detection can still request recovery or escalation.
+A retained plan continues as `implement` with incumbent minimums in force.
 
 See `/router-why` for the retention reason.
 
@@ -266,13 +206,9 @@ The breaking call is not a filesystem security barrier. The next invocation retu
 
 A new plan during review is rework. Breaks and rework count against another model that executed the plan.
 
-After two strikes, the router excludes that executor identity for the work item. Later release requires evidence of a strictly stronger replacement.
+After two strikes, the router excludes that executor identity for the work item. Strikes carry across entries and reopening of the same item. Active contracts do not.
 
-Strikes carry across entries and reopening of the same item. Active contracts do not.
-
-An excluded model remains excluded at every effort and provider. Replacement requires measured implementation quality above the strongest excluded executor.
-
-Legacy band increases limit repeated release after exclusions. Missing stronger evidence retains the submitter.
+An excluded model remains excluded at every effort and provider for implementation turns on that work item.
 
 A contract ends when the entry settles or a queued entry starts. The log assigns one outcome:
 

@@ -30,6 +30,8 @@ Without a saved transcript, decision records use the shared `~/.pi/agent/pi8/dec
 
 A debug sidecar ends in `.router-debug.log`. Without a saved transcript, debug output uses `/tmp/pi8-debug.log`.
 
+When debug is enabled, debug lines also appear directly in the Pi chat transcript as dim `pi8-debug` entries in arrival order.
+
 `PI8_DIR` changes the global storage directory. A configured debug path overrides the default debug location.
 
 ## Enable debug output
@@ -44,15 +46,21 @@ A debug sidecar ends in `.router-debug.log`. Without a saved transcript, debug o
 
 2. Start a new Pi session to apply the session debug setting.
 3. Reproduce the problem.
-4. Inspect the debug sidecar for that session.
+4. Inspect the debug sidecar for that session, or read the dim debug lines in Pi's chat.
 
-A string selects an explicit path:
+A string selects an explicit file path:
 
 ```json
 {
   "debug": "/path/to/private/pi8-debug.log"
 }
 ```
+
+Debug output records:
+- Decisions with work item, topic, phase, cause, and handoff identities.
+- Pending context choices and transitions.
+- Handoff status and boundary settlements.
+- Attempt milestones and failure details.
 
 Do not write a debug log into a public checkout when the request contains sensitive material.
 
@@ -67,12 +75,6 @@ Handoff and contract records add rubric levels, measured counts, requirement, ou
 An `editing` marker reports an observed mutation. It does not change the task type.
 
 Readers retain support for cause values in older records. A legacy cause does not imply that its selection path remains active.
-
-The evaluation comparator records:
-
-- Capability-policy digest and comparison axis.
-- Reference metric version and reported index version when available.
-- Complete required vector, including context and vision minimums.
 - Digest of the normalized benchmark store.
 
 The policy digest covers fixed vectors, references, requirement mapping, comparison axis, component rules, and input-shape rules.
@@ -152,8 +154,6 @@ Interpret the report with these limits:
 
 - Missing usage makes routed spend a lower bound.
 - Missing prices omit a turn from priced totals.
-- Foreground child usage can contribute to the totals.
-- Async child costs are absent.
 - Provider subscription charges may differ from registry token prices.
 - A changed baseline can make session totals harder to compare.
 

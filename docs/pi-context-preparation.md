@@ -2,7 +2,7 @@
 
 ## Scope and executable evidence
 
-These mechanism probes use the installed Pi 1.1.0 SDK, agent loop, extension
+These mechanism probes use the installed Pi 1.3.0 SDK, agent loop, extension
 runner, model runtime and session manager. Fake providers produce local streams.
 They make no HTTP requests and use no paid models. They do not load the production
 routing extension or prove that its adapters satisfy the migration conditions.
@@ -97,7 +97,7 @@ chain ends.
 Each target is prepared against the current context. A persisted compaction is
 not undone when its prompt still exceeds the target's budget. The next target
 uses that context. A compaction that changes the context checks the ranking
-again from the top, so a preferred target that now fits is served. Only a
+again from the top, so a preferred target that fits is served. Only a
 ready target gets a reservation. Planning and failed preparation consume no
 recovery claim.
 

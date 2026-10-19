@@ -28,15 +28,16 @@ This example limits automatic routing to available GitHub Copilot models. It doe
 | Option | Default | Meaning |
 |---|---|---|
 | `artificialAnalysisApiKey` | Unset | Key for benchmark sync. `/router-sync <key>` saves it. |
+| `preferences` | Empty profile | Per-user routing preferences for minimax regret optimization. |
 | `models` | All available models | Allowlist of model patterns. An empty array adds no restriction. |
 | `blacklist` | `[]` | Persistent model exclusions. |
 | `prompt` | `true` | Show notifications when the selected model changes. |
 | `semi` | `false` | Ask before a model change in an interactive session. |
 | `switchMargin` | `0.15` | Maximum cache credit and protocol penalty. Valid range: 0 to 1. |
 | `routerContextWindow` | Dynamic | Optional positive token limit for the advertised context window. |
-| `debug` | Off | `true` uses the session debug log. A string selects a file path. |
+| `debug` | Off | `true` enables the session debug log and renders dim debug entries in the Pi chat. A string selects an explicit file path. |
 | `syntheticPrefixes` | `[]` | Literal prefixes for synthetic integration messages whose source is not available in Pi's session projection. Projected custom messages need no prefix. Maximum length: 200 characters per prefix. |
-| `dimensionWeights` | See below | Legacy main-turn quality, cost, and speed weights. |
+| `dimensionWeights` | See below | Fallback quality, cost, and speed weights for central scoring. |
 | `reputation` | `true` | Collect protocol counts and enable eligible history-based preferences. |
 | `reputationWeights` | Unset | Weights for `reminder` and `ignored`. Each value must be between 0 and 1. |
 | `baselineModel` | Automatic | `provider/id` for the cost comparison in `/router-report`. |
@@ -45,7 +46,7 @@ The parser ignores invalid values or uses the relevant default. An invalid JSON 
 
 Do not depend on this recovery for configuration validation. Check your edits before use.
 
-The configuration controls preferences, not capability minimums. In the legacy scorer, changing weights cannot move a measured weak candidate into the preferred capability tier. Automatic main-turn selection has no capability tiers; see [Routing](routing.md#one-comparison-pool).
+The configuration controls preferences, not capability minimums. Automatic main-turn selection has no capability tiers; see [Routing](routing.md#one-comparison-pool).
 
 ## Model patterns
 
@@ -66,9 +67,44 @@ The command shows allowlist matches. Runtime failures and provider exclusions ca
 
 A [manual pin](commands.md#manual-model-control) is an explicit override. It can select an authenticated model outside the automatic allowlist or blacklist.
 
-## Default scoring weights
+## Routing preferences
 
-These are the `legacy` defaults.
+The `preferences` object specifies semantic trade-offs for minimax regret selection:
+
+```json
+{
+  "preferences": {
+    "version": 1,
+    "settledImplementation": "lower_cost",
+    "openDesignDecisions": "higher_reasoning_capability",
+    "handoffWarmCache": "keep_warm_incumbent",
+    "researchTasks": "higher_research_capability",
+    "afterRework": "switch_model"
+  }
+}
+```
+
+The profile requires `version: 1`. Each core field accepts its specific options or non-decisions (`equivalent`, `unsure`, `skip`):
+
+| Preference field | Option A | Option B |
+|---|---|---|
+| `settledImplementation` | `lower_cost` | `higher_coding_capability` |
+| `openDesignDecisions` | `lower_cost` | `higher_reasoning_capability` |
+| `handoffWarmCache` | `keep_warm_incumbent` | `switch_for_capability` |
+| `researchTasks` | `lower_cost` | `higher_research_capability` |
+| `afterRework` | `increase_effort` | `switch_model` |
+
+Substantive answers add linear constraints to the weight domain $\Theta$. Minimax regret selects the candidate that minimizes maximum regret across all weight vectors in $\Theta$.
+
+`unsure` and `skip` add no constraint.
+
+An invalid field value or unsupported version marks the profile invalid. An invalid profile is never partly applied; the selector falls back to the base weight domain.
+
+Use `/router-preferences` to inspect the saved profile and its binding status.
+
+## Scoring weights
+
+These are the fallback defaults for central scoring.
 
 | Task type | Quality | Cost | Speed |
 |---|---:|---:|---:|
@@ -89,18 +125,6 @@ An override can specify one task type:
 ```
 
 Weights must be finite and nonnegative. Missing fields retain the default for that task type.
-
-### Cheapest-sufficient weights
-
-Automatic main-turn selection under `cheapest-sufficient` uses fixed weights for every task type:
-
-| Quality | Cost | Speed |
-|---:|---:|---:|
-| 0 | 1 | 0 |
-
-`dimensionWeights` does not change these main-turn weights.
-
-Quality still determines capability tiers. Context and vision minimums still apply. Cache credit and configured protocol penalties can still change preference within a tier.
 
 ## Context window
 
@@ -128,11 +152,8 @@ Setting `switchMargin: 0` disables cache credit and protocol penalties.
 |---|---|
 | `PI8_DIR` | Override the pi8 storage directory. |
 | `ARTIFICIAL_ANALYSIS_API_KEY` | Supply the key for benchmark sync without saving a command argument. |
-| `PI8_POLICY_VERSION` | Select `cheapest-sufficient` for evaluation. Absent or unknown values select `legacy`. |
 
 Sync key precedence is: command argument, environment variable, saved configuration.
-
-`PI8_POLICY_VERSION` is not a user configuration option. See [Routing](routing.md#evaluation-comparator) before using it.
 
 ## Sources
 

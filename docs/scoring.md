@@ -1,8 +1,8 @@
-# Scoring
+# Scoring and features
 
 [Overview](overview.md) · [Routing](routing.md) · [Architecture](overview.md#architecture)
 
-The scorer selects a model and its effort together. Capability tiers precede quality, cost, speed, cache credit, and protocol preference.
+The candidate builder and feature engine prepare actions for unified minimax regret selection. Candidates expand by provider, model, and supported effort, evaluate ten bounded desirability features, and rank across the permitted pool.
 
 ## Candidate expansion
 
@@ -10,11 +10,9 @@ Candidates use `provider/id[:effort]` identities. Each supported, measured effor
 
 Delegation calls `modelRegistry.streamSimple`. Providers that reject bare delegated calls are not automatic candidates.
 
-For example, the Cursor SDK accepts requests only from its owning session. Pi can still select a Cursor model as a concrete session model.
-
 An unmeasured supported effort can receive an estimate from a higher measured effort.
 
-`off` requires a provider mode that actually disables thinking:
+`off` requires a provider mode that disables thinking:
 
 - A non-reasoning model has only this mode.
 - A reasoning model needs a supported `off` mapping and a provider that can disable thinking.
@@ -25,6 +23,8 @@ The router never estimates `minimal`. Several providers map it to `low`, so an i
 A measured `minimal` row remains available when supported.
 
 If the model supports none of its measured efforts, it receives one candidate without an effort label.
+
+Context fit checks `contextWindow >= promptTokens × 1.2`. An unknown window does not cause rejection.
 
 ## Downward effort estimates
 
@@ -40,148 +40,122 @@ Estimated rows retain registry price and context metadata. They do not inherit t
 
 Exact knowledge and research measurements never transfer across efforts. An unlabelled row does not supply them to a named effort.
 
-Estimated quality can satisfy ordinary eligibility. It cannot prove a strictly stronger model for escalation or excluded-executor replacement.
+## The ten desirability features
 
-## Capability minimums and ranking axes
+Every action evaluates ten features in `[0, 1]`, where larger values indicate higher desirability (`feature-v11`):
 
-See [capability targets](routing.md#capability-targets) for automatic selection's target scales and [one comparison pool](routing.md#one-comparison-pool) for its ranking.
+| Feature | Input | Meaning |
+|---|---|---|
+| `reasoningFit` | Task reasoning demand + Intelligence | Fit against the phase's reasoning target |
+| `agenticFit` | Task agentic demand + Terminal-Bench 4.0 | Fit against the phase's agentic coding target |
+| `researchFit` | Task research demand + Briefcase/Omniscience | Fit against the phase's research target |
+| `inputFit` | Context size + image inputs + LCR/MMMU-Pro | Fit for long context (>= 64k tokens) and vision reasoning |
+| `costDesirability` | Prompt cost + benchmark output cost | Logarithmic economic cost desirability ($0.00001 to $10) |
+| `timeDesirability` | AA output tokens / output speed | Logarithmic benchmark time desirability (60s shape, 3600s saturation) |
+| `continuity` | Incumbent match | Affinity for the currently serving model |
+| `frictionAvoidance` | Trajectory friction on model/effort | Penalty for observed stagnation or struggle |
+| `effortRecoveryFit` | Failed candidate rework | Preference for higher effort on the same model after rework |
+| `modelSwitchRecoveryFit` | Failed candidate rework | Preference for switching models after rework |
 
-Under `legacy`, ranking uses Intelligence for lightweight, gather, plan, and review work.
+Each feature supplies an interval `[lower, upper]` and a central value. Exact measurements collapse the interval to a single point. Missing evidence widens the interval, representing uncertainty in minimax regret.
 
-Implementation ranking normally uses agentic coding, then coding. An explicit implementation requirement below 0.45 uses the AA Agentic Index instead.
+## Capability fit and targets
 
-Cross-model capability comparisons and escalation do not use the AA Agentic Index under `legacy`.
+Normalized benchmark quality scales use absolute reference strengths:
 
-Coding-only rows remain unknown for implementation eligibility. A missing agentic measurement does not establish measured weakness.
+| Axis | Reference strength | Metric |
+|---|---:|---|
+| Intelligence | 57.6 | Artificial Analysis Intelligence Index |
+| Coding | 78.3 | Artificial Analysis Coding Index |
+| Agentic coding | 63.6 | Terminal-Bench 4.0 pass rate |
+| Agentic Index | 57.9 | Artificial Analysis Agentic Index |
+| Research | 0.61 | Briefcase rubric pass rate |
+| Long context | 1.0 | LCR correctness |
+| Vision reasoning | 1.0 | MMMU-Pro correctness |
 
-Omniscience can be negative. Its incorrect-answer penalty is already part of the index, so hallucination rate is not a separate minimum.
+Capability targets interpolate linearly between easy and hard endpoints based on axis demand:
+- Reasoning target: 0.20 to 0.55 (shortfall scale 0.15)
+- Agentic target: 0.01 to 0.60 (shortfall scale 0.20)
+- Research target: 0.25 to 0.65 (shortfall scale 0.20)
 
-## Requirement references
+Fit formula: `clamp(1 − max(0, target − quality) / shortfallScale, 0, 1)`.
 
-An accepted requirement scales the required task axes against fixed reference strengths:
+Surplus capability earns no extra fit. Phase relevance scales the fit.
+
+## Economic cost proxy
+
+The cost feature uses an economic cost proxy:
 
 ```text
-axis minimum = requirement × axis reference
+proxy = prompt cost + benchmark output cost
 ```
 
-| Axis | Reference strength |
-|---|---:|
-| Intelligence | 57.6 |
-| Coding | 78.3 |
-| Agentic coding | 63.6 |
-| AA Agentic Index | 57.9 |
-| Briefcase rubric | 0.61 |
+1. **Prompt cost:** Billed prompt tokens multiplied by registry rates, scaled by `promptTokenScale`.
+2. **Benchmark output cost:** Artificial Analysis output tokens per task at the exact served effort, multiplied by registry output price.
 
-Omniscience remains at zero. Long-context and image minimums remain separate input-shape constraints.
+Prompt tokens are estimated from characters. The router records the ratio of billed prompt tokens to estimated tokens after each complete attempt. `promptTokenScale` is an exponential moving average of these ratios, persisted in `prompt-token-scales.json`.
 
-Reference strengths do not depend on the available pool. Quality above an accepted handoff minimum earns no additional credit.
+When the output token count is missing and output price is positive, the cost feature lower bound is 0, the upper bound is the desirability of prompt cost alone, and the center is their midpoint.
 
-See [Work lifecycle](work-lifecycle.md#requirement-formulas) for the rubric and final-step formulas.
-
-## Cost scale
-
-Each selection uses one cost scale. Coverage comes from tier 0, or the filtered pool when no candidate meets every minimum.
-
-If more than half of that pool has `costPerTask`, the selection uses task cost.
-
-Otherwise, it uses blended registry token prices, with benchmark prices as fallback:
+Cost desirability is logarithmic:
 
 ```text
-blended price = input price × 0.25 + output price × 0.75
+costDesirability = clamp(1 − log10(max(cost, 0.00001) / 0.00001) / log10(10 / 0.00001), 0, 1)
 ```
 
-Lower cost receives logarithmic utility within its capability tier.
+## Latency and time desirability
 
-On the task-cost scale, a candidate without task cost receives no cost credit. Its token price cannot replace the missing measurement.
+The time feature divides the Artificial Analysis output tokens per task by measured output tokens per second.
 
-Free models without benchmark data receive no cost credit.
+When the served effort has no measured output speed, the router estimates speed from the minimum and maximum speeds of active rows at other efforts of the same registry model (`speed-other-effort`).
 
-Task cost can distinguish efforts of one model. Registry token prices normally cannot, because those efforts share a price.
+Without speed evidence or token counts, time desirability defaults to `[0, 1]` with center 0.5.
 
-## Speed scale
+Time desirability is logarithmic in seconds:
 
-If more than half of the preferred pool has task duration, the selection uses logarithmic task-time utility.
+```text
+timeDesirability = clamp(1 − log10(max(seconds, 0.1) / 0.1) / log10(3600 / 0.1), 0, 1)
+```
 
-Otherwise, it uses output tokens per second.
+## Cache credit
 
-A candidate without task duration receives no speed credit on the task-time scale.
+A recorded warm prefix gives cache credit only while younger than the model's `promptCache` lifetime for the request's retention tier (`short` or `long`).
 
-Missing lower-tier measurements do not reduce the preferred pool's coverage. Estimated rows carry neither task cost nor task duration.
+A model without a declared lifetime gets no cache credit, even with a published cache-read price.
 
-## Same-session cache credit
+Cost bounds evaluate two outcomes:
+- Miss outcome: all prompt tokens miss cache.
+- Hit outcome: the largest qualifying prefix hits cache.
 
-The exact incumbent can retain the full conversation prefix.
-
-An effort change shares that prefix only when the provider supports per-message effort. Otherwise, it receives only its own recently served prefix.
-
-Other recently served candidates can receive credit for their own prefixes.
-
-Credit uses the candidate's published cache prices. It multiplies reusable tokens by the cache-read discount, then caps the credit at `switchMargin`.
-
-The discount uses cache-write price when available, otherwise input price. All prices use the same token unit.
-
-Missing cache prices receive no credit.
-
-Compaction, tree navigation, and changes to the system prompt or tool schema clear session prefixes.
-
-## Cross-session cache credit
-
-Cross-session credit starts after at least two weeks of history collection.
-
-It requires:
-
-- An identical prompt-head hash.
-- The exact provider, model, and effort identity.
-- A recent matching record from another session.
-
-Only the shared system prompt and tool prefix count. Conversation tokens do not.
-
-| Age | Incremental cache-hit estimate |
-|---|---:|
-| Up to five minutes | 0.40 |
-| More than five minutes, up to one hour | 0.30 |
-| More than one hour | 0 |
-
-These values are observational estimates, not guaranteed cache hits. Selection frequency earns no credit.
-
-A record older than the candidate model's prompt cache lifetime, at the retention tier of the request that wrote it, gets no credit at any probability. A record without its request time or tier, and a model without a declared lifetime, get no credit.
+When a cache read costs more than a miss, the hit outcome sets the upper cost bound. When a hit is possible but the registry omits a cache-read price, the cost has no known maximum (`cache-read-price:unknown`).
 
 ## Protocol preference
 
-Protocol preference uses independent reminder and ignore rates, not execution-success bonuses.
+Protocol preference tracks independent reminder and ignore rates for tool-use compliance.
 
-Counts decay with a 30-day half-life. Reminder-rate preference needs 30 effective entries. Ignore-rate preference needs 10 completed reminder episodes.
+Counts decay with a 30-day half-life. Reminder-rate preference requires 30 effective entries. Ignore-rate preference requires 10 completed reminder episodes.
 
 Each rate uses a Wilson lower bound. Configured weights determine the penalty, capped by `switchMargin`.
 
-Unset `reputationWeights` leaves compliance collection active without a compliance penalty.
-
-See [Observability](observability.md#protocol-history) for record identities, retention, and deduplication.
+Unset `reputationWeights` leaves compliance collection active without applying penalties.
 
 ## Served thinking effort
 
-The scorer chooses an effort for every task type. No task-specific effort table replaces that choice.
+The router selects model and effort together.
 
-`levelFrom` raises the selected effort to a supported level. It never lowers the selected effort.
+`levelFrom` raises the selected effort to the nearest supported level. It never lowers the selected effort.
 
 The incumbent's minimum thinking level comes from the effort actually served, even if no benchmark row measures it.
 
-Before scoring, the router removes lower incumbent efforts when a row at the served effort exists.
+An unlabelled candidate uses Pi's session thinking level. Without a sent level, the provider disables thinking or uses its default.
 
-Otherwise, the nearest lower row represents the incumbent at the served effort.
-
-That row retains its other quality, price, and duration values. Knowledge, research, long-context, and vision measurements require the served effort or remain unknown.
-
-An unlabelled candidate uses Pi's session thinking level. Without a sent level, the provider disables thinking or uses its default when disabling is impossible.
-
-An explicit user choice uses Pi's nearest-supported resolution. The user choice is distinct from the router's up-only resolution.
+An explicit user choice uses Pi's nearest-supported resolution.
 
 ## Incumbent minimums
 
 Ordinary tool-loop invocations retain both incumbent capability and thinking minimums.
 
-The router skips these minimums at these boundaries:
-
+The router clears these minimums at these boundaries:
 - A released execution plan.
 - Another accepted handoff, until a model serves the new phase.
 - An applied trajectory handoff.
@@ -189,22 +163,4 @@ The router skips these minimums at these boundaries:
 
 A retained plan keeps both minimums. A fallback candidate can serve without satisfying the declared boundary.
 
-A boundary remains pending until a qualifying candidate serves. A higher supported effort of a qualifying candidate also satisfies it.
-
-## Evaluation comparator
-
-`cheapest-sufficient` uses Intelligence for implementation selection and all cross-model strength comparisons.
-
-Excluded-executor replacement needs measured superiority over every excluded source at the effort that will serve.
-
-Unknown or estimated cross-model quality cannot prove replacement. Without proof, the submitter retains the guarded plan.
-
-A supported higher effort of the same model remains a stronger move without cross-model benchmark proof.
-
-Recovery retains the complete required vector and captured policy. It tiers the complete proven-stronger set before cost preference.
-
-Unknown and insufficient entries remain available as recovery fallbacks. Ordinary provider-error fallback remains available too.
-
-See [Routing](routing.md#evaluation-comparator) for defaults and validation limits.
-
-[Scorer source](../extensions/routing/score/scorer.ts)
+[Candidate builder source](../extensions/routing/score/scorer.ts) · [Features source](../extensions/routing/features/candidate.ts)

@@ -51,8 +51,8 @@ The Intelligence normalization uses Artificial Analysis Intelligence Index versi
                     ↓
      plan/review done → commit_execution(plan + rubric)
                     ↓
-     router sets executor minimum ──→ plan broken → back to planner
-                    ↓                   (2nd strike by a model → stronger executor)
+     selector evaluates executor ──→ plan broken → back to planner
+                    ↓                   (2nd strike by a model → model excluded)
      executor edits every listed file
                     ↓
      planner reviews ──→ new plan → rework (a strike)
@@ -64,11 +64,12 @@ Automatic selection uses separate reasoning, agentic coding, and research target
 
 | Command | Purpose |
 |---|---|
-| `/router-sync [key]` | Fetch new benchmark data |
+| `/router-sync [key]` | Fetch new benchmark data and rotate the 3 newest backups |
 | `/router-status` | Show data freshness, coverage, pin state, and the last decision |
 | `/router-report` | Show routed spend against baseline spend, the percent saved, and turns by task type for this session |
-| `/router-manual [provider/model[:thinking]\|resume]` | Pin one model for this session. Space shows searchable model completions. Enter opens Pi's `/model` picker. |
-| `/router-semi [on\|off]` | Ask before the router switches away from the last served model. Saves `semi` in the config. |
+| `/router-preferences [show [--details]]` | Show saved routing preferences and binding status on the last decision |
+| `/router-manual [provider/model[:thinking]|resume]` | Pin one model for this session. Space shows searchable model completions. Enter opens Pi's `/model` picker. |
+| `/router-semi [on|off]` | Ask before the router switches away from the last served model. Saves `semi` in the config. |
 | `/router-why` | Explain why the router chose the last model |
 | `/router-models` | Show the allowlist and the models that match it |
 | `/router-fix <slug> <id>…` | Add registry models to a benchmark-to-registry mapping |
@@ -87,7 +88,15 @@ Automatic selection uses separate reasoning, agentic coding, and research target
   "switchMargin": 0.15,                 // cap on cache credit and compliance penalty
   "routerContextWindow": 200000,         // cap on router/auto's window (default: served model's window)
   "reputation": true,                   // global counts and exact-prefix cross-session cache credit
-  "debug": false                         // enable timing log
+  "debug": false,                        // enable timing log and chat debug display
+  "preferences": {                      // semantic trade-offs for minimax regret
+    "version": 1,
+    "settledImplementation": "lower_cost",
+    "openDesignDecisions": "higher_reasoning_capability",
+    "handoffWarmCache": "keep_warm_incumbent",
+    "researchTasks": "higher_research_capability",
+    "afterRework": "switch_model"
+  }
 }
 ```
 
@@ -97,7 +106,7 @@ The full reference is in [Configuration](docs/configuration.md).
 
 - **Decision log:** `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl` — model selections, fallbacks, and work lifecycle. Without a saved session: `~/.pi/agent/pi8/decisions.jsonl`.
 - **Global model history:** `~/.pi/agent/pi8/model-events.jsonl` — protocol counts and cache history.
-- **Debug log:** `<session-dir>/*.router-debug.log` — opt-in attempt and turn timings. Without a saved session: `/tmp/pi8-debug.log`.
+- **Debug log:** `<session-dir>/*.router-debug.log` — opt-in attempt and turn timings. Without a saved session: `/tmp/pi8-debug.log`. When debug is enabled, `pi8-debug` entries also render directly in the Pi chat transcript.
 
 See [Observability](docs/observability.md) for configuration, log locations, and privacy limits.
 

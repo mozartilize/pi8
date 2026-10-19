@@ -26,10 +26,13 @@ Silence alone does not advance the fallback chain.
 | Provider error | Retry the candidate when eligible, then try the next candidate |
 | Clean completion without text, thinking, or tool output | Try the next candidate |
 | Empty completion while answering a tool result | Ask the same candidate once to continue, then try the next candidate |
+| Empty completion on a synthetic tail | Serve cleanly without fallback, blacklisting, or provider strikes |
 | Reasoning-only output limit, without text or a tool call | Try the next candidate while replay remains safe |
 | Caller cancellation | End the turn without a blacklist change |
 
 Retryable provider errors allow up to two transient retries or one generic retry on the same candidate.
+
+When every message after the last assistant message is a recognized synthetic message (such as a context summary or settlement reminder), an empty completion with stop reason `stop` serves cleanly. The router releases the held events and records the candidate as served, with no fallback, blacklist entry, or provider strike.
 
 The router buffers an answerless attempt's events. It discards those events before fallback, including terminal events.
 
@@ -93,17 +96,13 @@ Repeated actions, repeated observations, persistent verifier failures, and stagn
 
 The serving model normally gets one recovery attempt. Evidence starts again, and the next request asks it to inspect errors before another edit.
 
-A later struggle of the same model schedules a same-task-type selection for the next provider invocation.
-
-Under `legacy`, the target is the cheapest strictly stronger candidate in the next capability band. Higher bands follow in the fallback chain.
+A later struggle of the same model schedules a same-task-type selection for the next provider invocation. The unified selector evaluates recovery features alongside capability, cost, and speed.
 
 A pre-output struggle can escalate immediately while replay remains safe.
 
 A failure signature warns after two corrective attempts and becomes severe after three. One failed correction is part of an ordinary verification loop.
 
 Models do not declare their own escalation. A closed execution plan permits transfer, while the router selects its executor.
-
-The evaluation comparator uses the complete proven-stronger set rather than named bands. See [Scoring](scoring.md#evaluation-comparator).
 
 ## Manual-pin state
 

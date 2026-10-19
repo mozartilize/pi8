@@ -30,7 +30,7 @@ Every model call serves the user's request.
 
 ## Scope and limitations
 
-The default policy is `legacy`. The `cheapest-sufficient` policy is an evaluation comparator, not an activated production policy.
+Automatic selection uses one comparison pool with minimax regret optimization. It has no capability tiers and no capability bands.
 
 Benchmarks inform selection. They do not prove that a model can complete a particular task.
 
@@ -56,14 +56,17 @@ Tool gates control the workflow. They do not isolate files, shell commands, or c
 | Source | Responsibility |
 |---|---|
 | [Entry point](../index.ts) | Register the extension and connect Pi hooks |
-| [Provider](../extensions/serve/provider.ts) | Registry access, task resolution, scoring, and delegation |
-| [Scorer](../extensions/routing/score/scorer.ts) | Pure candidate scoring, capability tiers, and effort resolution |
+| [Provider](../extensions/serve/provider.ts) | Registry access, task resolution, and turn orchestration |
+| [Unified decision](../extensions/serve/unified-decision.ts) | Candidate feature assembly and decision resolution |
+| [Candidate builder](../extensions/routing/score/scorer.ts) | Candidate identity, capability reads, thinking levels, and context fit |
+| [Features](../extensions/routing/features/candidate.ts) | Task demand, capability fit, economic spend, latency, and recovery |
+| [Optimization](../extensions/routing/optimization/select.ts) | Decision problem compilation, weight domain, and minimax regret selection |
 | [Delegation](../extensions/serve/delegation.ts) | Authentication, retries, provider failures, cancellation, and timing |
-| [Work phase](../extensions/routing/policy/work-phase.ts) | Entry state, final-step requirements, and handoff minimums |
-| [Execution difficulty](../extensions/routing/policy/execution-difficulty.ts) | Rubric and source-measurement requirements |
-| [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan release, execution, review, and strikes |
-| [Contract tool](../extensions/serve/execution-contract-tool.ts) | Plan acceptance and tool-event tracking |
-| [Benchmark adapters](../extensions/adapters/artificial-analysis.ts) | Join API and public-page measurements |
+| [Work phase](../extensions/routing/policy/work-phase.ts) | Entry state, task types, and handoff transitions |
+| [Execution difficulty](../extensions/routing/features/difficulty.ts) | Rubric axis demand and file measurements |
+| [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan validation, release, review, and strikes |
+| [Contract tool](../extensions/serve/execution-contract-tool.ts) | Plan acceptance, target observation, and tool tracking |
+| [Benchmark store](../extensions/bench/store.ts) | Normalized rows, aliases, backups, and matching |
 
 ### Session state
 
@@ -120,8 +123,7 @@ To check implementation changes, run:
 
 ```sh
 npm run tsc
-timeout 120 npx vitest run
-timeout 120 npm run test:candidate-policy
+timeout 60 npx vitest run
 ```
 
 [Project overview](../README.md)

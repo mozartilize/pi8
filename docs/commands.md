@@ -11,6 +11,7 @@ Enter these commands in Pi, not in a shell. Replace angle-bracket arguments with
 | `/router-status` | Data freshness, benchmark coverage, pin state, protocol counts, and the last decision |
 | `/router-why` | Details of the last model selection and execution plan |
 | `/router-report` | Estimated routed spend, baseline spend, and counts by task type |
+| `/router-preferences` | Saved routing preferences, validation status, and last decision binding |
 | `/router-models` | Automatic allowlist and matching registry models |
 
 `/router-report` is not an invoice or an outcome benchmark. See [Observability](observability.md#cost-report).
@@ -28,6 +29,8 @@ The command refreshes the saved benchmark store. An explicit key becomes the sav
 Without an argument, sync checks `ARTIFICIAL_ANALYSIS_API_KEY`, then the saved key.
 
 Chromium must be available. A failed source fetch preserves the previous benchmark store.
+
+A successful sync copies `benchmarks.json` to `benchmarks.json.bak.<UTC time>` before replacing the file. Sync keeps the 3 newest backups.
 
 ## Model mapping
 
@@ -94,6 +97,22 @@ In an interactive session, confirmation offers these choices:
 
 Dismissal or cancellation cancels the turn. Non-interactive sessions omit this confirmation.
 
+## Routing preferences
+
+```text
+/router-preferences
+/router-preferences show
+/router-preferences show --details
+```
+
+Without arguments, the command shows saved preferences and validation status.
+
+It reports whether the last decision applied the preferences.
+
+With `--details`, it lists the top candidate actions with their regret and shortfall diagnostics.
+
+See [Configuration](configuration.md#routing-preferences) for preference fields and values.
+
 ## Model exclusions
 
 ```text
@@ -131,7 +150,9 @@ Removing only one model does not remove a provider-wide usage-limit exclusion. P
 | Action | Saved across sessions? |
 |---|---|
 | Sync data and explicit sync key | Yes |
+| Benchmark backups (3 newest) | Yes |
 | Benchmark alias | Yes |
+| Preferences in `config.json` | Yes |
 | Semi-automatic setting | Yes |
 | Blacklist with `--save` | Yes |
 | Manual pin | No |
