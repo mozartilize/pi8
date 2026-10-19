@@ -4,7 +4,7 @@ import { buildCandidate } from '../routing/score/scorer.js';
 import { WorkerLpAdapter } from '../routing/optimization/lp.js';
 import type { AssignmentRevisions } from '../routing/policy/assignment-transaction.js';
 import type { BenchModel } from '../types.js';
-import { readPreferences, type UnifiedTurnInput, type UnifiedTurnOutcome } from './unified-decision.js';
+import { readPreferences, resolveUnifiedDecision, type UnifiedTurnInput, type UnifiedTurnOutcome } from './unified-decision.js';
 import { createUnifiedDispatch } from './unified-dispatch.js';
 import { createBoundaryAuthorization, type BoundaryAuthorizationV1 } from '../routing/policy/boundary-authorization.js';
 
@@ -185,5 +185,52 @@ describe('reservation of an ordinary provider request', () => {
     const f = fixture();
     f.replace(undefined);
     expect(createUnifiedDispatch(f.host).dispatch('test/source', new AbortController().signal)).toBe(true);
+  });
+});
+
+describe('the best-ranked actor without authorization', () => {
+  it('is never dispatched: not as the choice, not as a fallback, not as a recovery', async () => {
+    const quality = { source: 40, alternate: 55, third: 80 } as const;
+    const models = (['source', 'alternate', 'third'] as const).map((id) => registryModel(`test/${id}`, { reasoning: false }));
+    const rows: BenchModel[] = models.map((model) => {
+      const q = quality[model.id as keyof typeof quality];
+      return {
+        registryId: `test/${model.id}`, benchSlug: model.id, active: true, source: 'aa',
+        quality: { intelligence: q, coding: q, agenticCoding: q, research: q / 100 },
+        axisProvenance: { intelligence: 'measured', coding: 'measured', agenticCoding: 'measured', research: 'measured' },
+      };
+    });
+    const candidates = models.map((model, i) => buildCandidate(model, rows[i]));
+    const input = (excludedExecutors?: string[]): UnifiedTurnInput => ({
+      state: { phase: 'implement', workItemId: 'work', estimatedContextTokens: 1000, needsVision: false,
+        boundary: 'ordinary', friction: [], nowMs: 0, benchmarkIndexVersion: '4.3' },
+      authorizationScope: { boundaryId: 'entry', workItemId: 'work', phase: 'implement', assignmentId: 'a1', revision: 1 },
+      ...(excludedExecutors ? { workState: { intentKey: 'entry', workItemId: 'work', providerInvocation: 1, observedMutationTools: 0, excludedExecutors } } : {}),
+      cause: 'incumbent', candidates, registryModels: models, rows,
+      isExcluded: () => false, isCurrent: () => true,
+      ports: { lp, domains: { lookup: () => undefined } },
+    });
+    const open = await resolveUnifiedDecision(input(), () => undefined);
+    if (open.kind !== 'decision') throw new Error(open.kind);
+    const top = open.decision.chosen;
+    expect(top).toBe('test/third');
+
+    const closed = await resolveUnifiedDecision(input([top]), () => undefined);
+    if (closed.kind !== 'decision') throw new Error(closed.kind);
+    expect(closed.decision.fallbackChain).not.toContain(top);
+    expect(closed.authorization.allowedActors).not.toContain(top);
+
+    const revisions: AssignmentRevisions = { workItemId: 'work', branchId: 'branch', session: 1,
+      profileDigest: readPreferences().digest, authorization: 1, context: 1 };
+    const host = { revisions: () => ({ ...revisions }), assignmentId: () => 'a1', authorization: () => closed.authorization };
+    const recoveryInput = input([top]);
+    const adapter = createUnifiedDispatch(host, { input: recoveryInput, candidates: () => candidates, models: () => models, commit: () => true });
+    const signal = new AbortController().signal;
+    expect(adapter.dispatch(top, signal)).toBe(false);
+    expect(adapter.dispatch(closed.decision.chosen, signal)).toBe(true);
+    const recovery = await adapter.select(closed.decision.chosen, adapter.reachable(closed.decision.chosen), () => true, signal);
+    expect(recovery.kind).toBe('decision');
+    if (recovery.kind === 'decision') expect(recovery.chosen).not.toBe(top);
+    expect(adapter.reserve(top)).toBeUndefined();
   });
 });
