@@ -35,7 +35,7 @@ describe('store', () => {
       version: 2,
       syncedAt: Date.now(),
       models: [],
-      aliases: { 'claude-opus-4-6': 'anthropic/claude-opus-4-6-20260115' },
+      aliases: { 'claude-opus-4-6': ['anthropic/claude-opus-4-6-20260115'] },
     };
     saveStore(store, tmpDir);
     const loaded = loadStore(tmpDir);
@@ -47,10 +47,10 @@ describe('store', () => {
 
   it('seeds residual provider-specific benchmark aliases', () => {
     expect(emptyStore().aliases).toEqual({
-      'gpt-5-1-codex': 'opencode/gpt-5.1-codex-max',
-      'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
-      'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
-      'claude-4-sonnet': 'opencode/claude-sonnet-4',
+      'gpt-5-1-codex': ['opencode/gpt-5.1-codex-max'],
+      'mimo-v2-5-pro': ['opencode-go/mimo-v2.5'],
+      'gpt-5-3-codex': ['openai-codex/gpt-5.3-codex-spark'],
+      'claude-4-sonnet': ['opencode/claude-sonnet-4'],
     });
   });
 
@@ -58,15 +58,15 @@ describe('store', () => {
     writeJsonAtomic(join(tmpDir, 'benchmarks.json'), {
       version: 2,
       syncedAt: 123,
-      aliases: { 'gpt-5-1-codex': 'custom/gpt-5.1-codex' },
+      aliases: { 'gpt-5-1-codex': ['custom/gpt-5.1-codex', 'other/gpt-5.1-codex'] },
       models: [],
     });
 
     expect(loadStore(tmpDir)?.aliases).toEqual({
-      'gpt-5-1-codex': 'custom/gpt-5.1-codex',
-      'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
-      'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
-      'claude-4-sonnet': 'opencode/claude-sonnet-4',
+      'gpt-5-1-codex': ['custom/gpt-5.1-codex', 'other/gpt-5.1-codex'],
+      'mimo-v2-5-pro': ['opencode-go/mimo-v2.5'],
+      'gpt-5-3-codex': ['openai-codex/gpt-5.3-codex-spark'],
+      'claude-4-sonnet': ['opencode/claude-sonnet-4'],
     });
   });
 
@@ -259,7 +259,7 @@ describe('store', () => {
     writeJsonAtomic(join(tmpDir, 'benchmarks.json'), {
       version: 2,
       syncedAt: 123,
-      aliases: { good: 'alpha/model', bad: {}, empty: '' },
+      aliases: { good: 'alpha/model', list: ['beta/one', 7, 'no-slash', 'beta/one', 'beta/two'], bad: {}, empty: '', none: [] },
       models: [
         {
           registryId: 'alpha/model',
@@ -275,7 +275,7 @@ describe('store', () => {
     expect(loadStore(tmpDir)).toEqual({
       version: 2,
       syncedAt: 123,
-      aliases: { ...DEFAULT_BENCHMARK_ALIASES, good: 'alpha/model' },
+      aliases: { ...DEFAULT_BENCHMARK_ALIASES, good: ['alpha/model'], list: ['beta/one', 'beta/two'] },
       models: [{
         registryId: 'alpha/model',
         benchSlug: 'alpha-model',
@@ -288,8 +288,15 @@ describe('store', () => {
 
   it('adds alias immutably', () => {
     const store = emptyStore();
-    const next = addAlias(store, 'slug', 'provider/id');
-    expect(next.aliases).toEqual({ ...DEFAULT_BENCHMARK_ALIASES, slug: 'provider/id' });
+    const next = addAlias(store, 'slug', ['provider/id']);
+    expect(next.aliases).toEqual({ ...DEFAULT_BENCHMARK_ALIASES, slug: ['provider/id'] });
     expect(store.aliases).toEqual(DEFAULT_BENCHMARK_ALIASES);
+  });
+
+  it('appends registry ids to an existing alias without duplicates', () => {
+    const once = addAlias(emptyStore(), 'kimi-3', ['opencode/kimi-k3']);
+    const twice = addAlias(once, 'kimi-3', ['github-copilot/moonshot-kimi-k3', 'opencode/kimi-k3']);
+    expect(twice.aliases['kimi-3']).toEqual(['opencode/kimi-k3', 'github-copilot/moonshot-kimi-k3']);
+    expect(once.aliases['kimi-3']).toEqual(['opencode/kimi-k3']);
   });
 });

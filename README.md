@@ -71,7 +71,7 @@ Automatic selection uses separate reasoning, agentic coding, and research target
 | `/router-semi [on\|off]` | Ask before the router switches away from the last served model. Saves `semi` in the config. |
 | `/router-why` | Explain why the router chose the last model |
 | `/router-models` | Show the allowlist and the models that match it |
-| `/router-fix <slug> <id>` | Override a benchmark-to-registry mapping |
+| `/router-fix <slug> <id>…` | Add registry models to a benchmark-to-registry mapping |
 | `/router-blacklist [add/remove/clear]` | Exclude models. `remove <provider>/*` also clears a usage-limit exclusion of that provider. |
 
 ## Configuration

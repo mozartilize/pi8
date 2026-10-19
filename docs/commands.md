@@ -32,7 +32,15 @@ Chromium must be available. A failed source fetch preserves the previous benchma
 ## Model mapping
 
 ```text
-/router-fix <benchmark-slug> <provider/id>
+/router-fix <benchmark-slug> <provider/id> [<provider/id>…]
+```
+
+This command adds the registry models to the alias list of the benchmark slug. One slug can map to several registry models. A second command for the same slug adds to the list.
+
+The store keeps each alias as a list:
+
+```json
+"aliases": { "kimi-3": ["opencode/kimi-k3", "github-copilot/moonshot-kimi-k3"] }
 ```
 
 This command saves a benchmark alias. The command does not immediately rematch the benchmark rows.

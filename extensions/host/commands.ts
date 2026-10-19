@@ -458,9 +458,9 @@ async function handleFixCommand(
   args: string,
   ctx: ExtensionCommandContext,
 ): Promise<void> {
-  const [slug, registryId] = splitArgs(args);
-  if (!slug || !registryId) {
-    const msg = 'Usage: /router-fix <bench-slug> <provider/id>';
+  const [slug, ...registryIds] = splitArgs(args);
+  if (!slug || registryIds.length === 0 || registryIds.some((id) => !id.includes('/'))) {
+    const msg = 'Usage: /router-fix <bench-slug> <provider/id> [<provider/id>…]';
     ctx.ui.notify(msg, 'error');
     return;
   }
@@ -470,9 +470,9 @@ async function handleFixCommand(
     ctx.ui.notify(msg, 'error');
     return;
   }
-  const next = addAlias(store, slug, registryId);
+  const next = addAlias(store, slug, registryIds);
   saveStore(next);
-  const msg = `Alias added: ${slug} -> ${registryId}. Re-run /router-sync to apply.`;
+  const msg = `Alias saved: ${slug} -> ${next.aliases[slug].join(', ')}. Re-run /router-sync to apply.`;
   ctx.ui.notify(msg, 'info');
 }
 
@@ -778,7 +778,7 @@ export function registerCommands(
     });
 
   pi.registerCommand('router-fix', {
-    description: 'Manually fix a benchmark-to-registry alias: /router-fix <bench-slug> <provider/id>',
+    description: 'Add registry models to a benchmark alias: /router-fix <bench-slug> <provider/id> [<provider/id>…]',
     handler: safeCommand('/router-fix', (args, ctx) => handleFixCommand(args, ctx)),
   });
 

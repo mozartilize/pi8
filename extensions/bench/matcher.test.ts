@@ -49,7 +49,7 @@ describe('resolveSlugAll — canonical single targets', () => {
   });
 
   it('uses alias map over fuzzy matching', () => {
-    const aliases = { 'weird-slug': 'openai/gpt-4o' };
+    const aliases = { 'weird-slug': ['openai/gpt-4o'] };
     expect(resolveSlugAll('weird-slug', registry, aliases)).toEqual(['openai/gpt-4o']);
   });
 
@@ -186,7 +186,7 @@ describe('resolveSlugAll — identity is preserved', () => {
 
   it('falls back to identity matching when an alias target is absent', () => {
     const reg = [{ provider: 'p', id: 'model-x' }];
-    expect(resolveSlugAll('model-x', reg, { 'model-x': 'missing/model' })).toEqual(['p/model-x']);
+    expect(resolveSlugAll('model-x', reg, { 'model-x': ['missing/model'] })).toEqual(['p/model-x']);
   });
 
   it('adds an alias target without unbinding providers that already match by identity', () => {
@@ -195,7 +195,7 @@ describe('resolveSlugAll — identity is preserved', () => {
       { provider: 'b', id: 'gpt-5.3-codex' },
       { provider: 'c', id: 'gpt-5.3-codex-spark' },
     ];
-    const all = resolveSlugAll('gpt-5-3-codex', reg, { 'gpt-5-3-codex': 'c/gpt-5.3-codex-spark' });
+    const all = resolveSlugAll('gpt-5-3-codex', reg, { 'gpt-5-3-codex': ['c/gpt-5.3-codex-spark'] });
     expect(all).toEqual(['a/gpt-5.3-codex', 'b/gpt-5.3-codex', 'c/gpt-5.3-codex-spark']);
   });
 
@@ -208,13 +208,26 @@ describe('resolveSlugAll — identity is preserved', () => {
     // A source that names Claude Fable 5 without the version digit; the alias
     // target is arbitrary because the expansion binds all provider copies.
     const all = resolveSlugAll('claude-fable', reg, {
-      'claude-fable': 'opencode/claude-fable-5',
+      'claude-fable': ['opencode/claude-fable-5'],
     });
     expect(all).toEqual([
       'claude-bridge/claude-fable-5',
       'github-copilot/claude-fable-5',
       'opencode/claude-fable-5',
     ]);
+  });
+
+  it('binds every alias target when the targets have different identities', () => {
+    const reg = [
+      { provider: 'opencode', id: 'kimi-k3' },
+      { provider: 'openrouter', id: 'kimi-k3' },
+      { provider: 'github-copilot', id: 'moonshot-kimi-k3' },
+      { provider: 'other', id: 'kimi-k2' },
+    ];
+    const all = resolveSlugAll('kimi-3', reg, {
+      'kimi-3': ['opencode/kimi-k3', 'github-copilot/moonshot-kimi-k3', 'missing/model'],
+    });
+    expect(all).toEqual(['github-copilot/moonshot-kimi-k3', 'opencode/kimi-k3', 'openrouter/kimi-k3']);
   });
 
   it('leaves a supplementary alias provider-specific when identity already bound the model', () => {
@@ -224,7 +237,7 @@ describe('resolveSlugAll — identity is preserved', () => {
       { provider: 'opencode', id: 'mimo-v2.5-free' },
     ];
     const all = resolveSlugAll('mimo-v2-5-pro', reg, {
-      'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
+      'mimo-v2-5-pro': ['opencode-go/mimo-v2.5'],
     });
     // Identity matching already bound the .pro copy, so the alias stays a
     // single provider pin and does not drag the .free copy in with the .pro

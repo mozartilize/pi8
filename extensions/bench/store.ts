@@ -34,15 +34,18 @@ export const getStorePath = (base?: string): string =>
   join(resolveStoragePath(base), STORE_FILE);
 
 /** Provider-specific registry variants that cannot be normalized safely. */
-export const DEFAULT_BENCHMARK_ALIASES: Readonly<Record<string, string>> = {
-  'gpt-5-1-codex': 'opencode/gpt-5.1-codex-max',
-  'mimo-v2-5-pro': 'opencode-go/mimo-v2.5',
-  'gpt-5-3-codex': 'openai-codex/gpt-5.3-codex-spark',
+export const DEFAULT_BENCHMARK_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  'gpt-5-1-codex': ['opencode/gpt-5.1-codex-max'],
+  'mimo-v2-5-pro': ['opencode-go/mimo-v2.5'],
+  'gpt-5-3-codex': ['openai-codex/gpt-5.3-codex-spark'],
   // Word order differs from the registry (`claude-sonnet-4`). The matcher
   // binds every provider copy of the target identity, so the anchor provider
   // is arbitrary.
-  'claude-4-sonnet': 'opencode/claude-sonnet-4',
+  'claude-4-sonnet': ['opencode/claude-sonnet-4'],
 };
+
+const defaultAliases = (): Record<string, string[]> =>
+  Object.fromEntries(Object.entries(DEFAULT_BENCHMARK_ALIASES).map(([slug, ids]) => [slug, [...ids]]));
 
 /** All levels a bench row may be measured at, for load-time validation. */
 const MODEL_THINKING_LEVELS: readonly ModelThinkingLevel[] = [
@@ -62,7 +65,7 @@ export const emptyStore = (): BenchmarkStore => ({
   version: 2,
   syncedAt: 0,
   models: [],
-  aliases: { ...DEFAULT_BENCHMARK_ALIASES },
+  aliases: defaultAliases(),
 });
 
 export const isStale = (store: BenchmarkStore, now = Date.now()): boolean => {
@@ -176,13 +179,19 @@ function sanitizeBenchModel(value: unknown): BenchModel | undefined {
   };
 }
 
-function sanitizeAliases(value: unknown): Record<string, string> {
+/**
+ * Each alias value is a list of `provider/id` strings. A single string is
+ * also accepted, so a store file that a person edits by hand stays valid.
+ */
+function sanitizeAliases(value: unknown): Record<string, string[]> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const result: Record<string, string> = {};
+  const result: Record<string, string[]> = {};
   for (const [key, val] of Object.entries(value)) {
-    if (typeof key !== 'string' || !key.trim()) continue;
-    if (typeof val !== 'string' || !val.trim() || !val.includes('/')) continue;
-    result[key.trim()] = val.trim();
+    if (!key.trim()) continue;
+    const ids = (Array.isArray(val) ? val : [val])
+      .filter((id): id is string => typeof id === 'string' && id.includes('/'))
+      .map((id) => id.trim());
+    if (ids.length > 0) result[key.trim()] = [...new Set(ids)];
   }
   return result;
 }
@@ -210,7 +219,7 @@ export const loadStore = (base?: string): BenchmarkStore | undefined => {
       models: Array.isArray(parsed.models)
         ? parsed.models.map(sanitizeBenchModel).filter((m): m is BenchModel => m !== undefined)
         : [],
-      aliases: { ...DEFAULT_BENCHMARK_ALIASES, ...sanitizeAliases(parsed.aliases) },
+      aliases: { ...defaultAliases(), ...sanitizeAliases(parsed.aliases) },
     };
   } catch {
     return undefined;
@@ -373,18 +382,17 @@ export const mergeBenchRows = (models: BenchModel[]): BenchModel[] => {
 };
 
 /**
- * Mutable helper for storing an alias locally in the benchmark store.
+ * Return a copy of the store with the registry ids added to the slug's alias
+ * list. Ids that the list already has are not added again.
  */
 export const addAlias = (
   store: BenchmarkStore,
   benchSlug: string,
-  registryId: string,
-): BenchmarkStore => {
-  return {
-    ...store,
-    aliases: { ...store.aliases, [benchSlug]: registryId },
-  };
-};
+  registryIds: readonly string[],
+): BenchmarkStore => ({
+  ...store,
+  aliases: { ...store.aliases, [benchSlug]: [...new Set([...(store.aliases[benchSlug] ?? []), ...registryIds])] },
+});
 
 /**
  * Get available models from the extension context registry.

@@ -155,20 +155,19 @@ export const buildRefVariants = (models: RegistryModelRef[]): Map<string, Regist
 export function resolveSlugAll(
   slug: string,
   registryModels: RegistryModelRef[],
-  aliases: Record<string, string> = {},
+  aliases: Record<string, readonly string[]> = {},
 ): string[] {
-  // 1. An alias names a model the identity matcher cannot infer. It adds that
-  // binding rather than replacing the slug's other bindings, because the same
-  // benchmark row usually describes a model several providers serve: a
-  // single-target alias would silently strip measured quality from the
+  // 1. An alias names models the identity matcher cannot infer. It adds those
+  // bindings rather than replacing the slug's other bindings, because the same
+  // benchmark row usually describes a model several providers serve: an alias
+  // that replaced them would silently strip measured quality from the
   // siblings that already matched, demoting them to the unknown-quality tier.
   const bindings: string[] = [];
   const variants = buildRefVariants(registryModels);
-  const aliasTarget = aliases[slug];
-  const aliasModel = aliasTarget
-    ? variants.get(aliasTarget) ?? variants.get(aliasTarget.split('/').pop() ?? '')
-    : undefined;
-  if (aliasModel) bindings.push(`${aliasModel.provider}/${aliasModel.id}`);
+  const aliasModels = (aliases[slug] ?? [])
+    .map((target) => variants.get(target) ?? variants.get(target.split('/').pop() ?? ''))
+    .filter((m): m is RegistryModelRef => m !== undefined);
+  for (const m of aliasModels) bindings.push(`${m.provider}/${m.id}`);
 
   // 2. Exact "provider/id" reference pins to that one entry.
   if (slug.includes('/')) {
@@ -194,12 +193,10 @@ export function resolveSlugAll(
   // matching already bound siblings, the alias is a supplementary
   // provider-specific pin (e.g. a spark/free variant) and binds only its own
   // copy.
-  if (aliasModel && identityMatches.length === 0) {
-    const targetKey = identityKey(aliasModel.id);
-    if (targetKey) {
-      for (const r of registryModels) {
-        if (identityKey(r.id) === targetKey) bindings.push(`${r.provider}/${r.id}`);
-      }
+  if (identityMatches.length === 0) {
+    const targetKeys = new Set(aliasModels.map((m) => identityKey(m.id)).filter(Boolean));
+    for (const r of registryModels) {
+      if (targetKeys.has(identityKey(r.id))) bindings.push(`${r.provider}/${r.id}`);
     }
   }
 
@@ -217,7 +214,7 @@ export function resolveSlugAll(
 export function resolveRows(
   rows: Omit<BenchModel, 'registryId' | 'active'>[],
   registryModels: RegistryModelRef[],
-  aliases: Record<string, string> = {},
+  aliases: Record<string, readonly string[]> = {},
 ): BenchModel[] {
   const out: BenchModel[] = [];
   for (const row of rows) {

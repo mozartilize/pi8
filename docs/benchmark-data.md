@@ -68,7 +68,7 @@ To correct a mapping:
 
 1. Inspect unresolved rows with `/router-status`.
 2. Check the registry model's identity.
-3. Run `/router-fix <slug> <provider/id>`.
+3. Run `/router-fix <slug> <provider/id> [<provider/id>…]`. One slug can map to several registry models, for example one for each provider. The command adds the ids to the slug's list in `aliases`.
 4. Run `/router-sync` again.
 
 Do not map different model releases merely because their names look similar.

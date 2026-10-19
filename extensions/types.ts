@@ -128,8 +128,12 @@ export interface BenchmarkStore {
   version: 2;
   syncedAt: number; // epoch ms
   models: BenchModel[];
-  /** benchSlug -> registryId bindings the fuzzy matcher cannot infer on its own. */
-  aliases: Record<string, string>;
+  /**
+   * benchSlug -> registryIds the fuzzy matcher cannot infer on its own. One
+   * benchmark model can have several registry ids, for example one for each
+   * provider that serves it.
+   */
+  aliases: Record<string, string[]>;
 }
 
 export interface ScoreWeights {
