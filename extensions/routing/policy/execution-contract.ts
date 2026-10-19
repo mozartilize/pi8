@@ -239,14 +239,24 @@ export function acceptContract(state: WorkPhaseState, input: AcceptInput): WorkP
   };
 }
 
+/**
+ * Canonical `provider/model` identity of a candidate key, without effort. The
+ * same model id on another provider is another model: it has its own
+ * strikes, and a submitter does not shield it.
+ */
+function modelIdentity(key: string): string {
+  const parsed = parseCandidateKey(key);
+  return `${parsed.provider}/${parsed.id}`;
+}
+
 function sameModel(a: string, b: string): boolean {
-  return parseCandidateKey(a).id === parseCandidateKey(b).id;
+  return modelIdentity(a) === modelIdentity(b);
 }
 
 /** Count one strike against `model`; a model other than the submitter only. */
 function strike(state: WorkPhaseState, model: string, submitter: string): WorkPhaseState {
   if (sameModel(model, submitter)) return state;
-  const id = parseCandidateKey(model).id;
+  const id = modelIdentity(model);
   const strikes = (state.contractStrikes?.[id] ?? 0) + 1;
   const excludedExecutors = strikes >= CONTRACT_STRIKE_LIMIT && !state.excludedExecutors?.some((key) => sameModel(key, model))
     ? [...(state.excludedExecutors ?? []), model]

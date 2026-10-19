@@ -10,6 +10,7 @@ import {
   expireContract,
   isDeclaredTarget,
   isExcludedExecutor,
+  servedBySubmitter,
   isUnderReview,
   handBackContract,
   noteContractEdit,
@@ -165,11 +166,31 @@ describe('execution contract lifecycle', () => {
     const first = breakContract(accepted([edit('a.ts')]), 'copilot/luna:high', 'undeclared-target');
     expect(first.contract).toMatchObject({ status: 'broken', breakReason: 'undeclared-target', breaker: 'copilot/luna:high' });
     expect(first.excludedExecutors).toBeUndefined();
-    const second = breakContract(accepted([edit('a.ts')], first), 'codex/luna:medium', 'struggle');
-    expect(second.contractStrikes).toEqual({ luna: 2 });
-    expect(second.excludedExecutors).toEqual(['codex/luna:medium']);
+    const second = breakContract(accepted([edit('a.ts')], first), 'copilot/luna:medium', 'struggle');
+    expect(second.contractStrikes).toEqual({ 'copilot/luna': 2 });
+    expect(second.excludedExecutors).toEqual(['copilot/luna:medium']);
     expect(isExcludedExecutor(second, 'copilot/luna:max')).toBe(true);
     expect(isExcludedExecutor(second, 'copilot/terra:max')).toBe(false);
+  });
+
+  it('keeps strikes and exclusions apart for the same model id on two providers', () => {
+    const first = breakContract(accepted([edit('a.ts')]), 'copilot/luna:high', 'undeclared-target');
+    const second = breakContract(accepted([edit('a.ts')], first), 'codex/luna:high', 'struggle');
+    expect(second.contractStrikes).toEqual({ 'copilot/luna': 1, 'codex/luna': 1 });
+    expect(second.excludedExecutors).toBeUndefined();
+    const third = breakContract(accepted([edit('a.ts')], second), 'copilot/luna:low', 'struggle');
+    expect(third.excludedExecutors).toEqual(['copilot/luna:low']);
+    expect(isExcludedExecutor(third, 'copilot/luna:max')).toBe(true);
+    expect(isExcludedExecutor(third, 'codex/luna:max')).toBe(false);
+  });
+
+  it('a submitter does not shield the same model id on another provider', () => {
+    // The submitter is codex/sol.
+    const broken = breakContract(accepted([edit('a.ts')]), 'copilot/sol:high', 'undeclared-target');
+    expect(broken.contractStrikes).toEqual({ 'copilot/sol': 1 });
+    expect(attributeExecutor(accepted([edit('a.ts')]), 'copilot/sol:high').contract?.executor).toBe('copilot/sol:high');
+    expect(servedBySubmitter(accepted([edit('a.ts')]).contract!, 'copilot/sol:high')).toBe(false);
+    expect(servedBySubmitter(accepted([edit('a.ts')]).contract!, 'codex/sol:low')).toBe(true);
   });
 
   it('never strikes the submitter for breaking its own plan', () => {
@@ -196,7 +217,7 @@ describe('execution contract lifecycle', () => {
     const next = withContinuedPenalties({ ...state(), intentKey: 'intent-b', priorWork: penaltiesOf(withActive)! },
       'w_1', 'continue');
     expect(next.contract).toBeUndefined();
-    expect(next.contractStrikes).toEqual({ luna: 1 });
+    expect(next.contractStrikes).toEqual({ 'x/luna': 1 });
   });
 });
 
@@ -283,7 +304,7 @@ describe('execution contract completion and outcome', () => {
       return next;
     };
     const once = reworkContract(executedBy(state()));
-    expect(once.contractStrikes).toEqual({ luna: 1 });
+    expect(once.contractStrikes).toEqual({ 'copilot/luna': 1 });
     const twice = reworkContract(executedBy(once));
     expect(twice.excludedExecutors).toEqual(['copilot/luna:high']);
   });

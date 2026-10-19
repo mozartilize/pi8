@@ -3151,7 +3151,7 @@ describe('context acquisition', () => {
       };
       await executeOnce();
       await executeOnce();
-      expect(harness.session.getWorkPhaseState()?.contractStrikes).toEqual({ cheap: 1 });
+      expect(harness.session.getWorkPhaseState()?.contractStrikes).toEqual({ 'alpha/cheap': 1 });
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
       const escalated = await session.routeTurnAgainWithSameUserEntry();
