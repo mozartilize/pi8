@@ -8,7 +8,7 @@ import { AssignmentLedger, type AssignmentRevisions } from './assignment-transac
 import { settleBoundary, type BoundaryAuthorizationV1 } from './boundary-authorization.js';
 
 const REVISIONS: AssignmentRevisions = {
-  workItemId: 'W', branchId: 'b1', session: 1, profileDigest: 'd1', authorization: 3, context: 1,
+  phase: 'implement', assignmentId: 'as1', entryId: 'E', boundaryId: 'bd', routingEpoch: 5, branchId: 'b1', session: 1, profileDigest: 'd1', authorization: 3, context: 1,
 };
 
 describe('single-use reservation and final dispatch check', () => {
@@ -22,7 +22,10 @@ describe('single-use reservation and final dispatch check', () => {
   it.each([
     ['authorization', { authorization: 4 }],
     ['profile', { profileDigest: 'd2' }],
-    ['work branch', { branchId: 'b2' }],
+    ['branch', { branchId: 'b2' }],
+    ['entry', { entryId: 'E2' }],
+    ['routing boundary', { boundaryId: 'bd2' }],
+    ['routing epoch', { routingEpoch: 6 }],
     ['context', { context: 2 }],
   ] as const)('starts no provider call when the %s revision changes between reservation and dispatch', (_, patch) => {
     const ledger = new AssignmentLedger(REVISIONS);
@@ -52,13 +55,13 @@ describe('single-use reservation and final dispatch check', () => {
 });
 
 const auth = (patch: Partial<BoundaryAuthorizationV1> = {}): BoundaryAuthorizationV1 => ({
-  boundaryId: 'bd', workItemId: 'W', phase: 'implement', assignmentId: 'as1', revision: 3,
+  sessionGeneration: 1, profileDigest: 'd1', contextRevision: 1, entryId: 'E', routingEpoch: 5, boundaryId: 'bd', phase: 'implement', assignmentId: 'as1', revision: 3,
   allowedActors: ['a/A:high', 'b/B:high'], state: 'pending', ...patch,
 });
 
 describe('settlement needs a current actual-serve receipt from an authorized actor', () => {
   const receipt = (actualServed: string, patch: Partial<Parameters<typeof settleBoundary>[1] & object> = {}) =>
-    ({ boundaryId: 'bd', workItemId: 'W', phase: 'implement' as const, assignmentId: 'as1', revision: 3, actualServed, answered: true, ...patch });
+    ({ sessionGeneration: 1, profileDigest: 'd1', contextRevision: 1, entryId: 'E', routingEpoch: 5, boundaryId: 'bd', phase: 'implement' as const, assignmentId: 'as1', revision: 3, actualServed, answered: true, ...patch });
 
   it('an authorized fallback that actually serves settles; an answerless attempt does not', () => {
     expect(settleBoundary(auth(), receipt('a/A:high', { answered: false })).state).toBe('pending');
@@ -76,8 +79,10 @@ describe('settlement needs a current actual-serve receipt from an authorized act
     expect(settleBoundary(auth({ excludedModels: ['a/A'] }), receipt('a/A:high')).state).toBe('pending');
   });
 
-  it('rejects a receipt from another work item or phase', () => {
-    expect(settleBoundary(auth(), receipt('a/A:high', { workItemId: 'other' })).state).toBe('pending');
+  it('rejects a receipt from another entry, routing epoch, boundary or task type', () => {
+    expect(settleBoundary(auth(), receipt('a/A:high', { entryId: 'other' })).state).toBe('pending');
+    expect(settleBoundary(auth(), receipt('a/A:high', { routingEpoch: 4 })).state).toBe('pending');
+    expect(settleBoundary(auth(), receipt('a/A:high', { boundaryId: 'other' })).state).toBe('pending');
     expect(settleBoundary(auth(), receipt('a/A:high', { phase: 'review' })).state).toBe('pending');
   });
 
@@ -98,7 +103,9 @@ describe('settlement needs a current actual-serve receipt from an authorized act
   });
 
   it.each([
-    { workItemId: 'other' }, { branchId: 'other' }, { session: 2 }, { authorization: 4 },
+    { entryId: 'other' }, { boundaryId: 'other' }, { routingEpoch: 6 },
+    { phase: 'review' as const }, { assignmentId: 'as2' }, { profileDigest: 'd2' }, { context: 2 }, { flowId: 'f2' },
+    { branchId: 'other' }, { session: 2 }, { authorization: 4 },
   ])('expires the boundary when the scope changes: %j', (patch) => {
     const ledger = new AssignmentLedger(REVISIONS);
     ledger.boundary = auth();

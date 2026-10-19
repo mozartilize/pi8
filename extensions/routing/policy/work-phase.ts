@@ -1,23 +1,37 @@
+import { createHash } from 'node:crypto';
 import type { ComplexityBand, Dimension, ReasoningEvidence, ReasoningHandoffMeta, ReasoningRubric, TaskScope } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
-import type { ContextReason, EntryResolution, ExecutorPenalties } from '../context/types.js';
+import type { ContextReason, EntryResolution } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
 import type { ChangeFactsState, CheckVerdicts } from './change-facts.js';
 import type { GroundedArtifact } from '../context/types.js';
 import type { PendingIdentity } from '../../serve/context-resolution.js';
-import { parseCandidateKey } from '../score/scorer.js';
 import type { BoundaryAuthorizationV1 } from './boundary-authorization.js';
+import type { ExecutionFlowState } from './execution-flow.js';
 
-/** Execution penalties of one work item, carried until an entry continues it. */
-export interface PriorWork {
-  workItemId: string;
-  contractStrikes?: Record<string, number>;
-  excludedExecutors?: string[];
+/** Stable boundary id of an entry's triage. */
+export function triageBoundaryId(sourceEntryId: string, routingEpoch: number): string {
+  return `triage:${sourceEntryId}:${routingEpoch}`;
+}
+
+/**
+ * Boundary id of an accepted ready handoff. The same accepted payload again
+ * gives the same id; a different payload gives a different one.
+ */
+export function handoffBoundaryId(sourceEntryId: string, routingEpoch: number, handoffKey: string): string {
+  const digest = createHash('sha256').update(handoffKey).digest('hex').slice(0, 16);
+  return `handoff:${sourceEntryId}:${routingEpoch}:${digest}`;
 }
 
 /** Per-entry routing state: the entry's task type and its explicit handoffs. */
 export interface WorkPhaseState {
   intentKey: string;
+  /** Session entry id of the genuine user entry; the intent key when Pi gives none. */
+  sourceEntryId?: string;
+  /** Routing epoch when the entry started; an entry of another epoch has no authority. */
+  routingEpoch?: number;
+  /** Routing boundary of the entry: its triage, or its latest accepted ready handoff. */
+  boundaryId?: string;
   /** Task type declared at the handoff, or the incumbent's last served task type. */
   deliverable?: Dimension;
   providerInvocation: number;
@@ -25,12 +39,8 @@ export interface WorkPhaseState {
   observedMutationTools: number;
   /** Plan/review → implement handoff for this entry; never inherited. */
   contract?: ExecutionContract;
-  /** Contract breaks per executor model id, kept across entries on the same work item. */
-  contractStrikes?: Record<string, number>;
-  /** Served keys of executor models that reached the strike limit. */
-  excludedExecutors?: string[];
-  /** The previous work item's penalties, applied only if this entry's handoff continues that item. */
-  priorWork?: PriorWork;
+  /** Strike and exclusion scope of this entry's implementation; never persisted. */
+  executionFlow?: ExecutionFlowState;
   /** The one handoff reminder for this entry was already appended. */
   contractReminded?: boolean;
   /** Files the entry's tools looked at, most recent first; router-observed, never inherited. */
@@ -39,7 +49,7 @@ export interface WorkPhaseState {
   partialReadCount?: number;
   /** Context → planning/review handoff for this entry; never inherited. */
   reasoningHandoff?: ReasoningHandoffMeta;
-  /** Permissions for the current work item, phase and provider assignment. */
+  /** Permissions for the current routing boundary, task type and provider assignment. */
   boundaryAuthorization?: BoundaryAuthorizationV1;
   /** Facts declared at this entry's accepted handoff, and their log record; never inherited. */
   changeFacts?: ChangeFactsState;
@@ -116,87 +126,4 @@ export function carryAcrossBranch(state: WorkPhaseState, deliverable: Dimension 
 
 export function nextProviderInvocation(state: WorkPhaseState): WorkPhaseState {
   return { ...state, providerInvocation: state.providerInvocation + 1 };
-}
-
-/**
- * The penalties a later entry takes over when its handoff continues this
- * entry's work item. An entry placed on no work item passes on the ones it
- * received, so a run of entries that never hand off does not drop them.
- */
-export function penaltiesOf(state: WorkPhaseState): PriorWork | undefined {
-  if (!state.workItemId) return state.priorWork;
-  if (!state.contractStrikes && !state.excludedExecutors) return undefined;
-  return {
-    workItemId: state.workItemId,
-    ...(state.contractStrikes ? { contractStrikes: state.contractStrikes } : {}),
-    ...(state.excludedExecutors ? { excludedExecutors: state.excludedExecutors } : {}),
-  };
-}
-
-/** The execution penalties that `state` holds. */
-export function statePenalties(state: WorkPhaseState): ExecutorPenalties {
-  return { strikes: state.contractStrikes ?? {}, excluded: state.excludedExecutors ?? [] };
-}
-
-const modelId = (key: string): string => parseCandidateKey(key).id;
-
-/** Penalties never shrink: the higher strike count and every excluded model of either side. */
-export function mergePenalties(a: ExecutorPenalties, b: ExecutorPenalties): ExecutorPenalties {
-  const strikes = { ...a.strikes };
-  for (const [id, count] of Object.entries(b.strikes)) strikes[id] = Math.max(strikes[id] ?? 0, count);
-  const excluded = [...a.excluded];
-  for (const key of b.excluded) {
-    if (!excluded.some((known) => modelId(known) === modelId(key))) excluded.push(key);
-  }
-  return { strikes, excluded };
-}
-
-export function samePenalties(a: ExecutorPenalties, b: ExecutorPenalties): boolean {
-  const ids = Object.keys(a.strikes);
-  return ids.length === Object.keys(b.strikes).length && ids.every((id) => a.strikes[id] === b.strikes[id])
-    && a.excluded.length === b.excluded.length && a.excluded.every((key) => b.excluded.some((other) => modelId(other) === modelId(key)));
-}
-
-/** `state` with the penalties its work item holds on the branch; the same object when it adds none. */
-export function withBranchPenalties(state: WorkPhaseState, branch: ExecutorPenalties | undefined): WorkPhaseState {
-  if (!branch) return state;
-  const current = statePenalties(state);
-  const merged = mergePenalties(current, branch);
-  if (samePenalties(merged, current)) return state;
-  return {
-    ...state,
-    ...(Object.keys(merged.strikes).length > 0 ? { contractStrikes: merged.strikes } : {}),
-    ...(merged.excluded.length > 0 ? { excludedExecutors: merged.excluded } : {}),
-  };
-}
-
-/** `state` with exactly the penalties its work item holds on the branch; the same object when they match. */
-export function withExactBranchPenalties(state: WorkPhaseState, branch: ExecutorPenalties | undefined): WorkPhaseState {
-  const current = statePenalties(state);
-  const target = branch ?? { strikes: {}, excluded: [] };
-  if (samePenalties(current, target)) return state;
-  const { contractStrikes: _strikes, excludedExecutors: _excluded, ...rest } = state;
-  return {
-    ...rest,
-    ...(Object.keys(target.strikes).length > 0 ? { contractStrikes: target.strikes } : {}),
-    ...(target.excluded.length > 0 ? { excludedExecutors: target.excluded } : {}),
-  };
-}
-
-/**
- * Take over the previous work item's penalties when the entry continues or
- * reopens that same item; nothing else crosses.
- */
-export function withContinuedPenalties(
-  state: WorkPhaseState,
-  workItemId: string | undefined,
-  relation: string,
-): WorkPhaseState {
-  const prior = state.priorWork;
-  if (!prior || prior.workItemId !== workItemId || (relation !== 'continue' && relation !== 'reopen')) return state;
-  return {
-    ...state,
-    ...(prior.contractStrikes ? { contractStrikes: prior.contractStrikes } : {}),
-    ...(prior.excludedExecutors ? { excludedExecutors: prior.excludedExecutors } : {}),
-  };
 }

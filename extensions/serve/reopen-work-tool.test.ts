@@ -45,7 +45,7 @@ beforeEach(() => vi.clearAllMocks());
 
 describe('reopen_work', () => {
   it('reopens the completed incumbent, records one boundary, and leaves one repick pending', () => {
-    const session = doneSession({ priorWork: { workItemId: 'w_1', contractStrikes: { 'a/model': 2 } } });
+    const session = doneSession();
     const persisted: unknown[] = [];
     session.context.bindPersistence((event) => persisted.push(event));
     const result = submitReopenWork(SHAPE, AUTO, session);
@@ -58,7 +58,7 @@ describe('reopen_work', () => {
       contextStatus: 'ready-pending',
       workItemId: 'w_1',
       deliverable: 'implement',
-      contractStrikes: { 'a/model': 2 },
+      executionFlow: { strikesByModel: {}, excludedModels: [] },
       contextResolution: { relation: 'reopen', workItemId: 'w_1', deliverable: 'implement' },
     });
     expect(session.getWorkPhaseState()?.priorCompletion).toBeUndefined();

@@ -6,6 +6,7 @@ import type { AssignmentRevisions } from '../routing/policy/assignment-transacti
 import type { BenchModel } from '../types.js';
 import { readPreferences, resolveUnifiedDecision, type UnifiedTurnInput, type UnifiedTurnOutcome } from './unified-decision.js';
 import { createUnifiedDispatch } from './unified-dispatch.js';
+import { newExecutionFlow } from '../routing/policy/execution-flow.js';
 import { createBoundaryAuthorization, type BoundaryAuthorizationV1 } from '../routing/policy/boundary-authorization.js';
 
 const lp = new WorkerLpAdapter();
@@ -20,25 +21,27 @@ function fixture(withThird = false) {
   }));
   const candidates = models.map((model, i) => buildCandidate(model, rows[i]));
   const revisions: AssignmentRevisions = {
-    workItemId: 'work', branchId: 'branch', session: 1,
+    phase: 'implement', assignmentId: 'assignment', entryId: 'entry', boundaryId: 'triage:entry:0', routingEpoch: 0, branchId: 'branch', session: 1,
     profileDigest: readPreferences().digest, authorization: 1, context: 1,
   };
   let assignmentId = 'assignment';
   const boundaryOf = (actors: readonly string[], excluded: readonly string[] = []) => createBoundaryAuthorization(
-    { boundaryId: 'entry', workItemId: 'work', phase: 'implement', assignmentId, revision: revisions.authorization },
-    actors, excluded.map((model) => ({ workItemId: 'work', phase: 'implement' as const, model })));
+    { sessionGeneration: 1, profileDigest: readPreferences().digest, contextRevision: 1, entryId: 'entry', routingEpoch: 0, boundaryId: 'triage:entry:0', phase: 'implement', assignmentId, revision: revisions.authorization },
+    actors, excluded);
   let boundary: BoundaryAuthorizationV1 | undefined = boundaryOf(models.map((model) => `test/${model.id}`));
   const input: UnifiedTurnInput = {
     state: { phase: 'implement', estimatedContextTokens: 1000,
       needsVision: false, boundary: 'ordinary', friction: [], nowMs: 0,
       benchmarkIndexVersion: '4.3' },
-    authorizationScope: { boundaryId: 'entry', workItemId: 'work', phase: 'implement', assignmentId, revision: 1 },
+    authorizationScope: { sessionGeneration: 1, profileDigest: readPreferences().digest, contextRevision: 1, entryId: 'entry', routingEpoch: 0, boundaryId: 'triage:entry:0', phase: 'implement', assignmentId, revision: 1 },
     cause: 'incumbent', candidates, registryModels: models, rows,
     isExcluded: () => false, isCurrent: () => true,
     ports: { lp, domains: { lookup: () => undefined } },
   };
   const commit = vi.fn((outcome: Extract<UnifiedTurnOutcome, { kind: 'decision' }>) => {
     revisions.authorization = outcome.authorization.revision;
+    revisions.assignmentId = outcome.authorization.assignmentId;
+    revisions.flowId = outcome.authorization.flowId;
     assignmentId = outcome.authorization.assignmentId;
     boundary = outcome.authorization;
     return true;
@@ -47,7 +50,9 @@ function fixture(withThird = false) {
   const adapter = createUnifiedDispatch(host, { input, candidates: () => candidates, models: () => models, commit });
   const signal = new AbortController();
   const select = () => adapter.select('test/source', adapter.reachable('test/source'), () => true, signal.signal);
-  const replace = (next: BoundaryAuthorizationV1 | undefined, id = assignmentId) => { boundary = next; assignmentId = id; };
+  const replace = (next: BoundaryAuthorizationV1 | undefined, id = assignmentId) => {
+    boundary = next; assignmentId = id; revisions.assignmentId = id;
+  };
   return { adapter, select, signal, revisions, commit, candidates, input, host, boundaryOf, replace };
 }
 
@@ -73,7 +78,7 @@ describe('production unified recovery', () => {
     expect(f.commit).not.toHaveBeenCalled();
   });
 
-  it.each(['profileDigest', 'branchId', 'workItemId'] as const)('rejects a changed %s before reservation', async (field) => {
+  it.each(['profileDigest', 'branchId', 'entryId', 'boundaryId'] as const)('rejects a changed %s before reservation', async (field) => {
     const f = fixture();
     await f.select();
     f.revisions[field] = 'changed';
@@ -81,7 +86,7 @@ describe('production unified recovery', () => {
     expect(f.commit).not.toHaveBeenCalled();
   });
 
-  it.each(['profileDigest', 'branchId', 'workItemId'] as const)('rejects a changed %s after reservation, before provider dispatch', async (field) => {
+  it.each(['profileDigest', 'branchId', 'entryId', 'boundaryId'] as const)('rejects a changed %s after reservation, before provider dispatch', async (field) => {
     const f = fixture();
     await f.select();
     expect(f.adapter.reserve('test/alternate')).toBeDefined();
@@ -115,8 +120,8 @@ describe('production unified recovery', () => {
 
   it('keeps executor exclusions in the same implementation phase', async () => {
     const f = fixture();
-    f.input.workState = { intentKey: 'entry', workItemId: 'work', providerInvocation: 1,
-      observedMutationTools: 0, excludedExecutors: ['test/alternate'] };
+    f.input.workState = { intentKey: 'entry', sourceEntryId: 'entry', providerInvocation: 1, observedMutationTools: 0,
+      executionFlow: { ...newExecutionFlow('entry', 'b'), excludedModels: ['test/alternate'] } };
     expect(await f.select()).toMatchObject({ kind: 'decision', chosen: 'test/source' });
     expect(f.adapter.reserve('test/alternate')).toBeUndefined();
     expect(f.commit).not.toHaveBeenCalled();
@@ -155,7 +160,7 @@ describe('reservation of an ordinary provider request', () => {
     expect(adapter.dispatch('test/source:high', signal)).toBe(false);
   });
 
-  it.each(['profileDigest', 'branchId', 'workItemId', 'session', 'authorization', 'context'] as const)(
+  it.each(['profileDigest', 'branchId', 'entryId', 'boundaryId', 'routingEpoch', 'session', 'authorization', 'context'] as const)(
     'refuses the next request after %s changed since scoring', (field) => {
       const f = fixture();
       const signal = new AbortController().signal;
@@ -168,7 +173,7 @@ describe('reservation of an ordinary provider request', () => {
   it('refuses a request of an assignment that another one replaced, until the live one is taken over', () => {
     const f = fixture();
     const signal = new AbortController().signal;
-    f.replace(f.boundaryOf(['test/source', 'test/alternate']), 'newer');
+    f.replace({ ...f.boundaryOf(['test/source', 'test/alternate']), assignmentId: 'newer' }, 'newer');
     expect(f.adapter.dispatch('test/source', signal)).toBe(false);
     f.adapter.rebase();
     expect(f.adapter.dispatch('test/source', signal)).toBe(true);
@@ -207,8 +212,9 @@ describe('the best-ranked actor without authorization', () => {
     const input = (excludedExecutors?: string[]): UnifiedTurnInput => ({
       state: { phase: 'implement', estimatedContextTokens: 1000, needsVision: false,
         boundary: 'ordinary', friction: [], nowMs: 0, benchmarkIndexVersion: '4.3' },
-      authorizationScope: { boundaryId: 'entry', workItemId: 'work', phase: 'implement', assignmentId: 'a1', revision: 1 },
-      ...(excludedExecutors ? { workState: { intentKey: 'entry', workItemId: 'work', providerInvocation: 1, observedMutationTools: 0, excludedExecutors } } : {}),
+      authorizationScope: { sessionGeneration: 1, profileDigest: readPreferences().digest, contextRevision: 1, entryId: 'entry', routingEpoch: 0, boundaryId: 'triage:entry:0', phase: 'implement', assignmentId: 'a1', revision: 1 },
+      ...(excludedExecutors ? { workState: { intentKey: 'entry', sourceEntryId: 'entry', providerInvocation: 1, observedMutationTools: 0,
+        executionFlow: { ...newExecutionFlow('entry', 'b'), excludedModels: excludedExecutors } } } : {}),
       cause: 'incumbent', candidates, registryModels: models, rows,
       isExcluded: () => false, isCurrent: () => true,
       ports: { lp, domains: { lookup: () => undefined } },
@@ -223,8 +229,8 @@ describe('the best-ranked actor without authorization', () => {
     expect(closed.decision.fallbackChain).not.toContain(top);
     expect(closed.authorization.allowedActors).not.toContain(top);
 
-    const revisions: AssignmentRevisions = { workItemId: 'work', branchId: 'branch', session: 1,
-      profileDigest: readPreferences().digest, authorization: 1, context: 1 };
+    const revisions: AssignmentRevisions = { phase: 'implement', assignmentId: 'a1', entryId: 'entry', boundaryId: 'triage:entry:0', routingEpoch: 0, branchId: 'branch', session: 1,
+      profileDigest: readPreferences().digest, authorization: 1, context: 1, flowId: closed.authorization.flowId };
     const host = { revisions: () => ({ ...revisions }), assignmentId: () => 'a1', authorization: () => closed.authorization };
     const recoveryInput = input([top]);
     const adapter = createUnifiedDispatch(host, { input: recoveryInput, candidates: () => candidates, models: () => models, commit: () => true });

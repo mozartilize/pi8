@@ -3,7 +3,8 @@
  * one prepared provider call. No compaction starts here.
  *
  * A request starts only through a single-use reservation of its action,
- * checked against the revisions that scoring recorded: session, work item,
+ * checked against the revisions that scoring recorded: session, routing epoch,
+ * entry, routing boundary,
  * branch, preference profile, authorization and context. Fallbacks and
  * retries reserve again, so a change during a long attempt stops the next
  * request. The selected recovery action is reserved at the atomic abort.
@@ -72,7 +73,8 @@ export function createUnifiedDispatch(host: DispatchHost, recoveryHost?: Recover
     const revision = host.revisions();
     return {
       sessionGeneration: revision.session,
-      workBoundaryId: JSON.stringify([revision.workItemId, revision.branchId, revision.context, host.assignmentId()]),
+      routingEpoch: revision.routingEpoch,
+      routingBoundaryId: JSON.stringify([revision.entryId, revision.boundaryId, revision.branchId, revision.context, host.assignmentId()]),
       boundaryAuthorizationRevision: revision.authorization,
       profileDigest: revision.profileDigest,
     };
@@ -130,7 +132,8 @@ export function createUnifiedDispatch(host: DispatchHost, recoveryHost?: Recover
       pending = undefined;
       if (!recoveryHost || !proposal || proposal.signal.aborted || !proposal.current()
         || proposal.outcome.selection.chosen !== target || !reachable(proposal.source).includes(target)) return undefined;
-      const ledger = new AssignmentLedger({ ...host.revisions(), authorization: proposal.outcome.authorization.revision });
+      const ledger = new AssignmentLedger({ ...host.revisions(), authorization: proposal.outcome.authorization.revision,
+        assignmentId: proposal.outcome.authorization.assignmentId, flowId: proposal.outcome.authorization.flowId });
       ledger.boundary = proposal.outcome.authorization;
       const plan = ledger.plan();
       const reservation = ledger.commitAndReserve(plan, target, proposal.signal);
@@ -141,6 +144,7 @@ export function createUnifiedDispatch(host: DispatchHost, recoveryHost?: Recover
     dispatch(target, signal) {
       const { ledger, plan } = base;
       ledger.bump(host.revisions());
+      ledger.boundary = host.authorization();
       if (host.assignmentId() !== base.assignmentId || (base.reservation && target !== base.reservation.target)) return false;
       if (base.recovered && !reachable(target).includes(target)) return false;
       // An authorization that names a model without an effort (a user pin) covers each effort of it.

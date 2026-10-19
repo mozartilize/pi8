@@ -253,15 +253,20 @@ function sameModel(a: string, b: string): boolean {
   return modelIdentity(a) === modelIdentity(b);
 }
 
-/** Count one strike against `model`; a model other than the submitter only. */
+/**
+ * Count one strike against `model` in the entry's execution flow; a model
+ * other than the submitter only. Without a flow there is no strike scope:
+ * only an accepted implement handoff starts one.
+ */
 function strike(state: WorkPhaseState, model: string, submitter: string): WorkPhaseState {
-  if (sameModel(model, submitter)) return state;
+  const flow = state.executionFlow;
+  if (!flow || sameModel(model, submitter)) return state;
   const id = modelIdentity(model);
-  const strikes = (state.contractStrikes?.[id] ?? 0) + 1;
-  const excludedExecutors = strikes >= CONTRACT_STRIKE_LIMIT && !state.excludedExecutors?.some((key) => sameModel(key, model))
-    ? [...(state.excludedExecutors ?? []), model]
-    : state.excludedExecutors;
-  return { ...state, contractStrikes: { ...state.contractStrikes, [id]: strikes }, excludedExecutors };
+  const strikes = (flow.strikesByModel[id] ?? 0) + 1;
+  const excludedModels = strikes >= CONTRACT_STRIKE_LIMIT && !flow.excludedModels.some((key) => sameModel(key, model))
+    ? [...flow.excludedModels, id]
+    : flow.excludedModels;
+  return { ...state, executionFlow: { ...flow, strikesByModel: { ...flow.strikesByModel, [id]: strikes }, excludedModels } };
 }
 
 /**
@@ -399,9 +404,9 @@ export function servedBySubmitter(contract: ExecutionContract, served: string): 
   return sameModel(served, contract.submitter);
 }
 
-/** Whether `key` names a model excluded from executing this task. */
+/** Whether `key` names a model that the entry's execution flow excluded from executing. */
 export function isExcludedExecutor(state: WorkPhaseState | undefined, key: string): boolean {
-  return state?.excludedExecutors?.some((excluded) => sameModel(excluded, key)) ?? false;
+  return state?.executionFlow?.excludedModels.some((excluded) => sameModel(excluded, key)) ?? false;
 }
 
 export function contractMeta(state: WorkPhaseState): ExecutionContractMeta | undefined {
@@ -426,7 +431,8 @@ export function contractMeta(state: WorkPhaseState): ExecutionContractMeta | und
     ...(contract.reviewVerifier ? { reviewVerifier: contract.reviewVerifier } : {}),
     ...(contract.breakReason ? { breakReason: contract.breakReason } : {}),
     ...(contract.breaker ? { breaker: contract.breaker } : {}),
-    ...(state.excludedExecutors?.length ? { excludedExecutors: [...state.excludedExecutors] } : {}),
+    ...(state.executionFlow?.excludedModels.length ? { excludedExecutors: [...state.executionFlow.excludedModels] } : {}),
+    ...(state.executionFlow ? { flowId: state.executionFlow.flowId } : {}),
     ...(handoffId ? { handoffId } : {}),
   };
 }

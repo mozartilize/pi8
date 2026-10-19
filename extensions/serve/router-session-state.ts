@@ -22,21 +22,20 @@ import type {
 import { checkBenchmarkStore, type BenchmarkCheck } from '../bench/store.js';
 import { debugLog } from '../host/debuglog.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
-import { mergePenalties, samePenalties, statePenalties, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
 import { ContextPreparationState } from './context-preparation.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
 import type { PendingTrajectoryEscalation, StruggleDecision } from '../routing/struggle/types.js';
 import type { ToolCycleInput } from '../routing/struggle/fingerprints.js';
 import type { WarmPrefixEvidence } from '../routing/features/state.js';
-import { applyEvent, emptyLedger, parseContextEvent, type TopicLedger } from '../routing/context/ledger.js';
+import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/ledger.js';
 import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
 import { ReadCoverage, type LineRange } from '../routing/context/grounding.js';
 import type { LegacyIndex } from '../routing/context/legacy.js';
 import {
   CONTEXT_COMMIT_EVENT_LIMIT,
   type BranchState,
-  type ExecutorPenalties,
   type FlatContextEvent,
   type Incumbent,
   type RoutingContextEvent,
@@ -216,20 +215,6 @@ export class RoutingContextState {
     this.ledger = next;
   }
 
-  /**
-   * Record the penalties an item earned on this branch, so that `/tree` back
-   * to the branch and a resume restore them. They only grow, and a record
-   * the branch could not hold is not written.
-   */
-  recordPenalties(workItemId: string, observed: ExecutorPenalties, sourceEntryId: string): void {
-    const known = this.ledger.items.get(workItemId)?.penalties ?? { strikes: {}, excluded: [] };
-    const merged = mergePenalties(known, observed);
-    if (samePenalties(merged, known)) return;
-    const event: RoutingContextEvent = { v: 1, op: 'executor-penalty', workItemId, ...merged, sourceEntryId };
-    if (parseContextEvent(JSON.parse(JSON.stringify(event))) == null) return;
-    this.append(event);
-  }
-
   /** Pi switched to another model: the next router entry starts without an incumbent. */
   clearIncumbent(): void {
     if (!this.ledger.incumbent) return;
@@ -313,6 +298,13 @@ export class RouterSession {
   private recoveryNoteDue = false;
 
   private sessionGen = 0;
+  /**
+   * Process-local routing epoch. `/tree`, a model switch into or out of
+   * router/auto, a manual pin change, and a session reset advance it before
+   * any restored state is visible. Never persisted. A new user entry does not
+   * advance it.
+   */
+  private routingEpoch = 0;
   private history: { entry: string; data: ModelHistory } | undefined;
   private decision: RoutingDecision | undefined;
   private chosenRegistryId: string | undefined;
@@ -366,6 +358,24 @@ export class RouterSession {
 
   getSessionGeneration(): number {
     return this.sessionGen;
+  }
+
+  getRoutingEpoch(): number {
+    return this.routingEpoch;
+  }
+
+  /**
+   * End the routing authority of the current epoch: advance the epoch and
+   * drop the entry's boundary authorization, execution contract and
+   * execution flow. A late result of the earlier epoch then matches nothing.
+   */
+  invalidateRouting(): void {
+    this.routingEpoch += 1;
+    const state = this.intent.getWorkPhaseState();
+    if (state) {
+      const { boundaryAuthorization: _auth, contract: _contract, executionFlow: _flow, ...rest } = state;
+      this.intent.commitWorkPhaseState(rest);
+    }
   }
 
   getLastDecision(): RoutingDecision | undefined {
@@ -486,6 +496,7 @@ export class RouterSession {
     // existing snapshot when switching pins (A -> B): the intervening manual
     // turns overwrote `decision`, so only the first pin captures the auto route.
     if (this.manualModel === undefined) this.resumeSnapshot = this.decision;
+    if (this.manualModel !== registryId) this.invalidateRouting();
     this.manualModel = registryId;
   }
 
@@ -498,7 +509,10 @@ export class RouterSession {
    */
   resumeManual(): boolean {
     const active = this.manualModel !== undefined || this.resumeSnapshot !== undefined;
-    if (this.manualModel !== undefined) this.trajectory.consumePending();
+    if (this.manualModel !== undefined) {
+      this.trajectory.consumePending();
+      this.invalidateRouting();
+    }
     this.manualModel = undefined;
     this.resumeIntentKey = undefined;
     return active;
@@ -622,12 +636,6 @@ export class RouterSession {
 
   commitWorkPhaseState(next: WorkPhaseState | undefined): void {
     this.intent.commitWorkPhaseState(next);
-    try {
-      const source = this.context.getEntrySource();
-      if (next?.workItemId && source) this.context.recordPenalties(next.workItemId, statePenalties(next), source);
-    } catch {
-      // A penalty that cannot be recorded stays in memory for this session.
-    }
   }
 
   bindTrajectoryIntent(intentKey: string): void {
@@ -735,6 +743,7 @@ export class RouterSession {
    */
   reset(): void {
     this.sessionGen += 1;
+    this.routingEpoch += 1;
     this.history = undefined;
     this.decision = undefined;
     this.chosenRegistryId = undefined;

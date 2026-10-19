@@ -34,7 +34,7 @@ import {
   owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { declaredRubric, parseReasoningRubric } from '../routing/policy/execution-difficulty.js';
-import { withContinuedPenalties, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
@@ -397,10 +397,9 @@ export function submitContextHandoff(
   }
   const selected = plan ? publishSelectedWork(session, plan) : undefined;
   const materialized = selected
-    ? withContinuedPenalties({ ...state, pendingIdentity: undefined, provisionalGrounding: undefined,
+    ? { ...state, pendingIdentity: undefined, provisionalGrounding: undefined,
       contextResolution: selected.resolution, workItemId: selected.workItemId,
-      contextReasons: selected.resolution.contextReasons, contextSatisfied: true },
-    selected.workItemId, selected.resolution.relation)
+      contextReasons: selected.resolution.contextReasons, contextSatisfied: true }
     : state;
   if (selected) {
     const cached = session.getCachedIntent();
@@ -412,7 +411,9 @@ export function submitContextHandoff(
     ...(declared ? { declared } : {}),
     log: factsLog(deliverable, declared, facts.change ?? {}),
   };
-  const next = acceptContextHandoff(materialized, { deliverable, key, ...(reasoning ? { reasoning } : {}) });
+  const next = acceptContextHandoff(materialized, {
+    deliverable, key, routingEpoch: session.getRoutingEpoch(), ...(reasoning ? { reasoning } : {}),
+  });
   session.commitWorkPhaseState({ ...next, changeFacts, priorCompletion: undefined, completion: undefined });
   log(state, served, 'accept', {
     ...(next.reasoningHandoff ? { handoff: next.reasoningHandoff } : {}),

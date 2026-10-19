@@ -12,7 +12,12 @@
 import { actorAllowedForBoundary, type BoundaryAuthorizationV1 } from './boundary-authorization.js';
 
 export interface AssignmentRevisions {
-  workItemId: string;
+  entryId: string;
+  boundaryId: string;
+  routingEpoch: number;
+  phase: BoundaryAuthorizationV1['phase'];
+  assignmentId: string;
+  flowId?: string;
   branchId: string;
   session: number;
   profileDigest: string;
@@ -33,9 +38,11 @@ export interface Reservation {
 }
 
 const sameRevisions = (a: AssignmentRevisions, b: AssignmentRevisions): boolean =>
-  a.workItemId === b.workItemId && a.branchId === b.branchId && a.session === b.session
+  a.entryId === b.entryId && a.boundaryId === b.boundaryId && a.routingEpoch === b.routingEpoch
+  && a.branchId === b.branchId && a.session === b.session
   && a.profileDigest === b.profileDigest
-  && a.authorization === b.authorization && a.context === b.context;
+  && a.authorization === b.authorization && a.context === b.context
+  && a.phase === b.phase && a.assignmentId === b.assignmentId && a.flowId === b.flowId;
 
 export class AssignmentLedger {
   revisions: AssignmentRevisions;
@@ -59,16 +66,22 @@ export class AssignmentLedger {
   bump(patch: Partial<AssignmentRevisions>): void {
     const previous = this.revisions;
     this.revisions = { ...previous, ...patch };
-    if (this.boundary && (previous.workItemId !== this.revisions.workItemId
-      || previous.branchId !== this.revisions.branchId || previous.session !== this.revisions.session
-      || previous.authorization !== this.revisions.authorization)) {
+    if (this.boundary && !sameRevisions(previous, this.revisions)) {
       this.boundary = { ...this.boundary, state: 'expired' };
     }
   }
 
   /** Hosts without a boundary keep their ordinary assignment behavior. */
   canAssign(target: string): boolean {
-    return !this.boundary || (this.boundary.workItemId === this.revisions.workItemId
+    return !this.boundary || (this.boundary.entryId === this.revisions.entryId
+      && this.boundary.boundaryId === this.revisions.boundaryId
+      && this.boundary.routingEpoch === this.revisions.routingEpoch
+      && this.boundary.sessionGeneration === this.revisions.session
+      && this.boundary.profileDigest === this.revisions.profileDigest
+      && this.boundary.contextRevision === this.revisions.context
+      && this.boundary.phase === this.revisions.phase
+      && this.boundary.assignmentId === this.revisions.assignmentId
+      && this.boundary.flowId === this.revisions.flowId
       && this.boundary.revision === this.revisions.authorization
       && actorAllowedForBoundary(this.boundary, target));
   }

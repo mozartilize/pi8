@@ -23,7 +23,7 @@ import type { EntryResolution, GroundedArtifact, WorkItem } from '../routing/con
 import { CONVERSATION_EVIDENCE, acceptContextHandoff } from '../routing/policy/context-acquisition.js';
 import { declaredRubric } from '../routing/policy/execution-difficulty.js';
 import { REOPEN_WORK_TOOL, completedIncumbent } from '../routing/policy/work-completion.js';
-import { withContinuedPenalties, type WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { PendingIdentity } from './context-resolution.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER, closeContractEntry } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -269,8 +269,7 @@ export function submitReopenWork(
   ]);
   if (!recorded) return reject(state, served, 'not-recorded');
 
-  const continued = withContinuedPenalties(state, item.id, 'reopen');
-  const closed = closeContractEntry(continued, served);
+  const closed = closeContractEntry(state, served);
   const reasoning = { requester: served, target: deliverable, rubric, evidence: CONVERSATION_EVIDENCE };
   const resolution: EntryResolution = {
     sourceEntryId,
@@ -282,7 +281,7 @@ export function submitReopenWork(
     resolver: 'context-handoff',
   };
   const next = acceptContextHandoff(openForRepick(closed), {
-    deliverable, key: handoffKey(params), reasoning,
+    deliverable, key: handoffKey(params), reasoning, routingEpoch: session.getRoutingEpoch(),
   });
   session.commitWorkPhaseState({
     ...next,

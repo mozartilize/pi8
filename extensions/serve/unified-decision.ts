@@ -17,7 +17,7 @@ import type { ModelThinkingLevel } from '@earendil-works/pi-ai';
 import { rowAtServedEffort } from '../routing/features/model.js';
 import { candidateFeatures } from '../routing/features/candidate.js';
 import { compileActionFeatures } from '../routing/optimization/compile.js';
-import { createBoundaryAuthorization, type BoundaryAuthorizationV1 } from '../routing/policy/boundary-authorization.js';
+import { createBoundaryAuthorization, type BoundaryAuthorizationV1, type BoundaryScope } from '../routing/policy/boundary-authorization.js';
 import { isExcludedExecutor } from '../routing/policy/execution-contract.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { DecisionStateV1 } from '../routing/features/state.js';
@@ -90,7 +90,7 @@ export function readPreferences(): ValidatedPreferences {
 export interface UnifiedTurnInput {
   state: DecisionStateV1;
   cause: DecisionCause;
-  authorizationScope: Pick<BoundaryAuthorizationV1, 'boundaryId' | 'workItemId' | 'phase' | 'assignmentId' | 'revision'>;
+  authorizationScope: BoundaryScope;
   workState?: WorkPhaseState;
   /** Routable candidates; their models define the legal action set. */
   candidates: readonly Candidate[];
@@ -212,18 +212,26 @@ function difficultyMissingReason(input: UnifiedTurnInput): UnifiedDecisionMeta['
   return work?.incumbentServes ? 'continuation' : 'no-handoff';
 }
 
-/** A new authorization for the legal actions, minus the executors that this work item excluded. */
+/**
+ * A new authorization for the legal actions, minus the executors that the
+ * live execution flow of this entry excluded. The flow applies only when it
+ * belongs to the entry that the scope names.
+ */
 function authorize(input: UnifiedTurnInput, selection: readonly SelectionCandidate[]): BoundaryAuthorizationV1 {
-  return createBoundaryAuthorization(input.authorizationScope, selection.map(({ action }) => action.key),
-    input.workState?.workItemId === input.authorizationScope.workItemId
-      ? selection.filter(({ action }) => isExcludedExecutor(input.workState, action.key))
-        .map(({ action }) => ({ workItemId: input.authorizationScope.workItemId, phase: 'implement' as const, model: action.key }))
-      : []);
+  const work = input.workState;
+  const flow = work?.executionFlow;
+  const live = flow !== undefined && work!.intentKey !== undefined
+    && (work!.sourceEntryId ?? work!.intentKey) === input.authorizationScope.entryId;
+  const exclusions = live ? selection.filter(({ action }) => isExcludedExecutor(work, action.key)).map(({ action }) => action.key) : [];
+  const scope = live && input.authorizationScope.phase === 'implement'
+    ? { ...input.authorizationScope, flowId: flow!.flowId } : input.authorizationScope;
+  return createBoundaryAuthorization(scope, selection.map(({ action }) => action.key), exclusions);
 }
 
 /**
  * The route that was ranked before a manual pin, without a new ranking. The
- * saved route applies only to the same feature mapping, task type and work.
+ * saved route applies only to the same feature mapping, preference profile,
+ * task type, entry and routing boundary.
  * Its chain keeps the saved actions that are legal, numerically valid and hold the prompt.
  * Returns undefined when one check fails or no saved action remains.
  */
@@ -232,9 +240,9 @@ export function restoreUnifiedDecision(input: UnifiedTurnInput, saved: RoutingDe
 } | undefined {
   if (!saved.unified || saved.unified.featureSchemaDigest !== FEATURE_SCHEMA_DIGEST
     || saved.dimension !== input.state.phase || input.authorizationScope.phase !== input.state.phase) return undefined;
-  // A saved work item must be the current one. Without one, the saved entry must be the current entry.
-  const savedWork = saved.workContext?.workItemId;
-  if (savedWork !== undefined ? savedWork !== input.authorizationScope.workItemId : saved.intentKey !== input.authorizationScope.boundaryId) {
+  const scope = saved.routingScope;
+  if (!scope || scope.entryId !== input.authorizationScope.entryId || scope.boundaryId !== input.authorizationScope.boundaryId
+    || saved.unified.profileDigest !== readPreferences().digest) {
     return undefined;
   }
   const { selection, candidates } = legalActions(input);

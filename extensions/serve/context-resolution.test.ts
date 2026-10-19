@@ -178,101 +178,39 @@ describe('work-context resolution through the provider', () => {
     expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
   });
 
-  it('carries execution penalties only when an entry continues the selected work item', async () => {
+  it('does not persist flow penalties or adopt them through a work choice', async () => {
     await setup();
     const item = await createItem();
-    harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!,
-      contractStrikes: { 'beta/strong': 1 } });
+    const state = harness.session.getWorkPhaseState()!;
+    expect(state.executionFlow).toBeDefined();
+    harness.session.commitWorkPhaseState({ ...state, executionFlow: {
+      ...state.executionFlow!, strikesByModel: { 'beta/strong': 2 }, excludedModels: ['beta/strong'],
+    } });
+    expect(persistedContextEvents(tree.getBranch()).filter((event) => event.op === 'executor-penalty')).toEqual([]);
     await entry('implement it');
-    expect(harness.session.getWorkPhaseState()?.contractStrikes).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
     expect((await handoff({ ...READY, workItemId: item.id })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contractStrikes).toEqual({ 'beta/strong': 1 });
-    await entry('@requirements/foo.md implement a backup check');
-    await groundFile();
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Backups',
-      workItemTitle: 'Backup check' })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contractStrikes).toBeUndefined();
+    const next = harness.session.getWorkPhaseState()!.executionFlow!;
+    expect(next.flowId).not.toBe(state.executionFlow!.flowId);
+    expect(next.strikesByModel).toEqual({});
+    expect(next.excludedModels).toEqual([]);
   });
 
-  it('carries no old work identity or penalties across /tree', async () => {
+  it('does not restore live execution authority after tree navigation or reset', async () => {
     await setup();
     await createItem();
-    harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!,
-      contractStrikes: { 'beta/strong': 2 }, excludedExecutors: ['beta/strong'] });
-    tree.navigate(null);
+    const state = harness.session.getWorkPhaseState()!;
+    harness.session.commitWorkPhaseState({ ...state, executionFlow: {
+      ...state.executionFlow!, strikesByModel: { 'beta/strong': 2 }, excludedModels: ['beta/strong'],
+    } });
+    harness.session.invalidateRouting();
     harness.session.context.restore(tree.getBranch());
     carryPhaseAcrossTree(harness.session, tree.getBranch());
-    await entry('ok go ahead');
-    const state = harness.session.getWorkPhaseState()!;
-    expect(state).toMatchObject({ contextStatus: 'acquiring' });
-    expect(state.workItemId).toBeUndefined();
-    expect(state.contractStrikes).toBeUndefined();
-    expect(state.excludedExecutors).toBeUndefined();
-  });
-
-  describe('execution penalties follow the branch', () => {
-    const penalties = { contractStrikes: { strong: 2 }, excludedExecutors: ['beta/strong'] };
-    const penaltyEvents = () => persistedContextEvents(tree.getBranch()).filter((event) => event.op === 'executor-penalty');
-
-    it('records an executor exclusion on the branch of its work item', async () => {
-      await setup();
-      const item = await createItem();
-      harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, ...penalties });
-      expect(penaltyEvents()).toEqual([expect.objectContaining({ workItemId: item.id, strikes: { strong: 2 }, excluded: ['beta/strong'] })]);
-      // The same state again writes nothing.
-      harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()! });
-      expect(penaltyEvents()).toHaveLength(1);
-    });
-
-    it('restores the penalties of a work item after /tree back to its branch and after resume', async () => {
-      await setup();
-      const item = await createItem();
-      const before = tree.getLeafId();
-      harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, ...penalties });
-      const after = tree.getLeafId();
-      // Another branch, from before the exclusion, never sees it.
-      tree.navigate(before);
-      harness.session.context.restore(tree.getBranch());
-      carryPhaseAcrossTree(harness.session, tree.getBranch());
-      expect(harness.session.context.getLedger().items.get(item.id)?.penalties).toBeUndefined();
-      await entry('implement it');
-      expect((await handoff({ ...READY, workItemId: item.id })).accepted).toBe(true);
-      await serveBranch();
-      expect(harness.session.getWorkPhaseState()?.excludedExecutors).toBeUndefined();
-      // Back on the branch that recorded it, a continuing entry takes it over, also after a reload.
-      tree.navigate(after);
-      harness.session.reset();
-      harness.session.context.restore(tree.getBranch());
-      await entry('implement it again');
-      expect((await handoff({ ...READY, workItemId: item.id })).accepted).toBe(true);
-      await serveBranch();
-      expect(harness.session.getWorkPhaseState()).toMatchObject({ workItemId: item.id, ...penalties });
-    });
-
-    it('never lowers the penalties that the branch recorded', async () => {
-      await setup();
-      const item = await createItem();
-      const state = harness.session.getWorkPhaseState()!;
-      harness.session.commitWorkPhaseState({ ...state, ...penalties });
-      harness.session.commitWorkPhaseState({ ...state, contractStrikes: { strong: 1 } });
-      harness.session.commitWorkPhaseState(state);
-      expect(harness.session.context.getLedger().items.get(item.id)?.penalties)
-        .toEqual({ strikes: { strong: 2 }, excluded: ['beta/strong'] });
-      expect(penaltyEvents()).toHaveLength(1);
-    });
-
-    it('does not apply the penalties of one work item to another', async () => {
-      await setup();
-      const item = await createItem();
-      harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, ...penalties });
-      await entry('@requirements/foo.md implement a backup check');
-      await groundFile();
-      expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Backups',
-        workItemTitle: 'Backup check' })).accepted).toBe(true);
-      await serveBranch();
-      expect(harness.session.getWorkPhaseState()?.workItemId).not.toBe(item.id);
-      expect(harness.session.getWorkPhaseState()?.excludedExecutors).toBeUndefined();
-    });
+    expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.boundaryAuthorization).toBeUndefined();
+    harness.session.reset();
+    harness.session.context.restore(tree.getBranch());
+    expect(harness.session.getWorkPhaseState()).toBeUndefined();
   });
 
   it('fails open when work-context resolution fails', async () => {

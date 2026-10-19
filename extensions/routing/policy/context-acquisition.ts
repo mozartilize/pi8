@@ -22,7 +22,8 @@ import { dirname } from 'node:path';
 import type { DecisionCause, Dimension, ReasoningEvidence, ReasoningHandoffMeta } from '../../types.js';
 import { CONTEXT_DELIVERABLES } from '../context/resolve.js';
 import type { ContextReason } from '../context/types.js';
-import type { WorkPhaseState } from './work-phase.js';
+import { handoffBoundaryId, type WorkPhaseState } from './work-phase.js';
+import { newExecutionFlow } from './execution-flow.js';
 import { REOPEN_WORK_TOOL } from './work-completion.js';
 import { EXECUTION_CONTRACT_TOOL } from './execution-contract.js';
 import { isMutationCall } from './mutation-detector.js';
@@ -156,6 +157,10 @@ export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): 
  * serves it. `reasoning` is present for a plan, review, implementation, or
  * investigation target and carries its minimum. The router scores any other target at the
  * entry's deliverable with ordinary scoring.
+ *
+ * The handoff starts a new routing boundary, named from the accepted
+ * payload. An implement handoff starts the entry's execution flow, or keeps
+ * the flow that the entry already has.
  */
 export function acceptContextHandoff(
   state: WorkPhaseState,
@@ -163,14 +168,23 @@ export function acceptContextHandoff(
     deliverable: Dimension;
     key: string;
     reasoning?: Omit<ReasoningHandoffMeta, 'id' | 'pending' | 'owner'>;
+    /** Routing epoch of the session; the entry's own epoch when absent. */
+    routingEpoch?: number;
   },
 ): WorkPhaseState {
   if (state.contextStatus === 'ready-pending' || state.contextStatus === 'served' || state.reasoningHandoff) return state;
+  const entryId = state.sourceEntryId ?? state.intentKey;
+  const boundaryId = handoffBoundaryId(entryId, accepted.routingEpoch ?? state.routingEpoch ?? 0, accepted.key);
+  const executionFlow = accepted.deliverable === 'implement'
+    ? state.executionFlow ?? newExecutionFlow(entryId, boundaryId)
+    : state.executionFlow;
   return {
     ...state,
     deliverable: accepted.deliverable,
     contextStatus: 'ready-pending',
     handoffKey: accepted.key,
+    boundaryId,
+    ...(executionFlow ? { executionFlow } : {}),
     ...(accepted.reasoning ? { reasoningHandoff: { ...accepted.reasoning, id: state.intentKey, pending: true } } : {}),
   };
 }

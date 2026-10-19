@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   carryAcrossBranch,
-  penaltiesOf,
-  withContinuedPenalties,
+  handoffBoundaryId,
   nextProviderInvocation,
+  triageBoundaryId,
 } from './work-phase.js';
+import { newExecutionFlow } from './execution-flow.js';
 import type { WorkPhaseState } from './work-phase.js';
 
 const entryState = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
@@ -23,24 +24,19 @@ describe('nextProviderInvocation', () => {
   });
 });
 
-describe('penaltiesOf / withContinuedPenalties', () => {
-  const strikes = { contractStrikes: { 'beta/strong': 2 }, excludedExecutors: ['beta/strong'] };
-
-  it('applies a work item\'s penalties only to an entry that continues or reopens that item', () => {
-    const prior = penaltiesOf(entryState({ workItemId: 'w_1', ...strikes }));
-    const next = entryState({ intentKey: 'intent-b', priorWork: prior! });
-    expect(withContinuedPenalties(next, 'w_1', 'continue')).toMatchObject(strikes);
-    expect(withContinuedPenalties(next, 'w_1', 'reopen')).toMatchObject(strikes);
-    expect(withContinuedPenalties(next, 'w_2', 'reopen')).toBe(next);
-    expect(withContinuedPenalties(next, 'w_2', 'continue')).toBe(next);
-    expect(withContinuedPenalties(next, 'w_1', 'resume')).toBe(next);
-    expect(withContinuedPenalties(next, undefined, 'unknown')).toBe(next);
+describe('routing boundary ids', () => {
+  it('names the triage boundary from the entry and the routing epoch', () => {
+    expect(triageBoundaryId('u1', 0)).toBe('triage:u1:0');
+    expect(triageBoundaryId('u1', 1)).not.toBe(triageBoundaryId('u1', 0));
+    expect(triageBoundaryId('u2', 0)).not.toBe(triageBoundaryId('u1', 0));
   });
 
-  it('passes penalties on through entries placed on no work item', () => {
-    const received = penaltiesOf(entryState({ workItemId: 'w_1', ...strikes }));
-    expect(penaltiesOf(entryState({ priorWork: received! }))).toEqual({ workItemId: 'w_1', ...strikes });
-    expect(penaltiesOf(entryState({ workItemId: 'w_1' }))).toBeUndefined();
+  it('gives the same id to the same accepted payload and another id to another payload or epoch', () => {
+    const id = handoffBoundaryId('u1', 0, '{"deliverable":"implement"}');
+    expect(id).toBe(handoffBoundaryId('u1', 0, '{"deliverable":"implement"}'));
+    expect(id).toMatch(/^handoff:u1:0:/);
+    expect(handoffBoundaryId('u1', 0, '{"deliverable":"gather"}')).not.toBe(id);
+    expect(handoffBoundaryId('u1', 1, '{"deliverable":"implement"}')).not.toBe(id);
   });
 });
 
@@ -50,8 +46,7 @@ describe('carryAcrossBranch', () => {
       deliverable: 'gather',
       providerInvocation: 4,
       observedMutationTools: 2,
-      contractStrikes: { 'beta/strong': 2 },
-      excludedExecutors: ['beta/strong'],
+      executionFlow: { ...newExecutionFlow('intent-a', 'b'), strikesByModel: { 'beta/strong': 2 }, excludedModels: ['beta/strong'] },
       readPaths: ['/repo/a.ts'],
       contextStatus: 'acquiring',
       workItemId: 'w_a',

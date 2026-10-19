@@ -312,8 +312,10 @@ export interface ExecutionContractMeta {
    */
   breakReason?: 'undeclared-target' | 'unattributed-mutation' | 'replan' | 'struggle';
   breaker?: string;
-  /** Executor models excluded for this task after repeated breaks. */
+  /** Executor models that the execution flow excluded after repeated breaks. */
   excludedExecutors?: string[];
+  /** Execution flow that holds the strikes and exclusions. */
+  flowId?: string;
   /** Context handoff this plan followed, in the same entry or the one before. */
   handoffId?: string;
 }
@@ -463,8 +465,24 @@ export interface UnifiedDecisionMeta {
   top?: UnifiedActionTrace[];
 }
 
+/**
+ * Routing scope of a decision: the genuine user entry, its routing boundary,
+ * and, when known, the provider assignment and execution flow. Identities
+ * only; never paths, file content, or work identity.
+ */
+export interface RoutingScopeMeta {
+  entryId: string;
+  boundaryId: string;
+  assignmentId?: string;
+  authorizationRevision?: number;
+  flowId?: string;
+  continuesFlow?: boolean;
+}
+
 export interface RoutingDecision {
   dimension: Dimension;
+  /** Entry, boundary, assignment and flow that this decision belongs to. */
+  routingScope?: RoutingScopeMeta;
   /** Present when the unified selector made this decision. */
   unified?: UnifiedDecisionMeta;
   chosen: string;

@@ -10,6 +10,7 @@
  * lookup) is owned directly by `delegation.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { newExecutionFlow } from '../routing/policy/execution-flow.js';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
@@ -2592,9 +2593,11 @@ describe('context acquisition', () => {
       expect(planning?.dimension).toBe('plan');
       expect(planning?.chosen).toBe('beta/strong');
       if (implementationRequest) {
-        // Contract tests begin with a served plan phase for an implementation request.
+        // Contract tests begin with a served plan phase for an implementation request,
+        // with the execution flow that an accepted implement handoff starts.
         const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, deliverable: 'implement' });
+        harness.session.commitWorkPhaseState({ ...state, deliverable: 'implement',
+          executionFlow: newExecutionFlow(state.sourceEntryId ?? state.intentKey, state.boundaryId ?? '') });
       }
       return session;
     }
@@ -2748,7 +2751,7 @@ describe('context acquisition', () => {
           ? { ...row, quality: { ...row.quality, intelligence: 60 }, qualityEstimated: estimated }
           : row) });
         const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['beta/strong'] });
+        harness.session.commitWorkPhaseState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['beta/strong'] } });
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next?.chosen).toBe('alpha/cheap');
@@ -2765,7 +2768,7 @@ describe('context acquisition', () => {
           : row) };
         saveStore(replaced);
         const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['beta/strong'] });
+        harness.session.commitWorkPhaseState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['beta/strong'] } });
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next?.chosen).toBe('alpha/cheap');
@@ -2826,8 +2829,8 @@ describe('context acquisition', () => {
           saved.fallbackChain = ['alpha/cheap'];
           harness.session.blacklistModel('alpha/cheap');
         }],
-        ['another work item', (saved: { workContext?: { workItemId: string } }) => {
-          saved.workContext = { ...saved.workContext!, workItemId: 'other-work' };
+        ['another routing boundary', (saved: { routingScope?: { entryId: string; boundaryId: string } }) => {
+          saved.routingScope = { ...saved.routingScope!, boundaryId: 'other-boundary' };
         }],
         ['another feature mapping', (saved: { unified?: { featureSchemaDigest: string } }) => {
           saved.unified!.featureSchemaDigest = 'other-mapping';
@@ -2878,7 +2881,7 @@ describe('context acquisition', () => {
         expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
         breakWithUndeclaredEdit();
         await session.routeTurnAgainWithSameUserEntry();
-        expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
+        expect(harness.session.getWorkPhaseState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
 
         submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
         const escalated = await session.routeTurnAgainWithSameUserEntry();
@@ -2889,7 +2892,7 @@ describe('context acquisition', () => {
       it('releases a plan when an unrelated excluded executor left the pool', async () => {
         const session = await planned();
         const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });
+        harness.session.commitWorkPhaseState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['gone/model'] } });
         submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
         const contract = harness.session.getWorkPhaseState()?.contract;
         expect(contract).toMatchObject({ release: true });
@@ -2953,7 +2956,7 @@ describe('context acquisition', () => {
       bash('printf x > src/d.ts');
       expect(harness.session.getWorkPhaseState()?.contract)
         .toMatchObject({ status: 'broken', breakReason: 'unattributed-mutation', breaker: 'alpha/cheap' });
-      expect(harness.session.getWorkPhaseState()?.contractStrikes).toBeUndefined();
+      expect(harness.session.getWorkPhaseState()?.executionFlow?.strikesByModel).toEqual({});
       const restored = await session.routeTurnAgainWithSameUserEntry();
       expect(restored?.dimension).toBe('plan');
       expect(restored?.chosen).toBe('beta/strong');
@@ -3010,7 +3013,7 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       breakWithUndeclaredEdit();
       await session.routeTurnAgainWithSameUserEntry();
-      expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
+      expect(harness.session.getWorkPhaseState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
 
       // The second break excludes the executor from implementation. It cannot
       // occur in either the selection or the availability fallback chain.
@@ -3024,7 +3027,7 @@ describe('context acquisition', () => {
     it('releases a plan when an excluded executor is no longer in the pool', async () => {
       const session = await planned();
       const state = harness.session.getWorkPhaseState()!;
-      harness.session.commitWorkPhaseState({ ...state, excludedExecutors: ['gone/model'] });
+      harness.session.commitWorkPhaseState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['gone/model'] } });
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true });
       const next = await session.routeTurnAgainWithSameUserEntry();
@@ -3151,9 +3154,9 @@ describe('context acquisition', () => {
       };
       await executeOnce();
       await executeOnce();
-      expect(harness.session.getWorkPhaseState()?.contractStrikes).toEqual({ 'alpha/cheap': 1 });
+      expect(harness.session.getWorkPhaseState()?.executionFlow?.strikesByModel).toEqual({ 'alpha/cheap': 1 });
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-      expect(harness.session.getWorkPhaseState()?.excludedExecutors).toEqual(['alpha/cheap']);
+      expect(harness.session.getWorkPhaseState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
       const escalated = await session.routeTurnAgainWithSameUserEntry();
       expect(escalated?.chosen).toBe('beta/strong');
       expect(escalated?.fallbackChain).not.toContain('alpha/cheap');

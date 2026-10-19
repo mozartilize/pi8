@@ -84,9 +84,8 @@ import { actorAllowedForBoundary, createBoundaryAuthorization, settleBoundary as
 import { makeTerminalErrorEvent } from './error-event.js';
 import { POLICY_PASSIVE_CAUSES, scoredIncumbentKey } from '../routing/policy/routing-policy.js';
 import {
-  penaltiesOf,
-  withBranchPenalties,
   nextProviderInvocation,
+  triageBoundaryId,
   type WorkPhaseState,
 } from '../routing/policy/work-phase.js';
 import {
@@ -486,16 +485,18 @@ function advanceWorkPhase(args: {
       workPhaseState = closeContextEntry(workPhaseState, served);
       if (workPhaseState.contract) workPhaseState = closeContractEntry(workPhaseState, served);
     }
-    // The work this entry is on is known only at its handoff, which applies
-    // the previous work item's penalties when it continues that item.
-    const priorWork = workPhaseState && penaltiesOf(workPhaseState);
+    // Each genuine user entry starts at its own triage boundary.
+    const sourceEntryId = args.session.context.getEntrySource() ?? args.turnInput.key;
+    const routingEpoch = args.session.getRoutingEpoch();
     workPhaseState = {
       intentKey: args.turnInput.key,
+      sourceEntryId,
+      routingEpoch,
+      boundaryId: triageBoundaryId(sourceEntryId, routingEpoch),
       deliverable: args.deliverable,
       providerInvocation: 1,
       observedMutationTools: 0,
       ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
-      ...(priorWork ? { priorWork } : {}),
     };
     if (servingIncumbent(args.session)) workPhaseState = { ...workPhaseState, incumbentServes: true };
     const completed = completedIncumbent(args.session.context.getLedger());
@@ -749,7 +750,10 @@ async function resolveRouterTurn(args: {
   const { cacheHit, cachedIntent } = prepared.intent;
 
   const sessionGeneration = session.getSessionGeneration();
-  const stillCurrent = (): boolean => session.getSessionGeneration() === sessionGeneration;
+  const routingEpoch = session.getRoutingEpoch();
+  // A result of an earlier session or routing epoch is never published.
+  const stillCurrent = (): boolean => session.getSessionGeneration() === sessionGeneration
+    && session.getRoutingEpoch() === routingEpoch;
 
   const entry = await resolveEntrySemantics({
     session,
@@ -813,7 +817,7 @@ function settleExecutionContract(
   if (state !== observed) session.commitWorkPhaseState(state);
   const contract = state.contract!;
   if (contract.status !== 'active') return contract;
-  if (trajectory && parseCandidateKey(trajectory.fromModel).id !== parseCandidateKey(contract.submitter).id) {
+  if (trajectory && !servedBySubmitter(contract, trajectory.fromModel)) {
     const broken = breakContract(state, trajectory.fromModel, 'struggle');
     session.commitWorkPhaseState(broken);
     appendExecutionContractSignal({
@@ -871,12 +875,7 @@ async function scoreRouterTurn(args: {
   const routableCandidates = pinned ? candidates : applyRuntimeExclusions(candidates, session);
   if (routableCandidates.length === 0) return noRoutableCandidates(session);
 
-  // Penalties that the branch recorded for this work item apply again after /tree or a resume.
-  const stored = session.getWorkPhaseState();
-  const observed = stored?.workItemId
-    ? withBranchPenalties(stored, session.context.getLedger().items.get(stored.workItemId)?.penalties)
-    : stored;
-  if (observed !== stored) session.commitWorkPhaseState(observed);
+  const observed = session.getWorkPhaseState();
   const intentState = observed?.intentKey === turnInput.key ? observed : undefined;
   const mutationObserved = intentState != null && intentState.observedMutationTools > 0;
   const contract = settleExecutionContract(intentState, trajectoryEscalation, session);
@@ -958,8 +957,9 @@ async function scoreRouterTurn(args: {
     return { registryId: `${parsed.provider}/${parsed.id}`, ...(parsed.effort ? { effort: parsed.effort } : {}) };
   };
   const rework = trajectoryEscalation ? identity(trajectoryEscalation.fromModel) : undefined;
-  // Without a work item, the entry scopes the authorization.
-  const workItemId = session.getWorkPhaseState()?.workItemId ?? turnInput.key;
+  const entryId = entry?.sourceEntryId ?? turnInput.key;
+  const routingEpoch = session.getRoutingEpoch();
+  const boundaryId = entry?.boundaryId ?? triageBoundaryId(entryId, routingEpoch);
   const registryModels = (prepared.registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[];
   const promptTokenScales = promptTokenScaleMap(registryModels);
   const state: DecisionStateV1 = {
@@ -1024,7 +1024,9 @@ async function scoreRouterTurn(args: {
     state,
     cause: routedCause,
     authorizationScope: {
-      boundaryId: turnInput.key, workItemId, phase: routedDimension,
+      entryId, routingEpoch, boundaryId, phase: routedDimension,
+      sessionGeneration: session.getSessionGeneration(), profileDigest: readPreferences().digest,
+      contextRevision: entry?.providerInvocation ?? 0,
       assignmentId: randomUUID(), revision: (entry?.boundaryAuthorization?.revision ?? 0) + 1,
     },
     ...(!pinned && entry ? { workState: entry } : {}),
@@ -1044,8 +1046,9 @@ async function scoreRouterTurn(args: {
     ...(incumbentRegistryId ? { incumbentKey: incumbentRegistryId } : {}),
     signal: options?.signal,
     isCurrent: () => resolved.stillCurrent()
+      && session.getRoutingEpoch() === routingEpoch
       && session.getWorkPhaseState()?.intentKey === turnInput.key
-      && (session.getWorkPhaseState()?.workItemId ?? turnInput.key) === workItemId
+      && (session.getWorkPhaseState()?.boundaryId ?? boundaryId) === boundaryId
       && session.getWorkPhaseState()?.providerInvocation === entry?.providerInvocation,
 
   };
@@ -1062,7 +1065,8 @@ async function scoreRouterTurn(args: {
     return noRoutableCandidates(session);
   }
   const live = session.getWorkPhaseState();
-  if (!resolved.stillCurrent() || live?.intentKey !== turnInput.key || (live.workItemId ?? turnInput.key) !== workItemId) return SESSION_CHANGED;
+  if (!resolved.stillCurrent() || session.getRoutingEpoch() !== routingEpoch || live?.intentKey !== turnInput.key
+    || (live.boundaryId ?? boundaryId) !== boundaryId) return SESSION_CHANGED;
   session.commitWorkPhaseState({ ...live, boundaryAuthorization: outcome.authorization });
   const policy = { decision: outcome.decision, candidates: outcome.candidates, trajectoryApplied: rework !== undefined };
   const decision = policy.decision;
@@ -1098,6 +1102,12 @@ async function scoreRouterTurn(args: {
   }
   if (resolved.context) decision.workContext = workContextMeta(resolved.context);
   decision.intentKey = turnInput.key;
+  decision.routingScope = {
+    entryId, boundaryId,
+    assignmentId: outcome.authorization.assignmentId,
+    authorizationRevision: outcome.authorization.revision,
+    ...(outcome.authorization.flowId ? { flowId: outcome.authorization.flowId } : {}),
+  };
   decision.provenanceCounts = turnInput.provenanceCounts;
   try {
     // Counterfactual baseline for /router-report. Never blocks
@@ -1115,7 +1125,9 @@ async function scoreRouterTurn(args: {
   debugLog('decision', {
     dimension: decision.dimension,
     cause: decision.cause,
-    workItemId,
+    entryId,
+    boundaryId,
+    routingEpoch,
     topicId: decision.workContext?.topicId ?? entry?.contextResolution?.topicId,
     phase: routedDimension,
     contextStatus: entry?.contextStatus,
@@ -1204,7 +1216,11 @@ async function delegateRouterTurn(args: {
   turnTimer: () => number;
   stream: AssistantMessageEventStream;
 }): Promise<RouterTurnOutcome> {
-  const { prepared, resolved, scored, context, options, pi, session, turnTimer, stream } = args;
+  const { prepared, scored, context, options, pi, session, turnTimer, stream } = args;
+  const generation = session.getSessionGeneration();
+  // An explicit pin can replace the assignment during a fallback dialog.
+  const stillCurrent = (): boolean => session.getSessionGeneration() === generation
+    && scored.authorization?.routingEpoch === session.getRoutingEpoch();
   const { config, extensionContext, registry } = prepared;
   const { decision, routableCandidates, requestedReasoning } = scored;
   const pin = session.getManualModel() ?? session.getSemiHold(prepared.measured.turnInput.key);
@@ -1315,7 +1331,7 @@ async function delegateRouterTurn(args: {
     models: () => (registry?.getAvailable() ?? []) as unknown as RegistryModelInfo[],
     commit: (outcome, source) => {
       const state = session.getWorkPhaseState();
-      if (!resolved.stillCurrent() || !state || state.intentKey !== intentKey
+      if (!stillCurrent() || !state || state.intentKey !== intentKey
         || state.boundaryAuthorization?.assignmentId !== scored.authorization?.assignmentId) return false;
       const chain = decision.fallbackChain;
       const selected = outcome.decision;
@@ -1337,7 +1353,12 @@ async function delegateRouterTurn(args: {
     revisions: () => {
       const state = session.getWorkPhaseState();
       return {
-        workItemId: state?.workItemId ?? intentKey,
+        entryId: state?.sourceEntryId ?? intentKey,
+        boundaryId: state?.boundaryId ?? '',
+        routingEpoch: session.getRoutingEpoch(),
+        phase: state?.boundaryAuthorization?.phase ?? decision.dimension,
+        assignmentId: state?.boundaryAuthorization?.assignmentId ?? '',
+        flowId: state?.boundaryAuthorization?.flowId,
         branchId: JSON.stringify([session.context.getEntrySource(), state?.intentKey]),
         session: session.getSessionGeneration(), profileDigest: readPreferences().digest,
         authorization: state?.boundaryAuthorization?.revision ?? -1,
@@ -1414,21 +1435,27 @@ async function delegateRouterTurn(args: {
     const authorization = scored.authorization;
     const currentAuthorization = session.getWorkPhaseState()?.boundaryAuthorization;
     if (authorization) {
-      if (!resolved.stillCurrent() || currentAuthorization?.assignmentId !== authorization.assignmentId
-        || settling?.intentKey !== intentKey || (settling.workItemId ?? intentKey) !== authorization.workItemId
+      if (!stillCurrent() || currentAuthorization?.assignmentId !== authorization.assignmentId
+        || settling?.intentKey !== intentKey || (settling.sourceEntryId ?? intentKey) !== authorization.entryId
+        || settling.boundaryId !== authorization.boundaryId || session.getRoutingEpoch() !== authorization.routingEpoch
         || finalDecision.dimension !== authorization.phase) return finalDecision;
       const model = registryModels.find((model) => `${model.provider}/${model.id}` === lastServed.registryId);
       const actualServed = model && lastServed.thinkingLevel
         ? overrideAction(model, lastServed.thinkingLevel as ModelThinkingLevel)?.key ?? served
         : served;
       const confirmed = settleAuthorization(authorization, {
-        boundaryId: authorization.boundaryId, workItemId: authorization.workItemId, phase: finalDecision.dimension,
+        ...authorization,
+        sessionGeneration: session.getSessionGeneration(), profileDigest: readPreferences().digest,
+        contextRevision: settling.providerInvocation,
+        entryId: authorization.entryId, routingEpoch: session.getRoutingEpoch(),
+        boundaryId: authorization.boundaryId, phase: finalDecision.dimension,
         assignmentId: authorization.assignmentId, revision: authorization.revision, actualServed, answered: true,
       });
       if (confirmed.state !== 'served') return finalDecision;
       session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, boundaryAuthorization: confirmed });
       debugLog('boundary.confirm', {
-        workItemId: authorization.workItemId,
+        entryId: authorization.entryId,
+        boundaryId: authorization.boundaryId,
         phase: finalDecision.dimension,
         state: confirmed.state,
         actualServed,
@@ -1450,7 +1477,7 @@ async function delegateRouterTurn(args: {
     });
     return handoff ? { ...finalDecision, reasoningHandoff: handoff } : finalDecision;
   };
-  if (!resolved.stillCurrent() || (scored.authorization
+  if (!stillCurrent() || (scored.authorization
     && session.getWorkPhaseState()?.boundaryAuthorization?.assignmentId !== scored.authorization.assignmentId)) return SESSION_CHANGED;
   const result = await runDelegationLoop(delegationOptions, stream).finally(() => delegationOptions.dispatch?.release());
   if (result.success && session.getSessionGeneration() === delegationSessionGeneration) {
@@ -1476,7 +1503,7 @@ async function delegateRouterTurn(args: {
     && result.capabilityHandoff.fromModel === pendingTrajectory.fromModel
     && session.peekPendingTrajectoryEscalation() === pendingTrajectory
     && session.getSessionGeneration() === delegationSessionGeneration
-    && resolved.stillCurrent()
+    && stillCurrent()
   ) {
     session.consumePendingTrajectoryEscalation();
   }
@@ -1641,7 +1668,8 @@ function pinnedScored(args: {
     // Best-effort report telemetry only; failure must not stop routing.
   }
   const authorization = base.authorization && createBoundaryAuthorization({
-    ...base.authorization, assignmentId: randomUUID(), revision: base.authorization.revision + 1,
+    ...base.authorization, routingEpoch: session.getRoutingEpoch(),
+    assignmentId: randomUUID(), revision: base.authorization.revision + 1,
   }, [key]);
   const current = session.getWorkPhaseState();
   if (current && authorization) session.commitWorkPhaseState({ ...current, boundaryAuthorization: authorization });

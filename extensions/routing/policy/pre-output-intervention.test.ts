@@ -12,7 +12,7 @@ import { decidePreOutputIntervention, type AttemptEpoch, type LiveAttempt } from
 class FakeAttempt implements LiveAttempt {
   readonly source = 'a/A:high';
   epochValue: AttemptEpoch = {
-    attemptId: 'att1', sessionGeneration: 1, workBoundaryId: 'bd', boundaryAuthorizationRevision: 3, outputRevision: 0, profileDigest: 'd1',
+    attemptId: 'att1', sessionGeneration: 1, routingEpoch: 1, routingBoundaryId: 'bd', boundaryAuthorizationRevision: 3, outputRevision: 0, profileDigest: 'd1',
   };
   committed = false;
   aborted = false;
@@ -103,6 +103,8 @@ describe('decidePreOutputIntervention', () => {
 
   it.each([
     ['attempt or boundary changed', (live: FakeAttempt) => { live.epochValue = { ...live.epochValue, boundaryAuthorizationRevision: 4 }; }, 'attempt-or-work-changed'],
+    ['routing epoch changed', (live: FakeAttempt) => { live.epochValue = { ...live.epochValue, routingEpoch: 2 }; }, 'attempt-or-work-changed'],
+    ['routing boundary changed', (live: FakeAttempt) => { live.epochValue = { ...live.epochValue, routingBoundaryId: 'bd2' }; }, 'attempt-or-work-changed'],
     ['target removed', (live: FakeAttempt) => { live.removed.add('b/B:high'); }, 'target-changed'],
   ] as const)('does not switch when the %s during the solve', async (_, change, reason) => {
     const live = new FakeAttempt();

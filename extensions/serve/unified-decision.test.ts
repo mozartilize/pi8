@@ -1,3 +1,4 @@
+import { newExecutionFlow } from '../routing/policy/execution-flow.js';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { setDebugPath } from '../host/debuglog.js';
@@ -34,7 +35,7 @@ function input(models = [model('one')]): UnifiedTurnInput {
       needsVision: false, boundary: 'ordinary', friction: [], nowMs: 0,
       benchmarkIndexVersion: '4.3',
     },
-    authorizationScope: { boundaryId: 'entry-a', workItemId: 'work-a', phase: 'implement', assignmentId: 'attempt-a', revision: 1 },
+    authorizationScope: { sessionGeneration: 1, profileDigest: '', contextRevision: 1, entryId: 'entry-a', routingEpoch: 0, boundaryId: 'triage:entry-a:0', phase: 'implement', assignmentId: 'attempt-a', revision: 1 },
     cause: 'execution-contract',
     candidates: models.map((m, i) => buildCandidate(m, rows[i])),
     registryModels: models, rows,
@@ -222,11 +223,11 @@ describe('production selection adapter', () => {
     expect(result.decision.fallbackChain).toEqual(['test/wide:high']);
   });
 
-  it('excludes every effort of a failed executor only in its work item and implementation phase', async () => {
+  it('excludes every effort of a failed executor only in its entry\'s execution flow and the implement task type', async () => {
     const turn = input([model('one'), model('two')]);
     turn.workState = {
-      intentKey: 'entry-a', workItemId: 'work-a', providerInvocation: 1, observedMutationTools: 0,
-      excludedExecutors: ['test/one:low'],
+      intentKey: 'entry-a', sourceEntryId: 'entry-a', providerInvocation: 1, observedMutationTools: 0,
+      executionFlow: { ...newExecutionFlow('entry-a', 'b'), excludedModels: ['test/one:low'] },
     };
     const implementation = await resolveUnifiedDecision(turn, noPreparation);
     expect(implementation.kind).toBe('decision');
@@ -240,9 +241,10 @@ describe('production selection adapter', () => {
     expect(planning.kind).toBe('decision');
     if (planning.kind !== 'decision') throw new Error('Expected a decision');
     expect(planning.authorization.allowedActors).toContain('test/one:low');
+    expect(implementation.authorization.flowId).toBe(turn.workState.executionFlow!.flowId);
     const unrelated = await resolveUnifiedDecision({
       ...turn,
-      authorizationScope: { ...turn.authorizationScope, workItemId: 'work-b' },
+      authorizationScope: { ...turn.authorizationScope, entryId: 'entry-b' },
     }, noPreparation);
     expect(unrelated.kind).toBe('decision');
     if (unrelated.kind !== 'decision') throw new Error('Expected a decision');

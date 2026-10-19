@@ -10,12 +10,27 @@
  */
 import type { Dimension } from '../../types.js';
 
-export interface BoundaryAuthorizationV1 {
+/**
+ * The scope that one authorization covers. `entryId` and `boundaryId` name
+ * the routing boundary of the current entry; `routingEpoch` changes on
+ * `/tree`, a model switch, and a session reset, so an authorization of an
+ * earlier epoch never matches. `flowId` is set only when implement
+ * exclusions of a live execution flow apply.
+ */
+export interface BoundaryScope {
+  sessionGeneration: number;
+  profileDigest: string;
+  contextRevision: number;
+  entryId: string;
+  routingEpoch: number;
   boundaryId: string;
-  workItemId: string;
   phase: Dimension;
   assignmentId: string;
   revision: number;
+  flowId?: string;
+}
+
+export interface BoundaryAuthorizationV1 extends BoundaryScope {
   /** Effective action keys permitted by contract and phase rules. */
   allowedActors: readonly string[];
   /** Hard exclusions, e.g. a struck executor, by `provider/modelId`. */
@@ -24,12 +39,7 @@ export interface BoundaryAuthorizationV1 {
 }
 
 /** Proof that an attempt produced an answer for a boundary assignment. */
-export interface ActualServeReceipt {
-  boundaryId: string;
-  workItemId: string;
-  phase: Dimension;
-  assignmentId: string;
-  revision: number;
+export interface ActualServeReceipt extends BoundaryScope {
   /** Effective action key that served. */
   actualServed: string;
   /** True only when the attempt produced a meaningful answer. */
@@ -42,26 +52,19 @@ const modelOf = (actionKey: string): string => {
   return colon > slash ? actionKey.slice(0, colon) : actionKey;
 };
 
-/** A work failure excludes a model only from the named work item and phase. */
-export interface PhaseModelExclusion {
-  workItemId: string;
-  phase: Dimension;
-  model: string;
-}
-
 /**
  * The caller supplies callable effective actions after availability filters.
- * Only matching work/phase exclusions apply. Benchmark scores, price and rank
- * do not grant or remove permission.
+ * The executors that the live execution flow excluded apply only to the
+ * `implement` task type. Benchmark scores, price and rank do not grant or
+ * remove permission.
  */
 export function createBoundaryAuthorization(
-  scope: Pick<BoundaryAuthorizationV1, 'boundaryId' | 'workItemId' | 'phase' | 'assignmentId' | 'revision'>,
+  scope: BoundaryScope,
   availableActors: readonly string[],
-  exclusions: readonly PhaseModelExclusion[] = [],
+  flowExclusions: readonly string[] = [],
 ): BoundaryAuthorizationV1 {
-  const excludedModels = Object.freeze([...new Set(exclusions
-    .filter((exclusion) => exclusion.workItemId === scope.workItemId && exclusion.phase === scope.phase)
-    .map((exclusion) => modelOf(exclusion.model)))]);
+  const excludedModels = Object.freeze(scope.phase === 'implement'
+    ? [...new Set(flowExclusions.map(modelOf))] : []);
   const excluded = new Set(excludedModels);
   return Object.freeze({
     ...scope,
@@ -79,7 +82,10 @@ export function actorAllowedForBoundary(auth: BoundaryAuthorizationV1, actor: st
 
 export function settleBoundary(auth: BoundaryAuthorizationV1, receipt: ActualServeReceipt | undefined): BoundaryAuthorizationV1 {
   if (!receipt || auth.state !== 'pending' || !receipt.answered) return auth;
-  if (receipt.boundaryId !== auth.boundaryId || receipt.workItemId !== auth.workItemId || receipt.phase !== auth.phase
+  if (receipt.sessionGeneration !== auth.sessionGeneration || receipt.profileDigest !== auth.profileDigest
+    || receipt.contextRevision !== auth.contextRevision || receipt.flowId !== auth.flowId
+    || receipt.entryId !== auth.entryId || receipt.routingEpoch !== auth.routingEpoch
+    || receipt.boundaryId !== auth.boundaryId || receipt.phase !== auth.phase
     || receipt.assignmentId !== auth.assignmentId || receipt.revision !== auth.revision) return auth;
   if (!actorAllowedForBoundary(auth, receipt.actualServed)) return auth;
   return { ...auth, state: 'served' };

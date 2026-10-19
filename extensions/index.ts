@@ -316,6 +316,9 @@ function handleModelSelect(
     ...session.blacklist.getDebugState(),
   });
   declareRouterTools(pi);
+  // A model switch ends the routing authority of the current epoch before
+  // any rebuilt state is visible.
+  session.invalidateRouting();
   // A concrete model selection makes the previous router decision stale,
   // and ends the incumbent: switching back starts by collecting context.
   if (event.model.provider !== ROUTER_PROVIDER_ID || event.model.id !== AUTO_MODEL_ID) {
@@ -501,6 +504,7 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
   // entry state that still applies there.
   pi.on('session_compact', () => session.clearWarmCaches());
   pi.on('session_tree', (_event, ctx) => {
+    session.invalidateRouting();
     session.clearWarmCaches();
     restoreWorkLedger(ctx, session);
     carryPhaseAcrossTree(session, readBranch(ctx?.sessionManager));

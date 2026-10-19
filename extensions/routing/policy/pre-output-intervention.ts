@@ -16,7 +16,8 @@ import type { SelectionResult } from '../optimization/select.js';
 export interface AttemptEpoch {
   attemptId: string;
   sessionGeneration: number;
-  workBoundaryId: string;
+  routingEpoch: number;
+  routingBoundaryId: string;
   boundaryAuthorizationRevision: number;
   /** Increases on every consumer-visible or committed event. */
   outputRevision: number;
@@ -46,7 +47,7 @@ export type InterventionDisposition =
 
 const sameEpoch = (a: AttemptEpoch, b: AttemptEpoch): boolean =>
   a.attemptId === b.attemptId && a.sessionGeneration === b.sessionGeneration
-  && a.workBoundaryId === b.workBoundaryId && a.boundaryAuthorizationRevision === b.boundaryAuthorizationRevision
+  && a.routingEpoch === b.routingEpoch && a.routingBoundaryId === b.routingBoundaryId && a.boundaryAuthorizationRevision === b.boundaryAuthorizationRevision
   && a.outputRevision === b.outputRevision && a.profileDigest === b.profileDigest;
 
 /**

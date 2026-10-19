@@ -256,14 +256,18 @@ describe('work ledger lifecycle', () => {
       providerInvocation: 3,
       observedMutationTools: 1,
       boundaryAuthorization: createBoundaryAuthorization(
-        { boundaryId: 'b', workItemId: 'w_1', phase: 'gather', assignmentId: 'a1', revision: 1 }, ['alpha/cheap']),
+        { sessionGeneration: 1, profileDigest: 'd', contextRevision: 1, entryId: 'u', routingEpoch: 0, boundaryId: 'b', phase: 'gather', assignmentId: 'a1', revision: 1 }, ['alpha/cheap']),
       contextStatus: 'acquiring',
       workItemId: 'w_1',
     };
     defaultRouterSession.commitWorkPhaseState(state);
 
+    // The entry stays, without the routing authority of the earlier epoch.
+    const epoch = defaultRouterSession.getRoutingEpoch();
     await handlers.get('session_tree')!({ newLeafId: leaf, oldLeafId: leaf }, ctxFor(tree));
-    expect(defaultRouterSession.getWorkPhaseState()).toBe(state);
+    const { boundaryAuthorization: _dropped, ...withoutAuthority } = state;
+    expect(defaultRouterSession.getWorkPhaseState()).toEqual(withoutAuthority);
+    expect(defaultRouterSession.getRoutingEpoch()).toBe(epoch + 1);
 
     // Off the entry's branch, only what a thin continuation inherits stays,
     // raised to the restored active item's task type.
