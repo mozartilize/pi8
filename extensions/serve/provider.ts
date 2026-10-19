@@ -25,7 +25,6 @@ import {
   type Message,
   type CacheRetention,
 } from '@earendil-works/pi-ai';
-import { getProviderEnvValue } from '@earendil-works/pi-ai/utils/provider-env';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { ModelThinkingLevel, ThinkingLevel } from '@earendil-works/pi-ai';
@@ -185,7 +184,7 @@ const ESTIMATED_IMAGE_CHARS = 4800;
  */
 function requestCacheRetention(options: SimpleStreamOptions | undefined): CacheRetention {
   return options?.cacheRetention
-    ?? (getProviderEnvValue('PI_CACHE_RETENTION', options?.env) === 'long' ? 'long' : 'short');
+    ?? ((options?.env?.PI_CACHE_RETENTION || process.env.PI_CACHE_RETENTION) === 'long' ? 'long' : 'short');
 }
 
 function countImageBlocks(messages: readonly Message[] | undefined): number {
