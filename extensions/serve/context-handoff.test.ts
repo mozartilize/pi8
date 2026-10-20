@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Context } from '@earendil-works/pi-ai';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { convertToLlm, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel } from '../test-support/router-fixtures.js';
@@ -12,6 +12,8 @@ import { observeContextGrounding } from './context-grounding.js';
 import { prepareHandoffFacts, registerContextHandoffTool, submitContextHandoff } from './context-handoff-tool.js';
 import { RouterSession } from './router-session-state.js';
 import { phaseDifficulty } from '../routing/features/difficulty.js';
+import { settleReminder } from './settle-reminder.js';
+import { closeContextOnSettle } from './gathering-gate.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
@@ -192,6 +194,90 @@ describe('entry-scoped context handoff', () => {
     expect((await handoff({ outcome: 'needs-user', question: 'Which source version should I use?' })).accepted).toBe(true);
     expect(harness.session.getEntryRoutingState()).toMatchObject({ status: 'clarification-only', sourceEvidencePending: true });
   });
+
+  it('keeps a converted source-repair reminder in the same entry and permits a direct answer after the read', async () => {
+    await entry('@source.ts explain this');
+    const first = harness.session.getEntryRoutingState()!;
+    const repair = await settleReminder({ outcome: 'completed' } as never, harness.session);
+    const draft = repair?.entries?.at(-1);
+    expect(draft).toMatchObject({ type: 'custom_message', customType: 'pi8-settle' });
+    const note = draft && 'content' in draft ? draft.content : '';
+    const custom = { role: 'custom', customType: 'pi8-settle', content: note, display: false, timestamp: 100 };
+    tree.message(custom);
+    harness.resetEventStream();
+    const messages = tree.getBranch().filter((event) => event.type === 'message').map((event) => event.message!);
+    await harness.serve({ messages: convertToLlm(messages as never) } as Context);
+    const current = harness.session.getEntryRoutingState()!;
+    expect(current.intentKey).toBe(first.intentKey);
+    expect(current.boundaryId).toBe(first.boundaryId);
+    expect(current.providerInvocation).toBe(2);
+    expect(current.evidence).toBe(first.evidence);
+    expect(current.sourceSettleAttempts).toBe(1);
+    await read();
+    expect(await settleReminder({ outcome: 'completed' } as never, harness.session)).toBeUndefined();
+    expect(harness.session.getEntryRoutingState()?.handoffKey).toBeUndefined();
+  });
+
+  it('does not credit a late read or accept old prepared facts after a new genuine entry reaches the branch', async () => {
+    await entry('@source.ts implement the parser');
+    await read();
+    const facts = await prepareHandoffFacts(READY, ctx as never, harness.session,
+      async () => ({ stdout: '', stderr: '', code: 0 }) as never);
+    const before = harness.session.getEntryRoutingState()!;
+    before.evidence!.observedFiles.clear();
+    tree.user('implement another scheduler');
+    await read();
+    expect(before.evidence!.observedFiles.size).toBe(0);
+    expect(submitContextHandoff(READY, ctx as never, harness.session, facts).accepted).toBe(false);
+    expect(harness.session.getEntryRoutingState()).toBe(before);
+  });
+
+  it('does not classify an accepted needs-user question with unmet sources as a missing handoff', async () => {
+    await entry('@source.ts clarify this request');
+    expect((await handoff({ outcome: 'needs-user', question: 'Which source version should I use?' })).accepted).toBe(true);
+    await serve();
+    closeContextOnSettle(harness.session);
+    const records = readFileSync(join(temp.path, 'decisions.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    expect(records.some((record) => record.investigationHandoff?.action === 'no-handoff')).toBe(false);
+    expect(harness.session.getEntryRoutingState()?.contextClosed).toBe(true);
+  });
+
+  it.each(['same-entry', 'new-entry'] as const)('does not publish a late selection after a newer %s invocation serves', async (mode) => {
+    const selection = await import('./unified-decision.js');
+    const original = selection.resolveUnifiedDecision;
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const paused = new Promise<void>((resolve) => { release = resolve; });
+    let oldAssignment: string | undefined;
+    vi.spyOn(selection, 'resolveUnifiedDecision').mockImplementationOnce(async (...args) => {
+      const result = await original(...args);
+      if ('authorization' in result) oldAssignment = result.authorization.assignmentId;
+      enter();
+      await paused;
+      return result;
+    });
+    tree.user('explain the first result', 1);
+    const oldStream = harness.outStream;
+    harness.providerOptions.streamSimple({ id: 'auto' } as never,
+      { messages: [{ role: 'user', content: 'explain the first result', timestamp: 1 }] } as unknown as Context);
+    try {
+      await entered;
+      if (mode === 'new-entry') await entry('explain another result');
+      else await serve();
+      const current = harness.session.getEntryRoutingState()!;
+      const assignment = current.boundaryAuthorization!.assignmentId;
+      const decisionScope = harness.session.getLastDecision()!.routingScope;
+      expect(oldAssignment).toBeDefined();
+      expect(oldAssignment).not.toBe(assignment);
+      release();
+      await vi.waitFor(() => expect(oldStream.ended).toBe(true));
+      expect(harness.session.getEntryRoutingState()?.boundaryAuthorization?.assignmentId).toBe(assignment);
+      expect(harness.session.getLastDecision()?.routingScope).toEqual(decisionScope);
+      expect(harness.session.getEntryRoutingState()?.providerInvocation).toBe(mode === 'new-entry' ? 1 : 2);
+      expect(harness.streamedModels()).toHaveLength(1);
+    } finally { release(); }
+  }, 10_000);
 
   it.each(['entry', 'epoch', 'session'] as const)('rejects prepared facts after a different %s becomes current', async (change) => {
     await entry('implement the parser');

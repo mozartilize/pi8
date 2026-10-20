@@ -17,6 +17,8 @@ interface Corpus {
 import { observeContextGrounding } from './context-grounding.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
 import { gateContextToolCall } from './gathering-gate.js';
+import { gateContractMutation } from './execution-contract-tool.js';
+import { refreshSourceEvidence } from './entry-evidence.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
@@ -38,7 +40,8 @@ describe('entry-boundary corpus replay', () => {
   afterEach(() => { vi.restoreAllMocks(); temp.cleanup(); });
 
   async function replay(source: Corpus) {
-    const results: Array<{ id: string; required: number; accepted: boolean | undefined }> = [];
+    const results: Array<{ id: string; required: number; accepted: boolean | undefined;
+      writesAllowed: number; writesBlocked: number; sourcePending: boolean }> = [];
     for (const session of source.sessions) {
       const cwd = join(temp.path, session.id); mkdirSync(cwd, { recursive: true });
       for (const [path, content] of Object.entries(session.files ?? {})) {
@@ -65,19 +68,30 @@ describe('entry-boundary corpus replay', () => {
         expect(initial.executionFlow, entry.id).toBeUndefined();
         expect(initial.evidence!.observedFiles.size, entry.id).toBe(0);
         let accepted: boolean | undefined;
+        let writesAllowed = 0;
+        let writesBlocked = 0;
         const handoff = async () => {
+          const before = harness.session.getEntryRoutingState()!;
           const params = { outcome: 'ready', deliverable: entry.label.deliverable === 'lightweight' ? 'gather' : entry.label.deliverable,
             complexity: 'trivial', scope: 'bounded', findings: 'checked the visible request', question: 'perform the declared task' };
           const facts = await prepareHandoffFacts(params, ctx, harness.session,
             async () => ({ stdout: '', stderr: '', code: 0 }) as never);
           accepted = submitContextHandoff(params, ctx, harness.session, facts).accepted;
           if (accepted) {
-            expect(harness.session.getEntryRoutingState()!.boundaryId, entry.id).not.toBe(initial.boundaryId);
-            expect(gateContextToolCall({ toolName: 'write', input: {} }, harness.session)?.block, entry.id).toBe(true);
-            await serve();
-            expect(harness.session.getEntryRoutingState()!.status, entry.id).toBe('served');
+            const next = harness.session.getEntryRoutingState()!;
+            expect(next.boundaryId, entry.id).not.toBe(initial.boundaryId);
+            if (next.status === 'ready-pending') {
+              expect(next.boundaryId, entry.id).not.toBe(before.boundaryId);
+              expect(gateContextToolCall({ toolName: 'write', input: {} }, harness.session)?.block, entry.id).toBe(true);
+              await serve();
+              expect(harness.session.getEntryRoutingState()!.status, entry.id).toBe('served');
+            } else {
+              expect(before.status, entry.id).toBe('served');
+              expect(next.status, entry.id).toBe('served');
+              expect(next.boundaryId, entry.id).toBe(before.boundaryId);
+            }
           } else {
-            expect(harness.session.getEntryRoutingState()!.boundaryId, entry.id).toBe(initial.boundaryId);
+            expect(harness.session.getEntryRoutingState()!.boundaryId, entry.id).toBe(before.boundaryId);
           }
         };
         for (const action of entry.after ?? []) {
@@ -88,17 +102,28 @@ describe('entry-boundary corpus replay', () => {
             await observeContextGrounding({ toolName: 'read', input: { path: action.read, offset: action.offset, limit: action.limit },
               content: [{ type: 'text', text: shown }] } as never, ctx, harness.session);
           } else if ('externalEdit' in action) {
+            mkdirSync(dirname(join(cwd, action.externalEdit)), { recursive: true });
             writeFileSync(join(cwd, action.externalEdit), action.content);
           } else if ('write' in action) {
             await handoff();
-            if (!gateContextToolCall({ toolName: 'write', input: { path: action.write } }, harness.session)) {
+            await refreshSourceEvidence(harness.session);
+            const call = { toolName: 'write', input: { path: action.write } };
+            const blocked = gateContextToolCall(call, harness.session) ?? gateContractMutation(call, harness.session);
+            if (blocked?.block) {
+              writesBlocked += 1;
+            } else {
+              writesAllowed += 1;
+              mkdirSync(dirname(join(cwd, action.write)), { recursive: true });
               writeFileSync(join(cwd, action.write), action.content);
+              await observeContextGrounding({ ...call, content: [{ type: 'text', text: 'ok' }] } as never, ctx, harness.session);
             }
           } else { await handoff(); }
         }
         // A historical lightweight label denotes an answer with no declaration.
         if (accepted === undefined && entry.label.deliverable !== 'lightweight') await handoff();
-        results.push({ id: entry.id, required: initial.evidence!.referencedPaths.length, accepted });
+        await refreshSourceEvidence(harness.session);
+        results.push({ id: entry.id, required: initial.evidence!.referencedPaths.length, accepted, writesAllowed, writesBlocked,
+          sourcePending: harness.session.getEntryRoutingState()!.sourceEvidencePending === true });
         tree.assistant('done');
         harness.session.finishExecutionFlow();
       }
@@ -114,6 +139,14 @@ describe('entry-boundary corpus replay', () => {
     expect(results.find((r) => r.id === 'D2')).toMatchObject({ required: 0, accepted: undefined });
     expect(results.length).toBe(corpus.sessions.reduce((n, s) => n + s.entries.length, 0));
   }, 60_000);
+
+  it('replays multiple writes through an idempotent served boundary without requiring another selection', async () => {
+    const results = await replay({ sessions: [{ id: 'repeat', entries: [{ id: 'two-writes', prompt: 'implement the two changes',
+      label: { deliverable: 'implement' }, after: [{ write: 'src/target.ts', content: 'first' }, { write: 'src/target.ts', content: 'second' }],
+    }] }] });
+    expect(results[0]).toMatchObject({ accepted: true, writesAllowed: 2, writesBlocked: 0, sourcePending: false });
+    expect(readFileSync(join(temp.path, 'repeat', 'src/target.ts'), 'utf8')).toBe('second');
+  });
 
   it.skipIf(!LOCAL_REPLAY)('reports entry and source results on the local session corpus', async () => {
     const local = JSON.parse(readFileSync(LOCAL_CORPUS, 'utf8')) as Corpus;

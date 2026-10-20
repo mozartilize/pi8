@@ -1015,7 +1015,8 @@ async function scoreRouterTurn(args: {
   }
   const live = session.getEntryRoutingState();
   if (!resolved.stillCurrent() || session.getRoutingEpoch() !== routingEpoch || live?.intentKey !== turnInput.key
-    || (live.boundaryId ?? boundaryId) !== boundaryId) return SESSION_CHANGED;
+    || (live.boundaryId ?? boundaryId) !== boundaryId
+    || live.providerInvocation !== entry?.providerInvocation) return SESSION_CHANGED;
   session.commitEntryRoutingState({ ...live, boundaryAuthorization: outcome.authorization });
   const policy = { decision: outcome.decision, candidates: outcome.candidates, trajectoryApplied: rework !== undefined };
   const decision = policy.decision;

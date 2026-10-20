@@ -240,6 +240,7 @@ export function gateContextToolCall(
  */
 export function closeContextEntry(state: EntryRoutingState, served: string | undefined): EntryRoutingState {
   if (state.contextClosed) return state;
+  if (state.contextNeedsUser) return { ...state, contextClosed: true };
   const handoff = state.reasoningHandoff;
   const checks = state.checkVerdicts ? { checks: state.checkVerdicts } : {};
   if (handoff) {
