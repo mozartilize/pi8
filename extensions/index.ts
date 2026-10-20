@@ -65,16 +65,10 @@ import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, readBranch, requestRouting } 
 import { REQUEST_NOTE_ENTRY_TYPE, applyNotePlans, type NotableMessage } from './serve/request-notes.js';
 import { planToolsNote } from './serve/router-tools-note.js';
 import { CONTEXT_HANDOFF_TOOL } from './routing/policy/context-acquisition.js';
-import { COMPLETE_WORK_TOOL, REOPEN_WORK_TOOL } from './routing/policy/work-completion.js';
 import { EXECUTION_CONTRACT_TOOL } from './routing/policy/execution-contract.js';
-import { ROUTING_CONTEXT_TOOL } from './serve/routing-context-tool.js';
 import { observeContextGrounding } from './serve/context-grounding.js';
 import { carryPhaseAcrossTree } from './serve/context-resolution.js';
-import { registerRoutingContextTool } from './serve/routing-context-tool.js';
-import { registerCompleteWorkTool } from './serve/complete-work-tool.js';
-import { registerReopenWorkTool } from './serve/reopen-work-tool.js';
 import { logSettleOutcomes, settleReminder } from './serve/settle-reminder.js';
-import { gateCompletedWorkToolCall } from './serve/completed-work-gate.js';
 import {
   closeContextOnSettle,
   gateContextToolCall,
@@ -125,7 +119,7 @@ function noticeSetup(ctx: ExtensionContext, runtime: RuntimeBindings): void {
 
 /** The tools only router/auto serves. */
 const ROUTER_TOOLS: readonly string[] = [
-  EXECUTION_CONTRACT_TOOL, CONTEXT_HANDOFF_TOOL, ROUTING_CONTEXT_TOOL, COMPLETE_WORK_TOOL, REOPEN_WORK_TOOL,
+  EXECUTION_CONTRACT_TOOL, CONTEXT_HANDOFF_TOOL,
 ];
 
 /**
@@ -446,9 +440,6 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
   if (typeof pi.registerEntryRenderer === 'function') {
     pi.registerEntryRenderer(DEBUG_ENTRY_TYPE, (entry, _options, theme) => renderDebugEntry(entry, theme));
   }
-  registerRoutingContextTool(pi, session);
-  registerCompleteWorkTool(pi, session);
-  registerReopenWorkTool(pi, session);
   session.context.bindPersistence((event) => {
     if (typeof pi.appendEntry === 'function') pi.appendEntry(CONTEXT_ENTRY_TYPE, event);
   });
@@ -477,8 +468,8 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
 
   pi.on('model_select', (event, ctx) => handleModelSelect(pi, event, ctx, session, runtime));
 
-  // A missing hand_off_context or complete_work can still be declared, so
-  // those reminders run here. agent_settled only records how the entry ended.
+  // A missing hand_off_context can still be declared, so its reminder runs
+  // here. agent_settled only records how the entry ended.
   let completedSettlement = false;
   pi.on('agent_before_settle', (event, ctx) => {
     completedSettlement = isRouterAutoActive(ctx?.model) && event.outcome === 'completed';
@@ -522,8 +513,6 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     if (!isRouterAutoActive(ctx?.model)) return;
     // Collecting context runs only its allowed tools, delegation included:
     // a refused call never runs, is not counted, attributed, or observed.
-    const completed = gateCompletedWorkToolCall(event, session);
-    if (completed) return completed;
     const restricted = gateContextToolCall(event, session);
     if (restricted) return restricted;
     try {

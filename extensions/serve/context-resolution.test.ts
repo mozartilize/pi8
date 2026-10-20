@@ -91,7 +91,7 @@ describe('work-context resolution through the provider', () => {
     expect(accepted.accepted).toBe(true);
     return [...harness.session.context.getLedger().items.values()][0]!;
   }
-  const ledgerEvents = () => persistedContextEvents(tree.getBranch()).map((event) => event.op);
+  const ledgerEvents = () => persistedContextEvents(tree.getBranch()).filter((event) => event.op !== 'incumbent').map((event) => event.op);
 
   it('collects an unresolved request until a handoff selects work', async () => {
     await setup();
@@ -128,22 +128,22 @@ describe('work-context resolution through the provider', () => {
     expect(harness.session.getCachedIntent()?.context?.resolution.contextReasons).toEqual(['referenced-artifact']);
   });
 
-  it('restores the incumbent on resume and serves the next entry with it', async () => {
+  it('restores the incumbent identity on resume without restoring its task type', async () => {
     await setup();
     await createItem();
     await serveBranch();
     const incumbent = harness.session.context.getIncumbent();
     expect(incumbent).toBeDefined();
-    expect(ledgerEvents()).toContain('incumbent');
+    expect(persistedContextEvents(tree.getBranch()).some((event) => event.op === 'incumbent')).toBe(true);
     // A resumed session starts empty and restores the branch.
     harness.session.reset();
     harness.session.context.restore(tree.getBranch());
     const next = await entry('ok go ahead');
     expect(next.chosen.startsWith(incumbent!.registryId)).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
   });
 
-  it('serves a follow-up by the incumbent, which reads a changed file itself', async () => {
+  it('starts a follow-up in triage even when an incumbent and referenced files exist', async () => {
     await setup();
     await entry('@requirements/foo.md implement this');
     await groundFile();
@@ -154,9 +154,9 @@ describe('work-context resolution through the provider', () => {
     expect(incumbent).toBeDefined();
     writeFileSync(join(cwd, 'requirements', 'foo.md'), 'TSV without a header row\n');
     const next = await entry('implement it');
-    expect(next.cause).not.toBe('investigation');
+    expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation' });
     expect(next.chosen.startsWith(incumbent!.registryId)).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
   });
 
   it('closes a directory investigation at the handoff without inventing file grounding', async () => {
@@ -175,7 +175,7 @@ describe('work-context resolution through the provider', () => {
     expect((await handoff({ outcome: 'needs-user', question: 'Which exporter?' })).accepted).toBe(true);
     closeContextOnSettle(harness.session);
     expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+    expect(harness.session.getWorkPhaseState()?.status).toBe('clarification-only');
   });
 
   it('does not persist flow penalties or adopt them through a work choice', async () => {
@@ -237,7 +237,7 @@ describe('work-context resolution through the provider', () => {
     const params = { ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export', workItemTitle: 'CSV exporter' };
     expect((await handoff(params)).accepted).toBe(false);
     expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
     harness.session.context.bindPersistence((event) => tree.appendEntry(CONTEXT_ENTRY_TYPE, event));
     expect((await handoff(params)).accepted).toBe(true);
     expect(harness.session.context.getLedger().items.size).toBe(1);
@@ -283,7 +283,6 @@ describe('work-context resolution through the provider', () => {
     tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
     await setup();
     await entry('implement the auth login flow');
-    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', workItemId: 'NONE' })).accepted).toBe(true);
     await entry('back to the auth login flow');
     expect(harness.session.getWorkPhaseState()?.pendingIdentity?.legacy ?? []).toEqual([]);
   });

@@ -204,7 +204,7 @@ function acceptedText(deliverable: ReopenDeliverable): string {
  */
 function openForRepick(state: WorkPhaseState): WorkPhaseState {
   const open: WorkPhaseState = { ...state };
-  delete open.contextStatus;
+  delete open.status;
   delete open.reasoningHandoff;
   delete open.handoffKey;
   delete open.priorCompletion;
@@ -235,9 +235,9 @@ export function submitReopenWork(
   const lastServed = session.getLastServed();
   const served = lastServed ? servedKey(lastServed) : undefined;
   if (!state || !last || !served || !lastServed || last.intentKey !== state.intentKey) return reject(undefined, undefined, 'no-task');
-  const status = state.contextStatus;
+  const status = state.status;
   // Reopening the completed item is the declaration that ends collecting context after it.
-  if (status === 'clarification-only' || (status === 'acquiring' && !state.priorCompletion)) {
+  if (status === 'clarification-only' || (status === 'triage' && !state.priorCompletion)) {
     return reject(state, served, 'collecting-context');
   }
   if (status === 'ready-pending') return reject(state, served, 'already-handed-off');

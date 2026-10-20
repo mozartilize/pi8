@@ -19,7 +19,7 @@ vi.mock('../host/decisionlog.js', () => ({ appendContextHandoffSignal: vi.fn() }
 function acquiringSession(): RouterSession {
   const session = new RouterSession();
   const state: WorkPhaseState = {
-    intentKey: 'entry', deliverable: 'plan', contextStatus: 'acquiring',
+    intentKey: 'entry', deliverable: 'plan', status: 'triage',
     contextDenials: 0,
     providerInvocation: 1, observedMutationTools: 0,
   };
@@ -55,7 +55,7 @@ describe('gathering gate refusal accounting', () => {
     }
     const ended = session.getWorkPhaseState()!;
     expect(ended.contextDenials).toBe(ACQUISITION_DENIAL_LIMIT);
-    expect(ended.contextStatus).toBe('clarification-only');
+    expect(ended.status).toBe('clarification-only');
     expect(countContextRefusal(session, ended, 'a/model')).toBe(ended);
     expect(gateContextToolCall({ toolName: 'edit', input: {} }, session)?.block).toBe(true);
     expect(vi.mocked(appendContextHandoffSignal).mock.calls.filter(([signal]) => signal.action === 'budget-exhausted'))
@@ -68,7 +68,7 @@ describe('gathering gate refusal accounting', () => {
       session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, providerInvocation: invocation });
       expect(submitContextHandoff(params, ROUTER_AUTO, session).accepted).toBe(false);
     }
-    expect(session.getWorkPhaseState()).toMatchObject({ contextDenials: 0, contextStatus: 'acquiring' });
+    expect(session.getWorkPhaseState()).toMatchObject({ contextDenials: 0, status: 'triage' });
   });
 
   it('counts a handoff rejected for unread files', () => {
@@ -82,7 +82,7 @@ describe('gathering gate refusal accounting', () => {
     const session = acquiringSession();
     session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, contextDenials: ACQUISITION_DENIAL_LIMIT - 1 });
     const result = submitContextHandoff(READY, ROUTER_AUTO, session, UNREAD);
-    expect(session.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+    expect(session.getWorkPhaseState()?.status).toBe('clarification-only');
     // The files stay named so the reply can ask for them; no instruction to read or call again.
     expect(result.text).toBe(`Context not handed off: the request rests on files not read in full as they are now: src/queue.ts. ${CLARIFICATION_TEXT}`);
   });
@@ -125,7 +125,7 @@ describe('gathering gate refusal accounting', () => {
 
   it('does not count refusals while the accepted handoff awaits its next invocation', () => {
     const session = acquiringSession();
-    session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, contextStatus: 'ready-pending' });
+    session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, status: 'ready-pending' });
     expect(gateContextToolCall({ toolName: 'subagent', input: {} }, session)?.block).toBe(true);
     expect(session.getWorkPhaseState()?.contextDenials).toBe(0);
   });
@@ -153,7 +153,7 @@ describe('implementation boundary guidance', () => {
     } else {
       expect(result.text).not.toContain('commit_execution');
     }
-    expect(session.getWorkPhaseState()).toMatchObject({ contextStatus: 'ready-pending', observedMutationTools: 0 });
+    expect(session.getWorkPhaseState()).toMatchObject({ status: 'ready-pending', observedMutationTools: 0 });
     expect(session.getWorkPhaseState()?.reasoningHandoff?.rubric).toBeUndefined();
     expect(session.getWorkPhaseState()?.contract).toBeUndefined();
   });
@@ -162,7 +162,7 @@ describe('implementation boundary guidance', () => {
 describe('closing an entry', () => {
   it('logs the check verdicts of an implement handoff at the end of the entry', () => {
     const state: WorkPhaseState = {
-      intentKey: 'entry', deliverable: 'implement', contextStatus: 'served', providerInvocation: 3, observedMutationTools: 2,
+      intentKey: 'entry', deliverable: 'implement', status: 'served', providerInvocation: 3, observedMutationTools: 2,
       changeFacts: { log: factsLog('implement', undefined, {}) },
       checkVerdicts: { beforeHandoff: 'fail', afterHandoff: 'pass', runsAfterHandoff: 2 },
     };
@@ -192,7 +192,7 @@ describe('context-handoff debug lines', () => {
         intentKey: 'entry-a',
         workItemId: 'work-7',
         deliverable: 'plan',
-        contextStatus: 'ready-pending',
+        status: 'ready-pending',
         providerInvocation: 1,
         observedMutationTools: 0,
         contextResolution: {
@@ -211,7 +211,7 @@ describe('context-handoff debug lines', () => {
         workItemId: 'work-7',
         topicId: 'topic-3',
         phase: 'implement',
-        contextStatus: 'ready-pending',
+        status: 'ready-pending',
         intentKey: 'entry-a',
         served: 'openai/gpt',
       });

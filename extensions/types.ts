@@ -458,7 +458,7 @@ export interface UnifiedDecisionMeta {
   /** Bounds that map to capability-fit intervals. Collection uses its fixed targets instead. */
   difficultyBounds?: Record<'reasoning' | 'agentic' | 'research', { lower: number; upper: number }>;
   /** Why demand is absent. An absent code in an older record is not evidence of a cause. */
-  difficultyMissingReason?: 'collecting-context' | 'direct-answer' | 'no-rubric' | 'phase-mismatch' | 'continuation' | 'no-handoff';
+  difficultyMissingReason?: 'collecting-context' | 'no-rubric' | 'phase-mismatch' | 'no-handoff';
   /** Weights of a central fallback, in feature order. */
   theta?: number[];
   /** Best-ranked actions (all of them in debug), the chosen action and the incumbent, with their numbers. */

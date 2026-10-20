@@ -257,7 +257,7 @@ describe('work ledger lifecycle', () => {
       observedMutationTools: 1,
       boundaryAuthorization: createBoundaryAuthorization(
         { sessionGeneration: 1, profileDigest: 'd', contextRevision: 1, entryId: 'u', routingEpoch: 0, boundaryId: 'b', phase: 'gather', assignmentId: 'a1', revision: 1 }, ['alpha/cheap']),
-      contextStatus: 'acquiring',
+      status: 'triage',
       workItemId: 'w_1',
     };
     defaultRouterSession.commitWorkPhaseState(state);
@@ -402,15 +402,13 @@ describe('work ledger lifecycle', () => {
     }
   });
 
-  it('registers lifecycle and metadata tools once and never changes the tool list afterwards', async () => {
+  it('registers only handoff and execution tools and keeps the tool list stable', async () => {
     const tree = new SessionTree();
     const { handlers, pi } = makePi(tree);
     await autoModelRouterExtension(pi);
     const registerTool = vi.mocked(pi.registerTool);
     const names = () => registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name);
-    expect(names().filter((name) => name === 'routing_context')).toHaveLength(1);
-    expect(names().filter((name) => name === 'complete_work')).toHaveLength(1);
-    expect(names().filter((name) => name === 'reopen_work')).toHaveLength(1);
+    expect(names()).toEqual(['commit_execution', 'hand_off_context']);
     const before = registerTool.mock.calls.length;
     const ctx = { ...ctxFor(tree), model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } };
     await handlers.get('session_start')!({ reason: 'startup' }, ctx);
@@ -474,22 +472,22 @@ describe('mutation observation hooks', () => {
     rmSync(logDir, { recursive: true, force: true });
   });
 
-  it('uses the completed-work gate before mutation observation', async () => {
+  it('gates entry mutations and execution starts before observation or contract bookkeeping', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
     defaultRouterSession.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'intent-a' });
-    for (const marker of [
-      { priorCompletion: { workItemId: 'w_1' } },
-      { completion: { workItemId: 'w_1', status: 'done' as const } },
-    ]) {
-      defaultRouterSession.commitWorkPhaseState(entryState(marker));
+    for (const status of ['triage', 'ready-pending', 'clarification-only'] as const) {
+      defaultRouterSession.commitWorkPhaseState(entryState({ status, deliverable: 'implement' }));
       for (const toolName of ['write', 'commit_execution']) {
         expect(await toolCall({ toolName, input: {} }, routerAutoCtx)).toMatchObject({ block: true });
       }
       expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
-      expect(defaultRouterSession.getWorkPhaseState()?.contextDenials).toBeUndefined();
+      expect(defaultRouterSession.getWorkPhaseState()?.contract).toBeUndefined();
       expect(await toolCall({ toolName: 'write', input: {} }, concreteCtx)).toBeUndefined();
     }
+    defaultRouterSession.commitWorkPhaseState(entryState({ status: 'served', deliverable: 'implement' }));
+    expect(await toolCall({ toolName: 'write', input: { path: 'src/a.ts' } }, routerAutoCtx)).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(1);
   });
 
   it('keeps concrete-model sessions a complete no-op', async () => {
@@ -565,7 +563,7 @@ describe('mutation observation hooks', () => {
     } as unknown as ExtensionAPI);
     // Every router tool is registered once, up front, so the tool list never changes mid-session.
     expect(registerTool.mock.calls.map(([tool]) => (tool as { name: string }).name))
-        .toEqual(['commit_execution', 'hand_off_context', 'routing_context', 'complete_work', 'reopen_work']);
+        .toEqual(['commit_execution', 'hand_off_context']);
     const tool = registerTool.mock.calls[0]![0] as { name: string; execute: (...args: unknown[]) => Promise<{ details: { accepted: boolean } }> };
 
     const ctx = { ...routerAutoCtx, cwd: '/repo' } as unknown as ExtensionContext;
@@ -653,7 +651,7 @@ describe('mutation observation hooks', () => {
   const READY = { outcome: 'ready', deliverable: 'plan', complexity: 'trivial', scope: 'bounded', findings: 'f', question: 'q', difficulty: DIFFICULTY };
 
   function investigating(over: Partial<WorkPhaseState> = {}) {
-    defaultRouterSession.intent.commitWorkPhaseState(entryState({ deliverable: 'plan', contextStatus: 'acquiring', ...over }));
+    defaultRouterSession.intent.commitWorkPhaseState(entryState({ deliverable: 'plan', status: 'triage', ...over }));
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/cheap']), dimension: 'gather' as const, intentKey: 'intent-a' });
     defaultRouterSession.setLastServed({ registryId: 'test/cheap', viaFallback: false, accumulatedCost: 0 });
   }
@@ -753,7 +751,7 @@ describe('mutation observation hooks', () => {
     const registerTool = vi.fn();
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
     const tool = handoffTool(registerTool);
-    investigating({ contextStatus: undefined });
+    investigating({ status: undefined });
     defaultRouterSession.setLastDecision({ ...routingDecision(['test/plan']), dimension: 'plan' as const, intentKey: 'intent-a' });
     expect((await tool.execute('p1', READY, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
     expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
@@ -762,7 +760,7 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.setManualModel('test/cheap');
     expect((await tool.execute('p2', READY, undefined, undefined, routerAutoCtx)).details.accepted).toBe(true);
     defaultRouterSession.resumeManual();
-    expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('ready-pending');
+    expect(defaultRouterSession.getWorkPhaseState()?.status).toBe('ready-pending');
   });
 
   it('uses the declared task type without keyword-based adoption', async () => {
@@ -794,7 +792,7 @@ describe('mutation observation hooks', () => {
       const request: Record<string, unknown> = { ...READY };
       delete request[missing];
       expect((await tool.execute('shape', request, undefined, undefined, routerAutoCtx)).details.accepted).toBe(false);
-      expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+      expect(defaultRouterSession.getWorkPhaseState()?.status).toBe('triage');
       expect(defaultRouterSession.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
     },
   );
@@ -813,7 +811,7 @@ describe('mutation observation hooks', () => {
       .toBe(false);
     const asked = await tool.execute('p1', { outcome: 'needs-user', reason: 'ambiguous-request', question: 'which exporter?' }, undefined, undefined, routerAutoCtx);
     expect(asked.details.accepted).toBe(true);
-    expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+    expect(defaultRouterSession.getWorkPhaseState()?.status).toBe('clarification-only');
     for (const toolName of ['read', 'ask_user_question', 'hand_off_context', 'edit']) {
       expect(await handlers.get('tool_call')!({ toolName, toolCallId: toolName, input: {} }, routerAutoCtx)).toMatchObject({ block: true });
     }
@@ -929,7 +927,7 @@ describe('mutation observation hooks', () => {
     const handlers = await makeToolHandlers();
     const toolResult = handlers.get('tool_result')!;
     const content = [{ type: 'text', text: 'edited' }];
-    investigating({ deliverable: 'gather', contextStatus: undefined });
+    investigating({ deliverable: 'gather', status: undefined });
 
     expect(await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx)).toBeUndefined();
     expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: { path: 'src/a.ts' } }, routerAutoCtx))
@@ -938,7 +936,7 @@ describe('mutation observation hooks', () => {
     expect(first.content.map((c) => c.text)).toEqual(['edited', CONTEXT_HANDOFF_REMINDER]);
     expect(await toolResult({ toolName: 'edit', toolCallId: 'e2', content }, routerAutoCtx)).toBeUndefined();
 
-    investigating({ deliverable: 'plan', contextStatus: 'served' });
+    investigating({ deliverable: 'plan', status: 'served' });
     const state = defaultRouterSession.getWorkPhaseState()!;
     defaultRouterSession.commitWorkPhaseState({
       ...state,
@@ -1084,15 +1082,15 @@ describe('mutation observation hooks', () => {
     expect(await call('extension_control', { name: 'review-start' })).toBeUndefined();
     expect(await call('extension_inspect', {})).toBeUndefined();
     expect(await call('bash', { command: 'rg foo' })).toBeUndefined();
-    expect(defaultRouterSession.getWorkPhaseState()).toMatchObject({ contextDenials: 1, contextStatus: 'acquiring' });
+    expect(defaultRouterSession.getWorkPhaseState()).toMatchObject({ contextDenials: 1, status: 'triage' });
     expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
 
     defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, providerInvocation: 2 });
     expect(await call('bash', { command: 'rg bar' })).toBeUndefined();
-    expect(defaultRouterSession.getWorkPhaseState()).toMatchObject({ contextDenials: 1, contextStatus: 'acquiring' });
+    expect(defaultRouterSession.getWorkPhaseState()).toMatchObject({ contextDenials: 1, status: 'triage' });
     defaultRouterSession.commitWorkPhaseState({ ...defaultRouterSession.getWorkPhaseState()!, providerInvocation: 3 });
     expect((await call('edit'))?.reason).toContain('Reply to the user now');
-    expect(defaultRouterSession.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+    expect(defaultRouterSession.getWorkPhaseState()?.status).toBe('clarification-only');
     expect(await call('read')).toMatchObject({ block: true });
     expect(defaultRouterSession.getLastDecision()?.dimension).toBe('gather');
 
@@ -1103,10 +1101,10 @@ describe('mutation observation hooks', () => {
     defaultRouterSession.resumeManual();
 
     // A ready handoff still refuses changes until the next phase serves, without counting them.
-    investigating({ contextStatus: 'ready-pending' });
+    investigating({ status: 'ready-pending' });
     expect(await call('write')).toMatchObject({ block: true });
     expect(defaultRouterSession.getWorkPhaseState()?.contextDenials).toBeUndefined();
-    investigating({ contextStatus: 'served' });
+    investigating({ status: 'served' });
     expect(await call('write')).toBeUndefined();
   });
 
@@ -1115,7 +1113,7 @@ describe('mutation observation hooks', () => {
     await autoModelRouterExtension({ on: vi.fn(), registerTool, exec: vi.fn() } as unknown as ExtensionAPI);
     const tool = handoffTool(registerTool);
     const hand = async (deliverable: string) => {
-      investigating({ deliverable: 'gather', contextStatus: undefined });
+      investigating({ deliverable: 'gather', status: undefined });
       await tool.execute('p', { ...READY, deliverable }, undefined, undefined, routerAutoCtx);
       return defaultRouterSession.getWorkPhaseState()!;
     };
@@ -1123,8 +1121,8 @@ describe('mutation observation hooks', () => {
     expect((await hand('implement')).reasoningHandoff).toMatchObject({ target: 'implement' });
     expect((await hand('review')).reasoningHandoff).toMatchObject({ target: 'review' });
     expect((await hand('plan')).reasoningHandoff).toMatchObject({ target: 'plan' });
-    expect((await hand('gather')).contextStatus).toBeUndefined();
-    expect((await hand('lightweight')).contextStatus).toBeUndefined();
+    expect((await hand('gather')).status).toBeUndefined();
+    expect((await hand('lightweight')).status).toBeUndefined();
   });
 
   it('refuses a call it cannot check while collecting context, and never one outside the phase', async () => {
@@ -1133,7 +1131,7 @@ describe('mutation observation hooks', () => {
     const spy = vi.spyOn(defaultRouterSession, 'getLastServed').mockImplementation(() => { throw new Error('boom'); });
     expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e1', input: {} }, routerAutoCtx))
       .toMatchObject({ block: true });
-    investigating({ contextStatus: 'served' });
+    investigating({ status: 'served' });
     expect(await handlers.get('tool_call')!({ toolName: 'edit', toolCallId: 'e2', input: {} }, routerAutoCtx))
       .toBeUndefined();
     spy.mockRestore();
@@ -1179,7 +1177,7 @@ describe('mutation observation hooks', () => {
 });
 
 describe('router tool declaration', () => {
-  const ROUTER_TOOLS = ['commit_execution', 'hand_off_context', 'routing_context', 'complete_work', 'reopen_work'];
+  const ROUTER_TOOLS = ['commit_execution', 'hand_off_context'];
 
   async function setup(initial: string[]) {
     const handlers = new Map<string, (...args: any[]) => unknown>();

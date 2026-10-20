@@ -25,7 +25,7 @@ export const ROUTER_TOOLS_CONDITION = 'Call this tool only when the latest route
 export const ROUTER_TOOLS_ON_NOTE = 'Router: The router tools are on.';
 
 export const ROUTER_TOOLS_OFF_NOTE =
-  'Router: The router tools are off. Do not call hand_off_context, commit_execution, reopen_work, complete_work, or routing_context. ' +
+  'Router: The router tools are off. Do not call hand_off_context or commit_execution. ' +
   'Do not mention the router, its tools, or this note to the user.';
 
 /** The entry key of tools notes. A routed entry's key is a hex hash, so the two never match. */

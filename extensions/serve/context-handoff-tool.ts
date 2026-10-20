@@ -33,7 +33,7 @@ import {
   evidenceShape,
   owedContext,
 } from '../routing/policy/context-acquisition.js';
-import { declaredRubric, parseReasoningRubric } from '../routing/policy/execution-difficulty.js';
+import { declaredRubric } from '../routing/policy/execution-difficulty.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
@@ -60,9 +60,7 @@ const DESCRIPTION =
   'do. Give the facts that you observed about the remaining work. For a plan, review, or investigation, also rate the reasoning left. ' +
   'For an implementation, rate only the remaining work that your evidence supports. ' +
   'When the answer needs an investigation, for example the cause of a bug, call it with outcome "ready" and deliverable "gather". ' +
-  'Use outcome "answer" only when the context you collected already gives the answer. ' +
-  'For an answer, rate the reasoning left when you can support that rating. ' +
-  'For outcome "answer", omit topicId, topicTitle, and workItemTitle. You may use workItemId "NONE". ' +
+  'Answer directly without this tool when no further routing is needed. ' +
   'Use facts.decisions to name unresolved choices. Use facts.unknowns to identify missing evidence. ' +
   'Call it with outcome "needs-user" when the request is ' +
   'unclear or what it rests on cannot be read, with the question to ask. The router picks the next model. Do not ' +
@@ -78,23 +76,23 @@ function contextHandoffParameters() {
   const oneOf = (values: readonly string[], description: string) =>
     Type.Union(values.map((value) => Type.Literal(value)), { description });
   return Type.Object({
-    outcome: oneOf(['ready', 'answer', 'needs-user'], 'ready: hand off to a work phase, which can be an investigation (gather). answer: answer directly as gather. needs-user: ask the user first.'),
+    outcome: oneOf(['ready', 'needs-user'], 'ready: declare the next task type. needs-user: ask the user first.'),
     question: Type.Optional(Type.String({
       description: 'Required for ready or needs-user: what the next step must do, or the question for the user.',
     })),
     findings: Type.Optional(Type.String({ description: 'ready: what you found.' })),
-    deliverable: Type.Optional(oneOf(DIMENSIONS, 'Required for ready or answer: declare the task type. ready accepts plan, review, implement, or gather. answer accepts only gather.')),
+    deliverable: Type.Optional(oneOf(DIMENSIONS, 'Required for ready: declare the task type. ready accepts plan, review, implement, or gather.')),
     workItemId: Type.Optional(Type.String({ description: 'ready, when work is not yet selected: an offered work item or legacy id, or NEW_WORK_ITEM.' })),
     topicId: Type.Optional(Type.String({ description: 'ready: the offered topic id, or NEW_TOPIC. Required when creating work in an existing topic.' })),
     topicTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_TOPIC.' })),
     workItemTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_WORK_ITEM.' })),
-    complexity: Type.Optional(oneOf(COMPLEXITIES, 'Required for ready or answer: how hard the task is.')),
-    scope: Type.Optional(oneOf(SCOPES, 'Required for ready or answer: bounded or open-ended.')),
+    complexity: Type.Optional(oneOf(COMPLEXITIES, 'Required for ready: how hard the task is.')),
+    scope: Type.Optional(oneOf(SCOPES, 'Required for ready: bounded or open-ended.')),
     files: Type.Optional(Type.Array(Type.String(), {
       maxItems: MAX_EVIDENCE_PATHS,
-      description: 'ready or answer: files the next step rests on. Leave empty when the evidence is in the conversation.',
+      description: 'ready: files the next step rests on. Leave empty when the evidence is in the conversation.',
     })),
-    difficulty: Type.Optional(difficultyParameter('ready or answer, except implementation: the reasoning left, rated per criterion. Without a rubric, declared complexity bounds the demand.')),
+    difficulty: Type.Optional(difficultyParameter('ready, except implementation: the reasoning left, rated per criterion. Without a rubric, declared complexity bounds the demand.')),
     remainingWork: Type.Optional(remainingWorkParameter(
       'ready, for an implementation: what the next model still has to work out, rated 1 (easiest) to 5 (hardest) per criterion.',
     )),
@@ -125,15 +123,12 @@ const REJECTIONS = {
   'artifact-not-read': 'Context not handed off: the request rests on files not read in full as they are now. Read every ' +
     'line of each file. Reads in parts count when together they show every line. Then call it again:',
   'no-next-step': 'Context not handed off: hand off to implement, review, or plan. Hand off to gather only while collecting context. Call it again with one of those, or continue.',
-  'answer-work-identity': 'Context not handed off: outcome "answer" does not select work. ' +
-    'For an investigation, use outcome "ready", deliverable "gather", findings, question, and work identity. ' +
-    'To answer directly, call it again with outcome "answer". You may use workItemId "NONE". Remove these fields:',
+  'invalid-outcome': 'Context not handed off: use ready or needs-user.',
   'missing-work-choice': 'Context not handed off: choose a listed workItemId or NEW_WORK_ITEM.',
   'invalid-work-choice': 'Context not handed off: the work and topic ids must be from this entry’s offered choices. Choose again.',
   'missing-work-title': 'Context not handed off: give a short workItemTitle for NEW_WORK_ITEM.',
   'missing-topic-title': 'Context not handed off: give a short topicTitle for NEW_TOPIC.',
   'stale-entry': 'Context not handed off: this request is no longer the active entry.',
-  'use-reopen-work': 'Context not handed off: this is the completed work item you own. For more changes to it, call reopen_work.',
   'not-recorded': 'Context not handed off: the router could not record the handoff. Call it again.',
   internal: 'Context not handed off: internal router error. Call it again, or reply to the user.',
 } as const;
@@ -189,13 +184,12 @@ function openFor(ctx: Pick<ExtensionContext, 'model'> | undefined, session: Rout
   const lastServed = session.getLastServed();
   const served = lastServed ? servedKey(lastServed) : undefined;
   if (!state || !last || !served || last.intentKey !== state.intentKey) return { reject: 'no-task' };
-  if (state.contextStatus === 'clarification-only') return { reject: 'clarification-only', state, served };
-  if (state.contextStatus === 'ready-pending' || state.contextStatus === 'served' || state.reasoningHandoff) {
+  if (state.status === 'clarification-only') return { reject: 'clarification-only', state, served };
+  if (state.status === 'ready-pending' || state.status === 'served' || state.reasoningHandoff) {
     return { reject: 'already-handed-off', state, served };
   }
-  if (state.contextStatus === 'acquiring') return { state, served, acquiring: true };
+  if (state.status === 'triage') return { state, served, acquiring: true };
   // The incumbent changes phase by handing off; the router picks the next model.
-  if (state.incumbentServes) return { state, served, acquiring: false };
   if (last.dimension === 'gather' && !contextOwed(state)) return { state, served, acquiring: false };
   return { reject: 'not-acquiring', state, served };
 }
@@ -280,7 +274,7 @@ function reject(
     log(state, served, 'reject', { rejectReason: code });
     if (CONTEXT_REJECTIONS.has(code)) {
       const next = countContextRefusal(session, state, served);
-      if (next !== state && next.contextStatus === 'clarification-only') {
+      if (next !== state && next.status === 'clarification-only') {
         return { accepted: false, text: `${ENDING_REJECTIONS[code] ?? REJECTIONS[code]}${detail} ${CLARIFICATION_TEXT}` };
       }
     }
@@ -312,35 +306,14 @@ export function submitContextHandoff(
     if (!opened.acquiring) return reject(session, 'not-acquiring', state, served);
     if (!filled(params.question)) return reject(session, 'missing-question', state, served);
     const reason = member(NEEDS_USER_REASONS, params.reason);
-    session.commitWorkPhaseState({ ...state, contextStatus: 'clarification-only', contextNeedsUser: true });
+    session.commitWorkPhaseState({ ...state, status: 'clarification-only', contextNeedsUser: true });
     log(state, served, 'needs-user', reason ? { rejectReason: reason } : {});
     return { accepted: true, text: `Context handed back to the user. ${CLARIFICATION_TEXT}` };
   }
 
-  const reported = member(DIMENSIONS, params?.deliverable);
+  if (params?.outcome !== 'ready') return reject(session, 'invalid-outcome', state, served);
+  const reported = member(DIMENSIONS, params.deliverable);
   if (!reported) return reject(session, 'missing-deliverable', state, served);
-  if (params?.outcome === 'answer') {
-    if (!opened.acquiring) return reject(session, 'not-acquiring', state, served);
-    if (reported !== 'gather') return reject(session, 'no-next-step', state, served);
-    // An empty value selects nothing. Name each field that does, so the model can remove exactly those.
-    const given = (value: unknown) => value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '');
-    const identity = [
-      ...(given(params.workItemId) && !(typeof params.workItemId === 'string' && params.workItemId.trim() === 'NONE') ? ['workItemId'] : []),
-      ...(['topicId', 'topicTitle', 'workItemTitle'] as const).filter((field) => given(params[field])),
-    ];
-    if (identity.length > 0) return reject(session, 'answer-work-identity', state, served, ` ${identity.join(', ')}.`);
-    const complexity = member(COMPLEXITIES, params.complexity);
-    const scope = member(SCOPES, params.scope);
-    if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
-    if (facts.selectionError) return reject(session, facts.selectionError, state, served);
-    // A direct answer preserves its demand but creates neither work nor an incumbent.
-    const rubric = parseReasoningRubric(params.difficulty);
-    session.commitWorkPhaseState({ ...state, contextAnswer: reported,
-      contextAnswerDemand: { complexity, scope, ...(rubric ? { rubric } : {}), evidence: facts.evidence ?? CONVERSATION_EVIDENCE },
-      pendingIdentity: undefined, provisionalGrounding: undefined });
-    log(state, served, 'answer', { deliverable: reported });
-    return { accepted: true, text: `Declared ${reported}. Answer the user directly; do not make changes.` };
-  }
   if (!filled(params?.findings) || !filled(params?.question)) {
     // Name each empty field: a model that put the question into findings must see which field to fill.
     const empty = [filled(params?.findings) ? '' : 'findings', filled(params?.question) ? '' : 'question'].filter(Boolean);
@@ -360,12 +333,6 @@ export function submitContextHandoff(
   }
   if (selection && session.getSessionGeneration() !== selection.generation) {
     return reject(session, 'stale-entry', state, served);
-  }
-  // The completed item this model owns has one reopen protocol, reopen_work;
-  // a handoff still reopens any other done item.
-  const owned = state.priorCompletion?.workItemId ?? state.completion?.workItemId;
-  if (owned && selection?.plan.workItemId === owned && selection.plan.resolution.relation === 'reopen') {
-    return reject(session, 'use-reopen-work', state, served);
   }
   if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
 
@@ -456,19 +423,9 @@ export async function prepareHandoffFacts(
   signal?: AbortSignal,
   tools?: readonly string[],
 ): Promise<HandoffFacts> {
-  if (params?.outcome !== 'ready' && params?.outcome !== 'answer') return {};
+  if (params?.outcome !== 'ready') return {};
   const opened = openFor(ctx, session);
   const reported = member(DIMENSIONS, params.deliverable);
-  if (params.outcome === 'answer') {
-    if ('reject' in opened || !opened.acquiring || reported !== 'gather') return {};
-    const generation = session.getSessionGeneration();
-    const paths = evidencePaths(declaredFiles(params, ctx.cwd), opened.state.readPaths);
-    const evidence = await measureEvidence(exec, ctx.cwd, paths, signal);
-    if (session.getSessionGeneration() !== generation || session.getWorkPhaseState()?.intentKey !== opened.state.intentKey) {
-      return { selectionError: 'stale-entry' };
-    }
-    return { evidence };
-  }
   if ('reject' in opened || !reported || !filled(params.findings) || !filled(params.question)) return {};
   const facts: HandoffFacts = {};
   const deliverable = adoptedDeliverable(reported, opened.acquiring);
@@ -573,7 +530,7 @@ export function registerContextHandoffTool(pi: ExtensionAPI, session: RouterSess
           workItemId: live?.workItemId,
           topicId: live?.contextResolution?.topicId,
           phase: live?.reasoningHandoff?.target ?? live?.deliverable,
-          contextStatus: live?.contextStatus,
+          status: live?.status,
         });
         return { content: [{ type: 'text' as const, text: result.text }], details: { accepted: result.accepted } };
       },

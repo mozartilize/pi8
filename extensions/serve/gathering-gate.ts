@@ -26,7 +26,6 @@ import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { ContextReason } from '../routing/context/types.js';
 import type { RouterSession } from './router-session-state.js';
 import { insideCwd } from './context-grounding.js';
-import { ROUTING_CONTEXT_TOOL } from './routing-context-tool.js';
 
 export function logContextHandoff(
   state: WorkPhaseState,
@@ -41,7 +40,7 @@ export function logContextHandoff(
     workItemId: state.workItemId,
     topicId: state.contextResolution?.topicId,
     phase: handoff?.target ?? extra.deliverable ?? state.deliverable,
-    contextStatus: state.contextStatus,
+    status: state.status,
     intentKey: state.intentKey,
     served,
     ...(extra.rejectReason ? { rejectReason: extra.rejectReason } : {}),
@@ -61,7 +60,7 @@ export function countContextRefusal(session: RouterSession, state: WorkPhaseStat
   const next = countDenial(state);
   if (next !== state) {
     session.commitWorkPhaseState(next);
-    if (next.contextStatus === 'clarification-only') logContextHandoff(next, served, 'budget-exhausted');
+    if (next.status === 'clarification-only') logContextHandoff(next, served, 'budget-exhausted');
   }
   return next;
 }
@@ -70,7 +69,7 @@ export function countContextRefusal(session: RouterSession, state: WorkPhaseStat
 const MAX_INPUT_PATHS = 16;
 
 /** The router's own tools name files as claims, not as files the model looked at. */
-const ROUTER_TOOLS = new Set([CONTEXT_HANDOFF_TOOL, EXECUTION_CONTRACT_TOOL, ROUTING_CONTEXT_TOOL]);
+const ROUTER_TOOLS = new Set([CONTEXT_HANDOFF_TOOL, EXECUTION_CONTRACT_TOOL]);
 
 /** Top-level input strings, or strings in a top-level list, that could be paths. */
 function inputPathCandidates(input: unknown): string[] {
@@ -154,8 +153,7 @@ export function workChoiceNote(state: WorkPhaseState): string {
     legacy: pending.legacy.slice(0, 5).map((item) => ({ workItemId: item.id, excerpt: item.excerpt.slice(0, 240) })),
   })}. For outcome "ready", choose an offered workItemId, or NEW_WORK_ITEM with a short workItemTitle. ` +
     'For outcome "ready", use topicId NEW_TOPIC and a short topicTitle for a new topic. ' +
-    'For an existing topic, use its offered topicId. Do not infer identity from the active item alone. ' +
-    'For outcome "answer", omit topicId, topicTitle, and workItemTitle. You may use workItemId "NONE".' : '';
+    'For an existing topic, use its offered topicId. Do not infer identity from the active item alone.' : '';
 }
 
 /** Byte-identical across the entry's collect invocations. */
@@ -165,8 +163,8 @@ export function gatheringNote(state: WorkPhaseState): string {
     'Recognized mutations and execution plans are refused in this phase. ' +
     'Mutation detection is best-effort, not a sandbox. When you have what the next step needs, call ' +
     `${CONTEXT_HANDOFF_TOOL} with outcome "ready", deliverable, complexity, and scope. When the answer needs an investigation, ` +
-    'for example the cause of a bug, hand off with deliverable "gather". To answer from the context you collected, without a plan, review, change, or investigation, ' +
-    'call it with outcome "answer", deliverable "gather", complexity, and scope before giving a text answer. If the request is unclear or what it rests on cannot be read, ' +
+    'for example the cause of a bug, hand off with deliverable "gather". ' +
+    'Answer directly without this tool when no further routing is needed. If the request is unclear or what it rests on cannot be read, ' +
     `call it with outcome "needs-user" and your question. You may send at most ${ACQUISITION_REQUEST_LIMIT} ` +
     'model requests. Do not write the plan, review, change, or investigation yourself.';
 }
@@ -201,8 +199,8 @@ export function remindContextHandoff(
     if (event.toolName === CONTEXT_HANDOFF_TOOL) return undefined;
     const state = currentEntry(session);
     if (!state || state.contextReminded || state.reasoningHandoff) return undefined;
-    const acquiring = state.contextStatus === 'acquiring';
-    if (!acquiring && (state.contextStatus != null || session.getLastDecision()?.dimension !== 'gather')) return undefined;
+    const acquiring = state.status === 'triage';
+    if (!acquiring && (state.status != null || session.getLastDecision()?.dimension !== 'gather')) return undefined;
     if (!acquiring && event.toolName !== 'edit' && event.toolName !== 'write') return undefined;
     session.commitWorkPhaseState({ ...state, contextReminded: true });
     const lastServed = session.getLastServed();
@@ -234,26 +232,26 @@ export function gateContextToolCall(
   try {
     const state = currentEntry(session);
     restricted = acquisitionRestricted(state);
-    if (!state || !restricted || acquisitionAllows(state.contextStatus, event.toolName, event.input)) {
+    if (!state || !restricted || acquisitionAllows(state.status, event.toolName, event.input)) {
       return undefined;
     }
     const lastServed = session.getLastServed();
     const served = lastServed ? servedKey(lastServed) : 'unknown/unknown';
     // The tool name is a code. Arguments stay out of the decision log.
     logContextHandoff(state, served, 'deny', { deniedTool: event.toolName.slice(0, 64) });
-    if (state.contextStatus === 'ready-pending') {
+    if (state.status === 'ready-pending') {
       return {
         block: true,
         reason: 'Router: this call was not made. The context handoff was accepted; the next step, not this one, ' +
           'runs it. Continue without it.',
       };
     }
-    if (state.contextStatus === 'clarification-only') {
+    if (state.status === 'clarification-only') {
       return { block: true, reason: `Router: this call was not made. ${CLARIFICATION_TEXT}` };
     }
     const counts = isMutationCall(event.toolName, event.input);
     const next = counts ? countContextRefusal(session, state, served) : state;
-    if (next.contextStatus === 'clarification-only') {
+    if (next.status === 'clarification-only') {
       return { block: true, reason: `Router: this call was not made. ${CLARIFICATION_TEXT}` };
     }
     // A refused tool does not establish that the context is ready for a handoff.
@@ -285,7 +283,7 @@ export function closeContextEntry(state: WorkPhaseState, served: string | undefi
   } else if (state.changeFacts) {
     // An implement handoff: its check verdicts are the outcome its facts are fitted against.
     logContextHandoff(state, served ?? 'unknown/unknown', 'phase-end', { ...(state.deliverable ? { deliverable: state.deliverable } : {}), ...checks });
-  } else if (state.contextStatus === 'acquiring' || state.contextStatus === 'clarification-only') {
+  } else if (state.status === 'triage' || state.status === 'clarification-only') {
     logContextHandoff(state, served ?? 'unknown/unknown', 'no-handoff', { ...(state.deliverable ? { deliverable: state.deliverable } : {}), ...checks });
   } else {
     return state;

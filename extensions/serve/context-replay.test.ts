@@ -64,7 +64,7 @@ const MODELS = [
 
 const HANDOFF = (entry: CorpusEntry) => ({
   // A historical `lightweight` label is a direct answer, served under `gather`.
-  outcome: ['gather', 'lightweight'].includes(entry.label.deliverable) ? 'answer' : 'ready',
+  outcome: 'ready',
   deliverable: entry.label.deliverable === 'lightweight' ? 'gather' : entry.label.deliverable,
   complexity: 'trivial', scope: 'bounded',
   findings: 'the request and visible context were checked',
@@ -126,9 +126,9 @@ describe('routing-context corpus replay', () => {
     // These choices test the handoff contract; they are not model-generated predictions.
     const handoff = async (entry: CorpusEntry): Promise<boolean> => {
       const state = harness.session.getWorkPhaseState();
-      const acquiring = state?.contextStatus === 'acquiring';
-      // Collecting context hands off; so does an incumbent that changes phase.
-      if (!state || (!acquiring && !(state.incumbentServes && state.contextStatus == null))) return false;
+      const acquiring = state?.status === 'triage';
+      if (!state || !acquiring) return false;
+      if (entry.label.workItem === 'NONE') return true;
       const pending = state.pendingIdentity;
       const label = entry.label;
       if (label.context.includes('identity-unresolved')) {
@@ -195,7 +195,7 @@ describe('routing-context corpus replay', () => {
           );
         } else if ('write' in action) {
           attemptedHandoff = true;
-          if (await handoff(entry) || harness.session.getWorkPhaseState()?.contextStatus !== 'acquiring') {
+          if (await handoff(entry) || harness.session.getWorkPhaseState()?.status !== 'triage') {
             writeFileSync(join(cwd, action.write), action.content);
             await observeContextGrounding(
               { toolName: 'write', input: { path: action.write }, content: [{ type: 'text', text: 'ok' }], isError: false } as never,
@@ -212,16 +212,16 @@ describe('routing-context corpus replay', () => {
       }
       if (!attemptedHandoff) await handoff(entry);
       const selected = harness.session.getCachedIntent()?.context;
-      const contextStatus = harness.session.getWorkPhaseState()?.contextStatus;
+      const status = harness.session.getWorkPhaseState()?.status;
       // An entry the handoff could only answer with a question owes which work it is.
       const observedContext: ContextReason[] = requested.length > 0 ? requested
-        : askedUser || contextStatus === 'clarification-only' ? ['identity-unresolved']
+        : askedUser || status === 'clarification-only' ? ['identity-unresolved']
         : selected?.resolution.contextReasons ?? [];
       // Unresolved work is owed only while collecting context: an incumbent answers without it.
       const phase = harness.session.getWorkPhaseState();
       const observedSatisfied = observedContext.includes('identity-unresolved') ? false
         : requested.length > 0 ? requestedSatisfied
-        : selected?.contextSatisfied ?? (phase?.pendingIdentity && !phase.incumbentServes ? false : requestedSatisfied);
+        : selected?.contextSatisfied ?? (phase?.pendingIdentity && entry.label.workItem !== 'NONE' ? false : requestedSatisfied);
       const label = entry.label;
       if (selected?.createdWorkItem && selected.workItemId && !label.existing && label.workItem !== 'NONE') {
         ids.set(label.workItem, selected.workItemId);
@@ -232,12 +232,12 @@ describe('routing-context corpus replay', () => {
         sessionId: session.id,
         apiFamily: session.apiFamily ?? 'openai-completions',
         ordinal,
-        topicId: selected?.resolution.topicId ?? (phase?.contextAnswer !== undefined ? 'NONE' : 'UNKNOWN'),
-        workItemId: selected?.resolution.workItemId ?? (phase?.contextAnswer !== undefined ? 'NONE' : 'UNKNOWN'),
+        topicId: selected?.resolution.topicId ?? (entry.label.workItem === 'NONE' ? 'NONE' : 'UNKNOWN'),
+        workItemId: selected?.resolution.workItemId ?? (entry.label.workItem === 'NONE' ? 'NONE' : 'UNKNOWN'),
         createdTopic: selected?.createdTopic === true,
         createdWorkItem: selected?.createdWorkItem === true,
         relation: selected?.resolution.relation ?? 'unknown',
-        deliverable: phase?.contextAnswer ?? phase?.deliverable ?? 'gather',
+        deliverable: phase?.deliverable ?? 'gather',
         context: observedContext,
         contextSatisfied: observedSatisfied,
         resolver: selected?.resolution.resolver ?? 'pending',

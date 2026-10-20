@@ -74,9 +74,9 @@ describe('complete_work', () => {
   });
 
   it.each([
-    ['collecting context', { contextStatus: 'acquiring' as const }],
-    ['asking the user', { contextStatus: 'clarification-only' as const }],
-    ['a handoff waiting for its next step', { contextStatus: 'ready-pending' as const }],
+    ['collecting context', { status: 'triage' as const }],
+    ['asking the user', { status: 'clarification-only' as const }],
+    ['a handoff waiting for its next step', { status: 'ready-pending' as const }],
   ])('refuses while %s, without changing the ledger', (_label, over) => {
     const session = servingSession(over);
     const before = session.context.getLedger();

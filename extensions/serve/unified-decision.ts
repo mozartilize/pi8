@@ -202,14 +202,13 @@ function reasonText(result: UnifiedDecision, chosen: string, preparationTarget: 
 function difficultyMissingReason(input: UnifiedTurnInput): UnifiedDecisionMeta['difficultyMissingReason'] {
   if (input.state.contextAcquisition) return 'collecting-context';
   const work = input.workState;
-  if (work?.contextAnswer) return 'direct-answer';
   const contract = work?.contract;
   if (input.state.phase === 'implement' && contract && !contract.rubric
     && (contract.status === 'active' || contract.status === 'executed')) return 'no-rubric';
   if (work?.reasoningHandoff) {
     return work.reasoningHandoff.target === input.state.phase ? 'no-rubric' : 'phase-mismatch';
   }
-  return work?.incumbentServes ? 'continuation' : 'no-handoff';
+  return 'no-handoff';
 }
 
 /**

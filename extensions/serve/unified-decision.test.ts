@@ -142,11 +142,9 @@ describe('production selection adapter', () => {
 
   it.each([
     { reason: 'collecting-context', collecting: true, work: { incumbentServes: true } },
-    { reason: 'direct-answer', work: { contextAnswer: 'gather', contextStatus: 'acquiring' } },
     { reason: 'no-rubric', work: { reasoningHandoff: { target: 'gather' } } },
     { reason: 'phase-mismatch', work: { reasoningHandoff: { target: 'plan' } } },
-    { reason: 'continuation', work: { incumbentServes: true } },
-    { reason: 'no-handoff', work: { previousHandoffId: 'previous', contextStatus: 'clarification-only' } },
+    { reason: 'no-handoff', work: { previousHandoffId: 'previous', status: 'clarification-only' } },
     { reason: 'no-handoff', work: undefined },
   ])('records missing demand as $reason for $work', async ({ reason, collecting, work }) => {
     const turn = input();

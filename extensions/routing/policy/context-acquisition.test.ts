@@ -55,7 +55,7 @@ describe('entry phase', () => {
     });
     expect(entryPhase(toReview, 'review')).toEqual({ dimension: 'review', cause: 'investigation-handoff' });
     const toImplement = acceptContextHandoff(
-      state({ deliverable: 'implement', contextReasons: ['referenced-artifact'], contextSatisfied: false, contextStatus: 'acquiring' }),
+      state({ deliverable: 'implement', contextReasons: ['referenced-artifact'], contextSatisfied: false, status: 'triage' }),
       { deliverable: 'implement', key: 'k' },
     );
     expect(entryPhase(toImplement, 'implement')).toEqual({ dimension: 'implement', cause: 'investigation-handoff' });
@@ -64,7 +64,7 @@ describe('entry phase', () => {
   });
 
   it('keeps a clarification-only entry in the restricted phase whatever it owes', () => {
-    const entry = state({ deliverable: 'implement', contextStatus: 'clarification-only' });
+    const entry = state({ deliverable: 'implement', status: 'clarification-only' });
     expect(contextOwed(entry)).toBe(false);
     expect(entryPhase(entry, 'implement')).toEqual({ dimension: 'gather', cause: 'investigation' });
   });
@@ -79,12 +79,12 @@ describe('entry phase', () => {
 
 describe('handoff boundary', () => {
   it('accepts once and stays pending until an invocation serves it', () => {
-    const accepted = acceptContextHandoff(state({ contextStatus: 'acquiring' }), { deliverable: 'plan', key: 'k', reasoning });
-    expect(accepted).toMatchObject({ contextStatus: 'ready-pending', handoffKey: 'k' });
+    const accepted = acceptContextHandoff(state({ status: 'triage' }), { deliverable: 'plan', key: 'k', reasoning });
+    expect(accepted).toMatchObject({ status: 'ready-pending', handoffKey: 'k' });
     expect(accepted.reasoningHandoff).toMatchObject({ id: 'intent-a', pending: true });
     expect(acceptContextHandoff(accepted, { deliverable: 'review', key: 'other' })).toBe(accepted);
     const owned = serveContextHandoff(accepted, 'b/planner');
-    expect(owned.contextStatus).toBe('served');
+    expect(owned.status).toBe('served');
     expect(owned.reasoningHandoff).toMatchObject({ pending: false, owner: 'b/planner' });
     expect(serveContextHandoff(owned, 'c/other')).toBe(owned);
   });
@@ -93,43 +93,41 @@ describe('handoff boundary', () => {
 describe('restricted tools', () => {
   it('allows context tools while collecting and restricts execution starts', () => {
     for (const tool of ['read', 'grep', 'find', 'ls', 'fffind', 'ffgrep', 'tilth_read', 'tilth_search', 'ask_user_question', 'hand_off_context']) {
-      expect(acquisitionAllows('acquiring', tool), tool).toBe(true);
+      expect(acquisitionAllows('triage', tool), tool).toBe(true);
       expect(acquisitionAllows('ready-pending', tool), tool).toBe(true);
       expect(acquisitionAllows('clarification-only', tool), tool).toBe(false);
     }
     for (const tool of ['edit', 'write', 'commit_execution']) {
-      expect(acquisitionAllows('acquiring', tool)).toBe(false);
+      expect(acquisitionAllows('triage', tool)).toBe(false);
     }
     for (const tool of ['bash', 'subagent', 'ctx_execute', 'ctx_execute_file', 'extension_control', 'extension_inspect', 'read_file', 'mcp', 'web_search']) {
-      expect(acquisitionAllows('acquiring', tool)).toBe(true);
+      expect(acquisitionAllows('triage', tool)).toBe(true);
       expect(acquisitionAllows('ready-pending', tool)).toBe(false);
       expect(acquisitionAllows('clarification-only', tool)).toBe(false);
     }
-    expect(acquisitionAllows('acquiring', 'bash', { command: 'echo x > file' })).toBe(false);
-    expect(acquisitionAllows('acquiring', 'routing_context')).toBe(true);
+    expect(acquisitionAllows('triage', 'bash', { command: 'echo x > file' })).toBe(false);
+    expect(acquisitionAllows('triage', 'routing_context')).toBe(true);
     expect(acquisitionAllows('clarification-only', 'read')).toBe(false);
     expect(acquisitionAllows('clarification-only', 'hand_off_context')).toBe(false);
-    // reopen_work refuses an entry without completed work itself.
-    expect(acquisitionAllows('acquiring', 'reopen_work')).toBe(true);
-    expect(acquisitionAllows('ready-pending', 'reopen_work')).toBe(true);
+    expect(acquisitionAllows('ready-pending', 'commit_execution')).toBe(false);
   });
 
   it('restricts until a model serves the next phase', () => {
-    expect(acquisitionRestricted(state({ contextStatus: 'acquiring' }))).toBe(true);
-    expect(acquisitionRestricted(state({ contextStatus: 'clarification-only' }))).toBe(true);
-    expect(acquisitionRestricted(state({ contextStatus: 'ready-pending' }))).toBe(true);
-    expect(acquisitionRestricted(state({ contextStatus: 'served' }))).toBe(false);
+    expect(acquisitionRestricted(state({ status: 'triage' }))).toBe(true);
+    expect(acquisitionRestricted(state({ status: 'clarification-only' }))).toBe(true);
+    expect(acquisitionRestricted(state({ status: 'ready-pending' }))).toBe(true);
+    expect(acquisitionRestricted(state({ status: 'served' }))).toBe(false);
     expect(acquisitionRestricted(state())).toBe(false);
   });
 
   it('counts refusals once per invocation and ends acquisition at the limit', () => {
-    let entry = state({ contextStatus: 'acquiring', providerInvocation: 1 });
+    let entry = state({ status: 'triage', providerInvocation: 1 });
     entry = countDenial(entry);
     expect(countDenial(entry)).toBe(entry);
-    expect(entry).toMatchObject({ contextDenials: 1, contextStatus: 'acquiring' });
+    expect(entry).toMatchObject({ contextDenials: 1, status: 'triage' });
     for (let i = 2; i <= ACQUISITION_DENIAL_LIMIT; i += 1) entry = countDenial({ ...entry, providerInvocation: i });
-    expect(entry.contextStatus).toBe('clarification-only');
-    const ready = state({ contextStatus: 'ready-pending' });
+    expect(entry.status).toBe('clarification-only');
+    const ready = state({ status: 'ready-pending' });
     expect(countDenial(ready)).toBe(ready);
   });
 });
@@ -166,6 +164,6 @@ describe('notePartialRead', () => {
   it('counts partial reads until the handoff is served', () => {
     const counted = notePartialRead(notePartialRead(state()));
     expect(counted.partialReadCount).toBe(2);
-    expect(notePartialRead(state({ contextStatus: 'served', partialReadCount: 2 })).partialReadCount).toBe(2);
+    expect(notePartialRead(state({ status: 'served', partialReadCount: 2 })).partialReadCount).toBe(2);
   });
 });

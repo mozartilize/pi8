@@ -82,7 +82,8 @@ describe('entry-scoped work choice at the context handoff', () => {
       topicTitle: 'Export', workItemTitle: 'CSV exporter' })).accepted).toBe(true);
     const item = [...harness.session.context.getLedger().items.values()][0]!;
     expect(item).toMatchObject({ title: 'CSV exporter' });
-    const records = tree.getBranch().filter((event) => event.type === 'custom' && event.customType === CONTEXT_ENTRY_TYPE);
+    const records = tree.getBranch().filter((event) => event.type === 'custom' && event.customType === CONTEXT_ENTRY_TYPE
+      && (event.data as { op?: string }).op === 'context-commit');
     expect(records).toHaveLength(1);
     expect(records[0]?.data).toMatchObject({ op: 'context-commit', events: [
       { op: 'work-create' }, { op: 'activate' }, { op: 'boundary' },
@@ -123,7 +124,8 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(response.accepted).toBe(false);
     expect(harness.session.context.getLedger().items.size).toBe(0);
     expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
-    expect(tree.getBranch().filter((event) => event.type === 'custom' && event.customType === CONTEXT_ENTRY_TYPE)).toEqual([]);
+    expect(tree.getBranch().filter((event) => event.type === 'custom' && event.customType === CONTEXT_ENTRY_TYPE
+      && (event.data as { op?: string }).op === 'context-commit')).toEqual([]);
   });
 
   it('requires an entry-local complete read before creating work with a referenced file', async () => {
@@ -234,104 +236,31 @@ describe('entry-scoped work choice at the context handoff', () => {
     expect(harness.session.context.getLedger().items.size).toBe(3);
   });
 
-  it.each([
-    { workItemId: 'NEW_WORK_ITEM' },
-    { workItemId: 'existing-work' },
-    { topicId: 'NEW_TOPIC' },
-    { topicTitle: 'Export' },
-    { workItemTitle: 'Exporter' },
-    { workItemId: 'NONE', topicId: 'NEW_TOPIC' },
-  ])('rejects answer identity $workItemId $topicId $topicTitle $workItemTitle without consuming a refusal', async (identity) => {
-    await entry('find the source handlers');
+  it('rejects the answer outcome without changing entry state or demand', async () => {
+    await entry('explain the supplied result');
     const before = harness.session.getWorkPhaseState();
-    const result = await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', ...identity });
-    expect(result.accepted).toBe(false);
-    expect(result.text).toContain('outcome "ready"');
+    const result = await handoff({ ...READY, outcome: 'answer', deliverable: 'gather' });
+    expect(result).toMatchObject({ accepted: false, text: expect.stringContaining('use ready or needs-user') });
     expect(harness.session.getWorkPhaseState()).toBe(before);
-    expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
-    expect(harness.session.getWorkPhaseState()?.contextDenials).toBe(before?.contextDenials);
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+    expect(phaseDifficulty(before, 'gather')).toBeUndefined();
     expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect((await handoff({ ...READY, deliverable: 'gather', workItemId: 'NEW_WORK_ITEM',
-      topicTitle: 'Handlers', workItemTitle: 'Find handlers' })).accepted).toBe(true);
-    expect(harness.session.context.getLedger().items.size).toBe(1);
   });
 
-  it('names each identity field to remove from an answer, and ignores empty ones', async () => {
+  it('carries declared gather demand into selection through a ready boundary', async () => {
     await entry('find the source handlers');
-    const result = await handoff({
-      ...READY, outcome: 'answer', deliverable: 'gather',
-      workItemId: 'NONE', topicId: 'NEW_TOPIC', topicTitle: 'Handlers', workItemTitle: '',
-    });
-    expect(result.accepted).toBe(false);
-    expect(result.text).toMatch(/Remove these fields: topicId, topicTitle\.$/);
-  });
-
-  it('accepts an answer whose work and topic fields are empty strings', async () => {
-    await entry('find the source handlers');
-    const result = await handoff({
-      ...READY, outcome: 'answer', deliverable: 'gather',
-      workItemId: ' ', topicId: '', topicTitle: '', workItemTitle: '',
-    });
-    expect(result.accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contextAnswer).toBe('gather');
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-  });
-
-  it.each([undefined, 'NONE'])('accepts a gather answer with workItemId %s without creating work', async (workItemId) => {
-    await entry('explain the supplied result');
-    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', workItemId })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contextAnswer).toBe('gather');
-    expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-  });
-
-  it('preserves a direct answer rubric for the next gather invocation only', async () => {
-    await entry('explain the supplied result');
-    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', complexity: 'routine',
-      difficulty: { alternatives: 1, stakes: 1, spread: 2, knowledge: 2, uncertainty: 2 },
+    const triage = harness.session.getWorkPhaseState()!.boundaryId;
+    expect((await handoff({ ...READY, deliverable: 'gather', complexity: 'routine',
+      workItemId: 'NEW_WORK_ITEM', topicTitle: 'Handlers', workItemTitle: 'Find handlers',
     })).accepted).toBe(true);
-    const state = harness.session.getWorkPhaseState();
-    expect(phaseDifficulty(state, 'gather')).toMatchObject({
-      value: 0.25, axes: { reasoning: 0.25, agentic: 0.25, research: 0.25 }, source: 'reasoning-rubric',
-    });
-    expect(phaseDifficulty(state, 'implement')).toBeUndefined();
-    expect(state?.reasoningHandoff).toBeUndefined();
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    await entry('explain a different result');
-    expect(phaseDifficulty(harness.session.getWorkPhaseState(), 'gather')).toBeUndefined();
-  });
-
-  it.each(['answer', 'ready'])('carries complexity bounds into selection after %s without a rubric', async (outcome) => {
-    await entry('find the source handlers');
-    expect((await handoff({ ...READY, outcome, deliverable: 'gather', complexity: 'routine',
-      ...(outcome === 'ready' ? { workItemId: 'NEW_WORK_ITEM', topicTitle: 'Handlers', workItemTitle: 'Find handlers' } : {}),
-    })).accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()!.boundaryId).not.toBe(triage);
     const next = await serveBranch();
     expect(next.unified).toMatchObject({ difficulty: 0.25, difficultySource: 'declared-complexity',
       difficultyBounds: { reasoning: { lower: 0.125, upper: 0.375 }, agentic: { lower: 0.125, upper: 0.375 },
         research: { lower: 0.125, upper: 0.375 } },
     });
     expect(next.unified?.difficultyMissingReason).toBeUndefined();
-  });
-
-  it('measures observed files for an answer even when the declaration lists none', async () => {
-    await entry('explain the supplied result');
-    harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, readPaths: ['requirements/foo.md'] });
-    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', files: [] })).accepted).toBe(true);
-    const state = harness.session.getWorkPhaseState();
-    expect(state?.contextAnswerDemand?.evidence).toMatchObject({ applicable: true, files: 1, directories: 1 });
-    const difficulty = phaseDifficulty(state, 'gather');
-    expect(difficulty?.bounds?.reasoning).toEqual({ lower: 0, upper: 0.125 });
-    expect(difficulty?.bounds?.agentic.upper).toBeGreaterThanOrEqual(0.125);
-  });
-
-  it('declares a direct answer without selecting or creating work', async () => {
-    await entry('hello');
-    expect((await handoff({ ...READY, workItemId: 'NONE' })).accepted).toBe(false);
-    expect((await handoff({ ...READY, outcome: 'answer', deliverable: 'gather', workItemId: 'NONE' })).accepted).toBe(true);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeUndefined();
+    await entry('explain a different result');
+    expect(phaseDifficulty(harness.session.getWorkPhaseState(), 'gather')).toBeUndefined();
   });
 
   it('offers no lightweight task type in the tool schema', () => {
@@ -345,12 +274,12 @@ describe('entry-scoped work choice at the context handoff', () => {
 
   it('rejects the task type lightweight for every outcome', async () => {
     await entry('hello');
-    for (const outcome of ['answer', 'ready'] as const) {
+    for (const outcome of ['ready'] as const) {
       const result = await handoff({ ...READY, outcome, deliverable: 'lightweight', workItemId: 'NONE' });
       expect(result.accepted, outcome).toBe(false);
       expect(result.text, outcome).toContain('name the task type');
     }
-    expect(harness.session.getWorkPhaseState()?.contextAnswer).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
   });
 
   it('offers earlier unrouted work as a bounded choice without inheriting grounding', async () => {

@@ -123,18 +123,9 @@ describe('difficulty of the routed phase', () => {
     expect(phaseDifficulty(state({ contract }), 'implement')).toBeUndefined();
   });
 
-  it('direct-answer demand applies only to the gather phase of its entry', () => {
-    const answer = state({ contextAnswer: 'gather', contextAnswerDemand: { complexity: 'hard', scope: 'bounded', evidence: noFiles } });
-    expect(phaseDifficulty(answer, 'gather')).toMatchObject({ source: 'declared-complexity' });
-    for (const phase of ['plan', 'review', 'implement'] as const) expect(phaseDifficulty(answer, phase), phase).toBeUndefined();
-    expect(phaseDifficulty(state({ contextAnswerDemand: answer.contextAnswerDemand! }), 'gather')).toBeUndefined();
-  });
-
-  it('a handoff in the entry replaces direct-answer demand, even for another phase', () => {
-    const both = state({
-      reasoningHandoff: handoff('plan', reasoning(1)),
-      contextAnswer: 'gather', contextAnswerDemand: { complexity: 'hard', scope: 'bounded', evidence: noFiles },
-    });
-    expect(phaseDifficulty(both, 'gather')).toBeUndefined();
+  it('triage has no declared demand, even when it can answer directly', () => {
+    const triage = state({ status: 'triage', deliverable: 'gather' });
+    expect(phaseDifficulty(triage, 'gather')).toBeUndefined();
+    expect(phaseDifficulty(triage, 'implement')).toBeUndefined();
   });
 });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ComplexityBand, Dimension, ReasoningEvidence, ReasoningHandoffMeta, ReasoningRubric, TaskScope } from '../../types.js';
+import type { Dimension, ReasoningHandoffMeta } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
 import type { ContextReason, EntryResolution } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
@@ -32,7 +32,7 @@ export interface WorkPhaseState {
   routingEpoch?: number;
   /** Routing boundary of the entry: its triage, or its latest accepted ready handoff. */
   boundaryId?: string;
-  /** Task type declared at the handoff, or the incumbent's last served task type. */
+  /** Task type declared at the handoff; new entries start as gather. */
   deliverable?: Dimension;
   providerInvocation: number;
   /** Mutation calls observed in this entry; drives the `editing` status only. */
@@ -58,13 +58,7 @@ export interface WorkPhaseState {
   /** Handoff of the entry before this one, joined to this entry's records. */
   previousHandoffId?: string;
   /** Where collecting context stands for the entry; absent until an invocation routes it. */
-  contextStatus?: ContextStatus;
-  /** A gathering model declared the type of its direct answer; it remains in gathering. */
-  contextAnswer?: 'gather';
-  /** Direct-answer demand belongs to this entry and creates no handoff or work identity. */
-  contextAnswerDemand?: { complexity: ComplexityBand; scope: TaskScope; rubric?: ReasoningRubric; evidence: ReasoningEvidence };
-  /** An incumbent was serving when this entry arrived: it serves the entry, which collects no context. */
-  incumbentServes?: boolean;
+  status?: ContextStatus;
   /** Bounded choice set while this entry's work identity is not yet known. */
   pendingIdentity?: PendingIdentity;
   /** Complete reads made before work identity was chosen; entry-local and never inherited. */

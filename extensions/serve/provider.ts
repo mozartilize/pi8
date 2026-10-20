@@ -41,7 +41,6 @@ import {
   appendAttemptUsage,
   appendDecision,
   appendExecutionContractSignal,
-  appendWorkLifecycleSignal,
 } from '../host/decisionlog.js';
 import { renderRouterStatus, servedKey, type ServedInfo } from '../host/ui.js';
 import {
@@ -122,8 +121,7 @@ import {
 } from './gathering-gate.js';
 import { applyNotePlans, messageAnchor, planRequestNote, type NotePlan } from './request-notes.js';
 import { planToolsNote } from './router-tools-note.js';
-import { completedIncumbent, incumbentWorkItem } from '../routing/policy/work-completion.js';
-import { activeWorkNote, COMPLETED_WORK_GATHER_NOTE, completedWorkNote } from './completed-work-gate.js';
+import { incumbentWorkItem } from '../routing/policy/work-completion.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -314,25 +312,17 @@ function measureTurnInput(context: Context, config: AutoRouterConfig, sourceMess
   return { turnInput, head, needsVision, estContextTokens };
 }
 
-/**
- * The incumbent that serves a new entry at its task type. A model whose work
- * item is complete holds no task type: the entry gathers, and that model is
- * only a candidate with its cache and continuity.
- */
-function servingIncumbent(session: RouterSession) {
-  return completedIncumbent(session.context.getLedger()) ? undefined : session.context.getIncumbent();
-}
-
-/** The handoff owns the task type; without a serving incumbent, start by gathering. */
+/** Only a same-entry handoff can supply a task type. New entries start in triage. */
 function resolveBaseIntent(turnInput: ReturnType<typeof getTurnClassificationInput>, session: RouterSession) {
   const cachedIntent = session.getCachedIntent();
-  const cacheHit = cachedIntent?.key === turnInput.key;
-  const incumbent = servingIncumbent(session);
+  const entry = session.getWorkPhaseState();
+  const cacheHit = cachedIntent?.key === turnInput.key && entry?.intentKey === turnInput.key
+    && entry.routingEpoch === session.getRoutingEpoch();
   return {
     cacheHit,
     cachedIntent,
-    baseDimension: cacheHit ? cachedIntent.dimension : incumbent?.dimension ?? 'gather',
-    baseCause: cacheHit ? cachedIntent.cause : incumbent ? 'incumbent' as DecisionCause : 'investigation' as DecisionCause,
+    baseDimension: cacheHit ? cachedIntent.dimension : 'gather' as Dimension,
+    baseCause: cacheHit ? cachedIntent.cause : 'investigation' as DecisionCause,
   };
 }
 
@@ -493,14 +483,13 @@ function advanceWorkPhase(args: {
       sourceEntryId,
       routingEpoch,
       boundaryId: triageBoundaryId(sourceEntryId, routingEpoch),
-      deliverable: args.deliverable,
+      deliverable: 'gather',
+      status: 'triage',
       providerInvocation: 1,
       observedMutationTools: 0,
       ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
     };
-    if (servingIncumbent(args.session)) workPhaseState = { ...workPhaseState, incumbentServes: true };
-    const completed = completedIncumbent(args.session.context.getLedger());
-    if (completed) workPhaseState = { ...workPhaseState, priorCompletion: { workItemId: completed.workItem.id } };
+
     if (args.pendingIdentity) workPhaseState = { ...workPhaseState, pendingIdentity: args.pendingIdentity };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
@@ -876,7 +865,7 @@ async function scoreRouterTurn(args: {
   if (routableCandidates.length === 0) return noRoutableCandidates(session);
 
   const observed = session.getWorkPhaseState();
-  const intentState = observed?.intentKey === turnInput.key ? observed : undefined;
+  const intentState = cacheHit && observed?.intentKey === turnInput.key ? observed : undefined;
   const mutationObserved = intentState != null && intentState.observedMutationTools > 0;
   const contract = settleExecutionContract(intentState, trajectoryEscalation, session);
   const contractActive = contract?.status === 'active';
@@ -903,9 +892,9 @@ async function scoreRouterTurn(args: {
   let entry = session.getWorkPhaseState();
   const phase = entryPhase(entry, baseDimension);
   if (phase.cause === 'investigation' && entry) {
-    let next = entry.contextStatus == null ? { ...entry, contextStatus: 'acquiring' as const, contextRequests: 0 } : entry;
-    if (next.contextStatus === 'acquiring' && (next.contextRequests ?? 0) >= ACQUISITION_REQUEST_LIMIT) {
-      next = { ...next, contextStatus: 'clarification-only' };
+    let next = entry.status == null ? { ...entry, status: 'triage' as const, contextRequests: 0 } : entry;
+    if (next.status === 'triage' && (next.contextRequests ?? 0) >= ACQUISITION_REQUEST_LIMIT) {
+      next = { ...next, status: 'clarification-only' };
       logContextHandoff(next, session.getPreviousServed() ? servedKey(session.getPreviousServed()!) : 'unknown/unknown', 'budget-exhausted', {
         contextReasons: owedContext(entry),
       });
@@ -913,7 +902,7 @@ async function scoreRouterTurn(args: {
     if (next !== entry) session.commitWorkPhaseState(next);
     entry = next;
     // The entry's one clarification request has been sent: nothing more is dispatched.
-    if (entry.contextStatus === 'clarification-only' && entry.clarificationDispatched) {
+    if (entry.status === 'clarification-only' && entry.clarificationDispatched) {
       return {
         kind: 'terminal',
         reason: 'error',
@@ -925,7 +914,7 @@ async function scoreRouterTurn(args: {
   const routedCause = reviewing || implementing ? 'execution-contract' : phase.cause ?? baseCause;
   // The handoff that owns this phase, until a model serves it.
   const reasoning = routedDimension === entry?.reasoningHandoff?.target ? entry.reasoningHandoff : undefined;
-  const pendingBoundary = entry?.contextStatus === 'ready-pending' && !handBack;
+  const pendingBoundary = entry?.status === 'ready-pending' && !handBack;
 
   // Pi clears lastServed at stream start; the rotated value is the model and
   // effort that actually served, including an incumbent effort raise or fallback.
@@ -964,12 +953,10 @@ async function scoreRouterTurn(args: {
   const promptTokenScales = promptTokenScaleMap(registryModels);
   const state: DecisionStateV1 = {
     phase: routedDimension,
-    // A declared direct answer ends collecting context: writing a gather answer is the deliverable.
-    // The one clarification request is still collecting context: it only asks the user for what
-    // is missing, without tools, so the deliverable's demand does not apply to it.
+    // Triage and the one clarification request collect context or answer
+    // directly; no declared demand applies to them.
     contextAcquisition: routedDimension === 'gather' && phase.cause === 'investigation'
-      && ((entry?.contextStatus === 'acquiring' && entry.contextAnswer === undefined)
-        || entry?.contextStatus === 'clarification-only'),
+      && (entry?.status === 'triage' || entry?.status === 'clarification-only'),
     difficulty: phaseDifficulty(entry, routedDimension),
     openDecisions: entry?.changeFacts?.declared?.decisions?.length,
     estimatedContextTokens: estContextTokens,
@@ -997,9 +984,9 @@ async function scoreRouterTurn(args: {
   session.preparation.observe(turnInput.key, estContextTokens);
   const liveExclusions = session.getBlacklistedModels();
   // The pinned model that served last does not own the work that a resume restores.
-  const continuing = !resume && !entry?.priorCompletion && !trajectoryEscalation && !pendingBoundary && !contract?.releasePending && previous
-    && session.getLastDecision()?.dimension === routedDimension
-    && (entry?.incumbentServes || entry?.contextStatus === 'served');
+  const continuing = !resume && !trajectoryEscalation && !pendingBoundary && !contract?.releasePending && previous
+    && entry?.status === 'served' && entry.intentKey === turnInput.key
+    && session.getLastDecision()?.dimension === routedDimension;
   // A manual pin or semi hold names the exact actions, so an owner does not filter them.
   const heldOwner = exactActions ? undefined : handBack?.submitter ?? (contractActive && !contract.release ? contract.submitter
     : continuing ? servedCandidateKey : undefined);
@@ -1130,7 +1117,7 @@ async function scoreRouterTurn(args: {
     routingEpoch,
     topicId: decision.workContext?.topicId ?? entry?.contextResolution?.topicId,
     phase: routedDimension,
-    contextStatus: entry?.contextStatus,
+    status: entry?.status,
     handoffId: decision.reasoningHandoff?.id,
     previousHandoffId: decision.previousHandoffId,
     candidates: candidates.length,
@@ -1162,7 +1149,7 @@ async function scoreRouterTurn(args: {
  */
 function countAcquisitionRequest(session: RouterSession, intentKey: string): void {
   const state = session.getWorkPhaseState();
-  if (!state || state.intentKey !== intentKey || state.contextStatus !== 'acquiring') return;
+  if (!state || state.intentKey !== intentKey || state.status !== 'triage') return;
   session.commitWorkPhaseState({ ...state, contextRequests: (state.contextRequests ?? 0) + 1 });
 }
 
@@ -1280,14 +1267,12 @@ async function delegateRouterTurn(args: {
   const intentKey = prepared.measured.turnInput.key;
   const current = session.getWorkPhaseState();
   const entry = current?.intentKey === intentKey ? current : undefined;
-  const acquiring = entry?.contextStatus === 'acquiring';
-  const clarifying = entry?.contextStatus === 'clarification-only';
-  const workNote = entry?.priorCompletion ? completedWorkNote(entry)
-    : entry && (session.context.getLedger().activeWorkItemId || entry.completion) ? activeWorkNote : undefined;
+  const acquiring = entry?.status === 'triage';
+  const clarifying = entry?.status === 'clarification-only';
   const instruction = !entry ? undefined
     : clarifying ? CLARIFICATION_NOTE
-    : acquiring ? gatheringNote(entry) + (entry.priorCompletion ? ` ${COMPLETED_WORK_GATHER_NOTE}` : '')
-    : workNote;
+    : acquiring ? gatheringNote(entry)
+    : undefined;
   const delegatedContext = withEntryNotes(session, context, intentKey, entry ? instruction : undefined, !!entry);
   // The one clarification request: tools stay defined, so a history with
   // tool calls remains valid, but none may be called, and no fallback follows.
@@ -1399,19 +1384,17 @@ async function delegateRouterTurn(args: {
     noteIncumbent(lastServed, settled);
     return settled;
   };
-  // The model that served outside collecting context, and not by a pin, is the incumbent.
+  // The last actual auto serve is the incumbent candidate for the next entry.
   const noteIncumbent = (lastServed: ServedInfo, decision: RoutingDecision): void => {
     try {
-      const status = session.getWorkPhaseState()?.contextStatus;
-      if (status === 'acquiring' || status === 'clarification-only') return;
+      const status = session.getWorkPhaseState()?.status;
+      if (status === 'clarification-only') return;
       if (session.getManualModel() || session.getSemiHold(intentKey)) return;
       const state = session.getWorkPhaseState();
       const ownedWork = state?.workItemId ?? state?.completion?.workItemId ?? state?.priorCompletion?.workItemId;
       const workItemId = incumbentWorkItem(session.context.getLedger(), lastServed.registryId, ownedWork);
       session.context.recordIncumbent(lastServed, decision.dimension, session.context.getEntrySource() ?? intentKey, workItemId);
-      if (state?.priorCompletion && state.providerInvocation === 1) {
-        appendWorkLifecycleSignal({ intentKey, served: servedKey(lastServed), action: 'prior-completion', workItemId: state.priorCompletion.workItemId });
-      }
+
     } catch {
       // A lost record only means the next entry is routed afresh.
     }
@@ -1420,7 +1403,7 @@ async function delegateRouterTurn(args: {
     const served = servedKey(lastServed);
     const settling = session.getWorkPhaseState();
     // Marked only after a model served: a failed clarification request can retry.
-    if (settling?.intentKey === intentKey && settling.contextStatus === 'clarification-only' && !settling.clarificationDispatched) {
+    if (settling?.intentKey === intentKey && settling.status === 'clarification-only' && !settling.clarificationDispatched) {
       session.commitWorkPhaseState({ ...settling, clarificationDispatched: true });
     }
     // Like the trajectory handoff, a broken contract's handback is consumed only
@@ -1466,7 +1449,7 @@ async function delegateRouterTurn(args: {
       session.commitWorkPhaseState(serveContractRelease(releasing));
     }
     const current = session.getWorkPhaseState();
-    if (!scored.pendingBoundary || current?.intentKey !== intentKey || current.contextStatus !== 'ready-pending') {
+    if (!scored.pendingBoundary || current?.intentKey !== intentKey || current.status !== 'ready-pending') {
       return finalDecision;
     }
     const owned = serveContextHandoff(current, served);

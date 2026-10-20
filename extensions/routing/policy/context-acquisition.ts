@@ -24,7 +24,6 @@ import { CONTEXT_DELIVERABLES } from '../context/resolve.js';
 import type { ContextReason } from '../context/types.js';
 import { handoffBoundaryId, type WorkPhaseState } from './work-phase.js';
 import { newExecutionFlow } from './execution-flow.js';
-import { REOPEN_WORK_TOOL } from './work-completion.js';
 import { EXECUTION_CONTRACT_TOOL } from './execution-contract.js';
 import { isMutationCall } from './mutation-detector.js';
 
@@ -52,11 +51,10 @@ export const ACQUISITION_READ_TOOLS: readonly string[] = [
 ];
 /** The host question tool, when one is installed. */
 export const QUESTION_TOOL = 'ask_user_question';
-const ROUTING_CONTEXT_TOOL = 'routing_context';
 
 export type ContextStatus =
   /** Owed context is being gathered before implementation. */
-  | 'acquiring'
+  | 'triage'
   /** Acquisition ended without a ready handoff: the entry may only ask the user. */
   | 'clarification-only'
   /** A ready handoff is accepted; no qualifying model has served the next phase yet. */
@@ -89,8 +87,8 @@ export function contextOwed(state: WorkPhaseState | undefined): boolean {
 
 /** The entry is in the restricted phase: its tools are limited until a model serves the next one. */
 export function acquisitionRestricted(state: WorkPhaseState | undefined): boolean {
-  const status = state?.contextStatus;
-  return status === 'acquiring' || status === 'clarification-only' || status === 'ready-pending';
+  const status = state?.status;
+  return status === 'triage' || status === 'clarification-only' || status === 'ready-pending';
 }
 
 /**
@@ -100,15 +98,12 @@ export function acquisitionRestricted(state: WorkPhaseState | undefined): boolea
  */
 export function acquisitionAllows(status: ContextStatus | undefined, toolName: string, input?: unknown): boolean {
   if (status === 'clarification-only') return false;
-  if (status === 'acquiring') {
+  if (status === 'triage') {
     return toolName !== EXECUTION_CONTRACT_TOOL && !isMutationCall(toolName, input);
   }
-  // The boundary is already pending. Let the tool refuse a second reopen itself.
-  if (status === 'ready-pending' && toolName === REOPEN_WORK_TOOL) return true;
   return ACQUISITION_READ_TOOLS.includes(toolName)
     || toolName === QUESTION_TOOL
-    || toolName === CONTEXT_HANDOFF_TOOL
-    || toolName === ROUTING_CONTEXT_TOOL;
+    || toolName === CONTEXT_HANDOFF_TOOL;
 }
 
 /**
@@ -118,13 +113,13 @@ export function acquisitionAllows(status: ContextStatus | undefined, toolName: s
  * boundary is not revoked, and its refusals are not counted.
  */
 export function countDenial(state: WorkPhaseState): WorkPhaseState {
-  if (state.contextStatus !== 'acquiring' || state.deniedAtInvocation === state.providerInvocation) return state;
+  if (state.status !== 'triage' || state.deniedAtInvocation === state.providerInvocation) return state;
   const contextDenials = (state.contextDenials ?? 0) + 1;
   return {
     ...state,
     contextDenials,
     deniedAtInvocation: state.providerInvocation,
-    ...(contextDenials >= ACQUISITION_DENIAL_LIMIT ? { contextStatus: 'clarification-only' as const } : {}),
+    ...(contextDenials >= ACQUISITION_DENIAL_LIMIT ? { status: 'clarification-only' as const } : {}),
   };
 }
 
@@ -141,15 +136,10 @@ export interface EntryPhase {
  */
 export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): EntryPhase {
   if (state?.reasoningHandoff) return { dimension: state.reasoningHandoff.target, cause: 'investigation-handoff' };
-  if (state?.contextStatus === 'ready-pending' || state?.contextStatus === 'served') {
+  if (state?.status === 'ready-pending' || state?.status === 'served') {
     return { dimension: state.deliverable ?? base, cause: 'investigation-handoff' };
   }
-  // The incumbent serves the entry with every tool; it hands off to change phase.
-  if (state?.incumbentServes && state.contextStatus == null) return { dimension: base };
-  if (!state?.incumbentServes || state.contextStatus === 'clarification-only' || contextOwed(state)) {
-    return { dimension: 'gather', cause: 'investigation' };
-  }
-  return { dimension: base };
+  return { dimension: 'gather', cause: 'investigation' };
 }
 
 /**
@@ -172,7 +162,7 @@ export function acceptContextHandoff(
     routingEpoch?: number;
   },
 ): WorkPhaseState {
-  if (state.contextStatus === 'ready-pending' || state.contextStatus === 'served' || state.reasoningHandoff) return state;
+  if (state.status === 'ready-pending' || state.status === 'served' || state.reasoningHandoff) return state;
   const entryId = state.sourceEntryId ?? state.intentKey;
   const boundaryId = handoffBoundaryId(entryId, accepted.routingEpoch ?? state.routingEpoch ?? 0, accepted.key);
   const executionFlow = accepted.deliverable === 'implement'
@@ -181,7 +171,7 @@ export function acceptContextHandoff(
   return {
     ...state,
     deliverable: accepted.deliverable,
-    contextStatus: 'ready-pending',
+    status: 'ready-pending',
     handoffKey: accepted.key,
     boundaryId,
     ...(executionFlow ? { executionFlow } : {}),
@@ -191,25 +181,25 @@ export function acceptContextHandoff(
 
 /** The first qualifying invocation that served the next phase owns it. */
 export function serveContextHandoff(state: WorkPhaseState, owner: string): WorkPhaseState {
-  if (state.contextStatus !== 'ready-pending') return state;
+  if (state.status !== 'ready-pending') return state;
   const handoff = state.reasoningHandoff;
   return {
     ...state,
-    contextStatus: 'served',
+    status: 'served',
     ...(handoff?.pending ? { reasoningHandoff: { ...handoff, pending: false, owner } } : {}),
   };
 }
 
 /** Remember a path the acquisition read, most recent first. */
 export function noteContextRead(state: WorkPhaseState, path: string): WorkPhaseState {
-  if (state.reasoningHandoff || state.contextStatus === 'ready-pending' || state.contextStatus === 'served') return state;
+  if (state.reasoningHandoff || state.status === 'ready-pending' || state.status === 'served') return state;
   const readPaths = [path, ...(state.readPaths ?? []).filter((p) => p !== path)].slice(0, MAX_EVIDENCE_PATHS);
   return { ...state, readPaths };
 }
 
 /** Count a read of part of a file, until the entry's handoff. It has no effect on routing. */
 export function notePartialRead(state: WorkPhaseState): WorkPhaseState {
-  if (state.reasoningHandoff || state.contextStatus === 'ready-pending' || state.contextStatus === 'served') return state;
+  if (state.reasoningHandoff || state.status === 'ready-pending' || state.status === 'served') return state;
   return { ...state, partialReadCount: (state.partialReadCount ?? 0) + 1 };
 }
 

@@ -8,9 +8,7 @@ import {
   planToolsNote,
 } from './router-tools-note.js';
 import { CONTEXT_HANDOFF_TOOL } from '../routing/policy/context-acquisition.js';
-import { COMPLETE_WORK_TOOL, REOPEN_WORK_TOOL } from '../routing/policy/work-completion.js';
 import { EXECUTION_CONTRACT_TOOL } from '../routing/policy/execution-contract.js';
-import { ROUTING_CONTEXT_TOOL } from './routing-context-tool.js';
 
 type Message = NotableMessage & { content: unknown };
 
@@ -31,7 +29,7 @@ const texts = (message: Message | undefined) =>
 
 describe('router tools note', () => {
   it('names every router tool in the off note', () => {
-    for (const tool of [EXECUTION_CONTRACT_TOOL, CONTEXT_HANDOFF_TOOL, ROUTING_CONTEXT_TOOL, COMPLETE_WORK_TOOL, REOPEN_WORK_TOOL]) {
+    for (const tool of [EXECUTION_CONTRACT_TOOL, CONTEXT_HANDOFF_TOOL]) {
       expect(ROUTER_TOOLS_OFF_NOTE).toContain(tool);
     }
   });

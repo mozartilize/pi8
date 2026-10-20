@@ -21,8 +21,7 @@ import { expandModelCandidates } from './provider.js';
 import { setDelegationTimeouts } from './delegation.js';
 import { CONTINUE_TURN, handleContractToolCall, submitExecutionContract, trackContractToolResult } from './execution-contract-tool.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
-import { submitCompleteWork } from './complete-work-tool.js';
-import { gateCompletedWorkToolCall } from './completed-work-gate.js';
+import { gateContextToolCall } from './gathering-gate.js';
 import { ROUTER_TOOLS_ON_NOTE } from './router-tools-note.js';
 import type { RouterSession } from './router-session-state.js';
 import { ACQUISITION_REQUEST_LIMIT } from '../routing/policy/context-acquisition.js';
@@ -1435,7 +1434,7 @@ describe('incumbent keeps serving across unresolved entries', () => {
     });
   });
 
-  it('keeps the selected work’s model and task type across two unresolved entries', async () => {
+  it('starts unrelated entries in triage without retaining implementation authority', async () => {
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
     const selectedContext = await prepareSelectedWork(harness, tree, 'implement the retry logic across the module');
     harness.resetEventStream();
@@ -1452,14 +1451,15 @@ describe('incumbent keeps serving across unresolved entries', () => {
       await harness.serve({ messages } as unknown as Context);
       return harness.getProviderState().lastDecision;
     }
-    // The incumbent serves each later entry at the selected work's task type.
     const turn2 = await nextEntry('give me today’s weather forecast');
-    expect(turn2?.dimension).toBe('implement');
-    expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
+    expect(turn2).toMatchObject({ dimension: 'gather', cause: 'investigation' });
+    expect(turn2?.fallbackChain).toEqual(expect.arrayContaining(['alpha/strong', 'beta/cheap']));
+    expect(harness.session.getWorkPhaseState()).toMatchObject({ status: 'triage' });
+    expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
 
     const turn3 = await nextEntry('what is a good pancake topping?');
-    expect(turn3?.dimension).toBe('implement');
-    expect(harness.getProviderState().lastServed?.registryId).toBe('alpha/strong');
+    expect(turn3).toMatchObject({ dimension: 'gather', cause: 'investigation' });
   });
 });
 
@@ -2035,29 +2035,30 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
     });
 
-    it('declares a gather answer without creating work or an incumbent', async () => {
+    it('answers directly in triage without a handoff or declared demand', async () => {
       const session = await newSession();
       const first = await session.routeTurn('investigate the flaky test');
       expect(first?.dimension).toBe('gather');
-      expect((await submitPrepared({ outcome: 'answer', deliverable: 'gather', complexity: 'routine', scope: 'bounded' })).accepted).toBe(true);
+      expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
       expect(harness.session.context.getLedger().items.size).toBe(0);
-      expect(harness.session.context.getIncumbent()).toBeUndefined();
-      expect(harness.session.getWorkPhaseState()?.contextAnswer).toBe('gather');
+      expect(harness.session.context.getIncumbent()?.registryId).toBe(harness.session.getLastServed()?.registryId);
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
+      expect(harness.getProviderState().lastDecision?.unified?.difficulty).toBeUndefined();
     });
 
-    it('uses collecting-context capabilities only until the model declares a direct gather answer', async () => {
+    it('applies declared gather demand only after a ready handoff', async () => {
       const session = await newSession();
       const trace = () => harness.getProviderState().lastDecision?.unified?.top?.find((t) => t.key === 'alpha/cheap');
       await session.routeTurn('investigate the flaky test');
-      expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+      expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
       expect(trace()?.features).toMatchObject({ reasoningFit: 0.4, researchFit: 0.5 });
       expect(trace()?.capabilityShortfall).toBe(0);
       expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBe('collecting-context');
-      expect((await submitPrepared({ outcome: 'answer', deliverable: 'gather', complexity: 'routine', scope: 'bounded' })).accepted).toBe(true);
-      // The entry stays restricted to read tools, but writing the answer is the gather deliverable.
+      expect((await submitPrepared({ outcome: 'ready', deliverable: 'gather', findings: 'checked the test',
+        question: 'investigate the cause', complexity: 'routine', scope: 'bounded' })).accepted).toBe(true);
+      // The accepted gather boundary supplies demand to the next selection.
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
-      expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+      expect(harness.session.getWorkPhaseState()?.status).toBe('served');
       // Routine demand centers at 0.25: target 0.2875 against quality 0.20.
       expect(trace()?.features.reasoningFit).toBeCloseTo(1 / 6, 5);
       expect(trace()?.features.researchFit).toBe(1);
@@ -2074,7 +2075,7 @@ describe('context acquisition', () => {
       const session = await newSession();
       await session.routeTurn('investigate the flaky test');
       expect((await submitPrepared({ outcome: 'needs-user', question: 'Which test is flaky?', reason: 'ambiguous-request' })).accepted).toBe(true);
-      expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('clarification-only');
+      expect(harness.session.getWorkPhaseState()?.status).toBe('clarification-only');
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
       const unified = harness.getProviderState().lastDecision?.unified;
       expect(unified?.difficultyMissingReason).toBe('collecting-context');
@@ -2265,9 +2266,9 @@ describe('context acquisition', () => {
       expect(harness.session.context.getLedger().items.get(workItemId)?.openContext).toEqual([]);
       await session.routeTurnAgainWithSameUserEntry();
       const next = await session.routeTurn('ok go ahead');
-      // The incumbent serves the next entry; the selected work stays recorded.
+      // Recorded work does not establish task type or mutation authority for another entry.
       expect(harness.session.context.getLedger().items.has(workItemId)).toBe(true);
-      expect(next?.cause).not.toBe('investigation');
+      expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation' });
     });
 
     it('does not invent an implementation contract for a plan-only request', async () => {
@@ -2332,7 +2333,7 @@ describe('context acquisition', () => {
       // note follows it and tells the model not to follow it.
       const after = userBlocks();
       expect(after.slice(0, 3)).toEqual(first);
-      expect(after[3]!.text).toMatch(/^Router: Do not follow the earlier router notes for this request\.\nRouter: call complete_work/);
+      expect(after[3]!.text).toBe('Router: Do not follow the earlier router notes for this request.');
       expect(session.piContext!.messages[0]!.content).toBe(PLAN_PROMPT);
     });
 
@@ -2341,14 +2342,14 @@ describe('context acquisition', () => {
       harness.session.setManualModel('beta/strong');
       const first = await session.routeTurn(PLAN_PROMPT);
       expect(first).toMatchObject({ dimension: 'gather', cause: 'manual-override', chosen: 'beta/strong' });
-      expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('acquiring');
+      expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
       const entry = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
       expect(JSON.stringify(entry.content)).toContain('hand_off_context');
 
       expect((await submitPrepared(handoff(1))).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
       expect(planning).toMatchObject({ dimension: 'plan', cause: 'manual-override', chosen: 'beta/strong' });
-      expect(harness.session.getWorkPhaseState()?.contextStatus).toBe('served');
+      expect(harness.session.getWorkPhaseState()?.status).toBe('served');
     });
 
     it('ends acquisition at its request limit with one tool-free clarification request, then dispatches nothing', async () => {
@@ -2363,7 +2364,7 @@ describe('context acquisition', () => {
       expect(session.servedOptions?.toolChoice).toBe('none');
       const entry = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
       expect(JSON.stringify(entry.content)).toContain('Reply to the user now');
-      expect(harness.session.getWorkPhaseState()).toMatchObject({ contextStatus: 'clarification-only', clarificationDispatched: true });
+      expect(harness.session.getWorkPhaseState()).toMatchObject({ status: 'clarification-only', clarificationDispatched: true });
 
       const requests = harness.streamedModels().length;
       await session.routeTurnAgainWithSameUserEntry();
@@ -2378,7 +2379,7 @@ describe('context acquisition', () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       harness.session.commitWorkPhaseState({
-        ...harness.session.getWorkPhaseState()!, contextStatus: 'clarification-only',
+        ...harness.session.getWorkPhaseState()!, status: 'clarification-only',
       });
       await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
       expect(harness.session.getWorkPhaseState()?.clarificationDispatched).toBeUndefined();
@@ -2421,10 +2422,10 @@ describe('context acquisition', () => {
         return session;
       }
 
-      it('is the model chosen outside collecting context, never the one that collected it', async () => {
+      it('records the last actual serve, including triage', async () => {
         const session = await newSession();
         await session.routeTurn(PLAN_PROMPT);
-        expect(harness.session.context.getIncumbent()).toBeUndefined();
+        expect(harness.session.context.getIncumbent()).toMatchObject({ registryId: 'alpha/cheap', dimension: 'gather' });
         await submitPrepared(handoff(5));
         await session.routeTurnAgainWithSameUserEntry();
         expect(harness.session.context.getIncumbent()).toMatchObject({ registryId: 'beta/strong', dimension: 'plan' });
@@ -2437,16 +2438,27 @@ describe('context acquisition', () => {
         expect(harness.session.context.getIncumbent()?.workItemId).toBe(workItemId);
       });
 
-      it('serves every later entry with all tools, without collecting context', async () => {
-        const session = await served();
-        const next = await session.routeTurn('please handle the pending adjustment');
-        expect(next?.chosen.startsWith('beta/strong')).toBe(true);
-        expect(next?.cause).not.toBe('investigation');
-        expect(harness.session.getWorkPhaseState()).toMatchObject({ incumbentServes: true });
-        expect(harness.session.getWorkPhaseState()?.contextStatus).toBeUndefined();
-      });
+      it('starts a thin continuation after a plan in triage and competes without held ownership', async () => {
+      const session = await served();
+      const previous = harness.session.getWorkPhaseState()!.boundaryId;
+      const next = await session.routeTurn('ok go for it');
+      expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation' });
+      expect(next?.fallbackChain).toEqual(expect.arrayContaining(['alpha/cheap', 'beta/strong']));
+      expect(harness.session.getWorkPhaseState()).toMatchObject({ status: 'triage', deliverable: 'gather' });
+      expect(harness.session.getWorkPhaseState()!.boundaryId).not.toBe(previous);
+      expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
+      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+      const mutation = { toolName: 'edit', input: { path: 'src/a.ts' } };
+      expect(gateContextToolCall(mutation, harness.session)?.block).toBe(true);
+      expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
+      expect(gateContextToolCall(mutation, harness.session)?.block).toBe(true);
+      const implementing = await session.routeTurnAgainWithSameUserEntry();
+      expect(implementing?.dimension).toBe('implement');
+      expect(harness.session.getWorkPhaseState()?.status).toBe('served');
+      expect(gateContextToolCall(mutation, harness.session)).toBeUndefined();
+    });
 
-      it('hands off to change phase, and the router chooses the next model', async () => {
+    it('hands off to change phase, and the router chooses the next model', async () => {
         const session = await served();
         await session.routeTurn('please handle the pending adjustment');
         expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
@@ -2454,100 +2466,17 @@ describe('context acquisition', () => {
         expect(next).toMatchObject({ dimension: 'implement', cause: 'investigation-handoff' });
       });
 
-      it('attaches the same active-work note to delegated requests without changing transcript or system messages', async () => {
+      it('keeps delegated notes stable without adding a completion protocol or changing the transcript', async () => {
         const session = await served();
         await session.routeTurnAgainWithSameUserEntry();
         const first = JSON.stringify(session.servedContext!.messages);
-        expect(first).toContain('Your own suggestions, next steps, offers');
+        expect(first).not.toContain('call complete_work');
+      expect(first).not.toContain('call reopen_work');
         await session.routeTurnAgainWithSameUserEntry();
         expect(JSON.stringify(session.servedContext!.messages)).toBe(first);
         expect(JSON.stringify(session.piContext)).not.toContain('Router:');
         expect(session.servedContext!.messages.filter((m) => m.role === 'system'))
           .toEqual(session.piContext!.messages.filter((m) => m.role === 'system'));
-      });
-
-      describe('completed work', () => {
-        async function completed() {
-          const session = await served();
-          const workItemId = harness.session.context.getLedger().activeWorkItemId!;
-          expect(submitCompleteWork({ outcome: 'done' }, routerCtx, harness.session).accepted).toBe(true);
-          return { session, workItemId };
-        }
-
-        it('keeps the post-completion reply on the same entry and model without replyPending', async () => {
-          const { session, workItemId } = await completed();
-          const key = harness.session.getWorkPhaseState()!.intentKey;
-          const reply = await session.routeTurnAgainWithSameUserEntry();
-          expect(reply?.chosen).toBe('beta/strong');
-          expect(harness.session.getWorkPhaseState()).toMatchObject({
-            intentKey: key, completion: { workItemId, status: 'done' },
-          });
-          expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
-          expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, harness.session)?.block).toBe(true);
-        });
-
-        it('gathers the entry after completed work, with the done item\'s model only a candidate', async () => {
-          const { session, workItemId } = await completed();
-          const count = harness.streamedModels().length;
-          const decision = await session.routeTurn('explain the migration tradeoffs');
-          // A completed item holds no task type: the entry gathers at the context-collection targets.
-          expect(decision).toMatchObject({ dimension: 'gather', cause: 'investigation' });
-          expect(harness.streamedModels()).toHaveLength(count + 1);
-          expect(harness.session.getWorkPhaseState()).toMatchObject({ priorCompletion: { workItemId }, contextStatus: 'acquiring' });
-          expect(harness.session.getWorkPhaseState()?.incumbentServes).toBeUndefined();
-          expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
-          expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
-          const user = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
-          expect(JSON.stringify(user.content)).toContain('call reopen_work instead of hand_off_context');
-          expect(JSON.stringify(session.piContext)).not.toContain('Router:');
-          expect(gateCompletedWorkToolCall({ toolName: 'edit', input: {} }, harness.session)?.block).toBe(true);
-        });
-
-        it('refuses a handoff to the completed item it owns and points to reopen_work, without a refusal count', async () => {
-          const { session, workItemId } = await completed();
-          await session.routeTurn('add the pending adjustment to this migration');
-          const before = harness.session.getWorkPhaseState()!;
-          const topicId = harness.session.context.getLedger().items.get(workItemId)!.topic.id;
-          const result = await submitPrepared({ ...handoff(1, 'implement'), workItemId, topicId });
-          expect(result).toMatchObject({ accepted: false, text: expect.stringContaining('reopen_work') });
-          expect(harness.session.getWorkPhaseState()).toMatchObject({ priorCompletion: { workItemId } });
-          expect(harness.session.getWorkPhaseState()?.contextDenials).toBe(before.contextDenials);
-          expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
-          expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
-        });
-
-        it('hands off unrelated work to a new item without reopening the completed one', async () => {
-          const { session, workItemId } = await completed();
-          await session.routeTurn('implement a CSV exporter');
-          expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
-          const ledger = harness.session.context.getLedger();
-          expect(ledger.activeWorkItemId).not.toBe(workItemId);
-          expect(ledger.items.get(workItemId)?.status).toBe('done');
-          expect(harness.session.getWorkPhaseState()?.priorCompletion).toBeUndefined();
-          await session.routeTurnAgainWithSameUserEntry();
-          expect(harness.session.context.getIncumbent()?.workItemId).toBe(ledger.activeWorkItemId);
-        });
-
-        it('keeps completed ownership and the completed-work gate after another model gathers', async () => {
-          const { session, workItemId } = await completed();
-          await session.routeTurn('explain what the migration does', { failModels: ['beta/strong'] });
-          expect(harness.session.getLastServed()?.registryId).not.toBe('beta/strong');
-          // A model that only collected context does not take the completed item.
-          const incumbent = harness.session.context.getIncumbent()!;
-          expect(incumbent.registryId).toBe('beta/strong');
-          expect(incumbent.workItemId).toBe(workItemId);
-          await session.routeTurn('make another change to it');
-          expect(harness.session.getWorkPhaseState()?.priorCompletion).toEqual({ workItemId });
-          expect(gateCompletedWorkToolCall({ toolName: 'write', input: {} }, harness.session)?.block).toBe(true);
-          expect(harness.session.context.getLedger().items.get(workItemId)?.status).toBe('done');
-        });
-
-        it('does not reinterpret a legacy incumbent without a work item as completed ownership', async () => {
-          const { session } = await completed();
-          harness.session.context.recordIncumbent({ registryId: 'beta/strong' }, 'plan', 'legacy');
-          await session.routeTurn('a follow-up question');
-          expect(harness.session.getWorkPhaseState()?.priorCompletion).toBeUndefined();
-        });
       });
 
       it('is never a pinned model', async () => {
@@ -2603,11 +2532,8 @@ describe('context acquisition', () => {
     }
 
     async function resolvedImplementation(session: Session, prompt: string, complexity = 'trivial'): Promise<RoutingDecision | undefined> {
-      const incumbent = harness.session.context.getIncumbent();
       const first = await session.routeTurn(prompt);
-      // With no incumbent the entry collects context; an incumbent serves it and hands off.
-      if (incumbent) expect(first?.chosen.startsWith(incumbent.registryId)).toBe(true);
-      else expect(first?.dimension).toBe('gather');
+      expect(first?.dimension).toBe('gather');
       const params = { outcome: 'ready', deliverable: 'implement', complexity, scope: 'bounded', workItemId: 'NEW_WORK_ITEM',
         topicId: 'NEW_TOPIC', topicTitle: 'Implementation', workItemTitle: 'Requested change',
         findings: 'read the request', question: 'implement the change' };
@@ -2801,29 +2727,22 @@ describe('context acquisition', () => {
         expect(harness.streamedModels().at(-1)).toBe('alpha/cheap');
       });
 
-      it('restores the pre-pin route instead of ranking the pool again', async () => {
-        const session = await planned();
-        // The pre-pin route was ranked before beta/strong served, so a new ranking has other continuity values.
-        const saved = structuredClone(harness.getProviderState().lastDecision!);
-        harness.session.setManualModel('alpha/cheap');
-        await session.routeTurnAgainWithSameUserEntry();
-        expect(harness.streamedModels().at(-1)).toBe('alpha/cheap');
-        expect(harness.session.resumeManual()).toBe(true);
-        // The restore covers every invocation of the entry, and each one gets a new authorization.
-        const assignments = new Set<string>();
-        for (let invocation = 0; invocation < 2; invocation++) {
-          const next = await session.routeTurnAgainWithSameUserEntry();
-          expect(next).toMatchObject({ cause: 'resume', chosen: saved.chosen, fallbackChain: saved.fallbackChain });
-          expect(harness.getProviderState().lastDecision?.unified?.top).toEqual(saved.unified?.top);
-          expect(harness.streamedModels().at(-1)).toBe(saved.chosen);
-          const authorization = harness.session.getWorkPhaseState()?.boundaryAuthorization;
-          expect(authorization?.state).toBe('served');
-          assignments.add(authorization!.assignmentId);
-        }
-        expect(assignments.size).toBe(2);
-      });
+      it('does not restore pre-pin task type or contract authority after a manual routing transition', async () => {
+      const session = await planned();
+      const previous = harness.session.getWorkPhaseState()!.boundaryId;
+      harness.session.setManualModel('alpha/cheap');
+      await session.routeTurnAgainWithSameUserEntry();
+      expect(harness.streamedModels().at(-1)).toBe('alpha/cheap');
+      expect(harness.session.resumeManual()).toBe(true);
+      const next = await session.routeTurnAgainWithSameUserEntry();
+      expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation' });
+      expect(harness.session.getWorkPhaseState()?.boundaryId).not.toBe(previous);
+      expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
+      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+      expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
+    });
 
-      it.each([
+    it.each([
         ['only an action that is no longer callable', (saved: { chosen: string; fallbackChain: string[] }) => {
           saved.chosen = 'alpha/cheap';
           saved.fallbackChain = ['alpha/cheap'];
@@ -2843,8 +2762,8 @@ describe('context acquisition', () => {
         expect(harness.session.resumeManual()).toBe(true);
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next?.cause).not.toBe('resume');
-        expect(next?.chosen).toBe('beta/strong');
-        expect(harness.streamedModels().at(-1)).toBe('beta/strong');
+        expect(next?.dimension).toBe('gather');
+        expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
       });
 
       it('records selection identities and counts without task text or capability minimums', async () => {
@@ -3406,7 +3325,7 @@ describe('manual pin in an owned continuation', () => {
     await harness.serve(context);
     expect(harness.session.getLastServed()?.thinkingLevel).toBe('high');
     // The served model holds the rest of the entry at its thinking level.
-    harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, incumbentServes: true });
+    harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, status: 'served' });
     harness.session.setManualModel('alpha/source:low');
     harness.resetEventStream();
     await harness.serve(context);
@@ -3898,7 +3817,7 @@ describe('gathering direct answers', () => {
   const actions = (rows: Array<Record<string, unknown>>) => rows
     .map((r) => (r.investigationHandoff as { action?: string } | undefined)?.action).filter(Boolean);
 
-  it('streams one answer without a handoff, an incumbent, or retry telemetry', async () => {
+  it('streams one answer without a handoff or retry telemetry and remembers its served identity', async () => {
     const harness = await setupProviderTest({ dir: temp.path, models: [registryModel('a/model')] });
     harness.scriptReply([{ type: 'text_delta', delta: 'visible answer' }, { type: 'done' }]);
     await harness.serve(context);
@@ -3906,34 +3825,29 @@ describe('gathering direct answers', () => {
     expect(harness.outStream.events.filter((e) => e.type === 'text_delta').map((e) => (e as { delta: string }).delta))
       .toEqual(['visible answer']);
     expect(harness.outStream.events.filter((e) => e.type === 'done')).toHaveLength(1);
-    expect(harness.session.context.getIncumbent()).toBeUndefined();
+    expect(harness.session.context.getIncumbent()?.registryId).toBe('a/model');
     expect(harness.session.context.getLedger().items.size).toBe(0);
     const logged = await records();
     expect(actions(logged)).toEqual([]);
     expect(JSON.stringify(logged)).not.toContain('visible answer');
   });
 
-  it('serves a declared direct answer once and remains gathering on the next entry', async () => {
+  it('answers from triage with an incumbent and starts the next entry without a handoff', async () => {
     const harness = await setupProviderTest({ dir: temp.path, models: [registryModel('a/model')] });
-    harness.scriptReply([{ type: 'toolcall_start' }, { type: 'done' }]);
+    harness.session.context.recordIncumbent({ registryId: 'a/model' }, 'implement', 'previous');
+    harness.scriptReply([{ type: 'text_delta', delta: 'direct answer' }, { type: 'done' }]);
     await harness.serve(context);
-    const { submitContextHandoff } = await import('./context-handoff-tool.js');
-    expect(submitContextHandoff({
-      outcome: 'answer', deliverable: 'gather', complexity: 'trivial', scope: 'bounded',
-    }, { model: { provider: 'router', id: 'auto' } } as unknown as ExtensionContext, harness.session).accepted).toBe(true);
-    harness.resetEventStream();
-    harness.scriptReply([{ type: 'text_delta', delta: 'declared answer' }, { type: 'done' }]);
-    await harness.serve(context);
-    expect(harness.streamedModels()).toEqual(['a/model', 'a/model']);
+    expect(harness.streamedModels()).toEqual(['a/model']);
     expect(harness.outStream.events.filter((e) => e.type === 'text_delta')).toHaveLength(1);
-    expect(harness.session.context.getIncumbent()).toBeUndefined();
-    expect(actions(await records())).toContain('answer');
+    expect(harness.session.getLastDecision()?.dimension).toBe('gather');
+    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
+    expect(actions(await records())).not.toContain('answer');
     harness.resetEventStream();
-    harness.scriptReply([{ type: 'text_delta', delta: 'another entry' }, { type: 'done' }]);
     await harness.serve({ messages: [...context.messages, { role: 'user', content: 'next', timestamp: 2 }] } as unknown as Context);
-    expect(harness.streamedModels()).toHaveLength(3);
-    expect(harness.session.getWorkPhaseState()?.contextAnswer).toBeUndefined();
-    expect(harness.session.context.getIncumbent()).toBeUndefined();
+    expect(harness.streamedModels()).toHaveLength(2);
+    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
+    expect(harness.session.getWorkPhaseState()?.handoffKey).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
   });
 });
 

@@ -121,8 +121,8 @@ export function submitCompleteWork(
       ? { accepted: true, text: acceptedText(outcome), workItemId: state.completion.workItemId }
       : reject(state, served, 'already-complete');
   }
-  const status = state.contextStatus;
-  if (status === 'acquiring' || status === 'clarification-only') return reject(state, served, 'collecting-context');
+  const status = state.status;
+  if (status === 'triage' || status === 'clarification-only') return reject(state, served, 'collecting-context');
   if (status === 'ready-pending') return reject(state, served, 'handoff-pending');
   const item = activeWorkItem(session.context.getLedger());
   if (!item) return reject(state, served, 'no-active-work');

@@ -72,12 +72,12 @@ describe('decision log', () => {
       solver: 'exact', domainStatus: 'ready', constraintsEnforced: true,
       profileDigest: 'profile', featureSchemaDigest: 'schema',
       ranked: 1, insufficientEvidence: 0, holdingPrompt: 1,
-      difficultyMissingReason: 'direct-answer',
+      difficultyMissingReason: 'no-handoff',
     };
     appendDecision({ ...DECISION, unified }, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
     appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
     const records = readFileSync(join(dir, DECISION_LOG_FILE), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
-    expect(records[0].unified.difficultyMissingReason).toBe('direct-answer');
+    expect(records[0].unified.difficultyMissingReason).toBe('no-handoff');
     expect(records[0].unified).not.toHaveProperty('difficulty');
     expect(records[1]).not.toHaveProperty('unified');
   });

@@ -55,7 +55,7 @@ describe('reopen_work', () => {
     expect(ledger.activeWorkItemId).toBe('w_1');
     expect(ledger.incumbent).toMatchObject({ registryId: 'a/model', workItemId: 'w_1', dimension: 'implement' });
     expect(session.getWorkPhaseState()).toMatchObject({
-      contextStatus: 'ready-pending',
+      status: 'ready-pending',
       workItemId: 'w_1',
       deliverable: 'implement',
       executionFlow: { strikesByModel: {}, excludedModels: [] },
@@ -78,7 +78,7 @@ describe('reopen_work', () => {
     const session = doneSession({
       priorCompletion: undefined,
       completion: { workItemId: 'w_1', status: 'done' },
-      contextStatus: 'served',
+      status: 'served',
       reasoningHandoff: {
         id: 'old', pending: false, owner: 'a/model', requester: 'a/model', target: 'review',
         rubric: { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 },
@@ -89,7 +89,7 @@ describe('reopen_work', () => {
     expect(result.accepted).toBe(true);
     expect(result.text).toContain('A planning model continues');
     const state = session.getWorkPhaseState();
-    expect(state?.contextStatus).toBe('ready-pending');
+    expect(state?.status).toBe('ready-pending');
     expect(state?.completion).toBeUndefined();
     expect(state?.reasoningHandoff).toMatchObject({ pending: true, target: 'plan', id: 'entry' });
     expect(session.context.getLedger().incumbent?.dimension).toBe('plan');
@@ -121,7 +121,7 @@ describe('reopen_work', () => {
   });
 
   it('values a reopened implementation on the execution rubric', () => {
-    const session = doneSession({ priorCompletion: undefined, completion: { workItemId: 'w_1', status: 'done' }, contextStatus: 'served' });
+    const session = doneSession({ priorCompletion: undefined, completion: { workItemId: 'w_1', status: 'done' }, status: 'served' });
     const remainingWork = { openDecisions: 3, spread: 2, verification: 2, knowledge: 2, coupling: 2 };
     expect(submitReopenWork({ ...SHAPE, deliverable: 'implement', remainingWork }, AUTO, session).accepted).toBe(true);
     const handoff = session.getWorkPhaseState()?.reasoningHandoff;
@@ -179,17 +179,17 @@ describe('reopen_work', () => {
   });
 
   it('reopens the prior completed item while the entry after it collects context', () => {
-    const session = doneSession({ contextStatus: 'acquiring', contextRequests: 1 });
+    const session = doneSession({ status: 'triage', contextRequests: 1 });
     expect(submitReopenWork(SHAPE, AUTO, session).accepted).toBe(true);
     expect(session.context.getLedger().activeWorkItemId).toBe('w_1');
-    expect(session.getWorkPhaseState()).toMatchObject({ contextStatus: 'ready-pending', workItemId: 'w_1' });
+    expect(session.getWorkPhaseState()).toMatchObject({ status: 'ready-pending', workItemId: 'w_1' });
     expect(session.getWorkPhaseState()?.priorCompletion).toBeUndefined();
   });
 
   it.each([
-    ['collecting context without completed work', { contextStatus: 'acquiring' as const, priorCompletion: undefined }],
-    ['a handoff waiting for its next step', { contextStatus: 'ready-pending' as const }],
-    ['asking the user', { contextStatus: 'clarification-only' as const }],
+    ['collecting context without completed work', { status: 'triage' as const, priorCompletion: undefined }],
+    ['a handoff waiting for its next step', { status: 'ready-pending' as const }],
+    ['asking the user', { status: 'clarification-only' as const }],
   ])('refuses while %s', (_label, over) => {
     const session = doneSession(over);
     expect(submitReopenWork(SHAPE, AUTO, session).accepted).toBe(false);
@@ -224,7 +224,7 @@ describe('reopen_work', () => {
     session.context.bindPersistence(() => { throw new Error('disk full'); });
     expect(submitReopenWork(SHAPE, AUTO, session).accepted).toBe(false);
     expect(session.context.getLedger().items.get('w_1')?.status).toBe('done');
-    expect(session.getWorkPhaseState()?.contextStatus).toBeUndefined();
+    expect(session.getWorkPhaseState()?.status).toBeUndefined();
     // The prior completion, and with it the completed-work mutation gate, stays.
     expect(session.getWorkPhaseState()?.priorCompletion).toEqual({ workItemId: 'w_1' });
   });

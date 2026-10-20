@@ -48,7 +48,7 @@ describe('carryAcrossBranch', () => {
       observedMutationTools: 2,
       executionFlow: { ...newExecutionFlow('intent-a', 'b'), strikesByModel: { 'beta/strong': 2 }, excludedModels: ['beta/strong'] },
       readPaths: ['/repo/a.ts'],
-      contextStatus: 'acquiring',
+      status: 'triage',
       workItemId: 'w_a',
       contextReasons: ['carried-open-context'],
       contextSatisfied: false,
