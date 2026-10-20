@@ -18,19 +18,19 @@ import {
   reworkContract,
   validateContract,
 } from './execution-contract.js';
-import type { WorkPhaseState } from './work-phase.js';
+import type { EntryRoutingState } from './entry-routing-state.js';
 import { newExecutionFlow } from './execution-flow.js';
 
 /** An entry whose accepted implement handoff started an execution flow. */
-const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
+const state = (over: Partial<EntryRoutingState> = {}): EntryRoutingState => ({
   intentKey: 'intent-a',
   providerInvocation: 3,
   observedMutationTools: 0,
   executionFlow: newExecutionFlow('intent-a', 'handoff:intent-a:0:k'),
   ...over,
 });
-const strikes = (s: WorkPhaseState) => s.executionFlow?.strikesByModel;
-const excluded = (s: WorkPhaseState) => s.executionFlow?.excludedModels;
+const strikes = (s: EntryRoutingState) => s.executionFlow?.strikesByModel;
+const excluded = (s: EntryRoutingState) => s.executionFlow?.excludedModels;
 
 const edit = (path: string) => ({ kind: 'edit', path, change: 'make the claim atomic' });
 const verify = { kind: 'verify', verifier: 'test' };
@@ -46,7 +46,7 @@ function accepted(
   base = state(),
   rubric: Partial<ExecutionRubric> = {},
   observed: Partial<MeasuredFeatures> = {},
-): WorkPhaseState {
+): EntryRoutingState {
   const validation = validateContract(steps, '/repo');
   if (!validation.ok) throw new Error(validation.reason);
   return acceptContract(base, {
@@ -310,7 +310,7 @@ describe('execution contract completion and outcome', () => {
   });
 
   it('strikes the executor of reworked work and excludes it on the second strike', () => {
-    const executedBy = (base: WorkPhaseState) => {
+    const executedBy = (base: EntryRoutingState) => {
       let next = accepted([edit('src/a.ts')], base);
       next = noteContractEdit(next, '/repo', 'src/a.ts', 'copilot/luna:high');
       return next;

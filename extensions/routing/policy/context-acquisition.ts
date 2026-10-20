@@ -20,8 +20,8 @@
  */
 import { dirname } from 'node:path';
 import type { DecisionCause, Dimension, ReasoningEvidence, ReasoningHandoffMeta } from '../../types.js';
-import type { ContextReason } from '../context/types.js';
-import { handoffBoundaryId, type WorkPhaseState } from './work-phase.js';
+export type AcquisitionReason = 'reasoning-prep' | 'referenced-artifact';
+import { handoffBoundaryId, type EntryRoutingState } from './entry-routing-state.js';
 import { newExecutionFlow } from './execution-flow.js';
 import { EXECUTION_CONTRACT_TOOL } from './execution-contract.js';
 import { isMutationCall } from './mutation-detector.js';
@@ -67,22 +67,22 @@ export type ContextStatus =
  * it; context the request owes and the router found missing is owed whatever
  * the deliverable, so a waiver never skips a file or an open obligation.
  */
-export function owedContext(state: WorkPhaseState | undefined): ContextReason[] {
+export function owedContext(state: EntryRoutingState | undefined): AcquisitionReason[] {
   const deliverable = state?.deliverable;
   if (!state || !deliverable) return [];
-  const reasons: ContextReason[] = [];
+  const reasons: AcquisitionReason[] = [];
   if (deliverable === 'plan' || deliverable === 'review') reasons.push('reasoning-prep');
   if (state.sourceEvidencePending) reasons.push('referenced-artifact');
   return reasons;
 }
 
 /** Whether the entry owes collecting context before its deliverable. */
-export function contextOwed(state: WorkPhaseState | undefined): boolean {
+export function contextOwed(state: EntryRoutingState | undefined): boolean {
   return owedContext(state).length > 0;
 }
 
 /** The entry is in the restricted phase: its tools are limited until a model serves the next one. */
-export function acquisitionRestricted(state: WorkPhaseState | undefined): boolean {
+export function acquisitionRestricted(state: EntryRoutingState | undefined): boolean {
   const status = state?.status;
   return !!state?.sourceEvidencePending || status === 'triage' || status === 'clarification-only' || status === 'ready-pending';
 }
@@ -108,7 +108,7 @@ export function acquisitionAllows(status: ContextStatus | undefined, toolName: s
  * limit ends collecting context: the entry may then only ask the user. A ready
  * boundary is not revoked, and its refusals are not counted.
  */
-export function countDenial(state: WorkPhaseState): WorkPhaseState {
+export function countDenial(state: EntryRoutingState): EntryRoutingState {
   if (state.status !== 'triage' || state.deniedAtInvocation === state.providerInvocation) return state;
   const contextDenials = (state.contextDenials ?? 0) + 1;
   return {
@@ -130,7 +130,7 @@ export interface EntryPhase {
  * the model, never which context the request owes. A recovery entry acquires
  * at its deliverable, so a model trusted with the deliverable does it.
  */
-export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): EntryPhase {
+export function entryPhase(state: EntryRoutingState | undefined, base: Dimension): EntryPhase {
   if (state?.reasoningHandoff) return { dimension: state.reasoningHandoff.target, cause: 'investigation-handoff' };
   if (state?.status === 'ready-pending' || state?.status === 'served') {
     return { dimension: state.deliverable ?? base, cause: 'investigation-handoff' };
@@ -149,7 +149,7 @@ export function entryPhase(state: WorkPhaseState | undefined, base: Dimension): 
  * the flow that the entry already has.
  */
 export function acceptContextHandoff(
-  state: WorkPhaseState,
+  state: EntryRoutingState,
   accepted: {
     deliverable: Dimension;
     key: string;
@@ -157,7 +157,7 @@ export function acceptContextHandoff(
     /** Routing epoch of the session; the entry's own epoch when absent. */
     routingEpoch?: number;
   },
-): WorkPhaseState {
+): EntryRoutingState {
   if (state.handoffKey === accepted.key || state.status === 'ready-pending') return state;
   const entryId = state.sourceEntryId ?? state.intentKey;
   const boundaryId = handoffBoundaryId(entryId, accepted.routingEpoch ?? state.routingEpoch ?? 0, accepted.key);
@@ -178,7 +178,7 @@ export function acceptContextHandoff(
 }
 
 /** The first qualifying invocation that served the next phase owns it. */
-export function serveContextHandoff(state: WorkPhaseState, owner: string): WorkPhaseState {
+export function serveContextHandoff(state: EntryRoutingState, owner: string): EntryRoutingState {
   if (state.status !== 'ready-pending') return state;
   const handoff = state.reasoningHandoff;
   return {
@@ -189,14 +189,14 @@ export function serveContextHandoff(state: WorkPhaseState, owner: string): WorkP
 }
 
 /** Remember a path the acquisition read, most recent first. */
-export function noteContextRead(state: WorkPhaseState, path: string): WorkPhaseState {
+export function noteContextRead(state: EntryRoutingState, path: string): EntryRoutingState {
   if (state.reasoningHandoff || state.status === 'ready-pending' || state.status === 'served') return state;
   const readPaths = [path, ...(state.readPaths ?? []).filter((p) => p !== path)].slice(0, MAX_EVIDENCE_PATHS);
   return { ...state, readPaths };
 }
 
 /** Count a read of part of a file, until the entry's handoff. It has no effect on routing. */
-export function notePartialRead(state: WorkPhaseState): WorkPhaseState {
+export function notePartialRead(state: EntryRoutingState): EntryRoutingState {
   if (state.reasoningHandoff || state.status === 'ready-pending' || state.status === 'served') return state;
   return { ...state, partialReadCount: (state.partialReadCount ?? 0) + 1 };
 }

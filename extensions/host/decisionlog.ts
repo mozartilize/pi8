@@ -16,9 +16,8 @@ import type {
   ReasoningHandoffMeta,
   RoutingDecision,
   SourceEvidenceCounts,
-  WorkContextMeta,
 } from '../types.js';
-import type { ContextReason } from '../routing/context/types.js';
+import type { AcquisitionReason, ContextStatus } from '../routing/policy/context-acquisition.js';
 import type { CheckVerdicts, FactsLog } from '../routing/policy/change-facts.js';
 import type { DecisionEvidenceV1 } from '../routing/policy/decision-evidence.js';
 import { resolveStoragePath } from '../bench/store.js';
@@ -31,7 +30,7 @@ export const DECISION_LOG_FILE = 'decisions.jsonl';
  * versioning; readers treat their fields as they were written and never
  * reinterpret them under a later schema.
  */
-export const DECISION_LOG_SCHEMA_VERSION = 4;
+export const DECISION_LOG_SCHEMA_VERSION = 5;
 /** Sidecar suffix used when writing next to a persisted session file. */
 export const DECISION_SIDECAR_SUFFIX = 'router-decisions.jsonl';
 
@@ -64,7 +63,7 @@ export interface DecisionLogEntry {
   /** {@link DECISION_LOG_SCHEMA_VERSION} at write time; absent on unversioned records. */
   schemaVersion?: number;
   /** Discriminator. Absent or 'decision' for routing decisions. */
-  kind?: 'decision' | 'attempt-usage' | 'execution-contract' | 'investigation-handoff' | 'work-lifecycle';
+  kind?: 'decision' | 'attempt-usage' | 'execution-contract' | 'investigation-handoff' | 'settle';
   dimension: string;
   /** Final chosen model; after fallback this is the served model. */
   chosen: string;
@@ -106,6 +105,7 @@ export interface DecisionLogEntry {
   /** Set on `kind: 'investigation-handoff'` records only. */
   investigationHandoff?: {
     action: ContextHandoffSignal['action'];
+    status?: ContextStatus;
     /** Router-authored reject code, never the findings. */
     rejectReason?: string;
     /** Tool name of a refused call. Set only on `deny`. No arguments. */
@@ -113,7 +113,7 @@ export interface DecisionLogEntry {
     handoff?: ReasoningHandoffMeta;
     deliverable?: Dimension;
     /** Why the entry owed context, as categories. */
-    contextReasons?: ContextReason[];
+    contextReasons?: AcquisitionReason[];
     /** Codes and measurements of the declared facts, and the shadow requirement. */
     facts?: FactsLog;
     /** Verifier results before and after the handoff. */
@@ -124,24 +124,11 @@ export interface DecisionLogEntry {
     oversizedArtifacts?: number;
     sourceEvidence?: SourceEvidenceCounts;
   };
-  /** The entry's work-context resolution: tier, ids, categories; never titles. */
-  workContext?: WorkContextMeta;
-  /** Routed phase records: the deliverable behind collecting context, and the join to the previous entry's handoff. */
+  routingScope?: RoutingDecision['routingScope'];
   deliverable?: string;
   reasoningHandoff?: ReasoningHandoffMeta;
-  previousHandoffId?: string;
-  /** Set on `kind: 'work-lifecycle'` records only. */
-  workLifecycle?: {
-    action: WorkLifecycleSignal['action'];
-    workItemId?: string;
-    /** Router-authored reject code. */
-    rejectReason?: string;
-    status?: 'done' | 'superseded';
-    deliverable?: Dimension;
-    reminder?: SettleReminderKind;
-    /** Referenced files that owed no read because they are above the grounding size limit. */
-    oversizedArtifacts?: number;
-  };
+  /** Counts-only acquisition settlement diagnostics. */
+  settle?: { action: SettleSignal['action']; deliverable?: Dimension; reminder?: SettleReminderKind };
   /** Set on `kind: 'execution-contract'` records only. */
   executionContract?: {
     /** `route` marks a routing decision the contract shaped. */
@@ -181,6 +168,7 @@ export interface ExecutionContractSignal {
   outcome?: ContractOutcome;
   meta?: ExecutionContractMeta;
   evidence?: DecisionEvidenceV1;
+  routingScope?: RoutingDecision['routingScope'];
 }
 
 /** Append an execution-contract transition. Best-effort; never throws into the tool path. */
@@ -204,6 +192,7 @@ export function appendExecutionContractSignal(
       reason: `execution contract ${signal.action}`,
       chain: [signal.served],
       intentKey: signal.intentKey,
+      ...(signal.routingScope ? { routingScope: signal.routingScope } : {}),
       executionContract: {
         action: signal.action,
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
@@ -235,20 +224,22 @@ export interface ContextHandoffSignal {
    * handoff and `no-handoff` owed context that was never handed off.
    */
   action:
-    | 'accept' | 'answer' | 'reject' | 'reminder' | 'deny' | 'needs-user' | 'budget-exhausted'
+    | 'accept' | 'reject' | 'reminder' | 'deny' | 'needs-user' | 'budget-exhausted'
     | 'served' | 'phase-end' | 'no-handoff' | 'source-settle-repair' | 'source-settle-exhausted';
+  status?: ContextStatus;
   rejectReason?: string;
   /** Tool name of a refused call. Set only on `deny`. No arguments. */
   deniedTool?: string;
   handoff?: ReasoningHandoffMeta;
   deliverable?: Dimension;
-  contextReasons?: ContextReason[];
+  contextReasons?: AcquisitionReason[];
   facts?: FactsLog;
   checks?: CheckVerdicts;
   evidence?: DecisionEvidenceV1;
   /** Referenced files that owed no read because they are above the grounding size limit. */
   oversizedArtifacts?: number;
   sourceEvidence?: SourceEvidenceCounts;
+  routingScope?: RoutingDecision['routingScope'];
 }
 
 /** Append a context handoff transition. Best-effort; never throws into the tool path. */
@@ -272,9 +263,11 @@ export function appendContextHandoffSignal(
       reason: `context handoff ${signal.action}`,
       chain: [signal.served],
       intentKey: signal.intentKey,
+      ...(signal.routingScope ? { routingScope: signal.routingScope } : {}),
       investigationHandoff: {
         action: signal.action,
         ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
+        ...(signal.status ? { status: signal.status } : {}),
         ...(signal.deniedTool ? { deniedTool: signal.deniedTool } : {}),
         ...(signal.handoff ? { handoff: signal.handoff } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
@@ -292,41 +285,22 @@ export function appendContextHandoffSignal(
   }
 }
 
-/**
- * One work item lifecycle transition the model declared or the router
- * enforced. Ids, codes and categories only: never titles or reply text.
- */
-export interface WorkLifecycleSignal {
+/** Acquisition reminder outcome. It has no completion or work identity. */
+export interface SettleSignal {
   intentKey: string;
-  /** Model that served the invocation the transition belongs to. */
   served: string;
-  /**
-   * `complete-*` and `reopen-*` mark `complete_work` and `reopen_work`
-   * calls; `prior-completion` an entry that a completed item's model served;
-   * `gate` a change refused because the work item is complete.
-   * `settle-reminder` marks a hidden settle reminder, and `reminder` names its kind; when the
-   * run settles, `settle-followed` or `settle-ignored` records whether the
-   * model then declared the boundary.
-   */
-  action:
-    | 'complete-accept' | 'complete-reject' | 'reopen-accept' | 'reopen-reject' | 'prior-completion' | 'gate'
-    | 'settle-reminder' | 'settle-followed' | 'settle-ignored';
-  workItemId?: string;
-  rejectReason?: string;
-  status?: 'done' | 'superseded';
+  action: 'settle-reminder' | 'settle-followed' | 'settle-ignored';
   deliverable?: Dimension;
   reminder?: SettleReminderKind;
-  /** Referenced files that owed no read because they are above the grounding size limit. */
-  oversizedArtifacts?: number;
+  routingScope?: RoutingDecision['routingScope'];
 }
 
-/** The boundary a settle reminder asks for: `hand_off_context` or `complete_work`. */
-export type SettleReminderKind = 'context' | 'completion';
+export type SettleReminderKind = 'context';
 
-/** Append a work lifecycle transition. Best-effort; never throws into the tool path. */
-/** Opaque namespace for counts; the log path itself never leaves this process. */
-/** Ephemeral sessions share a log file, not an entry namespace. */
-export function resetModelEventSession(): void { ephemeralSessionGeneration++; }
+export function resetModelEventSession(): void {
+  ephemeralSessionGeneration += 1;
+}
+
 export function modelEventSession(): string {
   const scope = decisionLogBaseOverride || sessionSidecarPath(DECISION_SIDECAR_SUFFIX)
     ? decisionLogPath() : `${ephemeralLogScope}:${ephemeralSessionGeneration}`;
@@ -345,7 +319,7 @@ function recordProtocolEvent(
   }, storageBase);
 }
 
-export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBase?: string): void {
+export function appendSettleSignal(signal: SettleSignal, storageBase?: string): void {
   try {
     const kind = signal.action === 'settle-reminder' ? 'reminder'
       : signal.action === 'settle-followed' ? 'followed'
@@ -356,23 +330,20 @@ export function appendWorkLifecycleSignal(signal: WorkLifecycleSignal, storageBa
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const entry: DecisionLogEntry = {
       ts: Date.now(),
-      kind: 'work-lifecycle',
+      kind: 'settle',
       dimension: signal.deliverable ?? 'gather',
       chosen: signal.served,
       served: signal.served,
       viaFallback: false,
-      cause: 'incumbent',
-      reason: `work ${signal.action}`,
+      cause: 'investigation',
+      reason: `acquisition ${signal.action}`,
       chain: [signal.served],
       intentKey: signal.intentKey,
-      workLifecycle: {
+      ...(signal.routingScope ? { routingScope: signal.routingScope } : {}),
+      settle: {
         action: signal.action,
-        ...(signal.workItemId ? { workItemId: signal.workItemId } : {}),
-        ...(signal.rejectReason ? { rejectReason: signal.rejectReason } : {}),
-        ...(signal.status ? { status: signal.status } : {}),
         ...(signal.deliverable ? { deliverable: signal.deliverable } : {}),
         ...(signal.reminder ? { reminder: signal.reminder } : {}),
-        ...(signal.oversizedArtifacts ? { oversizedArtifacts: signal.oversizedArtifacts } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');
@@ -419,12 +390,9 @@ export function appendDecision(
       ...(decision.executionContract
         ? { executionContract: { action: 'route' as const, meta: decision.executionContract } }
         : {}),
-      ...(decision.workContext ? { workContext: decision.workContext } : {}),
+      ...(decision.routingScope ? { routingScope: decision.routingScope } : {}),
       ...(decision.deliverable ? { deliverable: decision.deliverable } : {}),
       ...(decision.reasoningHandoff ? { reasoningHandoff: decision.reasoningHandoff } : {}),
-      ...(decision.previousHandoffId
-        ? { previousHandoffId: decision.previousHandoffId }
-        : {}),
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');
   } catch {

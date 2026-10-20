@@ -61,7 +61,7 @@ import {
   defaultRuntimeBindings,
 } from './serve/router-session-state.js';
 import { isMutationCall } from './routing/policy/mutation-detector.js';
-import { SELECTION_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
+import { SELECTION_ENTRY_TYPE, readBranch } from './routing/context/branch-provenance.js';
 import { REQUEST_NOTE_ENTRY_TYPE, applyNotePlans, type NotableMessage } from './serve/request-notes.js';
 import { planToolsNote } from './serve/router-tools-note.js';
 import { CONTEXT_HANDOFF_TOOL } from './routing/policy/context-acquisition.js';
@@ -375,10 +375,10 @@ function observeMutationToolCall(
 ): void {
   try {
     if (!isMutationCall(event.toolName, event.input)) return;
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     if (!state) return;
     const committed = { ...state, observedMutationTools: state.observedMutationTools + 1 };
-    session.commitWorkPhaseState(committed);
+    session.commitEntryRoutingState(committed);
     const last = session.getLastDecision();
     if (last && committed.intentKey === last.intentKey && !last.mutationObserved) {
       const updated = { ...last, mutationObserved: true };
@@ -392,7 +392,7 @@ function observeMutationToolCall(
 
 function handleTrajectoryToolResult(event: ToolResultEvent, session: RouterSession): void {
   try {
-    const invocation = session.getWorkPhaseState()?.providerInvocation ?? 0;
+    const invocation = session.getEntryRoutingState()?.providerInvocation ?? 0;
     const decision = session.observeTrajectory(
       {
         toolName: event.toolName,
@@ -489,7 +489,7 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     session.invalidateRouting();
     session.clearWarmCaches();
     restoreBranchState(ctx, session);
-    session.commitWorkPhaseState(undefined);
+    session.commitEntryRoutingState(undefined);
     session.setCachedIntent(undefined);
   });
 
@@ -504,13 +504,13 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
   pi.on('tool_call', async (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
     if (event.toolName === EXECUTION_CONTRACT_TOOL || isMutationCall(event.toolName, event.input)) {
-      const before = session.getWorkPhaseState();
+      const before = session.getEntryRoutingState();
       const epoch = session.getRoutingEpoch();
       if (before?.routingEpoch != null && before.routingEpoch !== epoch) {
         return { block: true, reason: 'Router: this call was not made. Its routing authority expired.' };
       }
       await refreshSourceEvidence(session);
-      const live = session.getWorkPhaseState();
+      const live = session.getEntryRoutingState();
       if (before?.intentKey !== live?.intentKey || before?.boundaryId !== live?.boundaryId || epoch !== session.getRoutingEpoch()) {
         return { block: true, reason: 'Router: this call was not made. Its entry or routing boundary changed. Continue from the current entry.' };
       }

@@ -32,11 +32,11 @@ import {
   evidenceShape,
 } from '../routing/policy/context-acquisition.js';
 import { declaredRubric } from '../routing/policy/execution-difficulty.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
 import { refreshSourceEvidence, sourceEvidenceCounts, type SourceEvidenceStatus } from './entry-evidence.js';
-import { latestGenuineUserEntry, readBranch } from '../routing/context/persistence.js';
+import { latestGenuineUserEntry, readBranch } from '../routing/context/branch-provenance.js';
 import { CLARIFICATION_TEXT, countContextRefusal, logContextHandoff as log } from './gathering-gate.js';
 import { decisionEvidence } from '../routing/policy/decision-evidence.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
@@ -153,8 +153,8 @@ const filled = (value: unknown): value is string => typeof value === 'string' &&
 const member = <T extends string>(values: readonly T[], value: unknown): T | undefined =>
   values.includes(value as T) ? value as T : undefined;
 
-type Open = { state: WorkPhaseState; served: string; acquiring: boolean };
-type Opened = Open | { reject: RejectCode; state?: WorkPhaseState; served?: string };
+type Open = { state: EntryRoutingState; served: string; acquiring: boolean };
+type Opened = Open | { reject: RejectCode; state?: EntryRoutingState; served?: string };
 
 /**
  * Whether the entry takes a handoff: while acquiring owed context, or a
@@ -162,7 +162,7 @@ type Opened = Open | { reject: RejectCode; state?: WorkPhaseState; served?: stri
  */
 function openFor(ctx: (Pick<ExtensionContext, 'model'> & Partial<Pick<ExtensionContext, 'sessionManager'>>) | undefined, session: RouterSession): Opened {
   if (ctx?.model?.provider !== ROUTER_PROVIDER_ID || ctx.model.id !== AUTO_MODEL_ID) return { reject: 'not-router-auto' };
-  const state = session.getWorkPhaseState();
+  const state = session.getEntryRoutingState();
   const last = session.getLastDecision();
   const lastServed = session.getLastServed();
   const served = lastServed ? servedKey(lastServed) : undefined;
@@ -230,7 +230,7 @@ export interface HandoffFacts {
   unmet?: string[];
   /** Referenced files that owe no read because they are above the grounding size limit. */
   oversized?: number;
-  scope?: { entry: WorkPhaseState; generation: number; epoch: number; key: string };
+  scope?: { entry: EntryRoutingState; generation: number; epoch: number; key: string };
   source?: SourceEvidenceStatus;
 }
 
@@ -241,7 +241,7 @@ export interface HandoffFacts {
 function reject(
   session: RouterSession,
   code: RejectCode,
-  state: WorkPhaseState | undefined,
+  state: EntryRoutingState | undefined,
   served: string | undefined,
   detail = '',
 ): ContextHandoffSubmission {
@@ -295,7 +295,7 @@ export function submitContextHandoff(
     if (!opened.acquiring) return reject(session, 'not-acquiring', state, served);
     if (!filled(params.question)) return reject(session, 'missing-question', state, served);
     const reason = member(NEEDS_USER_REASONS, params.reason);
-    session.commitWorkPhaseState({ ...state, status: 'clarification-only', contextNeedsUser: true });
+    session.commitEntryRoutingState({ ...state, status: 'clarification-only', contextNeedsUser: true });
     log(state, served, 'needs-user', reason ? { rejectReason: reason } : {});
     return { accepted: true, text: `Context handed back to the user. ${CLARIFICATION_TEXT}` };
   }
@@ -338,11 +338,11 @@ export function submitContextHandoff(
   const next = acceptContextHandoff(materialized, {
     deliverable, key, routingEpoch: session.getRoutingEpoch(), ...(reasoning ? { reasoning } : {}),
   });
-  session.commitWorkPhaseState({ ...next, changeFacts });
+  session.commitEntryRoutingState({ ...next, changeFacts });
   if (deliverable === 'implement') session.previousFlow = undefined;
   const cached = session.getCachedIntent();
   if (cached?.key === state.intentKey) session.setCachedIntent({ ...cached, dimension: deliverable });
-  log(state, served, 'accept', {
+  log(next, served, 'accept', {
     ...(next.reasoningHandoff ? { handoff: next.reasoningHandoff } : {}),
     deliverable,
     facts: changeFacts.log,
@@ -435,7 +435,7 @@ export function registerContextHandoffTool(pi: ExtensionAPI, session: RouterSess
         } catch {
           result = { accepted: false, text: REJECTIONS.internal };
         }
-        const live = session.getWorkPhaseState();
+        const live = session.getEntryRoutingState();
         debugLog('context-handoff.submit', {
           accepted: result.accepted,
           entryId: live?.sourceEntryId,

@@ -14,9 +14,7 @@
  */
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open, stat } from 'node:fs/promises';
-import { join } from 'node:path';
-import type { GroundedArtifact, WorkItem } from './types.js';
+import { open } from 'node:fs/promises';
 
 /**
  * Larger files are never grounded, and a referenced file of this size owes no
@@ -209,74 +207,4 @@ export class ReadCoverage {
     }
     return this.remaining === 0;
   }
-}
-
-/** Whether the artifact's file still has the recorded content. */
-export async function isFresh(cwd: string | undefined, artifact: GroundedArtifact): Promise<boolean> {
-  const current = await fingerprintFile(cwd ? join(cwd, artifact.anchorValue) : artifact.anchorValue);
-  return current?.sha256 === artifact.sha256;
-}
-
-/**
- * The paths that exist. A path that does not exist has no content to read:
- * a request often names a file that it asks to create. A path that exists
- * but cannot be read stays, so it remains unmet.
- */
-async function presentPaths(cwd: string | undefined, paths: readonly string[]): Promise<string[]> {
-  const present: string[] = [];
-  for (const path of paths) {
-    try {
-      await stat(cwd ? join(cwd, path) : path);
-      present.push(path);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') present.push(path);
-    }
-  }
-  return present;
-}
-
-function oversized(info: { isFile(): boolean; size: number } | undefined): boolean {
-  return info != null && info.isFile() && info.size > GROUNDING_MAX_BYTES;
-}
-
-/** How many referenced paths owe no read because the file is above {@link GROUNDING_MAX_BYTES}. */
-export async function oversizedArtifactCount(cwd: string | undefined, paths: readonly string[]): Promise<number> {
-  let count = 0;
-  for (const path of paths) {
-    if (oversized(await stat(cwd ? join(cwd, path) : path).catch(() => undefined))) count += 1;
-  }
-  return count;
-}
-
-/**
- * The referenced paths not yet met: a file not read as it is now, or a
- * directory no accepted handoff closed. A path that does not exist, or a
- * regular file above {@link GROUNDING_MAX_BYTES}, is never unmet, because no
- * read can meet it.
- */
-export async function unmetArtifactPaths(
-  cwd: string | undefined,
-  item: Pick<WorkItem, 'grounding' | 'openContext'>,
-  paths: readonly string[],
-): Promise<string[]> {
-  const unmet: string[] = [];
-  for (const path of await presentPaths(cwd, paths)) {
-    const info = await stat(cwd ? join(cwd, path) : path).catch(() => undefined);
-    if (oversized(info)) continue;
-    const artifact = item.grounding.find((g) => g.anchorValue === path);
-    if (artifact) {
-      if (!(await isFresh(cwd, artifact))) unmet.push(path);
-      continue;
-    }
-    // Unknown open context counts as open.
-    if (item.openContext?.length !== 0) {
-      unmet.push(path);
-      continue;
-    }
-    // An unreadable or special file must not masquerade as a directory scope
-    // merely because fingerprinting failed.
-    if (!info?.isDirectory()) unmet.push(path);
-  }
-  return unmet;
 }

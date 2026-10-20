@@ -48,7 +48,7 @@ const externalDependencies: Record<string, readonly string[]> = {
   'cache.ts': ['@earendil-works/pi-ai', 'routing/score/scorer.js'],
   'candidate.ts': ['types.js', 'routing/score/scorer.js'],
   'benchmark-output.ts': ['types.js'],
-  'difficulty.ts': ['types.js', 'routing/policy/work-phase.js'],
+  'difficulty.ts': ['types.js', 'routing/policy/entry-routing-state.js'],
   'latency.ts': ['types.js'],
   'model.ts': ['types.js', 'bench/store.js'],
   'schema.ts': ['routing/digest.js'],

@@ -24,7 +24,7 @@ describe('grounding from tool results', () => {
     tree = new SessionTree();
     session = new RouterSession();
     tree.user('@requirements/foo.md implement this in @src.ts');
-    session.commitWorkPhaseState({ intentKey: 'entry', sourceEntryId: 'e1', routingEpoch: 0,
+    session.commitEntryRoutingState({ intentKey: 'entry', sourceEntryId: 'e1', routingEpoch: 0,
       providerInvocation: 1, observedMutationTools: 0, status: 'triage', sourceEvidencePending: true,
       evidence: createEntryEvidence({ key: 'entry', promptText: '@requirements/foo.md @src.ts' }, 0, cwd, tree.manager()),
     });
@@ -32,7 +32,7 @@ describe('grounding from tool results', () => {
   afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
   const ctx = () => ({ cwd, sessionManager: tree.manager() }) as never;
-  const grounding = () => [...session.getWorkPhaseState()!.evidence!.observedFiles].map(([anchorValue, observation]) => ({ anchorValue, ...observation }));
+  const grounding = () => [...session.getEntryRoutingState()!.evidence!.observedFiles].map(([anchorValue, observation]) => ({ anchorValue, ...observation }));
 
   it('records a SHA-256 fingerprint for a successful whole-file read of an anchor', async () => {
     await observeContextGrounding(
@@ -137,7 +137,7 @@ describe('grounding from tool results', () => {
   });
 
   it('leaves an anchor the model only named ungrounded', () => {
-    expect(session.getWorkPhaseState()!.evidence!.referencedPaths).toEqual(['requirements/foo.md', 'src.ts']);
+    expect(session.getEntryRoutingState()!.evidence!.referencedPaths).toEqual(['requirements/foo.md', 'src.ts']);
     expect(grounding()).toEqual([]);
   });
 
@@ -201,6 +201,6 @@ describe('grounding from tool results', () => {
     );
     session.reset();
     await pending;
-    expect(session.context.getLedger().items.size).toBe(0);
+    expect(session.getEntryRoutingState()).toBeUndefined();
   });
 });

@@ -1,6 +1,5 @@
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { ModelThinkingLevel, ThinkingLevelMap } from '@earendil-works/pi-ai';
-import type { ContextReason, ContextRelation, ResolverTier } from './routing/context/types.js';
 import type { FactsLog } from './routing/policy/change-facts.js';
 import type { AxisProvenance } from './routing/features/schema.js';
 
@@ -331,25 +330,6 @@ export interface ExecutionContractMeta {
 /** Catalog choice of work, by id or reserved value; the router derives the relation. */
 export interface WorkChoice {
   topicId: string;
-  workItemId: string;
-}
-
-/**
- * The entry's work-context resolution as routing and logs see it: the tier
- * that decided it, ids, and categories. Titles and summaries stay out.
- */
-export interface WorkContextMeta {
-  resolver: ResolverTier;
-  relation: ContextRelation;
-  topicId: string;
-  workItemId: string;
-  /** Reasons the request owed context; empty when it owed none. */
-  contextReasons: ContextReason[];
-  /** Whether the router found that context in hand when the entry resolved. */
-  contextSatisfied: boolean;
-  createdWorkItem?: boolean;
-  /** Placed on work found in the conversation from before tracking started. */
-  legacy?: boolean;
 }
 
 export type DecisionCause =
@@ -366,8 +346,7 @@ export type DecisionCause =
   | 'manual-override'
   | 'resume'
   | 'semi-hold'
-  | 'incumbent'
-  | 'work-context';
+  | 'incumbent';
 
 /**
  * The terminal accounting of one provider attempt. The delegation loop emits
@@ -505,12 +484,8 @@ export interface RoutingDecision {
   deliverable?: Dimension;
   /** Context handoff that shaped this invocation. */
   reasoningHandoff?: ReasoningHandoffMeta;
-  /** Handoff of the previous entry, on the first decision of the entry after it. */
-  previousHandoffId?: string;
   /** Message-origin census for this turn's context. */
   provenanceCounts?: Record<MessageProvenance, number>;
-  /** The entry's work-context resolution. */
-  workContext?: WorkContextMeta;
   cause: DecisionCause;
   fallbackChain: string[];
   /** True if the chosen model differs from the previous turn's model. */

@@ -32,7 +32,7 @@ import type {
   MeasuredFeatures,
 } from '../../types.js';
 import { parseCandidateKey } from '../score/scorer.js';
-import type { WorkPhaseState } from './work-phase.js';
+import type { EntryRoutingState } from './entry-routing-state.js';
 import { isTestPath } from './execution-difficulty.js';
 
 export const EXECUTION_CONTRACT_TOOL = 'commit_execution';
@@ -219,7 +219,7 @@ const OPEN_DECISION_LEVEL = 4;
  * difficulty do not keep a plan: the selector values the executor with the
  * plan's rubric.
  */
-export function acceptContract(state: WorkPhaseState, input: AcceptInput): WorkPhaseState {
+export function acceptContract(state: EntryRoutingState, input: AcceptInput): EntryRoutingState {
   const { validation, rubric, measured } = input;
   const keepReason: ContractKeepReason | undefined = measured.missingTargets == null || measured.missingTargets > 0
     ? 'unknown-target'
@@ -258,7 +258,7 @@ function sameModel(a: string, b: string): boolean {
  * other than the submitter only. Without a flow there is no strike scope:
  * only an accepted implement handoff starts one.
  */
-function strike(state: WorkPhaseState, model: string, submitter: string): WorkPhaseState {
+function strike(state: EntryRoutingState, model: string, submitter: string): EntryRoutingState {
   const flow = state.executionFlow;
   if (!flow || sameModel(model, submitter)) return state;
   const id = modelIdentity(model);
@@ -275,10 +275,10 @@ function strike(state: WorkPhaseState, model: string, submitter: string): WorkPh
  * write earns none either: the router cannot tell whether it left the plan.
  */
 export function breakContract(
-  state: WorkPhaseState,
+  state: EntryRoutingState,
   breaker: string | undefined,
   reason: ContractBreakReason,
-): WorkPhaseState {
+): EntryRoutingState {
   const contract = state.contract;
   if (contract?.status !== 'active') return state;
   const struck = breaker && reason !== 'unattributed-mutation' ? strike(state, breaker, contract.submitter) : state;
@@ -297,7 +297,7 @@ export function breakContract(
  * The submitter replaced an executed plan with a new one: the executed work
  * needed rework, which strikes its executor like a break.
  */
-export function reworkContract(state: WorkPhaseState): WorkPhaseState {
+export function reworkContract(state: EntryRoutingState): EntryRoutingState {
   const contract = state.contract;
   if (contract?.status !== 'executed' || !contract.executor) return state;
   return strike(state, contract.executor, contract.submitter);
@@ -309,7 +309,7 @@ export function reworkContract(state: WorkPhaseState): WorkPhaseState {
  * submitter (it may win on score, or serve as a fallback); only another model
  * makes the plan's outcome evidence about an executor.
  */
-export function attributeExecutor(state: WorkPhaseState, served: string | undefined): WorkPhaseState {
+export function attributeExecutor(state: EntryRoutingState, served: string | undefined): EntryRoutingState {
   const contract = state.contract;
   if (!contract?.release || contract.executor || contract.status === 'broken') return state;
   if (!served || sameModel(served, contract.submitter)) return state;
@@ -321,7 +321,7 @@ export function attributeExecutor(state: WorkPhaseState, served: string | undefi
  * A plan only its submitter served continues as implementation.
  */
 /** The plan's release boundary has been served: its executor keeps it from here. */
-export function serveContractRelease(state: WorkPhaseState): WorkPhaseState {
+export function serveContractRelease(state: EntryRoutingState): EntryRoutingState {
   const contract = state.contract;
   if (!contract?.releasePending) return state;
   return { ...state, contract: { ...contract, releasePending: false } };
@@ -349,7 +349,7 @@ export function handBackContract(contract: ExecutionContract | undefined): Execu
  * any edit marks the executed work as fixed; without a review, later edits
  * are not fixes.
  */
-export function noteContractEdit(state: WorkPhaseState, cwd: string, path: string, served: string | undefined): WorkPhaseState {
+export function noteContractEdit(state: EntryRoutingState, cwd: string, path: string, served: string | undefined): EntryRoutingState {
   const contract = state.contract;
   if (contract?.status === 'executed') {
     return !isUnderReview(contract) || contract.reviewEdited ? state : { ...state, contract: { ...contract, reviewEdited: true } };
@@ -370,7 +370,7 @@ export function noteContractEdit(state: WorkPhaseState, cwd: string, path: strin
 }
 
 /** Record the first verifier result after execution. */
-export function noteContractVerifier(state: WorkPhaseState, passed: boolean): WorkPhaseState {
+export function noteContractVerifier(state: EntryRoutingState, passed: boolean): EntryRoutingState {
   const contract = state.contract;
   if (contract?.status !== 'executed' || contract.reviewVerifier) return state;
   return { ...state, contract: { ...contract, reviewVerifier: passed ? 'pass' : 'fail' } };
@@ -381,7 +381,7 @@ export function noteContractVerifier(state: WorkPhaseState, passed: boolean): Wo
  * the router cannot attribute (Bash writes, deletions) never complete a plan
  * on their own, so the budget is what ends such a plan.
  */
-export function expireContract(state: WorkPhaseState): WorkPhaseState {
+export function expireContract(state: EntryRoutingState): EntryRoutingState {
   const contract = state.contract;
   if (contract?.status !== 'active') return state;
   if (state.providerInvocation - contract.acceptedAt <= contractBudget(contract.steps)) return state;
@@ -405,16 +405,16 @@ export function servedBySubmitter(contract: ExecutionContract, served: string): 
 }
 
 /** Whether `key` names a model that the entry's execution flow excluded from executing. */
-export function isExcludedExecutor(state: WorkPhaseState | undefined, key: string): boolean {
+export function isExcludedExecutor(state: EntryRoutingState | undefined, key: string): boolean {
   return state?.executionFlow?.excludedModels.some((excluded) => sameModel(excluded, key)) ?? false;
 }
 
-export function contractMeta(state: WorkPhaseState): ExecutionContractMeta | undefined {
+export function contractMeta(state: EntryRoutingState): ExecutionContractMeta | undefined {
   const contract = state.contract;
   if (!contract) return undefined;
   // A plan made from a context handoff, in this entry or the one
   // after it, joins its outcome to that handoff.
-  const handoffId = state.reasoningHandoff?.id ?? state.previousHandoffId;
+  const handoffId = state.reasoningHandoff?.id;
   return {
     status: contract.status,
     release: contract.release,

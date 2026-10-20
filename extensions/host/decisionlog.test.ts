@@ -13,7 +13,7 @@ import {
   appendDecision,
   appendExecutionContractSignal,
   appendContextHandoffSignal,
-  appendWorkLifecycleSignal,
+  appendSettleSignal,
   readRecentEntries,
   setDecisionLogBase,
   DECISION_LOG_FILE,
@@ -193,39 +193,62 @@ describe('decision log', () => {
     expect(existsSync(join(dir, DECISION_LOG_FILE))).toBe(true);
   });
 
+  it('writes schema 5 routing scope without obsolete work or cross-entry handoff metadata', () => {
+    const routingScope = { entryId: 'entry-a', boundaryId: 'boundary-b', assignmentId: 'assignment-c',
+      authorizationRevision: 3, flowId: 'flow-d' };
+    appendDecision({ ...DECISION, routingScope,
+      workContext: { workItemId: 'obsolete-work', topicId: 'obsolete-topic' }, previousHandoffId: 'obsolete-handoff',
+    } as typeof DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
+    const record = readRecentEntries(1, dir)[0];
+    expect(record.schemaVersion).toBe(5);
+    expect(record.routingScope).toEqual(routingScope);
+    expect(record).not.toHaveProperty('workContext');
+    expect(record).not.toHaveProperty('previousHandoffId');
+    expect(record).not.toHaveProperty('workLifecycle');
+  });
+
   it('stamps every record kind with the schema version it was written under', () => {
     appendDecision(DECISION, { registryId: DECISION.chosen, viaFallback: false, accumulatedCost: 0 }, dir);
     appendExecutionContractSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
     appendContextHandoffSignal({ intentKey: 'k', served: 'a/b', action: 'reminder' }, dir);
-    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'complete-accept', workItemId: 'w_1', status: 'done' }, dir);
+    appendSettleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-followed', reminder: 'context' }, dir);
 
     const records = readRecentEntries(10, dir);
     expect(records).toHaveLength(4);
     expect(records.every((record) => record.schemaVersion === DECISION_LOG_SCHEMA_VERSION)).toBe(true);
   });
 
-  it('writes lifecycle categories without model-supplied text and tolerates unwritable storage', () => {
-    appendWorkLifecycleSignal({
-      intentKey: 'k', served: 'a/b', action: 'complete-accept', workItemId: 'w_1', status: 'done',
+  it('writes settlement categories without model-supplied text and tolerates unwritable storage', () => {
+    appendSettleSignal({
+      intentKey: 'k', served: 'a/b', action: 'settle-followed', reminder: 'context',
       deliverable: 'review', title: 'secret title', reply: 'secret reply',
-    } as Parameters<typeof appendWorkLifecycleSignal>[0], dir);
+    } as Parameters<typeof appendSettleSignal>[0], dir);
     const record = readRecentEntries(1, dir)[0];
-    expect(record).toMatchObject({ kind: 'work-lifecycle', workLifecycle: {
-      action: 'complete-accept', workItemId: 'w_1', status: 'done', deliverable: 'review',
+    expect(record).toMatchObject({ kind: 'settle', settle: {
+      action: 'settle-followed', reminder: 'context', deliverable: 'review',
     } });
     expect(JSON.stringify(record)).not.toContain('secret');
     const blocker = join(dir, 'blocker.txt');
     writeFileSync(blocker, 'not a directory');
-    expect(() => appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'gate' }, join(blocker, 'sub'))).not.toThrow();
+    expect(() => appendSettleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-ignored' }, join(blocker, 'sub'))).not.toThrow();
   });
 
   it('records the kind of a settle reminder and its outcome', () => {
-    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-reminder', reminder: 'context' }, dir);
-    appendWorkLifecycleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-ignored', reminder: 'context' }, dir);
-    expect(readRecentEntries(2, dir).map((record) => record.workLifecycle)).toEqual([
+    appendSettleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-reminder', reminder: 'context' }, dir);
+    appendSettleSignal({ intentKey: 'k', served: 'a/b', action: 'settle-ignored', reminder: 'context' }, dir);
+    expect(readRecentEntries(2, dir).map((record) => record.settle)).toEqual([
       { action: 'settle-reminder', reminder: 'context' },
       { action: 'settle-ignored', reminder: 'context' },
     ]);
+  });
+
+  it('reads legacy schema 4 data without rewriting its task or metadata', () => {
+    const legacy = { ts: 1, schemaVersion: 4, dimension: 'lightweight', chosen: 'a/b', cause: 'work-context',
+      kind: 'work-lifecycle', workLifecycle: { action: 'complete-accept', workItemId: 'old' } };
+    const text = JSON.stringify(legacy) + '\n';
+    writeFileSync(join(dir, DECISION_LOG_FILE), text);
+    expect(readRecentEntries(10, dir)[0]).toEqual(legacy);
+    expect(readFileSync(join(dir, DECISION_LOG_FILE), 'utf8')).toBe(text);
   });
 
   it('reads an unversioned record as written', () => {

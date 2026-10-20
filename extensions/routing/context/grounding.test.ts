@@ -8,10 +8,8 @@ import {
   ReadCoverage,
   fingerprintFile,
   contentLineCount,
-  isFresh,
   matchedLineRanges,
   readLineRange,
-  unmetArtifactPaths,
 } from './grounding.js';
 
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -39,66 +37,6 @@ describe('grounding', () => {
     expect(await fingerprintFile(join(dir, 'blocker.txt', 'x.md'))).toBeUndefined();
   });
 
-  it('detects a changed or missing file', async () => {
-    writeFileSync(join(dir, 'req.md'), 'v1');
-    const artifact = { anchorValue: 'req.md', sha256: sha('v1'), observedAtEntryId: 'u', observedBy: 'read' as const };
-    expect(await isFresh(dir, artifact)).toBe(true);
-    writeFileSync(join(dir, 'req.md'), 'v2');
-    expect(await isFresh(dir, artifact)).toBe(false);
-    rmSync(join(dir, 'req.md'));
-    expect(await isFresh(dir, artifact)).toBe(false);
-  });
-
-  it('owes no read for a referenced path that does not exist', async () => {
-    writeFileSync(join(dir, 'req.md'), 'v1');
-    const item = { grounding: [], openContext: [] };
-    // A request names a file that it asks to create; no read can meet it.
-    expect(await unmetArtifactPaths(dir, item, ['src/new.ts', 'req.md'])).toEqual(['req.md']);
-    expect(await unmetArtifactPaths(dir, item, ['req.md/child'])).toEqual([]);
-    // A file read and then deleted owes no read either.
-    const read = { grounding: [{ anchorValue: 'req.md', sha256: sha('v1'), observedAtEntryId: 'u', observedBy: 'read' as const }], openContext: [] };
-    rmSync(join(dir, 'req.md'));
-    expect(await unmetArtifactPaths(dir, read, ['req.md'])).toEqual([]);
-  });
-
-  it('requires an accepted context handoff for a directory without treating it as a grounded file', async () => {
-    mkdirSync(join(dir, 'src'));
-    expect(await unmetArtifactPaths(dir, { grounding: [] }, ['src'])).toEqual(['src']);
-    expect(await unmetArtifactPaths(dir, { grounding: [], openContext: ['referenced-artifact'] }, ['src'])).toEqual(['src']);
-    expect(await unmetArtifactPaths(dir, { grounding: [], openContext: [] }, ['src'])).toEqual([]);
-  });
-
-  it('never lets a directory investigation substitute for fresh file evidence', async () => {
-    mkdirSync(join(dir, 'src'));
-    writeFileSync(join(dir, 'req.md'), 'v1');
-    const item = {
-      openContext: [],
-      grounding: [{ anchorValue: 'req.md', sha256: sha('v1'), observedAtEntryId: 'u', observedBy: 'read' as const }],
-    };
-    expect(await unmetArtifactPaths(dir, item, ['src', 'req.md'])).toEqual([]);
-    expect(await unmetArtifactPaths(dir, { ...item, openContext: ['referenced-artifact'] }, ['src', 'req.md'])).toEqual(['src']);
-    expect(await unmetArtifactPaths(dir, { ...item, grounding: [] }, ['src', 'req.md'])).toEqual(['req.md']);
-    writeFileSync(join(dir, 'req.md'), 'v2');
-    expect(await unmetArtifactPaths(dir, item, ['src', 'req.md'])).toEqual(['req.md']);
-    rmSync(join(dir, 'req.md'));
-    mkdirSync(join(dir, 'req.md'));
-    expect(await unmetArtifactPaths(dir, item, ['req.md'])).toEqual(['req.md']);
-    // No read can meet a file above the size cap, so it owes none.
-    writeFileSync(join(dir, 'big.md'), 'x'.repeat(GROUNDING_MAX_BYTES + 1));
-    expect(await unmetArtifactPaths(dir, item, ['big.md'])).toEqual([]);
-    // A path that becomes a file owes its exact content even after a directory investigation.
-    rmSync(join(dir, 'src'), { recursive: true });
-    writeFileSync(join(dir, 'src'), 'file');
-    expect(await unmetArtifactPaths(dir, item, ['src'])).toEqual(['src']);
-  });
-
-  it('owes a referenced artifact until every referenced path is grounded and fresh', async () => {
-    writeFileSync(join(dir, 'a.md'), 'a');
-    writeFileSync(join(dir, 'b.md'), 'b');
-    const item = { grounding: [{ anchorValue: 'a.md', sha256: sha('a'), observedAtEntryId: 'u', observedBy: 'read' as const }] };
-    expect(await unmetArtifactPaths(dir, item, ['a.md'])).toEqual([]);
-    expect(await unmetArtifactPaths(dir, item, ['a.md', 'b.md'])).toEqual(['b.md']);
-  });
 });
 
 describe('readLineRange', () => {

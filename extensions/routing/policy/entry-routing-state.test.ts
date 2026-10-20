@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  carryAcrossBranch,
   handoffBoundaryId,
   nextProviderInvocation,
   triageBoundaryId,
-} from './work-phase.js';
-import { newExecutionFlow } from './execution-flow.js';
-import type { WorkPhaseState } from './work-phase.js';
+} from './entry-routing-state.js';
+import type { EntryRoutingState } from './entry-routing-state.js';
 
-const entryState = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
+const entryState = (over: Partial<EntryRoutingState> = {}): EntryRoutingState => ({
   intentKey: 'intent-a',
   providerInvocation: 1,
   observedMutationTools: 0,
@@ -40,25 +38,3 @@ describe('routing boundary ids', () => {
   });
 });
 
-describe('carryAcrossBranch', () => {
-  it('keeps only the task type across branch navigation', () => {
-    const prior = entryState({
-      deliverable: 'gather',
-      providerInvocation: 4,
-      observedMutationTools: 2,
-      executionFlow: { ...newExecutionFlow('intent-a', 'b'), strikesByModel: { 'beta/strong': 2 }, excludedModels: ['beta/strong'] },
-      readPaths: ['/repo/a.ts'],
-      status: 'triage',
-      workItemId: 'w_a',
-      contextReasons: ['carried-open-context'],
-      contextSatisfied: false,
-    });
-    expect(carryAcrossBranch(prior, 'plan')).toEqual({
-      intentKey: 'intent-a',
-      deliverable: 'plan',
-      providerInvocation: 4,
-      observedMutationTools: 0,
-    });
-    expect(carryAcrossBranch(prior, undefined)).not.toHaveProperty('deliverable');
-  });
-});

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SERVING_ENTRY_TYPE, ServingHistoryState, rebuildServingHistory } from './serving-history.js';
-import { SELECTION_ENTRY_TYPE } from '../routing/context/persistence.js';
+import { SELECTION_ENTRY_TYPE } from '../routing/context/branch-provenance.js';
 
 const event = (customType: string, data: unknown) => ({ type: 'custom', customType, data });
 const served = (registryId: string, effort?: string) => event(SERVING_ENTRY_TYPE,

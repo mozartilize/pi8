@@ -49,12 +49,11 @@ import {
   type ExecutionStepInput,
 } from '../routing/policy/execution-contract.js';
 import { parseRubric } from '../routing/policy/execution-difficulty.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import { entryRoutingScope, type EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import { actionFromTool, cycleFromToolResult, isVerifier } from '../routing/struggle/fingerprints.js';
 import { parseCandidateKey } from '../routing/score/scorer.js';
 import { classifyMutationCall, isMutationCall } from '../routing/policy/mutation-detector.js';
 import type { RouterSession } from './router-session-state.js';
-import { recordBoundary } from './context-resolution.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
 import { factsLog, parseDeclaredFacts, type ChangeMeasurements, type DeclaredFacts } from '../routing/policy/change-facts.js';
 import { changeFactsParameter } from './change-facts-schema.js';
@@ -139,7 +138,7 @@ export const CONTRACT_GATE =
  */
 function handoffInapplicable(
   last: RoutingDecision,
-  state: WorkPhaseState,
+  state: EntryRoutingState,
   served: string | undefined,
 ): ContractRejection | undefined {
   if (last.dimension !== 'plan' && last.dimension !== 'review' && last.dimension !== 'implement') {
@@ -187,7 +186,7 @@ function isRouterAuto(ctx: Pick<ExtensionContext, 'model'> | undefined): boolean
  */
 export function contractSubmissionOpen(ctx: Pick<ExtensionContext, 'model'> | undefined, session: RouterSession): boolean {
   if (!isRouterAuto(ctx)) return false;
-  const state = session.getWorkPhaseState();
+  const state = session.getEntryRoutingState();
   const last = session.getLastDecision();
   const lastServed = session.getLastServed();
   if (!state || !last || !lastServed || last.intentKey !== state.intentKey) return false;
@@ -364,10 +363,10 @@ export function observeFiles(
 }
 
 /** Log how a contract ended, with the rubric and measurements it was valued on. */
-export function appendContractOutcome(state: WorkPhaseState, outcome: ContractOutcome): void {
+export function appendContractOutcome(state: EntryRoutingState, outcome: ContractOutcome): void {
   const meta = contractMeta(state);
   if (!meta) return;
-  appendExecutionContractSignal({
+  appendExecutionContractSignal({ routingScope: entryRoutingScope(state),
     intentKey: state.intentKey,
     served: meta.executor ?? meta.submitter,
     action: 'outcome',
@@ -382,7 +381,7 @@ export function appendContractOutcome(state: WorkPhaseState, outcome: ContractOu
  * last invocation; it is the executor when an executor ended the entry with
  * text alone.
  */
-export function closeContractEntry(state: WorkPhaseState, served: string | undefined): WorkPhaseState {
+export function closeContractEntry(state: EntryRoutingState, served: string | undefined): EntryRoutingState {
   if (!state.contract) return state;
   const attributed = attributeExecutor(state, served);
   appendContractOutcome(attributed, entryEndOutcome(attributed.contract!));
@@ -395,10 +394,10 @@ export function closeContractEntry(state: WorkPhaseState, served: string | undef
  */
 export function closeContractOnSettle(session: RouterSession): void {
   try {
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     if (!state?.contract) return;
     const lastServed = session.getLastServed();
-    session.commitWorkPhaseState(closeContractEntry(state, lastServed ? servedKey(lastServed) : undefined));
+    session.commitEntryRoutingState(closeContractEntry(state, lastServed ? servedKey(lastServed) : undefined));
   } catch {
     // Contract bookkeeping must never fail the end of a run.
   }
@@ -411,8 +410,8 @@ const KEEP_REASONS = {
   'open-decisions': 'the plan leaves a behavior, interface, or design choice open',
 } as const;
 
-function reject(intentKey: string, served: string, rejection: ContractRejection): ContractSubmission {
-  appendExecutionContractSignal({ intentKey, served, action: 'reject', rejectReason: rejection.code });
+function reject(state: EntryRoutingState, served: string, rejection: ContractRejection): ContractSubmission {
+  appendExecutionContractSignal({ routingScope: entryRoutingScope(state), intentKey: state.intentKey, served, action: 'reject', rejectReason: rejection.code });
   return { accepted: false, text: `Execution plan not accepted: ${rejection.reason}. Continue with the current model.` };
 }
 
@@ -440,7 +439,7 @@ export function submitExecutionContract(
   if (!ctx || !isRouterAuto(ctx)) {
     return { accepted: false, text: `${EXECUTION_CONTRACT_TOOL} has no effect: the session model is not router/auto.` };
   }
-  const state = session.getWorkPhaseState();
+  const state = session.getEntryRoutingState();
   const last = session.getLastDecision();
   const lastServed = session.getLastServed();
   const served = lastServed ? servedKey(lastServed) : undefined;
@@ -450,8 +449,8 @@ export function submitExecutionContract(
   if (state.contract?.status === 'active') {
     // A second submission during execution means an open decision appeared.
     const broken = breakContract(state, served, 'replan');
-    session.commitWorkPhaseState(broken);
-    appendExecutionContractSignal({ intentKey: state.intentKey, served, action: 'break', meta: contractMeta(broken) });
+    session.commitEntryRoutingState(broken);
+    appendExecutionContractSignal({ routingScope: entryRoutingScope(state), intentKey: state.intentKey, served, action: 'break', meta: contractMeta(broken) });
     return {
       accepted: false,
       text: 'Execution plan not accepted: a plan is already being executed. The work returns to the model that ' +
@@ -459,9 +458,9 @@ export function submitExecutionContract(
     };
   }
   const inapplicable = handoffInapplicable(last, state, served);
-  if (inapplicable) return reject(state.intentKey, served, inapplicable);
+  if (inapplicable) return reject(state, served, inapplicable);
   const validation = validateContract(steps, ctx.cwd);
-  if (!validation.ok) return reject(state.intentKey, served, validation);
+  if (!validation.ok) return reject(state, served, validation);
 
   // A new plan while reviewing an executed one means the executed work
   // needs rework: that counts against its executor. The revised plan keeps
@@ -499,9 +498,9 @@ export function submitExecutionContract(
   const next = valued.reasoningHandoff && !valued.reasoningHandoff.contractAccepted
     ? { ...valued, reasoningHandoff: { ...valued.reasoningHandoff, contractAccepted: true } }
     : valued;
-  session.commitWorkPhaseState(next);
+  session.commitEntryRoutingState(next);
   const meta = contractMeta(next);
-  appendExecutionContractSignal({
+  appendExecutionContractSignal({ routingScope: entryRoutingScope(state),
     intentKey: state.intentKey,
     served,
     action: 'accept',
@@ -515,7 +514,6 @@ export function submitExecutionContract(
         }
       : {}),
   });
-  recordBoundary(session, next, 'execution-contract', state.intentKey);
   const contract = next.contract!;
   const header = contract.release
     ? 'Execution plan accepted. A model chosen for this plan executes it from the next step. When every listed ' +
@@ -585,7 +583,7 @@ export function handleContractToolCall(
   session: RouterSession,
 ): void {
   try {
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     const contract = state?.contract;
     if (!state || contract?.status !== 'active') return;
     const lastServed = session.getLastServed();
@@ -604,8 +602,8 @@ export function handleContractToolCall(
       return;
     }
     const broken = breakContract(state, served, reason);
-    session.commitWorkPhaseState(broken);
-    appendExecutionContractSignal({
+    session.commitEntryRoutingState(broken);
+    appendExecutionContractSignal({ routingScope: entryRoutingScope(state),
       intentKey: state.intentKey,
       served: served ?? 'unknown/unknown',
       action: 'break',
@@ -628,7 +626,7 @@ export function trackContractToolResult(
   session: RouterSession,
 ): void {
   try {
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     const contract = state?.contract;
     if (!state || !contract || contract.status === 'broken') return;
     if (event.toolName === 'edit' || event.toolName === 'write') {
@@ -638,9 +636,9 @@ export function trackContractToolResult(
       const served = lastServed ? servedKey(lastServed) : undefined;
       const next = noteContractEdit(state, ctx.cwd, path, served);
       if (next === state) return;
-      session.commitWorkPhaseState(next);
+      session.commitEntryRoutingState(next);
       if (contract.status === 'active' && next.contract?.status === 'executed') {
-        appendExecutionContractSignal({
+        appendExecutionContractSignal({ routingScope: entryRoutingScope(state),
           intentKey: state.intentKey,
           served: served ?? 'unknown/unknown',
           action: 'execute',
@@ -655,7 +653,7 @@ export function trackContractToolResult(
     if (!isVerifier(action)) return;
     const cycle = cycleFromToolResult(event, state.providerInvocation);
     const passed = !cycle.progressHint.isError && !cycle.progressHint.failureSignature;
-    session.commitWorkPhaseState(noteContractVerifier(state, passed));
+    session.commitEntryRoutingState(noteContractVerifier(state, passed));
   } catch {
     // Contract bookkeeping must never change a tool result.
   }
@@ -675,7 +673,7 @@ export function gateContractMutation(
 ): ToolCallEventResult | undefined {
   try {
     if (!isMutationCall(event.toolName, event.input)) return undefined;
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     const last = session.getLastDecision();
     if (!state || !last || last.intentKey !== state.intentKey) return undefined;
     if (last.dimension !== 'plan' && last.dimension !== 'review') return undefined;
@@ -683,8 +681,8 @@ export function gateContractMutation(
     const lastServed = session.getLastServed();
     const served = lastServed ? servedKey(lastServed) : undefined;
     if (handoffInapplicable(last, state, served)) return undefined;
-    session.commitWorkPhaseState({ ...state, contractReminded: true });
-    appendExecutionContractSignal({
+    session.commitEntryRoutingState({ ...state, contractReminded: true });
+    appendExecutionContractSignal({ routingScope: entryRoutingScope(state),
       intentKey: state.intentKey,
       served: served ?? 'unknown/unknown',
       action: 'reminder',
@@ -708,15 +706,15 @@ export function remindContractOnEdit(
 ): ToolResultEventResult | undefined {
   try {
     if (event.toolName !== 'edit' && event.toolName !== 'write') return undefined;
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     const last = session.getLastDecision();
     if (!state || !last || last.intentKey !== state.intentKey) return undefined;
     const lastServed = session.getLastServed();
     const served = lastServed ? servedKey(lastServed) : undefined;
     if (state.contract || state.contractReminded || handoffInapplicable(last, state, served)) return undefined;
     if (last.dimension === 'implement') return undefined;
-    session.commitWorkPhaseState({ ...state, contractReminded: true });
-    appendExecutionContractSignal({
+    session.commitEntryRoutingState({ ...state, contractReminded: true });
+    appendExecutionContractSignal({ routingScope: entryRoutingScope(state),
       intentKey: state.intentKey,
       served: served ?? 'unknown/unknown',
       action: 'reminder',

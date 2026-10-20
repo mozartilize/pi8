@@ -63,9 +63,9 @@ describe('entry-scoped context handoff', () => {
     await entry('implement the parser');
     expect((await handoff()).accepted).toBe(true);
     await serve();
-    const state = harness.session.getWorkPhaseState()!;
+    const state = harness.session.getEntryRoutingState()!;
     const flow = { ...state.executionFlow!, strikesByModel: { 'alpha/cheap': 2 }, excludedModels: ['alpha/cheap'] };
-    harness.session.commitWorkPhaseState({ ...state, executionFlow: flow });
+    harness.session.commitEntryRoutingState({ ...state, executionFlow: flow });
     return flow;
   }
 
@@ -81,25 +81,24 @@ describe('entry-scoped context handoff', () => {
 
   it('creates gather boundaries with declared demand and repeats the accepted payload without a new boundary', async () => {
     await entry('investigate the failure');
-    const triage = harness.session.getWorkPhaseState()!.boundaryId;
+    const triage = harness.session.getEntryRoutingState()!.boundaryId;
     const params = { ...READY, deliverable: 'gather', complexity: 'routine' };
     expect((await handoff(params)).accepted).toBe(true);
-    const boundary = harness.session.getWorkPhaseState()!.boundaryId;
+    const boundary = harness.session.getEntryRoutingState()!.boundaryId;
     expect(boundary).not.toBe(triage);
     await serve();
-    expect(phaseDifficulty(harness.session.getWorkPhaseState(), 'gather')).toMatchObject({ value: 0.25, source: 'declared-complexity' });
-    const served = harness.session.getWorkPhaseState();
+    expect(phaseDifficulty(harness.session.getEntryRoutingState(), 'gather')).toMatchObject({ value: 0.25, source: 'declared-complexity' });
+    const served = harness.session.getEntryRoutingState();
     expect((await handoff(params)).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()).toBe(served);
+    expect(harness.session.getEntryRoutingState()).toBe(served);
     expect((await handoff({ ...params, findings: 'another independent failure' })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()!.boundaryId).not.toBe(boundary);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
+    expect(harness.session.getEntryRoutingState()!.boundaryId).not.toBe(boundary);
   });
 
   it('keeps strikes across two implement handoffs in the same entry', async () => {
     const flow = await struckFlow();
     expect((await handoff({ ...READY, findings: 'revised implementation evidence' })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()!.executionFlow).toEqual(flow);
+    expect(harness.session.getEntryRoutingState()!.executionFlow).toEqual(flow);
     await serve();
     expect(harness.session.getLastDecision()!.fallbackChain).not.toContain('alpha/cheap');
     expect(harness.session.getLastServed()!.registryId).toBe('beta/strong');
@@ -112,9 +111,9 @@ describe('entry-scoped context handoff', () => {
     const delegated = JSON.stringify(vi.mocked(streamSimple).mock.calls.at(-1)?.[1]);
     expect(delegated).toContain('alpha/cheap');
     expect(delegated).toContain('Set continuesFlow to true');
-    expect(harness.session.getWorkPhaseState()!.executionFlow).toBeUndefined();
+    expect(harness.session.getEntryRoutingState()!.executionFlow).toBeUndefined();
     expect((await handoff({ ...READY, continuesFlow: true })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()!.executionFlow).toEqual(flow);
+    expect(harness.session.getEntryRoutingState()!.executionFlow).toEqual(flow);
     expect(harness.session.previousFlow).toBeUndefined();
     await serve();
     expect(harness.session.getLastDecision()!.fallbackChain).not.toContain('alpha/cheap');
@@ -124,7 +123,7 @@ describe('entry-scoped context handoff', () => {
     await entry('implement the parser');
     const result = await handoff({ ...READY, continuesFlow: true });
     expect(result).toMatchObject({ accepted: true, text: expect.stringContaining('No previous execution flow exists') });
-    expect(harness.session.getWorkPhaseState()!.executionFlow).toMatchObject({ strikesByModel: {}, excludedModels: [] });
+    expect(harness.session.getEntryRoutingState()!.executionFlow).toMatchObject({ strikesByModel: {}, excludedModels: [] });
   });
 
   it('discards an unlinked flow and cannot adopt it across an unrelated answer entry', async () => {
@@ -135,8 +134,8 @@ describe('entry-scoped context handoff', () => {
     expect(harness.session.previousFlow).toBeUndefined();
     await entry('implement another parser');
     expect((await handoff({ ...READY, continuesFlow: true })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()!.executionFlow!.flowId).not.toBe(flow.flowId);
-    expect(harness.session.getWorkPhaseState()!.executionFlow!.excludedModels).toEqual([]);
+    expect(harness.session.getEntryRoutingState()!.executionFlow!.flowId).not.toBe(flow.flowId);
+    expect(harness.session.getEntryRoutingState()!.executionFlow!.excludedModels).toEqual([]);
   });
 
   it('discards the previous flow when a fresh implementation omits continuesFlow', async () => {
@@ -144,16 +143,16 @@ describe('entry-scoped context handoff', () => {
     await entry('implement an unrelated scheduler');
     expect((await handoff()).accepted).toBe(true);
     expect(harness.session.previousFlow).toBeUndefined();
-    expect(harness.session.getWorkPhaseState()!.executionFlow!.flowId).not.toBe(flow.flowId);
-    expect(harness.session.getWorkPhaseState()!.executionFlow!.strikesByModel).toEqual({});
+    expect(harness.session.getEntryRoutingState()!.executionFlow!.flowId).not.toBe(flow.flowId);
+    expect(harness.session.getEntryRoutingState()!.executionFlow!.strikesByModel).toEqual({});
   });
 
   it.each([{ deliverable: 'plan', continuesFlow: true }, { outcome: 'needs-user', continuesFlow: true },
     { continuesFlow: 'true' }, { outcome: 'answer' }, { deliverable: 'lightweight' }])('rejects invalid declaration %j without spending a source refusal', async (patch) => {
     await entry('hello');
-    const state = harness.session.getWorkPhaseState();
+    const state = harness.session.getEntryRoutingState();
     expect((await handoff({ ...READY, ...patch })).accepted).toBe(false);
-    expect(harness.session.getWorkPhaseState()).toBe(state);
+    expect(harness.session.getEntryRoutingState()).toBe(state);
   });
 
   it('requires a complete current-entry read even when files are declared or the model is pinned', async () => {
@@ -161,12 +160,12 @@ describe('entry-scoped context handoff', () => {
     await entry('@source.ts implement the parser');
     expect((await handoff({ ...READY, files: ['source.ts'] })).accepted).toBe(false);
     await read('first\nsecond', 1);
-    expect(harness.session.getWorkPhaseState()!.sourceEvidencePending).toBe(true);
+    expect(harness.session.getEntryRoutingState()!.sourceEvidencePending).toBe(true);
     await read('third\nfourth', 3);
-    expect(harness.session.getWorkPhaseState()!.sourceEvidencePending).toBe(false);
+    expect(harness.session.getEntryRoutingState()!.sourceEvidencePending).toBe(false);
     expect((await handoff()).accepted).toBe(true);
     await entry('@source.ts explain another result');
-    expect(harness.session.getWorkPhaseState()!.evidence!.observedFiles.size).toBe(0);
+    expect(harness.session.getEntryRoutingState()!.evidence!.observedFiles.size).toBe(0);
     expect((await handoff()).accepted).toBe(false);
   });
 
@@ -177,6 +176,9 @@ describe('entry-scoped context handoff', () => {
     const text = readFileSync(join(temp.path, 'decisions.jsonl'), 'utf8');
     const accepted = text.trim().split('\n').map((line) => JSON.parse(line))
       .find((record) => record.investigationHandoff?.action === 'accept');
+    expect(accepted.investigationHandoff.status).toBe('ready-pending');
+    expect(accepted.routingScope.boundaryId).toBe(harness.session.getEntryRoutingState()!.boundaryId);
+    expect(accepted.routingScope.entryId).toBe(harness.session.getEntryRoutingState()!.sourceEntryId);
     expect(accepted.investigationHandoff.sourceEvidence).toEqual({ required: 1, fresh: 1, partial: 0, oversized: 0 });
     expect(text).not.toContain('source.ts');
     expect(text).not.toContain('first\\nsecond');
@@ -188,7 +190,7 @@ describe('entry-scoped context handoff', () => {
     writeFileSync(join(cwd, 'source.ts'), 'changed content');
     expect((await handoff()).accepted).toBe(false);
     expect((await handoff({ outcome: 'needs-user', question: 'Which source version should I use?' })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()).toMatchObject({ status: 'clarification-only', sourceEvidencePending: true });
+    expect(harness.session.getEntryRoutingState()).toMatchObject({ status: 'clarification-only', sourceEvidencePending: true });
   });
 
   it.each(['entry', 'epoch', 'session'] as const)('rejects prepared facts after a different %s becomes current', async (change) => {
@@ -198,8 +200,8 @@ describe('entry-scoped context handoff', () => {
     if (change === 'entry') await entry('implement a scheduler');
     if (change === 'epoch') harness.session.invalidateRouting();
     if (change === 'session') harness.session.reset();
-    const state = harness.session.getWorkPhaseState();
+    const state = harness.session.getEntryRoutingState();
     expect(submitContextHandoff(READY, ctx as never, harness.session, facts).accepted).toBe(false);
-    expect(harness.session.getWorkPhaseState()).toBe(state);
+    expect(harness.session.getEntryRoutingState()).toBe(state);
   });
 });

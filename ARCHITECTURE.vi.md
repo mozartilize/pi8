@@ -11,6 +11,18 @@ Các thông tin về hướng dẫn cài đặt và lệnh người dùng nằm 
 
 ---
 
+## 0. Phạm vi entry và quyền thực thi
+
+Mỗi yêu cầu người dùng thực sự bắt đầu ở `triage`, được định tuyến bằng `gather`. Model phục vụ gần nhất chỉ là ứng viên; loại công việc, mức suy luận tối thiểu và hợp đồng cũ không cấp quyền cho entry mới. Model có thể trả lời trực tiếp hoặc bàn giao qua một boundary được chấp thuận.
+
+`EntryRoutingState` giữ trạng thái và quyền của entry. `EntryEvidenceState` giữ các tham chiếu nguồn `@file`, độ bao phủ dòng và SHA-256 hiện tại. `ExecutionFlowState` giữ strike và danh sách loại trừ thực thi; hai handoff implement trong cùng entry không xóa strike. Chỉ entry ngay sau đó có thể nhận flow cũ qua `continuesFlow=true`.
+
+`ServingHistoryState` chỉ khôi phục danh tính `provider/model` và effort từ nhánh phiên. Sự kiện `pi8-serving-v1` không khôi phục quyền thực thi hoặc bằng chứng cache ấm. Đổi nhánh, reset phiên và đổi model có quyền sở hữu làm tăng routing epoch trước khi khôi phục dữ liệu.
+
+Nguồn được tham chiếu phải có bằng chứng đọc đầy đủ và SHA còn đúng trước khi bàn giao hoặc kết thúc câu trả lời. Tối đa hai lượt sửa nguồn trong cùng entry được phép trước khi chuyển sang hỏi làm rõ. Schema log 5 ghi `routingScope` và số đếm nguồn, không ghi đường dẫn hay nội dung nguồn.
+
+Xem [Entry routing](docs/entry-routing.md) cho giao thức và quy tắc chi tiết.
+
 ## 1. Độ khó và nhu cầu năng lực (Difficulty & Task Demand)
 
 Mô-đun `task-demand.ts` và `difficulty.ts` đóng vai trò là chủ thể duy nhất (single owner) tổng hợp các khai báo đã được chấp thuận (giai đoạn công việc, rubric độ khó, các quyết định còn để ngỏ, cờ thu thập ngữ cảnh) cùng với các đặc trưng đo đạc trực tiếp từ mã nguồn và đầu vào (kích thước ngữ cảnh, hình ảnh). Các thành phần chấm điểm và trích xuất đặc trưng phía sau chỉ đọc kết quả từ `TaskDemand`, tuyệt đối không tự tính toán lại nhu cầu.
@@ -36,7 +48,7 @@ export const PHASE_RELEVANCE: Readonly<Record<Dimension, TaskRelevance>> = {
 
 Các rubric được khai báo từ model nộp kế hoạch hoặc bàn giao ngữ cảnh theo thang đo 1 (dễ nhất) đến 5 (khó nhất). Hàm `level(v)` chuẩn hóa các giá trị nguyên này về đoạn $[0, 1]$:
 $$\text{level}(v) = \text{clamp01}\left(\frac{v - 1}{4}\right)$$
-Nếu một tiêu chí không được điền hoặc không phải số hữu hạn, nó mặc định nhận giá trị 1.0 (mức độ khó tối đa), tuân thủ nguyên tắc an toàn thận trọng (fail-safe).
+Tiêu chí thiếu hoặc không hợp lệ nhận mức hợp lệ cao nhất đã khai báo trong rubric.
 
 #### A. Rubric thực thi (`ExecutionRubric`)
 Được cung cấp qua công cụ `commit_execution`, gồm 5 tiêu chí:
@@ -174,7 +186,7 @@ Duy trì sự ổn định của model đang phục vụ (`incumbent`), bảo t�
 - Không có incumbent hoặc không rõ danh tính: $0.50$
 
 #### Đặc trưng 8: Tránh ma sát quỹ đạo (`frictionAvoidance`)
-Ngăn chặn việc chọn lại model/effort vừa gây ra sự cố trong cùng một công việc (`workItemId`):
+Phản ánh ma sát của đúng model/effort trong quyết định hiện tại; không kế thừa lịch sử theo danh tính công việc:
 - Gặp lỗi làm lại đã quy kết (`attributed-rework`): $0.00$
 - Vướng vòng lặp suy luận nghiêm trọng (`severe-reasoning-loop`): $0.25$
 - Không có ma sát: $1.00$
@@ -298,7 +310,7 @@ Khi một kế hoạch được giải phóng (`release: true`), bộ chọn Min
 - **Xử lý làm lại (Rework)**: Nếu trong quá trình review, submitter nhận thấy kết quả không đạt và nộp lại một kế hoạch `commit_execution` mới, hành động này được định danh là `rework`.
 - **Cơ chế loại trừ (`CONTRACT_STRIKE_LIMIT = 2`)**:
   - Mỗi lần làm vỡ hợp đồng (`broken`) hoặc khiến công việc phải làm lại (`rework`) tính 1 strike cho model thực thi đó.
-  - Khi một model tích lũy đủ **2 strike** trong cùng một công việc, model đó lập tức bị đưa vào danh sách loại trừ (`excludedExecutors`), bị cấm thực thi mọi kế hoạch tiếp theo của công việc này trên tất cả các mức effort và provider.
+  - Khi một `provider/model` tích lũy đủ **2 strike** trong cùng execution flow, danh tính đó bị loại khỏi thực thi ở mọi effort. Cùng model ID trên provider khác là danh tính khác. Flow chỉ sang entry kế tiếp khi được khai báo `continuesFlow=true`.
 
 ---
 

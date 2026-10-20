@@ -147,9 +147,9 @@ The first pin saves the current automatic decision in `resumeSnapshot`.
 
 `/router-manual resume` removes the pin and discards pin-owned pending trajectory escalation.
 
-The next routed turn serves the saved decision directly with cause `resume`. It does not rank the pool again, and its record keeps the saved ranking.
+A saved decision is considered only if it still belongs to the current entry and boundary. A valid restored decision keeps its saved ranking and uses cause `resume`.
 
-The saved decision applies only when these values are unchanged: the benchmark snapshot, the preference profile, the feature mapping, the task type, and the work item. Without a saved work item, the saved decision applies only to the same user entry.
+The snapshot also requires unchanged benchmark data, preference profile, feature mapping, and task type. A manual-model transition advances the routing epoch and ends earlier boundary authority; an old boundary cannot be restored by removing the pin. Invalid snapshots return to triage selection.
 
 The router keeps the saved chain actions that are legal for this invocation and hold the prompt. Each restored invocation gets a new authorization. Contract ownership still applies. The pinned model that served last does not own the work. If a check fails or no saved action remains, ordinary selection resumes, and the saved decision is discarded.
 

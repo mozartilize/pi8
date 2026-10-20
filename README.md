@@ -43,7 +43,8 @@ The Intelligence normalization uses Artificial Analysis Intelligence Index versi
 ```
 /router-sync → benchmark data
                     ↓
-   collect context → hand_off_context → task type
+   new user entry → triage (gather) → direct answer
+                    └→ hand_off_context → task type
                     ↓
          pick best (model, effort) → fallback chain
                     ↓
@@ -58,7 +59,9 @@ The Intelligence normalization uses Artificial Analysis Intelligence Index versi
      planner reviews ──→ new plan → rework (a strike)
 ```
 
-Automatic selection uses separate reasoning, agentic coding, and research targets. Declared complexity bounds demand when no rubric is available. Demand without either declaration spans the full range; it is not treated as a measured hardest task. Collecting context, before a handoff or a declared answer, uses its own lower reasoning target and does not compare research quality. A target sets capability fit; it is not a minimum. Every authorized action competes in one pool, and your preferences set the trade-off between capability fit, price, speed, and continuity. Missing benchmark evidence widens an action's uncertainty instead of ranking it last. See [capability targets](docs/routing.md#capability-targets) and [one comparison pool](docs/routing.md#one-comparison-pool).
+Automatic selection uses separate reasoning, agentic coding, and research targets. Declared complexity bounds demand when no rubric is available. Demand without either declaration spans the full range; it is not treated as a measured hardest task. Triage and its clarification request use its own lower reasoning target and does not compare research quality. A target sets capability fit; it is not a minimum. Every authorized action competes in one pool, and your preferences set the trade-off between capability fit, price, speed, and continuity. Missing benchmark evidence widens an action's uncertainty instead of ranking it last. See [capability targets](docs/routing.md#capability-targets) and [one comparison pool](docs/routing.md#one-comparison-pool).
+
+Every genuine user entry starts in triage. The last served model remains a candidate, not the owner of a new entry. It can answer directly without a declaration. An investigation, plan, review, or implementation uses an accepted handoff. Explicit `@file` references require fresh full-file evidence before handoff or settlement. See [Entry routing](docs/entry-routing.md).
 
 ## Commands
 
@@ -104,7 +107,7 @@ The full reference is in [Configuration](docs/configuration.md).
 
 ## Observability
 
-- **Decision log:** `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl` — model selections, fallbacks, and work lifecycle. Without a saved session: `~/.pi/agent/pi8/decisions.jsonl`.
+- **Decision log:** `<session-dir>/<timestamp>_<sessionId>.router-decisions.jsonl` — model selections, fallbacks, entry boundaries, source verification, and execution contracts. Without a saved session: `~/.pi/agent/pi8/decisions.jsonl`.
 - **Global model history:** `~/.pi/agent/pi8/model-events.jsonl` — protocol counts and cache history.
 - **Debug log:** `<session-dir>/*.router-debug.log` — opt-in attempt and turn timings. Without a saved session: `/tmp/pi8-debug.log`. When debug is enabled, `pi8-debug` entries also render directly in the Pi chat transcript.
 

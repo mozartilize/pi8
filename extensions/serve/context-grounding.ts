@@ -5,7 +5,7 @@ import { resolveToolPath } from '../routing/policy/execution-contract.js';
 import {
   contentLineCount, fingerprintFile, matchedLineRanges, readLineRange, ReadCoverage, resultText,
 } from '../routing/context/grounding.js';
-import { latestGenuineUserEntry, readBranch } from '../routing/context/persistence.js';
+import { latestGenuineUserEntry, readBranch } from '../routing/context/branch-provenance.js';
 import type { RouterSession } from './router-session-state.js';
 import { refreshSourceEvidence } from './entry-evidence.js';
 
@@ -20,7 +20,7 @@ export function currentSourceEntry(
   ctx: Pick<ExtensionContext, 'sessionManager'> | undefined,
   session: RouterSession,
 ): string | undefined {
-  return session.getWorkPhaseState()?.sourceEntryId
+  return session.getEntryRoutingState()?.sourceEntryId
     ?? latestGenuineUserEntry(readBranch(ctx?.sessionManager))
     ?? session.getCachedIntent()?.key;
 }
@@ -32,9 +32,9 @@ export async function observeContextGrounding(
   session: RouterSession,
 ): Promise<void> {
   try {
-    const evidence = session.getWorkPhaseState()?.evidence;
+    const evidence = session.getEntryRoutingState()?.evidence;
     if (event.isError || !ctx.cwd || !evidence || evidence.routingEpoch !== session.getRoutingEpoch()) return;
-    const stillCurrent = () => session.getWorkPhaseState()?.evidence === evidence
+    const stillCurrent = () => session.getEntryRoutingState()?.evidence === evidence
       && evidence.routingEpoch === session.getRoutingEpoch()
       && (latestGenuineUserEntry(readBranch(ctx.sessionManager)) ?? evidence.entryId) === evidence.entryId;
     if (!stillCurrent()) return;

@@ -23,7 +23,7 @@ Every model call serves the user's request.
 | [Architecture](#architecture) | System boundaries, data flow, session state, and implementation map |
 | [Scoring](scoring.md) | Candidate expansion, quality references, price/speed scales, cache credit, and effort |
 | [Delegation](delegation.md) | Attempts, retries, provider exclusions, output safety, and manual/resume state |
-| [Work lifecycle](work-lifecycle.md) | Context collection, execution plans, review, completion, and reopen |
+| [Entry routing](entry-routing.md) | Triage, source evidence, entry boundaries, execution plans, and execution flows |
 | [Benchmark data](benchmark-data.md) | Data sources, model matching, effort identity, and refresh behavior |
 | [Observability](observability.md) | Logs, attempt timing, cost reports, and privacy limits |
 | [Glossary](glossary.md) | Project terms and their meanings |
@@ -45,7 +45,7 @@ pi8 registers the synthetic `router/auto` provider inside Pi. It resolves a requ
 | Component | Responsibility |
 |---|---|
 | Pi | Model registry, authentication access, session transcript, tools, and supported thinking levels |
-| pi8 | Task state, benchmark matching, candidate selection, delegation, and work tracking |
+| pi8 | Task state, benchmark matching, candidate selection, delegation, and entry authorization |
 | Artificial Analysis | Published benchmark measurements |
 | Model provider | Authentication result, model availability, generated output, and usage |
 
@@ -62,7 +62,7 @@ Tool gates control the workflow. They do not isolate files, shell commands, or c
 | [Features](../extensions/routing/features/candidate.ts) | Task demand, capability fit, economic spend, latency, and recovery |
 | [Optimization](../extensions/routing/optimization/select.ts) | Decision problem compilation, weight domain, and minimax regret selection |
 | [Delegation](../extensions/serve/delegation.ts) | Authentication, retries, provider failures, cancellation, and timing |
-| [Work phase](../extensions/routing/policy/work-phase.ts) | Entry state, task types, and handoff transitions |
+| [Entry state](../extensions/routing/policy/entry-routing-state.ts) | Entry state, task types, and handoff transitions |
 | [Execution difficulty](../extensions/routing/features/difficulty.ts) | Rubric axis demand and file measurements |
 | [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan validation, release, review, and strikes |
 | [Contract tool](../extensions/serve/execution-contract-tool.ts) | Plan acceptance, target observation, and tool tracking |
@@ -76,7 +76,7 @@ Routing state uses instantiable domain containers:
 |---|---|
 | `RouterSession` | Session generation, last decision, last served model, candidate cache, and domain containers |
 | `BlacklistState` | Runtime model/provider exclusions and normalized session patterns |
-| `IntentState` | Cached entry intent and work-phase state across tool continuations |
+| `IntentState` | Cached entry intent and entry-routing state across tool continuations |
 | `RuntimeBindings` | Pi context, model registry, and provider-registration signature |
 
 `session_start` clears session routing state. Runtime bindings survive that reset and clear only on extension shutdown or reload.
@@ -93,17 +93,13 @@ Content comparison ignores object property order but preserves block order and i
 
 ### State boundaries
 
-Work-item status, task type, and execution-contract status are separate states.
+Every new genuine user entry starts in triage. Only a same-entry accepted boundary can establish a different task type or mutation authority.
 
-A completed item can retain its serving model. Reopening changes the item status and permits a new routing decision.
+Contracts and source evidence belong to the entry. Executor strikes belong to a live execution flow. The immediately following entry can adopt a struck flow only through an explicit implementation handoff with `continuesFlow=true`.
 
-An active execution contract belongs to its entry. Executor strikes belong to the work item and can survive later entries.
+A branch restores only serving identity and model-selection history, not task authority or an in-flight contract. Tree navigation and ownership-changing model transitions advance a routing epoch and clear ephemeral authority before restored identity becomes visible.
 
-Requests sent under a concrete model do not continue the active item automatically. A later routed request collects context and selects work again.
-
-A model switch without a request preserves the active item, but it ends the incumbent association.
-
-See [Work lifecycle](work-lifecycle.md#session-and-branch-transitions) for transcript records and branch handling.
+See [Entry routing](entry-routing.md#session-and-branch-transitions).
 
 ### Failure boundaries
 
@@ -117,7 +113,7 @@ See [Delegation](delegation.md) for attempt buffering and replay constraints.
 
 ## Implementation checks
 
-Detailed formulas and state transitions appear in the [Scoring](scoring.md), [Delegation](delegation.md), and [Work lifecycle](work-lifecycle.md) references.
+Detailed formulas and state transitions appear in the [Scoring](scoring.md), [Delegation](delegation.md), and [Entry routing](entry-routing.md) references.
 
 To check implementation changes, run:
 

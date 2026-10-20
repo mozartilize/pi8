@@ -20,7 +20,7 @@ Use `/router-report` for registry-priced cost estimates, not billed cost.
 
 | Log | Default location | Purpose |
 |---|---|---|
-| Decision log | Beside Pi's saved session transcript | Selection, fallback, work lifecycle, contracts, and attempt usage |
+| Decision log | Beside Pi's saved session transcript | Selection, fallback, entry boundaries, source verification, contracts, and attempt usage |
 | Global model history | `~/.pi/agent/pi8/model-events.jsonl` | Protocol counts and exact-prefix cache history |
 | Debug log | Beside Pi's saved session transcript when enabled | Timing and diagnostic events |
 
@@ -57,8 +57,8 @@ A string selects an explicit file path:
 ```
 
 Debug output records:
-- Decisions with work item, topic, phase, cause, and handoff identities.
-- Pending context choices and transitions.
+- Decisions with entry, boundary, assignment, phase, cause, and optional flow identities.
+- Entry acquisition status and source-evidence counts.
 - Handoff status and boundary settlements.
 - Attempt milestones and failure details.
 
@@ -66,7 +66,7 @@ Do not write a debug log into a public checkout when the request contains sensit
 
 ## Decision records
 
-Decision records include task type, selected candidate, cause, fallback order, and capability diagnostics.
+Schema 5 decision records include task type, selected candidate, cause, fallback order, capability diagnostics, and `routingScope`. The scope identifies the entry, boundary, assignment, and optional execution flow. Source verification records required, fresh, partial, and oversized counts. It does not record source paths or content. Older record versions remain readable as historical data.
 
 Handoff and contract records add rubric levels, measured counts, requirement, outcome, rejection codes, and model keys.
 
@@ -92,7 +92,7 @@ Global history uses two identities:
 
 Protocol identity normalizes `.`, `_`, and `-` separators. It retains date and revision suffixes so releases do not inherit another release's counts.
 
-Served and reminder records retain task type. Reminder kinds are `context`, `completion`, and `contract`.
+Served and reminder records retain task type. New reminder kinds are `context` and `contract`. Historical records can contain `completion`.
 
 Each kind has a separate rate. The router does not combine the kinds into one rate.
 

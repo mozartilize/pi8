@@ -17,16 +17,21 @@ Use these terms consistently in issues, documentation, and model-facing instruct
 | Handoff minimum | Requirement that applies after an accepted task declaration. |
 | Executor minimum | Implementation requirement that applies to a released execution plan. |
 | Incumbent capability minimum | Constraint that preserves the serving model's measured capability between routing boundaries. |
-| Minimum thinking level | Constraint that preserves the effort the incumbent actually served. |
+| Minimum thinking level | Constraint that preserves served effort within a continuing boundary of the same entry, not across new entries. |
 | Candidate | One routable provider, model, and effort combination. |
 | Candidate key | The identity `provider/id[:effort]` used in routing and logs. |
 | Effort | A provider-supported thinking level, such as `low`, `high`, or `max`. |
 | Estimated quality | A conservative inferred value, not a measurement at the candidate's exact model and effort. |
-| Incumbent | The model that retains the current routing phase. |
+| Incumbent | The last actually served model and effort. It is a candidate for a new entry, not its automatic owner. |
 | Final step | The requested outcome declared through task type, complexity, and scope. |
 | Terminal event | A stream event that ends one model attempt. This is not a task's final step. |
 | User entry | One user request and its associated tool-loop continuations. |
-| Work item | Tracked work that can continue, complete, or reopen across user entries. |
+| Routing boundary | An entry's triage boundary or an accepted ready handoff boundary. |
+| EntryRoutingState | Live task type, acquisition status, and authorization for one user entry. |
+| Execution flow | Live implementation strike and exclusion scope; it has no task title or status. |
+| EntryEvidenceState | Explicit source references and SHA-versioned read coverage for one entry. |
+| ServingHistoryState | Branch-folded served provider/model and optional effort; it restores no task authority. |
+| Previous-flow slot | One struck flow offered only to the immediately following entry for explicit adoption. |
 | Handoff | An accepted declaration that transfers work to its next routing phase. |
 | Execution contract | An accepted closed plan with concrete changes and verification steps. |
 | Submitter | The model that submits an execution plan. |
@@ -54,12 +59,12 @@ Use these terms consistently in issues, documentation, and model-facing instruct
 | Capability minimum | Measured quality required by task type and input shape |
 | Handoff minimum | Rubric and final-step requirement after an accepted declaration |
 | Executor minimum | Rubric, measurements, and shape of a closed execution plan |
-| Incumbent capability minimum | Serving-model quality retained between boundaries |
-| Minimum thinking level | Effort that the incumbent actually served |
+| Incumbent capability minimum | Serving-model ownership within one continuing served boundary |
+| Minimum thinking level | Effort of the incumbent within one continuing served boundary |
 
 A change in task type changes the relevant capability targets and required evidence.
 
-See [Scoring](scoring.md#incumbent-minimums) and [Work lifecycle](work-lifecycle.md#demand-formulas) for the rules.
+See [Scoring](scoring.md#incumbent-minimums) and [Entry routing](entry-routing.md#demand-formulas) for the rules.
 
 ## Benchmark names
 

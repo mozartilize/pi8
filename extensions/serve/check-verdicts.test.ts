@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import { factsLog } from '../routing/policy/change-facts.js';
 import { routingDecision } from '../test-support/router-fixtures.js';
 import { checkVerdict, observeCheckVerdict } from './check-verdicts.js';
@@ -25,9 +25,9 @@ describe('checkVerdict', () => {
 });
 
 describe('observeCheckVerdict', () => {
-  function entrySession(state: Partial<WorkPhaseState> = {}): RouterSession {
+  function entrySession(state: Partial<EntryRoutingState> = {}): RouterSession {
     const session = new RouterSession();
-    session.commitWorkPhaseState({ intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0, ...state });
+    session.commitEntryRoutingState({ intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0, ...state });
     session.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'entry' });
     return session;
   }
@@ -36,17 +36,17 @@ describe('observeCheckVerdict', () => {
     const session = entrySession();
     observeCheckVerdict(shell('npm test', 'fail', true), session);
     observeCheckVerdict(shell('npm test', 'ok'), session);
-    expect(session.getWorkPhaseState()?.checkVerdicts).toEqual({ beforeHandoff: 'pass', runsAfterHandoff: 0 });
-    session.commitWorkPhaseState({ ...session.getWorkPhaseState()!, changeFacts: { log: factsLog('implement', undefined, {}) } });
+    expect(session.getEntryRoutingState()?.checkVerdicts).toEqual({ beforeHandoff: 'pass', runsAfterHandoff: 0 });
+    session.commitEntryRoutingState({ ...session.getEntryRoutingState()!, changeFacts: { log: factsLog('implement', undefined, {}) } });
     observeCheckVerdict(shell('npm test', 'not ok', true), session);
     observeCheckVerdict(shell('npm test', 'ok 1\nCommand timed out after 30 seconds', true), session);
-    expect(session.getWorkPhaseState()?.checkVerdicts).toEqual({ beforeHandoff: 'pass', afterHandoff: 'timeout', runsAfterHandoff: 2 });
+    expect(session.getEntryRoutingState()?.checkVerdicts).toEqual({ beforeHandoff: 'pass', afterHandoff: 'timeout', runsAfterHandoff: 2 });
   });
 
   it('records nothing for an entry that the last decision does not serve', () => {
     const session = entrySession();
     session.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'other' });
     observeCheckVerdict(shell('npm test', 'ok'), session);
-    expect(session.getWorkPhaseState()?.checkVerdicts).toBeUndefined();
+    expect(session.getEntryRoutingState()?.checkVerdicts).toBeUndefined();
   });
 });

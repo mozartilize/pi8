@@ -3,8 +3,6 @@
  * movable leaf, and `getBranch()` walking from the leaf to the root. Enough
  * to exercise branch-local state the way Pi's SessionManager exposes it.
  */
-import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
-import type { RoutingContextEvent } from '../routing/context/types.js';
 
 export interface TreeEntry {
   type: string;
@@ -56,8 +54,8 @@ export class SessionTree {
     return this.add({ type: 'custom', customType, data });
   }
 
-  event(event: RoutingContextEvent): string {
-    return this.custom(CONTEXT_ENTRY_TYPE, event);
+  legacyContext(event: unknown): string {
+    return this.custom('pi8-routing-context-v1', event);
   }
 
   /** Move the leaf, as `/tree` does. */

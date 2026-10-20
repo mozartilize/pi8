@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeStoredPreferences } from '../test-support/stored-preferences.js';
 import type { BenchModel } from '../types.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import { registryModel } from '../test-support/router-fixtures.js';
 import { benchStoreJson } from '../test-support/provider-harness.js';
 import { WorkerLpAdapter, type LPAdapter } from '../routing/optimization/lp.js';
@@ -151,7 +151,7 @@ describe('production selection adapter', () => {
     turn.state.phase = 'gather';
     turn.state.contextAcquisition = collecting;
     turn.authorizationScope.phase = 'gather';
-    turn.workState = work ? { intentKey: 'entry-a', providerInvocation: 1, observedMutationTools: 0, ...work } as WorkPhaseState : undefined;
+    turn.entryState = work ? { intentKey: 'entry-a', providerInvocation: 1, observedMutationTools: 0, ...work } as EntryRoutingState : undefined;
     const result = await resolveUnifiedDecision(turn, noPreparation);
     if (result.kind !== 'decision') throw new Error('Expected a decision');
     expect(result.decision.unified).toHaveProperty('difficultyMissingReason', reason);
@@ -160,10 +160,10 @@ describe('production selection adapter', () => {
 
   it.each(['active', 'executed'] as const)('records an unscored %s implementation contract before a prior plan handoff', async (status) => {
     const turn = input();
-    turn.workState = {
+    turn.entryState = {
       intentKey: 'entry-a', providerInvocation: 1, observedMutationTools: 0,
       contract: { status }, reasoningHandoff: { target: 'plan' },
-    } as WorkPhaseState;
+    } as EntryRoutingState;
     const result = await resolveUnifiedDecision(turn, noPreparation);
     if (result.kind !== 'decision') throw new Error('Expected a decision');
     expect(result.decision.unified).toHaveProperty('difficultyMissingReason', 'no-rubric');
@@ -223,7 +223,7 @@ describe('production selection adapter', () => {
 
   it('excludes every effort of a failed executor only in its entry\'s execution flow and the implement task type', async () => {
     const turn = input([model('one'), model('two')]);
-    turn.workState = {
+    turn.entryState = {
       intentKey: 'entry-a', sourceEntryId: 'entry-a', providerInvocation: 1, observedMutationTools: 0,
       executionFlow: { ...newExecutionFlow('entry-a', 'b'), excludedModels: ['test/one:low'] },
     };
@@ -239,7 +239,7 @@ describe('production selection adapter', () => {
     expect(planning.kind).toBe('decision');
     if (planning.kind !== 'decision') throw new Error('Expected a decision');
     expect(planning.authorization.allowedActors).toContain('test/one:low');
-    expect(implementation.authorization.flowId).toBe(turn.workState.executionFlow!.flowId);
+    expect(implementation.authorization.flowId).toBe(turn.entryState.executionFlow!.flowId);
     const unrelated = await resolveUnifiedDecision({
       ...turn,
       authorizationScope: { ...turn.authorizationScope, entryId: 'entry-b' },

@@ -1,6 +1,6 @@
 /**
  * Declared handoff rubrics. Every declaration of a task type uses the same
- * rubric: `hand_off_context`, `reopen_work`, and `commit_execution` value
+ * rubric: `hand_off_context` and `commit_execution` value
  * implementation work on the execution rubric, and planning or review on the
  * reasoning rubric.
  *

@@ -1,8 +1,8 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { extractPromptAnchors } from '../routing/context/anchors.js';
+import { referencedSourcePaths } from '../routing/context/prompt-references.js';
 import { fingerprintFile, GROUNDING_MAX_BYTES, ReadCoverage } from '../routing/context/grounding.js';
-import { latestGenuineUserEntry, readBranch, type BranchReader } from '../routing/context/persistence.js';
+import { latestGenuineUserEntry, readBranch, type BranchReader } from '../routing/context/branch-provenance.js';
 import type { RouterSession } from './router-session-state.js';
 import type { SourceEvidenceCounts } from '../types.js';
 
@@ -26,8 +26,7 @@ export function createEntryEvidence(
     entryId: latestGenuineUserEntry(readBranch(sessionManager), turn) ?? turn.key,
     routingEpoch,
     cwd,
-    referencedPaths: extractPromptAnchors(turn.promptText, { cwd })
-      .filter((anchor) => anchor.kind === 'path' && anchor.mention === 'at').map((anchor) => anchor.value),
+    referencedPaths: referencedSourcePaths(turn.promptText, cwd),
     observedFiles: new Map(),
     readCoverage: new Map(),
   };
@@ -71,13 +70,13 @@ export async function sourceEvidenceStatus(evidence: EntryEvidenceState): Promis
 
 /** Publish only while the same entry and routing epoch still own the evidence. */
 export async function refreshSourceEvidence(session: RouterSession): Promise<SourceEvidenceStatus | undefined> {
-  const state = session.getWorkPhaseState();
+  const state = session.getEntryRoutingState();
   const evidence = state?.evidence;
   if (!evidence) return undefined;
   const status = await sourceEvidenceStatus(evidence);
-  const live = session.getWorkPhaseState();
+  const live = session.getEntryRoutingState();
   if (live?.evidence !== evidence || session.getRoutingEpoch() !== evidence.routingEpoch) return undefined;
   const pending = status.unmet.length > 0;
-  if (live.sourceEvidencePending !== pending) session.commitWorkPhaseState({ ...live, sourceEvidencePending: pending });
+  if (live.sourceEvidencePending !== pending) session.commitEntryRoutingState({ ...live, sourceEvidencePending: pending });
   return status;
 }

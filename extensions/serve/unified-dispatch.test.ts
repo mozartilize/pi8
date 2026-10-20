@@ -120,7 +120,7 @@ describe('production unified recovery', () => {
 
   it('keeps executor exclusions in the same implementation phase', async () => {
     const f = fixture();
-    f.input.workState = { intentKey: 'entry', sourceEntryId: 'entry', providerInvocation: 1, observedMutationTools: 0,
+    f.input.entryState = { intentKey: 'entry', sourceEntryId: 'entry', providerInvocation: 1, observedMutationTools: 0,
       executionFlow: { ...newExecutionFlow('entry', 'b'), excludedModels: ['test/alternate'] } };
     expect(await f.select()).toMatchObject({ kind: 'decision', chosen: 'test/source' });
     expect(f.adapter.reserve('test/alternate')).toBeUndefined();
@@ -213,7 +213,7 @@ describe('the best-ranked actor without authorization', () => {
       state: { phase: 'implement', estimatedContextTokens: 1000, needsVision: false,
         boundary: 'ordinary', friction: [], nowMs: 0, benchmarkIndexVersion: '4.3' },
       authorizationScope: { sessionGeneration: 1, profileDigest: readPreferences().digest, contextRevision: 1, entryId: 'entry', routingEpoch: 0, boundaryId: 'triage:entry:0', phase: 'implement', assignmentId: 'a1', revision: 1 },
-      ...(excludedExecutors ? { workState: { intentKey: 'entry', sourceEntryId: 'entry', providerInvocation: 1, observedMutationTools: 0,
+      ...(excludedExecutors ? { entryState: { intentKey: 'entry', sourceEntryId: 'entry', providerInvocation: 1, observedMutationTools: 0,
         executionFlow: { ...newExecutionFlow('entry', 'b'), excludedModels: excludedExecutors } } } : {}),
       cause: 'incumbent', candidates, registryModels: models, rows,
       isExcluded: () => false, isCurrent: () => true,

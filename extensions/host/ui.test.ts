@@ -1,10 +1,7 @@
 import { afterEach, describe, it, expect } from 'vitest';
 import { visibleWidth } from '@earendil-works/pi-tui';
 import { setDebugPath } from './debuglog.js';
-import { clearRouterStatus, renderDebugEntry, formatStatus, formatDecisionDetail, formatWorkContext, servedKey, preferenceBinding } from './ui.js';
-import { emptyLedger } from '../routing/context/ledger.js';
-import { foldEvents } from '../test-support/context-events.js';
-import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
+import { clearRouterStatus, renderDebugEntry, formatStatus, formatDecisionDetail, servedKey, preferenceBinding } from './ui.js';
 import { candidateKey } from '../routing/score/scorer.js';
 import type { RoutingDecision } from '../types.js';
 
@@ -305,86 +302,6 @@ describe('servedKey', () => {
     expect(servedKey({ registryId: 'alpha/model', thinkingLevel: 'high' }))
       .toBe(candidateKey({ registryId: 'alpha/model', effort: 'high' }));
     expect(servedKey({ registryId: 'alpha/model' })).toBe(candidateKey({ registryId: 'alpha/model' }));
-  });
-});
-
-describe('formatWorkContext', () => {
-  it('names the active work item and its topic', () => {
-    const ledger = foldEvents([
-      createEvent(workItem('w_1', 't_1', { title: 'Export CSV', topic: { id: 't_1', title: 'Reports' }, anchors: [{ kind: 'path', value: 'req.md', source: 'user' }] })),
-      createEvent(workItem('w_2', 't_2', { status: 'done' })),
-      activateEvent('w_1'),
-    ]);
-    const lines = formatWorkContext(ledger, 'tracked');
-    expect(lines[0]).toBe('Work context: Export CSV (topic: Reports; 1 open of 2 work items in 2 topics)');
-    expect(lines[1]).toContain('w_1, active, 1 anchor, 0 read and fingerprinted');
-    expect(lines.some((line) => line.startsWith('  context:'))).toBe(false);
-  });
-
-  it('says what context the active work item still holds open', () => {
-    const ledger = foldEvents([
-      createEvent(workItem('w_1', 't_1', { openContext: ['referenced-artifact'] })),
-      activateEvent('w_1'),
-    ]);
-    expect(formatWorkContext(ledger, 'tracked')).toContain('  context:    still needed before its next change (files it references)');
-  });
-
-  it('says an untracked branch searches the requests the router did not serve', () => {
-    expect(formatWorkContext(emptyLedger(), 'legacy-uninitialized')[0])
-      .toContain('earlier requests that the router did not serve are searched');
-    expect(formatWorkContext(emptyLedger(), 'native-empty')).toEqual(['Work context: none yet']);
-  });
-});
-
-describe('work context in /router-why', () => {
-  it('says which tier resolved the entry and whether its context is in hand, by id only', () => {
-    const lines = formatDecisionDetail({
-      ...decision,
-      workContext: {
-        resolver: 'deterministic', relation: 'continue', topicId: 't_1', workItemId: 'w_1',
-        contextReasons: ['referenced-artifact'], contextSatisfied: true,
-      },
-    }, { registryId: 'a/b', viaFallback: false, accumulatedCost: 0 }).join('\n');
-    expect(lines).toContain('work:       continue work item w_1 (continues the active work, no model asked)');
-    expect(lines).toContain('context:    current (files it references)');
-  });
-
-  it('says when the context was collected before the entry was placed', () => {
-    const lines = formatDecisionDetail({
-      ...decision,
-      workContext: {
-        resolver: 'context-handoff', relation: 'new', topicId: 't_1', workItemId: 'w_2',
-        contextReasons: ['referenced-artifact'], contextSatisfied: true,
-      },
-    }, undefined).join('\n');
-    expect(lines).toContain('work:       new work item w_2 (selected after collecting context)');
-    expect(lines).toContain('context:    collected (files it references)');
-  });
-
-  it('says when the entry was placed on work from before tracking started', () => {
-    const lines = formatDecisionDetail({
-      ...decision,
-      workContext: {
-        resolver: 'context-handoff', relation: 'resume', topicId: 't_1', workItemId: 'w_1',
-        contextReasons: [], contextSatisfied: true, legacy: true,
-      },
-    }, undefined).join('\n');
-    expect(lines).toContain('work:       resume work item w_1 (found in conversation from before tracking started)');
-    expect(lines).toContain('context:    current');
-  });
-
-  it('names a side question and an unrecorded entry plainly', () => {
-    const side = formatDecisionDetail({
-      ...decision,
-      workContext: { resolver: 'context-handoff', relation: 'switch', topicId: 'NEW_TOPIC', workItemId: 'NONE', contextReasons: [], contextSatisfied: true },
-    }, undefined).join('\n');
-    expect(side).toContain('a side question outside any work item');
-    const unresolved = formatDecisionDetail({
-      ...decision,
-      workContext: { resolver: 'fallback', relation: 'unknown', topicId: 'UNKNOWN', workItemId: 'UNKNOWN', contextReasons: ['carried-open-context'], contextSatisfied: false },
-    }, undefined).join('\n');
-    expect(unresolved).toContain('no work item (not recorded on this branch)');
-    expect(unresolved).toContain('context:    still needed (left open by an earlier request)');
   });
 });
 

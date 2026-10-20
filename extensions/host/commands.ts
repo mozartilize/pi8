@@ -1,3 +1,4 @@
+import { formatDecisionDetail, preferenceBinding, formatUnifiedSummary } from './ui.js';
 /**
  * Slash commands for the auto model router.
  */
@@ -21,7 +22,6 @@ import { CALIBRATED_INDEX_VERSION, indexVersionWarning } from '../routing/score/
 import {
   getProviderState,
 } from '../serve/provider.js';
-import { formatDecisionDetail, formatUnifiedSummary, formatWorkContext, preferenceBinding } from './ui.js';
 import { CORE_PREFERENCE_KEYS, hasSubstantiveAnswers } from '../routing/preferences/schema.js';
 
 import { readRecentEntries, type DecisionLogEntry } from './decisionlog.js';
@@ -253,7 +253,6 @@ async function handleStatusCommand(
   const { lastDecision, lastServed } = getProviderState(session);
   const manualStatus = `Manual override: ${session.getManualModel() ?? 'none (auto routing)'}`;
   const semiStatus = `Semi-auto: ${loadConfig().semi ? 'on (ask before model switches)' : 'off'}`;
-  const workContext = formatWorkContext(session.context.getLedger(), session.context.getBranchState());
   const config = loadConfig();
   const protocolHistory = config.reputation === false ? undefined : loadModelHistory();
   const penalties = protocolHistory ? compliancePenalties(protocolHistory, config.reputationWeights, config.switchMargin) : new Map<string, number>();
@@ -276,7 +275,6 @@ async function handleStatusCommand(
       semiStatus,
       ...browserStatus,
       ...modelHistory,
-      ...workContext,
       'Auto-router has no benchmark data — run `/router-sync <key>` with a free key from https://artificialanalysis.ai/.',
     ].join('\n');
     ctx.ui.notify(msg, 'warning');
@@ -299,7 +297,6 @@ async function handleStatusCommand(
     semiStatus,
     ...browserStatus,
     ...modelHistory,
-    ...workContext,
     `Synced: ${new Date(store.syncedAt).toISOString()}${stale ? ' (stale)' : ''}`,
     `AA Intelligence Index version: ${store.indexVersion ?? 'not reported'} (minimums calibrated for ${CALIBRATED_INDEX_VERSION})`,
     ...(readiness.ready ? [] : [`router/auto does not route: ${readiness.message}`]),

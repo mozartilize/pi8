@@ -48,7 +48,7 @@ let failed: { lower: SelectionCandidate['action']; source: SelectionCandidate['a
 let source: { registryId: string; effort: NonNullable<SelectionCandidate['action']['effort']> };
 let otherAtSameEffort: SelectionCandidate['action'];
 
-const reworkState = (withFriction: boolean): DecisionStateV1 => ({
+const reentryState = (withFriction: boolean): DecisionStateV1 => ({
   phase: 'implement', estimatedContextTokens: 50_000, needsVision: false,
   boundary: 'rework', rework: { failed: source },
   friction: withFriction ? [{ ...source, kind: 'severe-reasoning-loop' }] : [],
@@ -98,8 +98,8 @@ describe('real-pool pre-output recovery', () => {
   });
 
   it('penalizes only the exact failed action, and ranks it lower than without the friction event', async () => {
-    const plain = await select(reworkState(false));
-    const loop = await select(reworkState(true));
+    const plain = await select(reentryState(false));
+    const loop = await select(reentryState(true));
     expect(feature(loop, failed.source.key, 'frictionAvoidance')).toBe(0.25);
     for (const key of [failed.lower.key, failed.higher.key, otherAtSameEffort.key]) {
       expect(feature(loop, key, 'frictionAvoidance'), key).toBe(1);
@@ -112,7 +112,7 @@ describe('real-pool pre-output recovery', () => {
   });
 
   it('distinguishes a higher effort of the failed model from a model switch', async () => {
-    const result = await select(reworkState(true));
+    const result = await select(reentryState(true));
     expect([feature(result, failed.higher.key, 'effortRecoveryFit'), feature(result, failed.higher.key, 'modelSwitchRecoveryFit')]).toEqual([1, 0]);
     expect([feature(result, failed.lower.key, 'effortRecoveryFit'), feature(result, failed.lower.key, 'modelSwitchRecoveryFit')]).toEqual([0, 0]);
     expect([feature(result, failed.source.key, 'effortRecoveryFit'), feature(result, failed.source.key, 'modelSwitchRecoveryFit')]).toEqual([0, 0]);

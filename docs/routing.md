@@ -33,13 +33,13 @@ Each model call serves the user's request.
 | `implement` | Authorized changes |
 | `review` | Examination of work against its requirements |
 
-With no incumbent, a request starts as `gather`. An accepted declaration establishes the next task type.
+Every new genuine user entry starts in triage as `gather`. An accepted declaration establishes the next task type.
 
-The incumbent retains its task type until an accepted boundary changes it. A mutation call alone does not change `plan` or `review` to `implement`.
+A served boundary retains its task type only within the same entry. A mutation call alone does not change `plan` or `review` to `implement`.
 
 Simple implementation remains `implement`. A small edit does not change its task type.
 
-See [Work lifecycle](work-lifecycle.md) for the declaration tools and execution plans.
+See [Entry routing](entry-routing.md) for the declaration tools and execution plans.
 
 ## Capability targets
 
@@ -81,7 +81,7 @@ Axes with zero phase relevance do not contribute a shortfall. Vision and long-co
 
 ## Collecting context
 
-Collecting context is not the same work as a `gather` deliverable. The host marks a decision as collecting context only when all of these are true: the routed task type is `gather`, the entry is collecting context with read-only tools, and the model has not declared a direct answer. The model's prose cannot set this mark.
+Collecting context is not the same work as a `gather` deliverable. The host marks a decision as collecting context only when all of these are true: the routed task type is `gather`, the entry is collecting context with read-only tools, and the entry has no served ready boundary. The model's prose cannot set this mark.
 
 The one clarification request also has this mark. After `needs-user`, or when the request budget is used up, the reply only asks the user for the missing information, without tools. The deliverable's demand does not apply to that reply.
 
@@ -92,9 +92,9 @@ While collecting context:
 - Research and knowledge quality give every action the same `researchFit` value, 0.5, and no shortfall.
 - Intelligence is the required evidence, not Research. Long-context and vision evidence rules still apply.
 
-The mark ends at an accepted handoff or a declared direct answer. A `gather` answer, and every plan, review, or implementation phase, uses the targets above. The 0.20 target is authored policy. It is not a measured minimum for the quality of collected context.
+The mark ends at an accepted handoff. A direct answer uses triage targets without another declaration or selector pass. A declared investigation and every plan, review, or implementation phase use the targets above. The 0.20 target is authored policy. It is not a measured minimum for the quality of collected context.
 
-An investigation is not collecting context. When the answer needs one, for example the cause of a bug, the collecting model hands off with outcome `ready`, deliverable `gather`, and a reasoning rubric. The router then selects the investigator with the rubric's demand, as for a plan or review. A handoff without a rubric uses its declared complexity bounds. A direct answer retains its reasoning rubric or complexity bounds for the next gather invocation; it creates no work item or handoff. Only an entry that is collecting context can hand off to `gather`.
+An investigation is not collecting context. When the answer needs one, for example the cause of a bug, the collecting model hands off with outcome `ready`, deliverable `gather`, and a reasoning rubric. The router then selects the investigator with the rubric's demand, as for a plan or review. A handoff without a rubric uses its declared complexity bounds. A direct answer needs no declaration and has no declared demand. A distinct `gather` handoff can follow a served gather boundary in the same entry.
 
 ## Difficulty declarations
 
@@ -117,7 +117,7 @@ A rubric takes precedence over complexity, including when a low complexity label
 | hard | 0.625 | 0.75 | 0.875 |
 | frontier | 0.875 | 1 | 1 |
 
-Each band extends half a rubric step around its central value, clipped to `[0, 1]`. These are policy bounds from a declaration, not measured confidence intervals. File measurements add to the agentic center and both bounds, capped at one. An open-ended scope keeps the agentic upper bound at one when there is no rubric. A small file set does not reduce a declared demand. Direct answers measure the union of declared files and files read in the entry, as ready handoffs do.
+Each band extends half a rubric step around its central value, clipped to `[0, 1]`. These are policy bounds from a declaration, not measured confidence intervals. File measurements add to the agentic center and both bounds, capped at one. An open-ended scope keeps the agentic upper bound at one when there is no rubric. A small file set does not reduce a declared demand. Ready handoffs measure the union of declared files and files read in the entry. Direct answers have no demand declaration.
 
 The logged scalar difficulty is the maximum central axis demand. Selection uses the axis bounds, not that summary. Decisions record `difficultySource` and `difficultyBounds`; records with neither declaration retain a missing-demand reason and bounds `[0, 1]`. Demand does not carry into another user entry or an unrelated phase.
 
@@ -141,7 +141,7 @@ Each measured effort is a separate candidate. The router selects the model and e
 
 An estimate can cover a supported lower effort. The router does not invent measurements above the highest measured effort.
 
-The router never lowers its selected effort. It can increase effort to a supported level or to the incumbent's minimum thinking level.
+Within a continuing served boundary, the incumbent's served effort can supply a minimum thinking level. A new entry inherits no thinking minimum; supported efforts compete in its triage selection.
 
 An explicit user thinking choice follows the provider's supported levels. See [manual model control](commands.md#manual-model-control).
 
@@ -173,7 +173,7 @@ See [Delegation](delegation.md) for retry counts, provider exclusions, attempt b
 | [Spend](../extensions/routing/features/spend.ts) and [cache](../extensions/routing/features/cache.ts) | Cache eligibility, economic cost proxy, and cost desirability |
 | [Decision compiler](../extensions/routing/optimization/compile.ts) | Numerical validation and the numerical problem |
 | [Difficulty](../extensions/routing/features/difficulty.ts) | Axis demands from accepted declarations |
-| [Work phase](../extensions/routing/policy/work-phase.ts) | Entry state, task types, and handoff transitions |
+| [Entry state](../extensions/routing/policy/entry-routing-state.ts) | Entry state, task types, and handoff transitions |
 | [Execution contract](../extensions/routing/policy/execution-contract.ts) | Plan validation, release, review, and strikes |
 | [Provider](../extensions/serve/provider.ts) | Candidate preparation and stream orchestration |
 | [Delegation](../extensions/serve/delegation.ts) | Attempts, retries, cancellation, and safe fallback |

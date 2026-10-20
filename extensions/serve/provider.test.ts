@@ -699,8 +699,7 @@ describe('provider orchestration', () => {
     const resumed = harness.getProviderState().lastDecision!;
     expect(autoDecision.cause).toBe('investigation');
     expect(resumed.cause).toBe('investigation');
-    expect(harness.session.getWorkPhaseState()?.evidence).toBeDefined();
-    expect(harness.session.context.getLedger().items.size).toBe(0);
+    expect(harness.session.getEntryRoutingState()?.evidence).toBeDefined();
 
     // A later entry cannot reuse the earlier boundary.
     harness.resetEventStream();
@@ -879,7 +878,7 @@ describe('provider orchestration', () => {
     // The router served the strong model, then Pi selected a concrete model
     // (ended) or kept router/auto.
     harness.session.setLastServed({ registryId: 'alpha/first', thinkingLevel: 'high', viaFallback: false, accumulatedCost: 0 });
-    harness.session.context.clearIncumbent();
+    harness.session.serving.clearIncumbent();
     if (ended) harness.session.endServing();
     harness.scriptReply([{ type: 'text_delta', delta: 'ok' }, { type: 'done' }]);
     await harness.serve({ messages: [{ role: 'user', content: 'what does the cache module do' }] } as unknown as Context);
@@ -1454,9 +1453,9 @@ describe('incumbent keeps serving across unresolved entries', () => {
     const turn2 = await nextEntry('give me today’s weather forecast');
     expect(turn2).toMatchObject({ dimension: 'gather', cause: 'investigation' });
     expect(turn2?.fallbackChain).toEqual(expect.arrayContaining(['alpha/strong', 'beta/cheap']));
-    expect(harness.session.getWorkPhaseState()).toMatchObject({ status: 'triage' });
-    expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
-    expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
+    expect(harness.session.getEntryRoutingState()).toMatchObject({ status: 'triage' });
+    expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
+    expect(harness.session.getEntryRoutingState()?.executionFlow).toBeUndefined();
 
     const turn3 = await nextEntry('what is a good pancake topping?');
     expect(turn3).toMatchObject({ dimension: 'gather', cause: 'investigation' });
@@ -1872,7 +1871,7 @@ describe('context acquisition', () => {
     fallbackChain: string[];
     reasoningHandoff?: { minimum: number; pending: boolean; id: string; owner?: string; trajectoryFired?: boolean };
     executionContract?: { handoffId?: string };
-    previousHandoffId?: string;
+    routingScope?: { entryId: string; boundaryId: string };
     deliverable?: string;
   }
 
@@ -1984,27 +1983,24 @@ describe('context acquisition', () => {
     const session = await newSession();
     const first = await session.routeTurn('implement a CSV exporter');
     expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation' });
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(harness.session.getWorkPhaseState()?.evidence).toBeDefined();
+    expect(harness.session.getEntryRoutingState()?.evidence).toBeDefined();
   });
 
   it('keeps one evidence state through repeated invocations of an entry', async () => {
     const session = await newSession();
     await session.routeTurn('implement the CSV exporter');
-    const evidence = harness.session.getWorkPhaseState()?.evidence;
+    const evidence = harness.session.getEntryRoutingState()?.evidence;
     await session.routeTurnAgainWithSameUserEntry();
-    expect(harness.session.getWorkPhaseState()?.evidence).toBe(evidence);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
+    expect(harness.session.getEntryRoutingState()?.evidence).toBe(evidence);
   });
 
   it('does not reuse evidence from another entry', async () => {
     const session = await newSession();
     await session.routeTurn('implement a CSV exporter');
-    const firstKey = harness.session.getWorkPhaseState()?.intentKey;
+    const firstKey = harness.session.getEntryRoutingState()?.intentKey;
     await session.routeTurn('design a backup scheduler');
-    expect(harness.session.getWorkPhaseState()?.intentKey).not.toBe(firstKey);
-    expect(harness.session.getWorkPhaseState()?.evidence?.entryId).toBe(harness.session.getWorkPhaseState()?.sourceEntryId);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
+    expect(harness.session.getEntryRoutingState()?.intentKey).not.toBe(firstKey);
+    expect(harness.session.getEntryRoutingState()?.evidence?.entryId).toBe(harness.session.getEntryRoutingState()?.sourceEntryId);
   });
 
   describe('context handoff', () => {
@@ -2039,8 +2035,7 @@ describe('context acquisition', () => {
       const session = await newSession();
       const first = await session.routeTurn('investigate the flaky test');
       expect(first?.dimension).toBe('gather');
-      expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
-      expect(harness.session.context.getLedger().items.size).toBe(0);
+      expect(harness.session.getEntryRoutingState()?.status).toBe('triage');
       expect(harness.session.serving.getIncumbent()?.registryId).toBe(harness.session.getLastServed()?.registryId);
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
       expect(harness.getProviderState().lastDecision?.unified?.difficulty).toBeUndefined();
@@ -2050,7 +2045,7 @@ describe('context acquisition', () => {
       const session = await newSession();
       const trace = () => harness.getProviderState().lastDecision?.unified?.top?.find((t) => t.key === 'alpha/cheap');
       await session.routeTurn('investigate the flaky test');
-      expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
+      expect(harness.session.getEntryRoutingState()?.status).toBe('triage');
       expect(trace()?.features).toMatchObject({ reasoningFit: 0.4, researchFit: 0.5 });
       expect(trace()?.capabilityShortfall).toBe(0);
       expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBe('collecting-context');
@@ -2058,7 +2053,7 @@ describe('context acquisition', () => {
         question: 'investigate the cause', complexity: 'routine', scope: 'bounded' })).accepted).toBe(true);
       // The accepted gather boundary supplies demand to the next selection.
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
-      expect(harness.session.getWorkPhaseState()?.status).toBe('served');
+      expect(harness.session.getEntryRoutingState()?.status).toBe('served');
       // Routine demand centers at 0.25: target 0.2875 against quality 0.20.
       expect(trace()?.features.reasoningFit).toBeCloseTo(1 / 6, 5);
       expect(trace()?.features.researchFit).toBe(1);
@@ -2075,7 +2070,7 @@ describe('context acquisition', () => {
       const session = await newSession();
       await session.routeTurn('investigate the flaky test');
       expect((await submitPrepared({ outcome: 'needs-user', question: 'Which test is flaky?', reason: 'ambiguous-request' })).accepted).toBe(true);
-      expect(harness.session.getWorkPhaseState()?.status).toBe('clarification-only');
+      expect(harness.session.getEntryRoutingState()?.status).toBe('clarification-only');
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
       const unified = harness.getProviderState().lastDecision?.unified;
       expect(unified?.difficultyMissingReason).toBe('collecting-context');
@@ -2090,7 +2085,7 @@ describe('context acquisition', () => {
         await session.routeTurn('investigate the flaky test');
         const rubric = { alternatives: level, stakes: level, spread: level, knowledge: level, uncertainty: level };
         expect((await submitPrepared({ ...handoff(level, 'gather'), difficulty: rubric })).accepted).toBe(true);
-        expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toMatchObject({ target: 'gather', rubric });
+        expect(harness.session.getEntryRoutingState()?.reasoningHandoff).toMatchObject({ target: 'gather', rubric });
         const investigating = await session.routeTurnAgainWithSameUserEntry();
         expect(investigating).toMatchObject({ dimension: 'gather', cause: 'investigation-handoff' });
         expect(investigating?.reasoningHandoff).toMatchObject({ target: 'gather', pending: false, owner: investigating?.chosen });
@@ -2112,7 +2107,7 @@ describe('context acquisition', () => {
       expect((await submitPrepared({ ...handoff(4, 'gather'), difficulty: rubric })).accepted).toBe(true);
       await session.routeTurnAgainWithSameUserEntry();
       const before = harness.session.getCachedIntent()!;
-      const handoffState = harness.session.getWorkPhaseState()?.reasoningHandoff;
+      const handoffState = harness.session.getEntryRoutingState()?.reasoningHandoff;
       expect(handoffState).toMatchObject({ rubric, pending: false });
       const bounds = harness.getProviderState().lastDecision?.unified?.difficultyBounds;
 
@@ -2130,7 +2125,7 @@ describe('context acquisition', () => {
         session.piContext!.messages = convertToLlm(manager.buildSessionProjection().messages);
         await session.routeTurnAgainWithSameUserEntry();
         expect(harness.session.getCachedIntent()?.key).toBe(before.key);
-        expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toEqual(handoffState);
+        expect(harness.session.getEntryRoutingState()?.reasoningHandoff).toEqual(handoffState);
         expect(harness.getProviderState().lastDecision?.unified).toMatchObject({ difficultyBounds: bounds });
         expect(harness.getProviderState().lastDecision?.unified?.difficultyMissingReason).toBeUndefined();
         expect(session.servedContext?.messages.some((message) => JSON.stringify(message.content).includes(content))).toBe(true);
@@ -2139,7 +2134,7 @@ describe('context acquisition', () => {
       manager.appendMessage({ role: 'user', content: 'review the other task', timestamp: 2 });
       await session.routeTurn('review the other task');
       expect(harness.session.getCachedIntent()?.key).not.toBe(before.key);
-      expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.reasoningHandoff).toBeUndefined();
     });
 
     it('investigates a plan request until the handoff, then records the planner as the boundary owner', async () => {
@@ -2154,15 +2149,15 @@ describe('context acquisition', () => {
       // The invocation that takes the boundary records its owner, in the
       // decision `/router-why` reads and in the decision log.
       expect(planning?.reasoningHandoff).toMatchObject({ pending: false, owner: planning?.chosen });
-      expect(harness.session.getWorkPhaseState()?.reasoningHandoff)
+      expect(harness.session.getEntryRoutingState()?.reasoningHandoff)
         .toMatchObject({ pending: false, owner: planning?.chosen });
       const logged = (await session.readDecisionRecords())
         .filter((r) => r.dimension === 'plan')
         .map((r) => r.reasoningHandoff as { pending?: boolean; owner?: string } | undefined);
       expect(logged.at(-1)).toMatchObject({ pending: false, owner: planning?.chosen });
-      const previous = harness.session.getWorkPhaseState()!.boundaryId;
+      const previous = harness.session.getEntryRoutingState()!.boundaryId;
       expect((await submitPrepared(handoff(2))).accepted).toBe(true);
-      expect(harness.session.getWorkPhaseState()!.boundaryId).not.toBe(previous);
+      expect(harness.session.getEntryRoutingState()!.boundaryId).not.toBe(previous);
     });
 
     it('selects the planning phase from the accepted task declaration', async () => {
@@ -2171,7 +2166,7 @@ describe('context acquisition', () => {
       expect((await submitPrepared({ ...handoff(1), complexity: 'moderate', scope: 'open-ended' })).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
       expect(planning).toMatchObject({ dimension: 'plan', unified: { ranked: 2 } });
-      expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.rubric).toMatchObject({ alternatives: 1 });
+      expect(harness.session.getEntryRoutingState()?.reasoningHandoff?.rubric).toMatchObject({ alternatives: 1 });
     });
 
     it('plans with the model that leads on intelligence', async () => {
@@ -2187,9 +2182,9 @@ describe('context acquisition', () => {
       await submitPrepared(handoff(5));
       const planner = (await session.routeTurnAgainWithSameUserEntry())?.chosen;
       // Lowering the declared difficulty after the boundary served cannot move the phase to a cheaper model.
-      const state = harness.session.getWorkPhaseState()!;
+      const state = harness.session.getEntryRoutingState()!;
       const easiest = { alternatives: 1, stakes: 1, spread: 1, knowledge: 1, uncertainty: 1 };
-      harness.session.commitWorkPhaseState({ ...state, reasoningHandoff: { ...state.reasoningHandoff!, rubric: easiest } });
+      harness.session.commitEntryRoutingState({ ...state, reasoningHandoff: { ...state.reasoningHandoff!, rubric: easiest } });
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe(planner);
     });
 
@@ -2211,8 +2206,8 @@ describe('context acquisition', () => {
         await session.routeTurnAgainWithSameUserEntry();
         expect(harness.session.getLastServed()?.registryId).toBe('beta/strong');
         // The tool can run before the invocation settles its serve.
-        const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({
+        const state = harness.session.getEntryRoutingState()!;
+        harness.session.commitEntryRoutingState({
           ...state, deliverable: 'implement',
           reasoningHandoff: { ...state.reasoningHandoff!, pending: true, owner: undefined },
         });
@@ -2226,7 +2221,7 @@ describe('context acquisition', () => {
       await session.routeTurn(PLAN_PROMPT);
       await submitPrepared(handoff(5));
       await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
-      expect(harness.session.getWorkPhaseState()?.reasoningHandoff?.pending).toBe(true);
+      expect(harness.session.getEntryRoutingState()?.reasoningHandoff?.pending).toBe(true);
     });
 
     it('routes a review deliverable through its investigation to review', async () => {
@@ -2237,17 +2232,17 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('review');
     });
 
-    it('chooses work before serving an implementation', async () => {
+    it('accepts an entry boundary before serving an implementation', async () => {
       const session = await newSession();
       const first = await session.routeTurn(
         'Trace the race condition across the codebase from scratch, then fix and implement the corrected logic.',
       );
       expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation' });
-      expect(harness.getProviderState().lastDecision?.workContext).toBeUndefined();
+      expect(harness.getProviderState().lastDecision).not.toHaveProperty('workContext');
       expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
       const executing = await session.routeTurnAgainWithSameUserEntry();
       expect(executing).toMatchObject({ dimension: 'implement', cause: 'investigation-handoff' });
-      expect(harness.getProviderState().lastDecision?.workContext?.workItemId).toBe(harness.session.getWorkPhaseState()?.workItemId);
+      expect(harness.getProviderState().lastDecision?.routingScope?.boundaryId).toBe(harness.session.getEntryRoutingState()?.boundaryId);
     });
 
     it('collects context when semantic wording is ambiguous', async () => {
@@ -2262,10 +2257,10 @@ describe('context acquisition', () => {
       const session = await newSession();
       await session.routeTurn('trace the scheduler race, then fix it');
       expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
-      expect(harness.session.getWorkPhaseState()?.executionFlow).toBeDefined();
+      expect(harness.session.getEntryRoutingState()?.executionFlow).toBeDefined();
       await session.routeTurnAgainWithSameUserEntry();
       const next = await session.routeTurn('ok go ahead');
-      expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.executionFlow).toBeUndefined();
       expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation' });
     });
 
@@ -2279,7 +2274,7 @@ describe('context acquisition', () => {
         remainingWork: { openDecisions: 1, spread: 1, verification: 1, knowledge: 1, coupling: 1 },
       };
       expect(submitExecutionContract(plan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(false);
-      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
     });
 
     it('applies planner struggle within the reasoning phase and logs it at phase end', async () => {
@@ -2340,21 +2335,21 @@ describe('context acquisition', () => {
       harness.session.setManualModel('beta/strong');
       const first = await session.routeTurn(PLAN_PROMPT);
       expect(first).toMatchObject({ dimension: 'gather', cause: 'manual-override', chosen: 'beta/strong' });
-      expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
+      expect(harness.session.getEntryRoutingState()?.status).toBe('triage');
       const entry = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
       expect(JSON.stringify(entry.content)).toContain('hand_off_context');
 
       expect((await submitPrepared(handoff(1))).accepted).toBe(true);
       const planning = await session.routeTurnAgainWithSameUserEntry();
       expect(planning).toMatchObject({ dimension: 'plan', cause: 'manual-override', chosen: 'beta/strong' });
-      expect(harness.session.getWorkPhaseState()?.status).toBe('served');
+      expect(harness.session.getEntryRoutingState()?.status).toBe('served');
     });
 
     it('ends acquisition at its request limit with one tool-free clarification request, then dispatches nothing', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
-      harness.session.commitWorkPhaseState({
-        ...harness.session.getWorkPhaseState()!, contextRequests: ACQUISITION_REQUEST_LIMIT,
+      harness.session.commitEntryRoutingState({
+        ...harness.session.getEntryRoutingState()!, contextRequests: ACQUISITION_REQUEST_LIMIT,
       });
       const asking = await session.routeTurnAgainWithSameUserEntry();
       expect(asking).toMatchObject({ dimension: 'gather', cause: 'investigation' });
@@ -2362,7 +2357,7 @@ describe('context acquisition', () => {
       expect(session.servedOptions?.toolChoice).toBe('none');
       const entry = session.servedContext!.messages.filter((m) => m.role === 'user').at(-1)!;
       expect(JSON.stringify(entry.content)).toContain('Reply to the user now');
-      expect(harness.session.getWorkPhaseState()).toMatchObject({ status: 'clarification-only', clarificationDispatched: true });
+      expect(harness.session.getEntryRoutingState()).toMatchObject({ status: 'clarification-only', clarificationDispatched: true });
 
       const requests = harness.streamedModels().length;
       await session.routeTurnAgainWithSameUserEntry();
@@ -2376,16 +2371,16 @@ describe('context acquisition', () => {
     it('retries a clarification request that did not serve', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
-      harness.session.commitWorkPhaseState({
-        ...harness.session.getWorkPhaseState()!, status: 'clarification-only',
+      harness.session.commitEntryRoutingState({
+        ...harness.session.getEntryRoutingState()!, status: 'clarification-only',
       });
       await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
-      expect(harness.session.getWorkPhaseState()?.clarificationDispatched).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.clarificationDispatched).toBeUndefined();
 
       const asking = await session.routeTurnAgainWithSameUserEntry();
       expect(asking).toMatchObject({ dimension: 'gather', cause: 'investigation' });
       expect(session.servedOptions?.toolChoice).toBe('none');
-      expect(harness.session.getWorkPhaseState()?.clarificationDispatched).toBe(true);
+      expect(harness.session.getEntryRoutingState()?.clarificationDispatched).toBe(true);
     });
 
     it('counts each acquisition request, fallback attempts included', async () => {
@@ -2393,16 +2388,19 @@ describe('context acquisition', () => {
       await session.routeTurn(PLAN_PROMPT, { serveFails: true });
       const requests = harness.streamedModels().length;
       expect(requests).toBeGreaterThanOrEqual(2);
-      expect(harness.session.getWorkPhaseState()?.contextRequests).toBe(requests);
+      expect(harness.session.getEntryRoutingState()?.contextRequests).toBe(requests);
     });
 
-    it('logs the handoff lifecycle and joins the next entry to it, never logging findings', async () => {
+    it('logs entry-scoped handoff transitions without inheriting a prior-entry join or logging findings', async () => {
       const session = await newSession();
       await session.routeTurn(PLAN_PROMPT);
       await submitPrepared(handoff(3));
       await session.routeTurnAgainWithSameUserEntry();
+      const previousEntry = harness.getProviderState().lastDecision?.routingScope?.entryId;
       const next = await session.routeTurn('now plan the rollout for the second region as well');
-      expect(next?.previousHandoffId).toBeDefined();
+      expect(next).not.toHaveProperty('previousHandoffId');
+      expect(next?.routingScope?.entryId).not.toBe(previousEntry);
+      expect(next?.routingScope?.entryId).toBe(harness.session.getEntryRoutingState()?.sourceEntryId);
       const records = await session.readDecisionRecords();
       const actions = records
         .map((r) => (r.investigationHandoff as { action?: string } | undefined)?.action)
@@ -2431,28 +2429,27 @@ describe('context acquisition', () => {
 
       it('remembers model identity without creating work at a handoff', async () => {
         await served();
-        expect(harness.session.getWorkPhaseState()?.workItemId).toBeUndefined();
+        expect(harness.session.getEntryRoutingState()).not.toHaveProperty('workItemId');
         expect(harness.session.serving.getIncumbent()).not.toHaveProperty('workItemId');
-        expect(harness.session.context.getLedger().items.size).toBe(0);
       });
 
       it('starts a thin continuation after a plan in triage and competes without held ownership', async () => {
       const session = await served();
-      const previous = harness.session.getWorkPhaseState()!.boundaryId;
+      const previous = harness.session.getEntryRoutingState()!.boundaryId;
       const next = await session.routeTurn('ok go for it');
       expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation' });
       expect(next?.fallbackChain).toEqual(expect.arrayContaining(['alpha/cheap', 'beta/strong']));
-      expect(harness.session.getWorkPhaseState()).toMatchObject({ status: 'triage', deliverable: 'gather' });
-      expect(harness.session.getWorkPhaseState()!.boundaryId).not.toBe(previous);
-      expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
-      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()).toMatchObject({ status: 'triage', deliverable: 'gather' });
+      expect(harness.session.getEntryRoutingState()!.boundaryId).not.toBe(previous);
+      expect(harness.session.getEntryRoutingState()?.reasoningHandoff).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
       const mutation = { toolName: 'edit', input: { path: 'src/a.ts' } };
       expect(gateContextToolCall(mutation, harness.session)?.block).toBe(true);
       expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
       expect(gateContextToolCall(mutation, harness.session)?.block).toBe(true);
       const implementing = await session.routeTurnAgainWithSameUserEntry();
       expect(implementing?.dimension).toBe('implement');
-      expect(harness.session.getWorkPhaseState()?.status).toBe('served');
+      expect(harness.session.getEntryRoutingState()?.status).toBe('served');
       expect(gateContextToolCall(mutation, harness.session)).toBeUndefined();
     });
 
@@ -2477,11 +2474,16 @@ describe('context acquisition', () => {
           .toEqual(session.piContext!.messages.filter((m) => m.role === 'system'));
       });
 
-      it('is never a pinned model', async () => {
+      it('records an actual pinned serve without giving it ownership of another entry', async () => {
         const session = await newSession();
         harness.session.setManualModel('alpha/cheap');
         await session.routeTurn('please handle the pending adjustment');
-        expect(harness.session.serving.getIncumbent()).toBeUndefined();
+        expect(harness.session.serving.getIncumbent()).toMatchObject({ registryId: 'alpha/cheap' });
+        expect(harness.session.resumeManual()).toBe(true);
+        expect((await session.routeTurn('explain a different result'))?.dimension).toBe('gather');
+        expect(harness.session.getEntryRoutingState()?.boundaryAuthorization?.allowedActors)
+          .toEqual(expect.arrayContaining(['alpha/cheap', 'beta/strong']));
+        expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
       });
     });
   });
@@ -2522,8 +2524,8 @@ describe('context acquisition', () => {
       if (implementationRequest) {
         // Contract tests begin with a served plan phase for an implementation request,
         // with the execution flow that an accepted implement handoff starts.
-        const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, deliverable: 'implement',
+        const state = harness.session.getEntryRoutingState()!;
+        harness.session.commitEntryRoutingState({ ...state, deliverable: 'implement',
           executionFlow: newExecutionFlow(state.sourceEntryId ?? state.intentKey, state.boundaryId ?? '') });
       }
       return session;
@@ -2564,7 +2566,7 @@ describe('context acquisition', () => {
           async () => ({ stdout: '', stderr: '', code: 0 }) as never);
         expect(submitContextHandoff(params, routerCtx, harness.session, measured).accepted).toBe(true);
         const planning = await session.routeTurnAgainWithSameUserEntry();
-        return { session, planning, state: harness.session.getWorkPhaseState()! };
+        return { session, planning, state: harness.session.getEntryRoutingState()! };
       }
 
       it('keeps the declaration in state and logs only codes', async () => {
@@ -2592,11 +2594,11 @@ describe('context acquisition', () => {
         await planned();
         const facts = { decisions: ['secret open decision'], precedent: 'src/secret.ts', answers: { mapping: 'Y' } };
         expect(submitExecutionContract({ ...smallPlan, facts }, routerCtx, harness.session, EXISTING_TARGETS, { files: 1 }).accepted).toBe(true);
-        const contract = harness.session.getWorkPhaseState()!.contract!;
+        const contract = harness.session.getEntryRoutingState()!.contract!;
         expect(contract.facts?.declared).toMatchObject({ modify: 1, create: 0, checkCommands: 1, decisions: 1, precedent: true });
         expect(contract.facts?.shadow.requirement).toBeGreaterThan(0);
         expect(contract).toMatchObject({ release: true });
-        expect(JSON.stringify(contractMeta(harness.session.getWorkPhaseState()!))).not.toContain('secret');
+        expect(JSON.stringify(contractMeta(harness.session.getEntryRoutingState()!))).not.toContain('secret');
       });
     });
 
@@ -2628,8 +2630,8 @@ describe('context acquisition', () => {
         expect(result.text).toContain('Execution plan accepted');
         // The submitter may also serve the next step; a final reply there ends the run with no edits.
         expect(result.text).toContain(CONTINUE_TURN);
-        expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true, releasePending: true });
-        expect(harness.session.getWorkPhaseState()?.contract?.keepReason).toBeUndefined();
+        expect(harness.session.getEntryRoutingState()?.contract).toMatchObject({ release: true, releasePending: true });
+        expect(harness.session.getEntryRoutingState()?.contract?.keepReason).toBeUndefined();
       });
 
       it('releases the same closed plan from a stronger measured submitter', async () => {
@@ -2638,7 +2640,7 @@ describe('context acquisition', () => {
         // A routed request expands the candidates from the restored rows.
         await session.routeTurnAgainWithSameUserEntry();
         expect(submitExecutionContract(settledPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
-        const contract = harness.session.getWorkPhaseState()?.contract;
+        const contract = harness.session.getEntryRoutingState()?.contract;
         expect(contract?.release).toBe(true);
         expect(contract?.keepReason).toBeUndefined();
       });
@@ -2646,8 +2648,8 @@ describe('context acquisition', () => {
 
     it('keeps plan/review after a mutation call without an accepted plan', async () => {
       const session = await planned();
-      const state = harness.session.getWorkPhaseState()!;
-      harness.session.commitWorkPhaseState({ ...state, observedMutationTools: state.observedMutationTools + 1 });
+      const state = harness.session.getEntryRoutingState()!;
+      harness.session.commitEntryRoutingState({ ...state, observedMutationTools: state.observedMutationTools + 1 });
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('plan');
       expect(next?.chosen).toBe('beta/strong');
@@ -2674,8 +2676,8 @@ describe('context acquisition', () => {
         saveStore({ ...store, syncedAt: store.syncedAt + 1, models: store.models.map((row) => row.registryId === 'alpha/cheap'
           ? { ...row, quality: { ...row.quality, intelligence: 60 }, qualityEstimated: estimated }
           : row) });
-        const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['beta/strong'] } });
+        const state = harness.session.getEntryRoutingState()!;
+        harness.session.commitEntryRoutingState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['beta/strong'] } });
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next?.chosen).toBe('alpha/cheap');
@@ -2691,8 +2693,8 @@ describe('context acquisition', () => {
           ? { ...row, quality: { ...row.quality, intelligence: 60 }, qualityEstimated: false }
           : row) };
         saveStore(replaced);
-        const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['beta/strong'] } });
+        const state = harness.session.getEntryRoutingState()!;
+        harness.session.commitEntryRoutingState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['beta/strong'] } });
         expect(submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS).accepted).toBe(true);
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next?.chosen).toBe('alpha/cheap');
@@ -2727,17 +2729,17 @@ describe('context acquisition', () => {
 
       it('does not restore pre-pin task type or contract authority after a manual routing transition', async () => {
       const session = await planned();
-      const previous = harness.session.getWorkPhaseState()!.boundaryId;
+      const previous = harness.session.getEntryRoutingState()!.boundaryId;
       harness.session.setManualModel('alpha/cheap');
       await session.routeTurnAgainWithSameUserEntry();
       expect(harness.streamedModels().at(-1)).toBe('alpha/cheap');
       expect(harness.session.resumeManual()).toBe(true);
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation' });
-      expect(harness.session.getWorkPhaseState()?.boundaryId).not.toBe(previous);
-      expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
-      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
-      expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.boundaryId).not.toBe(previous);
+      expect(harness.session.getEntryRoutingState()?.status).toBe('triage');
+      expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.executionFlow).toBeUndefined();
     });
 
     it.each([
@@ -2761,7 +2763,7 @@ describe('context acquisition', () => {
         const next = await session.routeTurnAgainWithSameUserEntry();
         expect(next?.cause).not.toBe('resume');
         expect(next?.dimension).toBe('gather');
-        expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
+        expect(harness.session.getEntryRoutingState()?.status).toBe('triage');
       });
 
       it('records selection identities and counts without task text or capability minimums', async () => {
@@ -2798,7 +2800,7 @@ describe('context acquisition', () => {
         expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
         breakWithUndeclaredEdit();
         await session.routeTurnAgainWithSameUserEntry();
-        expect(harness.session.getWorkPhaseState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
+        expect(harness.session.getEntryRoutingState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
 
         submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
         const escalated = await session.routeTurnAgainWithSameUserEntry();
@@ -2808,10 +2810,10 @@ describe('context acquisition', () => {
 
       it('releases a plan when an unrelated excluded executor left the pool', async () => {
         const session = await planned();
-        const state = harness.session.getWorkPhaseState()!;
-        harness.session.commitWorkPhaseState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['gone/model'] } });
+        const state = harness.session.getEntryRoutingState()!;
+        harness.session.commitEntryRoutingState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['gone/model'] } });
         submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-        const contract = harness.session.getWorkPhaseState()?.contract;
+        const contract = harness.session.getEntryRoutingState()?.contract;
         expect(contract).toMatchObject({ release: true });
         expect(contract?.keepReason).toBeUndefined();
         const next = await session.routeTurnAgainWithSameUserEntry();
@@ -2822,12 +2824,12 @@ describe('context acquisition', () => {
     it('releases the incumbent once: the executor that served keeps the plan', async () => {
       const session = await planned();
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-      expect(harness.session.getWorkPhaseState()?.contract?.releasePending).toBe(true);
+      expect(harness.session.getEntryRoutingState()?.contract?.releasePending).toBe(true);
       await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
-      expect(harness.session.getWorkPhaseState()?.contract?.releasePending).toBe(true);
+      expect(harness.session.getEntryRoutingState()?.contract?.releasePending).toBe(true);
       harness.session.clearBlacklistedModels();
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
-      expect(harness.session.getWorkPhaseState()?.contract?.releasePending).toBe(false);
+      expect(harness.session.getEntryRoutingState()?.contract?.releasePending).toBe(false);
     });
 
     it('hands a plan off from an implement entry, and returns a break to implementation', async () => {
@@ -2849,14 +2851,14 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       // Declared targets never break the plan.
       handleContractToolCall({ toolName: 'edit', input: { path: './src/a.ts' } }, { cwd: '/repo' }, harness.session);
-      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
+      expect(harness.session.getEntryRoutingState()?.contract?.status).toBe('active');
       breakWithUndeclaredEdit();
       const restored = await session.routeTurnAgainWithSameUserEntry();
       expect(restored?.dimension).toBe('plan');
       expect(restored?.chosen).toBe('beta/strong');
       expect(harness.getProviderState().lastDecision?.executionContract)
         .toMatchObject({ status: 'broken', breakReason: 'undeclared-target', breaker: 'alpha/cheap' });
-      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
       const after = await session.routeTurnAgainWithSameUserEntry();
       expect(after?.dimension).toBe('plan');
       expect(harness.getProviderState().lastDecision?.executionContract).toBeUndefined();
@@ -2869,11 +2871,11 @@ describe('context acquisition', () => {
       const bash = (command: string) =>
         handleContractToolCall({ toolName: 'bash', input: { command } }, { cwd: '/repo' }, harness.session);
       bash('npx vitest run src/a.test.ts');
-      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
+      expect(harness.session.getEntryRoutingState()?.contract?.status).toBe('active');
       bash('printf x > src/d.ts');
-      expect(harness.session.getWorkPhaseState()?.contract)
+      expect(harness.session.getEntryRoutingState()?.contract)
         .toMatchObject({ status: 'broken', breakReason: 'unattributed-mutation', breaker: 'alpha/cheap' });
-      expect(harness.session.getWorkPhaseState()?.executionFlow?.strikesByModel).toEqual({});
+      expect(harness.session.getEntryRoutingState()?.executionFlow?.strikesByModel).toEqual({});
       const restored = await session.routeTurnAgainWithSameUserEntry();
       expect(restored?.dimension).toBe('plan');
       expect(restored?.chosen).toBe('beta/strong');
@@ -2884,7 +2886,7 @@ describe('context acquisition', () => {
       submitExecutionContract({ ...smallPlan, remainingWork: { ...EASY, openDecisions: 5 } }, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
       handleContractToolCall({ toolName: 'bash', input: { command: 'sed -i s/a/b/ src/a.ts' } }, { cwd: '/repo' }, harness.session);
-      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
+      expect(harness.session.getEntryRoutingState()?.contract?.status).toBe('active');
     });
 
     it('keeps a broken plan pending when its permitted submitter fails', async () => {
@@ -2895,10 +2897,10 @@ describe('context acquisition', () => {
       const failed = await session.routeTurnAgainWithSameUserEntry({ failModels: ['beta/strong'] });
       expect(failed?.fallbackChain).toEqual(['beta/strong']);
       expect(harness.session.getLastServed()).toBeUndefined();
-      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('broken');
+      expect(harness.session.getEntryRoutingState()?.contract?.status).toBe('broken');
       harness.session.clearBlacklistedModels();
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
-      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
     });
 
     it('keeps a broken plan bound to its submitter until a handback invocation serves', async () => {
@@ -2908,14 +2910,14 @@ describe('context acquisition', () => {
       breakWithUndeclaredEdit();
       const failed = await session.routeTurnAgainWithSameUserEntry({ serveFails: true });
       expect(failed?.chosen).toBe('beta/strong');
-      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('broken');
+      expect(harness.session.getEntryRoutingState()?.contract?.status).toBe('broken');
       // The provider recovers; the next invocation still owes the handback.
       harness.session.blacklist.clearBlacklistedModels();
       const retried = await session.routeTurnAgainWithSameUserEntry();
       expect(retried?.dimension).toBe('plan');
       expect(retried?.chosen).toBe('beta/strong');
       expect(harness.getProviderState().lastDecision?.executionContract).toMatchObject({ status: 'broken' });
-      expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
     });
 
     it('lets an executor break a plan once, then routes later plans to a stronger model', async () => {
@@ -2930,7 +2932,7 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       breakWithUndeclaredEdit();
       await session.routeTurnAgainWithSameUserEntry();
-      expect(harness.session.getWorkPhaseState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
+      expect(harness.session.getEntryRoutingState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
 
       // The second break excludes the executor from implementation. It cannot
       // occur in either the selection or the availability fallback chain.
@@ -2943,10 +2945,10 @@ describe('context acquisition', () => {
 
     it('releases a plan when an excluded executor is no longer in the pool', async () => {
       const session = await planned();
-      const state = harness.session.getWorkPhaseState()!;
-      harness.session.commitWorkPhaseState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['gone/model'] } });
+      const state = harness.session.getEntryRoutingState()!;
+      harness.session.commitEntryRoutingState({ ...state, executionFlow: { ...state.executionFlow!, excludedModels: ['gone/model'] } });
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-      expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ release: true });
+      expect(harness.session.getEntryRoutingState()?.contract).toMatchObject({ release: true });
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
       expect(next?.chosen).toBe('alpha/cheap');
@@ -2975,7 +2977,7 @@ describe('context acquisition', () => {
       await session.routeTurnAgainWithSameUserEntry();
       const again = submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect(again.accepted).toBe(false);
-      expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ status: 'broken', breakReason: 'replan' });
+      expect(harness.session.getEntryRoutingState()?.contract).toMatchObject({ status: 'broken', breakReason: 'replan' });
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
     });
 
@@ -3013,9 +3015,9 @@ describe('context acquisition', () => {
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('alpha/cheap');
       editResult('src/a.ts', true);
-      expect(harness.session.getWorkPhaseState()?.contract?.status).toBe('active');
+      expect(harness.session.getEntryRoutingState()?.contract?.status).toBe('active');
       editResult('src/a.ts');
-      expect(harness.session.getWorkPhaseState()?.contract)
+      expect(harness.session.getEntryRoutingState()?.contract)
         .toMatchObject({ status: 'executed', executedReason: 'complete', executor: 'alpha/cheap' });
 
       const review = await session.routeTurnAgainWithSameUserEntry();
@@ -3031,7 +3033,7 @@ describe('context acquisition', () => {
       const served = harness.session.getLastServed()!;
       harness.session.setLastServed({ ...served, viaFallback: true });
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-      expect(harness.session.getWorkPhaseState()?.contract?.submitterTemporary).toBe(true);
+      expect(harness.session.getEntryRoutingState()?.contract?.submitterTemporary).toBe(true);
     });
 
     it('records the review verifier result and logs the outcome when the entry ends', async () => {
@@ -3047,7 +3049,7 @@ describe('context acquisition', () => {
       );
       test('t1', '1 failed');
       test('t2', 'all passed');
-      expect(harness.session.getWorkPhaseState()?.contract?.reviewVerifier).toBe('fail');
+      expect(harness.session.getEntryRoutingState()?.contract?.reviewVerifier).toBe('fail');
       editResult('src/a.ts');
 
       await session.routeTurn('thanks, now summarize what changed');
@@ -3071,9 +3073,9 @@ describe('context acquisition', () => {
       };
       await executeOnce();
       await executeOnce();
-      expect(harness.session.getWorkPhaseState()?.executionFlow?.strikesByModel).toEqual({ 'alpha/cheap': 1 });
+      expect(harness.session.getEntryRoutingState()?.executionFlow?.strikesByModel).toEqual({ 'alpha/cheap': 1 });
       submitExecutionContract(smallPlan, routerCtx, harness.session, EXISTING_TARGETS);
-      expect(harness.session.getWorkPhaseState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
+      expect(harness.session.getEntryRoutingState()?.executionFlow?.excludedModels).toEqual(['alpha/cheap']);
       const escalated = await session.routeTurnAgainWithSameUserEntry();
       expect(escalated?.chosen).toBe('beta/strong');
       expect(escalated?.fallbackChain).not.toContain('alpha/cheap');
@@ -3088,7 +3090,7 @@ describe('context acquisition', () => {
       }
       expect(decision?.dimension).toBe('review');
       // No edit named the executor; the model that served its invocations did.
-      expect(harness.session.getWorkPhaseState()?.contract)
+      expect(harness.session.getEntryRoutingState()?.contract)
         .toMatchObject({ status: 'executed', executedReason: 'budget', executor: 'alpha/cheap' });
     });
 
@@ -3098,8 +3100,8 @@ describe('context acquisition', () => {
       harness.session.blacklist.blacklistModel('alpha/cheap');
       expect((await session.routeTurnAgainWithSameUserEntry())?.chosen).toBe('beta/strong');
       editResult('src/a.ts');
-      expect(harness.session.getWorkPhaseState()?.contract).toMatchObject({ status: 'executed', release: true });
-      expect(harness.session.getWorkPhaseState()?.contract?.executor).toBeUndefined();
+      expect(harness.session.getEntryRoutingState()?.contract).toMatchObject({ status: 'executed', release: true });
+      expect(harness.session.getEntryRoutingState()?.contract?.executor).toBeUndefined();
       const next = await session.routeTurnAgainWithSameUserEntry();
       expect(next?.dimension).toBe('implement');
       expect(next?.cause).toBe('execution-contract');
@@ -3143,7 +3145,7 @@ describe('context acquisition', () => {
 
     expect(first?.dimension).toBe('gather');
     expect(second?.dimension).toBe('gather');
-    expect(harness.session.getWorkPhaseState()?.evidence).toBeDefined();
+    expect(harness.session.getEntryRoutingState()?.evidence).toBeDefined();
   });
 
 describe('deep context', () => {
@@ -3156,7 +3158,7 @@ describe('deep context', () => {
     expect(first?.dimension).toBe('gather');
     expect(after?.dimension).toBe('gather');
     expect(after?.cause).toBe(first?.cause);
-    expect(harness.session.getWorkPhaseState()?.evidence).toBeDefined();
+    expect(harness.session.getEntryRoutingState()?.evidence).toBeDefined();
   });
 
 });
@@ -3196,7 +3198,7 @@ describe('unified pre-output recovery integration', () => {
     expect(h.delegatedCall(0).options?.signal?.aborted).toBe(true);
     expect(h.session.getLastDecision()).toMatchObject({ dimension: 'gather', cause: 'investigation', unified: { constraintsEnforced: true },
       trajectoryFriction: { preOutput: true } });
-    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('served');
+    expect(h.session.getEntryRoutingState()?.boundaryAuthorization?.state).toBe('served');
   });
 
   it.each(['text', 'tool-call', 'thinking-overflow'] as const)('does not select recovery after committed %s', async (committed) => {
@@ -3221,7 +3223,7 @@ describe('unified pre-output recovery integration', () => {
     await h.serve({ messages: [{ role: 'user', content: 'examine this request' }] } as Context);
     expect(h.streamedModels()).toEqual(['alpha/first', 'gamma/third']);
     expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([{ type: 'text_delta', delta: 'recovery answer' }]);
-    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('served');
+    expect(h.session.getEntryRoutingState()?.boundaryAuthorization?.state).toBe('served');
     expect(h.outStream.events.filter((event) => event.type === 'done')).toHaveLength(1);
   });
 
@@ -3239,7 +3241,7 @@ describe('unified pre-output recovery integration', () => {
     expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([]);
     expect(h.outStream.events.filter((event) => event.type === 'error')).toHaveLength(1);
     expect(h.getProviderState().blacklistedModels).toEqual([]);
-    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('pending');
+    expect(h.session.getEntryRoutingState()?.boundaryAuthorization?.state).toBe('pending');
   });
 });
 
@@ -3269,7 +3271,7 @@ describe('reservation of every provider request', () => {
     expect(h.streamedModels()).toEqual([]);
     expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([]);
     expect(h.outStream.events.filter((event) => event.type === 'error')).toHaveLength(1);
-    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('pending');
+    expect(h.session.getEntryRoutingState()?.boundaryAuthorization?.state).toBe('pending');
   });
 
   it.each(['profile', 'assignment'] as const)('starts no fallback request when the %s changed during the first attempt', async (change) => {
@@ -3277,8 +3279,8 @@ describe('reservation of every provider request', () => {
     h.scriptReply(() => {
       if (change === 'profile') writeStoredPreferences({ version: 1, settledImplementation: 'lower_cost' });
       else {
-        const state = h.session.getWorkPhaseState()!;
-        h.session.commitWorkPhaseState({ ...state, boundaryAuthorization: { ...state.boundaryAuthorization!,
+        const state = h.session.getEntryRoutingState()!;
+        h.session.commitEntryRoutingState({ ...state, boundaryAuthorization: { ...state.boundaryAuthorization!,
           assignmentId: 'another', revision: state.boundaryAuthorization!.revision + 1 } });
       }
       return asStream([{ type: 'error', error: { errorMessage: 'Provider finish_reason: error' } }]);
@@ -3287,7 +3289,7 @@ describe('reservation of every provider request', () => {
     expect(h.streamedModels()).toHaveLength(1);
     expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([]);
     expect(h.outStream.events.filter((event) => event.type === 'error')).toHaveLength(1);
-    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).not.toBe('served');
+    expect(h.session.getEntryRoutingState()?.boundaryAuthorization?.state).not.toBe('served');
   });
 
   it('still falls back to the other authorized action when nothing changed', async () => {
@@ -3300,7 +3302,7 @@ describe('reservation of every provider request', () => {
     expect(h.streamedModels()).toHaveLength(2);
     expect(new Set(h.streamedModels()).size).toBe(2);
     expect(h.outStream.events.filter((event) => event.type === 'text_delta')).toEqual([{ type: 'text_delta', delta: 'answer' }]);
-    expect(h.session.getWorkPhaseState()?.boundaryAuthorization?.state).toBe('served');
+    expect(h.session.getEntryRoutingState()?.boundaryAuthorization?.state).toBe('served');
   });
 });
 
@@ -3323,7 +3325,7 @@ describe('manual pin in an owned continuation', () => {
     await harness.serve(context);
     expect(harness.session.getLastServed()?.thinkingLevel).toBe('high');
     // The served model holds the rest of the entry at its thinking level.
-    harness.session.commitWorkPhaseState({ ...harness.session.getWorkPhaseState()!, status: 'served' });
+    harness.session.commitEntryRoutingState({ ...harness.session.getEntryRoutingState()!, status: 'served' });
     harness.session.setManualModel('alpha/source:low');
     harness.resetEventStream();
     await harness.serve(context);
@@ -3824,7 +3826,6 @@ describe('gathering direct answers', () => {
       .toEqual(['visible answer']);
     expect(harness.outStream.events.filter((e) => e.type === 'done')).toHaveLength(1);
     expect(harness.session.serving.getIncumbent()?.registryId).toBe('a/model');
-    expect(harness.session.context.getLedger().items.size).toBe(0);
     const logged = await records();
     expect(actions(logged)).toEqual([]);
     expect(JSON.stringify(logged)).not.toContain('visible answer');
@@ -3841,12 +3842,12 @@ describe('gathering direct answers', () => {
     harness.scriptReply([{ type: 'text_delta', delta: 'answer' }, { type: 'done' }]);
     await harness.serve(context);
     expect(harness.session.getLastDecision()?.dimension).toBe('gather');
-    expect(harness.session.getWorkPhaseState()?.boundaryAuthorization?.allowedActors)
+    expect(harness.session.getEntryRoutingState()?.boundaryAuthorization?.allowedActors)
       .toEqual(expect.arrayContaining(['a/model:low', 'a/model:high']));
     expect(harness.session.getLastDecision()?.unified?.ranked).toBe(2);
-    expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
-    expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
-    expect(harness.session.getWorkPhaseState()?.sourceEvidencePending).toBe(false);
+    expect(harness.session.getEntryRoutingState()?.executionFlow).toBeUndefined();
+    expect(harness.session.getEntryRoutingState()?.contract).toBeUndefined();
+    expect(harness.session.getEntryRoutingState()?.sourceEvidencePending).toBe(false);
   });
 
   it('answers from triage with an incumbent and starts the next entry without a handoff', async () => {
@@ -3857,14 +3858,14 @@ describe('gathering direct answers', () => {
     expect(harness.streamedModels()).toEqual(['a/model']);
     expect(harness.outStream.events.filter((e) => e.type === 'text_delta')).toHaveLength(1);
     expect(harness.session.getLastDecision()?.dimension).toBe('gather');
-    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
+    expect(harness.session.getEntryRoutingState()?.status).toBe('triage');
     expect(actions(await records())).not.toContain('answer');
     harness.resetEventStream();
     await harness.serve({ messages: [...context.messages, { role: 'user', content: 'next', timestamp: 2 }] } as unknown as Context);
     expect(harness.streamedModels()).toHaveLength(2);
-    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
-    expect(harness.session.getWorkPhaseState()?.handoffKey).toBeUndefined();
-    expect(harness.session.getWorkPhaseState()?.reasoningHandoff).toBeUndefined();
+    expect(harness.session.getEntryRoutingState()?.status).toBe('triage');
+    expect(harness.session.getEntryRoutingState()?.handoffKey).toBeUndefined();
+    expect(harness.session.getEntryRoutingState()?.reasoningHandoff).toBeUndefined();
   });
 });
 

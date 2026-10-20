@@ -25,7 +25,7 @@ import { PROVENANCE_AXES, type BenchModel, type RoutingDecision } from '../types
 import type { ServedInfo } from '../host/ui.js';
 import type { BenchmarkCheck } from '../bench/store.js';
 import { RouterSession, RuntimeBindings } from '../serve/router-session-state.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import { registryModel } from './router-fixtures.js';
 import { scriptedRegistryStream } from './registry-stream.js';
 
@@ -150,7 +150,7 @@ export interface ProviderStateSnapshot {
   accumulatedCost: number;
   blacklistedModels: string[];
   blacklistedProviders: string[];
-  workPhaseState: WorkPhaseState | undefined;
+  entryRoutingState: EntryRoutingState | undefined;
 }
 
 export interface ProviderHarnessOptions {

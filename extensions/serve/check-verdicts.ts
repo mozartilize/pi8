@@ -25,18 +25,18 @@ export function checkVerdict(event: ToolCycleInput, invocation: number): CheckVe
 /** Record a verifier result for the entry that the current invocation serves. */
 export function observeCheckVerdict(event: ToolCycleInput, session: RouterSession): void {
   try {
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     const last = session.getLastDecision();
     if (!state || !last || last.intentKey !== state.intentKey) return;
     // A change to the workspace after a check run invalidates that run's receipt.
     if (state.checkVerdicts && isMutationCall(event.toolName, event.input)) {
       const stale = staleReceipts(state.checkVerdicts);
-      if (stale !== state.checkVerdicts) session.commitWorkPhaseState({ ...state, checkVerdicts: stale });
+      if (stale !== state.checkVerdicts) session.commitEntryRoutingState({ ...state, checkVerdicts: stale });
       return;
     }
     const verdict = checkVerdict(event, state.providerInvocation);
     if (!verdict) return;
-    session.commitWorkPhaseState({
+    session.commitEntryRoutingState({
       ...state,
       checkVerdicts: noteCheckVerdict(state.checkVerdicts, verdict, state.changeFacts !== undefined),
     });
@@ -57,7 +57,7 @@ export async function observeCheckReceipt(
   cwd: string,
 ): Promise<void> {
   try {
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     const last = session.getLastDecision();
     if (!state || !last || last.intentKey !== state.intentKey) return;
     const action = actionFromTool(event.toolName, event.input);
@@ -65,7 +65,7 @@ export async function observeCheckReceipt(
     const verdict = checkVerdict(event, state.providerInvocation);
     if (!verdict) return;
     const snapshot = await snapshotWorkspace(exec, cwd);
-    const current = session.getWorkPhaseState();
+    const current = session.getEntryRoutingState();
     if (!current || current.intentKey !== state.intentKey) return;
     const receipt = buildReceipt({
       id: fingerprint([event.toolCallId]).slice(0, 8),
@@ -74,7 +74,7 @@ export async function observeCheckReceipt(
       output: contentText(event.content),
       snapshot,
     });
-    session.commitWorkPhaseState({ ...current, checkVerdicts: addReceipt(current.checkVerdicts ?? { runsAfterHandoff: 0 }, receipt) });
+    session.commitEntryRoutingState({ ...current, checkVerdicts: addReceipt(current.checkVerdicts ?? { runsAfterHandoff: 0 }, receipt) });
   } catch {
     // Receipts are evidence only; a failure leaves the verdict unchanged.
   }

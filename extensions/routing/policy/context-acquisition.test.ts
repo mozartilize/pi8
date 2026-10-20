@@ -15,9 +15,9 @@ import {
   notePartialRead,
   serveContextHandoff,
 } from './context-acquisition.js';
-import type { WorkPhaseState } from './work-phase.js';
+import type { EntryRoutingState } from './entry-routing-state.js';
 
-const state = (over: Partial<WorkPhaseState> = {}): WorkPhaseState => ({
+const state = (over: Partial<EntryRoutingState> = {}): EntryRoutingState => ({
   intentKey: 'intent-a',
   deliverable: 'plan',
   providerInvocation: 2,
@@ -45,7 +45,7 @@ describe('entry phase', () => {
     ['implement', {}, 'gather', 'investigation'],
     ['gather', { sourceEvidencePending: true }, 'gather', 'investigation'],
   ] as const)('a %s deliverable with %j routes as its acquisition until handoff', (deliverable, over, dimension, cause) => {
-    const entry = state({ deliverable, ...over } as Partial<WorkPhaseState>);
+    const entry = state({ deliverable, ...over } as Partial<EntryRoutingState>);
     expect(entryPhase(entry, deliverable)).toEqual({ dimension, ...(cause ? { cause } : {}) });
   });
 

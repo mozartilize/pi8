@@ -1,11 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { Dimension, ReasoningHandoffMeta } from '../../types.js';
+import type { Dimension, ReasoningHandoffMeta, RoutingScopeMeta } from '../../types.js';
 import type { ExecutionContract } from './execution-contract.js';
-import type { ContextReason, EntryResolution } from '../context/types.js';
 import type { ContextStatus } from './context-acquisition.js';
 import type { ChangeFactsState, CheckVerdicts } from './change-facts.js';
-import type { GroundedArtifact } from '../context/types.js';
-import type { PendingIdentity } from '../../serve/context-resolution.js';
 import type { BoundaryAuthorizationV1 } from './boundary-authorization.js';
 import type { ExecutionFlowState } from './execution-flow.js';
 import type { EntryEvidenceState } from '../../serve/entry-evidence.js';
@@ -25,7 +22,7 @@ export function handoffBoundaryId(sourceEntryId: string, routingEpoch: number, h
 }
 
 /** Per-entry routing state: the entry's task type and its explicit handoffs. */
-export interface WorkPhaseState {
+export interface EntryRoutingState {
   intentKey: string;
   /** Session entry id of the genuine user entry; the intent key when Pi gives none. */
   sourceEntryId?: string;
@@ -62,14 +59,8 @@ export interface WorkPhaseState {
   changeFacts?: ChangeFactsState;
   /** Verifier results this entry observed, before and after its handoff; never inherited. */
   checkVerdicts?: CheckVerdicts;
-  /** Handoff of the entry before this one, joined to this entry's records. */
-  previousHandoffId?: string;
-  /** Where collecting context stands for the entry; absent until an invocation routes it. */
+  /** Acquisition and boundary status of this entry. */
   status?: ContextStatus;
-  /** Bounded choice set while this entry's work identity is not yet known. */
-  pendingIdentity?: PendingIdentity;
-  /** Complete reads made before work identity was chosen; entry-local and never inherited. */
-  provisionalGrounding?: GroundedArtifact[];
   /** Collect provider requests so far, fallback attempts included. */
   contextRequests?: number;
   /** Rejected handoffs and refused calls, counted once per provider invocation. */
@@ -86,45 +77,26 @@ export interface WorkPhaseState {
   contextReminded?: boolean;
   /** The entry's acquisition outcome was logged. */
   contextClosed?: boolean;
-  /** The entry's work-context resolution; set once per entry. */
-  contextResolution?: EntryResolution;
-  /** Work item the entry resolved to, when it resolved to one. */
-  workItemId?: string;
-  /** Context the entry's request owes; fixed when it resolved. */
-  contextReasons?: ContextReason[];
-  /** Router-checked when the entry resolved; fixed for the rest of the entry. */
-  contextSatisfied?: boolean;
-  /**
-   * The model of this completed work item serves the entry first. It may
-   * answer about the completed work, but changes nothing until it reopens
-   * the item or hands off; either boundary clears this. Entry-local.
-   */
-  priorCompletion?: { workItemId: string };
-  /** The entry completed its work item; no change runs for the rest of the entry until a reopen. */
-  completion?: { workItemId: string; status: 'done' | 'superseded' };
   /** This entry already got its one settle reminder to call hand_off_context. */
   contextSettleReminded?: boolean;
-  /** This entry already got its one settle reminder to call complete_work. */
-  completionSettleReminded?: boolean;
   /** The outcome of this entry's settle reminders was logged. */
   settleOutcomeLogged?: boolean;
 }
 
-/**
- * What an entry leaves to a branch it is not on, after `/tree`: `deliverable`
- * as the task type. It establishes no work identity. Strikes, excluded
- * executors, contracts, handoffs, and context-collection state belong to the
- * entries of the branch Pi left.
- */
-export function carryAcrossBranch(state: WorkPhaseState, deliverable: Dimension | undefined): WorkPhaseState {
+/** Diagnostic scope only. This value does not grant routing or mutation authority. */
+export function entryRoutingScope(state: EntryRoutingState | undefined): RoutingScopeMeta | undefined {
+  if (!state?.boundaryId) return undefined;
+  const authorization = state.boundaryAuthorization;
   return {
-    intentKey: state.intentKey,
-    ...(deliverable ? { deliverable } : {}),
-    providerInvocation: state.providerInvocation,
-    observedMutationTools: 0,
+    entryId: state.sourceEntryId ?? state.intentKey,
+    boundaryId: state.boundaryId,
+    ...(authorization?.boundaryId === state.boundaryId ? {
+      assignmentId: authorization.assignmentId, authorizationRevision: authorization.revision,
+    } : {}),
+    ...(state.executionFlow ? { flowId: state.executionFlow.flowId } : {}),
   };
 }
 
-export function nextProviderInvocation(state: WorkPhaseState): WorkPhaseState {
+export function nextProviderInvocation(state: EntryRoutingState): EntryRoutingState {
   return { ...state, providerInvocation: state.providerInvocation + 1 };
 }

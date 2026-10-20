@@ -2,8 +2,8 @@
  * Mutable per-session routing state for provider.ts and its sub-domains.
  *
  * Encapsulated domain aggregates:
- * - `IntentState`: Cached routing intent and per-entry work-phase state.
- * - `RoutingContextState`: The branch's work ledger, rebuilt from Pi's session tree.
+ * - `IntentState`: Cached routing intent and per-entry routing state.
+ * - `ServingHistoryState`: The branch's last actually served identity.
  * - `RuntimeBindings`: Pi extension runtime context & model registry (survives session reset).
  * - `RouterSession`: Unified session aggregate owning the lifecycle and domain objects.
  * Paths given an injected session must read and write that same owner, not a
@@ -20,9 +20,8 @@ import type {
   RoutingDecision,
 } from '../types.js';
 import { checkBenchmarkStore, type BenchmarkCheck } from '../bench/store.js';
-import { debugLog } from '../host/debuglog.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import type { ExecutionFlowState } from '../routing/policy/execution-flow.js';
 import { ServingHistoryState } from './serving-history.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
@@ -31,34 +30,20 @@ import { TrajectoryState } from '../routing/struggle/trajectory.js';
 import type { PendingTrajectoryEscalation, StruggleDecision } from '../routing/struggle/types.js';
 import type { ToolCycleInput } from '../routing/struggle/fingerprints.js';
 import type { WarmPrefixEvidence } from '../routing/features/state.js';
-import { applyEvent, emptyLedger, type TopicLedger } from '../routing/context/ledger.js';
-import { classifyBranch, rebuildLedger } from '../routing/context/persistence.js';
-import { ReadCoverage, type LineRange } from '../routing/context/grounding.js';
-import type { LegacyIndex } from '../routing/context/legacy.js';
-import {
-  CONTEXT_COMMIT_EVENT_LIMIT,
-  type BranchState,
-  type FlatContextEvent,
-  type Incumbent,
-  type RoutingContextEvent,
-} from '../routing/context/types.js';
-import type { ResolvedEntryContext } from './context-resolution.js';
 import { RequestNoteState } from './request-notes.js';
 
 export interface CachedRoutingIntent {
   key: string;
   dimension: Dimension;
   cause: DecisionCause;
-  /** The entry's work-context resolution; resolved once per entry. */
-  context?: ResolvedEntryContext;
 }
 
 /**
- * Domain object for per-turn intent caching and per-entry work-phase state.
+ * Domain object for per-turn intent caching and per-entry routing state.
  */
 export class IntentState {
   private cachedIntent: CachedRoutingIntent | undefined;
-  private phaseState: WorkPhaseState | undefined;
+  private entryState: EntryRoutingState | undefined;
 
   getCachedIntent(): CachedRoutingIntent | undefined {
     return this.cachedIntent;
@@ -68,182 +53,17 @@ export class IntentState {
     this.cachedIntent = intent;
   }
 
-  getWorkPhaseState(): WorkPhaseState | undefined {
-    return this.phaseState;
+  getEntryRoutingState(): EntryRoutingState | undefined {
+    return this.entryState;
   }
 
-  commitWorkPhaseState(next: WorkPhaseState | undefined): void {
-    this.phaseState = next;
+  commitEntryRoutingState(next: EntryRoutingState | undefined): void {
+    this.entryState = next;
   }
 
   reset(): void {
     this.cachedIntent = undefined;
-    this.phaseState = undefined;
-  }
-}
-
-/**
- * The active branch's work ledger. Pi's session tree is its source of truth:
- * an event is applied only once the bound persistence has written it to the
- * branch, so the in-memory ledger is always the fold of the branch and a
- * reload rebuilds exactly what routing saw. With no persistence bound it
- * lives in memory only. A reset forgets the ledger but keeps that binding.
- */
-export class RoutingContextState {
-  private ledger: TopicLedger = emptyLedger();
-  private branchState: BranchState = 'native-empty';
-  private persist: ((event: RoutingContextEvent) => void) | undefined;
-  /** Session entry id of the genuine user entry being routed. */
-  private entrySource: string | undefined;
-  /** Lines of anchored files read so far, until they cover the whole file; runtime-only. */
-  private readCoverage = new Map<string, ReadCoverage>();
-  /**
-   * The index of the requests the router did not serve, for the last such
-   * request it covers. The path to an entry never changes, so it holds
-   * across `/tree` and is dropped only on reset.
-   */
-  private legacyIndex: LegacyIndex | undefined;
-
-  bindPersistence(persist: ((event: RoutingContextEvent) => void) | undefined): void {
-    this.persist = persist;
-  }
-
-  getLedger(): TopicLedger {
-    return this.ledger;
-  }
-
-  getBranchState(): BranchState {
-    return this.branchState;
-  }
-
-  /** Rebuild from the active branch; an unreadable branch starts empty. */
-  restore(branch: readonly unknown[] | undefined): void {
-    this.ledger = rebuildLedger(branch);
-    this.branchState = classifyBranch(branch, this.ledger);
-    this.entrySource = undefined;
-    this.readCoverage.clear();
-  }
-
-  /**
-   * Record lines of an anchored file the model read for a work item; true
-   * once the reads of this version of the file cover every line.
-   */
-  noteRead(workItemId: string, path: string, file: { sha256: string; lineCount: number }, range: LineRange): boolean {
-    const key = `${workItemId}\0${path}`;
-    let coverage = this.readCoverage.get(key);
-    if (!coverage || coverage.sha256 !== file.sha256) {
-      coverage = new ReadCoverage(file.sha256, file.lineCount);
-      this.readCoverage.set(key, coverage);
-    }
-    const complete = coverage.add(range);
-    if (complete) this.readCoverage.delete(key);
-    return complete;
-  }
-
-  /**
-   * Write one event to the branch, then fold it. Returns whether it applied:
-   * an event that does not apply is not written, and one the branch did not
-   * record is not applied.
-   */
-  append(event: RoutingContextEvent): boolean {
-    const next = applyEvent(this.ledger, event);
-    if (next === this.ledger) return false;
-    try {
-      this.persist?.(event);
-    } catch (err) {
-      debugLog('context.persist-error', { op: event.op, message: err instanceof Error ? err.message : String(err) });
-      return false;
-    }
-    this.ledger = next;
-    this.branchState = 'tracked';
-    return true;
-  }
-
-  /** Persist a ready handoff as one branch entry before publishing any of its changes. */
-  appendCommit(events: readonly RoutingContextEvent[]): boolean {
-    const first = events[0];
-    if (!first || first.op === 'context-commit' || events.length > CONTEXT_COMMIT_EVENT_LIMIT
-      || events.some((event) => event.op === 'context-commit' || event.sourceEntryId !== first.sourceEntryId)) return false;
-    let next = this.ledger;
-    for (const event of events) {
-      const applied = applyEvent(next, event);
-      if (applied === next) return false;
-      next = applied;
-    }
-    const record: RoutingContextEvent = { v: 1, op: 'context-commit', sourceEntryId: first.sourceEntryId,
-      events: [...events] as FlatContextEvent[] };
-    try {
-      this.persist?.(record);
-    } catch (err) {
-      debugLog('context.persist-error', { op: record.op, message: err instanceof Error ? err.message : String(err) });
-      return false;
-    }
-    this.ledger = next;
-    this.branchState = 'tracked';
-    return true;
-  }
-
-  getIncumbent(): Incumbent | undefined {
-    return this.ledger.incumbent;
-  }
-
-  /**
-   * Record the model the router chose outside collecting context, and the
-   * work item it served. Written to the branch only when it changed, so a
-   * resumed session restores it.
-   */
-  recordIncumbent(
-    served: { registryId: string; thinkingLevel?: string },
-    dimension: Dimension,
-    sourceEntryId: string,
-    workItemId?: string,
-  ): void {
-    const event: RoutingContextEvent = {
-      v: 1,
-      op: 'incumbent',
-      served: { registryId: served.registryId, ...(served.thinkingLevel ? { thinkingLevel: served.thinkingLevel } : {}) },
-      dimension,
-      ...(workItemId ? { workItemId } : {}),
-      sourceEntryId,
-    };
-    const next = applyEvent(this.ledger, event);
-    if (next === this.ledger) return;
-    try {
-      this.persist?.(event);
-    } catch (err) {
-      debugLog('context.persist-error', { op: event.op, message: err instanceof Error ? err.message : String(err) });
-      return;
-    }
-    this.ledger = next;
-  }
-
-  /** Pi switched to another model: the next router entry starts without an incumbent. */
-  clearIncumbent(): void {
-    if (!this.ledger.incumbent) return;
-    const { incumbent: _ended, ...rest } = this.ledger;
-    this.ledger = rest;
-  }
-
-  /** The index for `headEntryId`, built at most once per head. */
-  legacyIndexFor(headEntryId: string, build: () => LegacyIndex): LegacyIndex {
-    if (this.legacyIndex?.headEntryId !== headEntryId) this.legacyIndex = build();
-    return this.legacyIndex;
-  }
-
-  getEntrySource(): string | undefined {
-    return this.entrySource;
-  }
-
-  setEntrySource(sourceEntryId: string | undefined): void {
-    this.entrySource = sourceEntryId;
-  }
-
-  reset(): void {
-    this.ledger = emptyLedger();
-    this.branchState = 'native-empty';
-    this.entrySource = undefined;
-    this.readCoverage.clear();
-    this.legacyIndex = undefined;
+    this.entryState = undefined;
   }
 }
 
@@ -291,7 +111,6 @@ export class RuntimeBindings {
 export class RouterSession {
   public readonly blacklist: BlacklistState;
   public readonly intent: IntentState;
-  public readonly context = new RoutingContextState();
   public readonly serving = new ServingHistoryState();
   /** Router notes recorded on the active branch; the persistence binding survives resets. */
   public readonly notes = new RequestNoteState();
@@ -312,12 +131,12 @@ export class RouterSession {
   previousFlow: ExecutionFlowState | undefined;
 
   finishExecutionFlow(): void {
-    const state = this.getWorkPhaseState();
+    const state = this.getEntryRoutingState();
     if (!state || state.flowClosed) return;
     const flow = state.executionFlow;
     this.previousFlow = flow && (flow.excludedModels.length > 0 || Object.values(flow.strikesByModel).some((n) => n > 0))
       ? flow : undefined;
-    this.commitWorkPhaseState({ ...state, executionFlow: undefined, flowClosed: true });
+    this.commitEntryRoutingState({ ...state, executionFlow: undefined, flowClosed: true });
   }
 
   previousFlowNote(): string {
@@ -396,11 +215,11 @@ export class RouterSession {
     this.previousFlow = undefined;
     this.preparation.reset();
     this.trajectory.reset();
-    const state = this.intent.getWorkPhaseState();
+    const state = this.intent.getEntryRoutingState();
     if (state) {
       const { boundaryAuthorization: _auth, contract: _contract, executionFlow: _flow,
         evidence: _evidence, sourceEvidencePending: _pending, ...rest } = state;
-      this.intent.commitWorkPhaseState(rest);
+      this.intent.commitEntryRoutingState(rest);
     }
   }
 
@@ -656,12 +475,12 @@ export class RouterSession {
     this.intent.setCachedIntent(intent);
   }
 
-  getWorkPhaseState(): WorkPhaseState | undefined {
-    return this.intent.getWorkPhaseState();
+  getEntryRoutingState(): EntryRoutingState | undefined {
+    return this.intent.getEntryRoutingState();
   }
 
-  commitWorkPhaseState(next: WorkPhaseState | undefined): void {
-    this.intent.commitWorkPhaseState(next);
+  commitEntryRoutingState(next: EntryRoutingState | undefined): void {
+    this.intent.commitEntryRoutingState(next);
   }
 
   bindTrajectoryIntent(intentKey: string): void {
@@ -791,7 +610,6 @@ export class RouterSession {
     this.memoizedCandidateExpansion = undefined;
 
     this.intent.reset();
-    this.context.reset();
     this.serving.reset();
     this.notes.reset();
     this.preparation.reset();

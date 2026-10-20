@@ -6,7 +6,7 @@
  * Without either declaration the demand remains unknown, not easy.
  */
 import type { ComplexityBand, Dimension, ExecutionRubric, HandoffRubric, MeasuredFeatures, ReasoningEvidence, ReasoningRubric, TaskScope } from '../../types.js';
-import type { WorkPhaseState } from '../policy/work-phase.js';
+import type { EntryRoutingState } from '../policy/entry-routing-state.js';
 import { clamp01 } from './mapping.js';
 import type { DemandInterval, TaskDifficulty } from './state.js';
 
@@ -77,7 +77,7 @@ function declaredDifficulty(declaration: {
 }
 
 /** Only declarations accepted in this entry for the routed phase supply its demand. */
-export function phaseDifficulty(state: WorkPhaseState | undefined, phase: Dimension): TaskDifficulty | undefined {
+export function phaseDifficulty(state: EntryRoutingState | undefined, phase: Dimension): TaskDifficulty | undefined {
   const contract = state?.contract;
   if (phase === 'implement' && contract?.rubric && (contract.status === 'active' || contract.status === 'executed')) {
     return executionDifficulty(contract.rubric, contract.measured);

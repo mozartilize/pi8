@@ -7,7 +7,13 @@ import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel } from '../test-support/router-fixtures.js';
 import { setupProviderTest } from '../test-support/provider-harness.js';
 import { SessionTree } from '../test-support/session-tree.js';
-import type { Corpus } from '../test-support/context-replay.js';
+interface Corpus {
+  sessions: Array<{ id: string; files?: Record<string, string>; legacyHistory?: Array<{ role: string; text: string }>;
+    entries: Array<{ id: string; prompt: string; label: { deliverable: string }; after?: Array<
+      { read: string; offset?: number; limit?: number } | { externalEdit: string; content: string }
+      | { write: string; content: string } | { handoff: boolean }
+    > }> }>;
+}
 import { observeContextGrounding } from './context-grounding.js';
 import { prepareHandoffFacts, submitContextHandoff } from './context-handoff-tool.js';
 import { gateContextToolCall } from './gathering-gate.js';
@@ -53,7 +59,7 @@ describe('entry-boundary corpus replay', () => {
       for (const entry of session.entries) {
         const entryId = tree.user(entry.prompt, tree.getBranch().length + 1000);
         await serve();
-        const initial = harness.session.getWorkPhaseState()!;
+        const initial = harness.session.getEntryRoutingState()!;
         expect(initial, entry.id).toMatchObject({ sourceEntryId: entryId, status: 'triage', deliverable: 'gather', providerInvocation: 1 });
         expect(initial.contract, entry.id).toBeUndefined();
         expect(initial.executionFlow, entry.id).toBeUndefined();
@@ -66,12 +72,12 @@ describe('entry-boundary corpus replay', () => {
             async () => ({ stdout: '', stderr: '', code: 0 }) as never);
           accepted = submitContextHandoff(params, ctx, harness.session, facts).accepted;
           if (accepted) {
-            expect(harness.session.getWorkPhaseState()!.boundaryId, entry.id).not.toBe(initial.boundaryId);
+            expect(harness.session.getEntryRoutingState()!.boundaryId, entry.id).not.toBe(initial.boundaryId);
             expect(gateContextToolCall({ toolName: 'write', input: {} }, harness.session)?.block, entry.id).toBe(true);
             await serve();
-            expect(harness.session.getWorkPhaseState()!.status, entry.id).toBe('served');
+            expect(harness.session.getEntryRoutingState()!.status, entry.id).toBe('served');
           } else {
-            expect(harness.session.getWorkPhaseState()!.boundaryId, entry.id).toBe(initial.boundaryId);
+            expect(harness.session.getEntryRoutingState()!.boundaryId, entry.id).toBe(initial.boundaryId);
           }
         };
         for (const action of entry.after ?? []) {

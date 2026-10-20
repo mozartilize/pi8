@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ComplexityBand, ExecutionRubric, MeasuredFeatures, ReasoningEvidence, ReasoningRubric } from '../../types.js';
 import { demandInterval } from './task-demand.js';
-import type { WorkPhaseState } from '../policy/work-phase.js';
+import type { EntryRoutingState } from '../policy/entry-routing-state.js';
 import { executionDifficulty, phaseDifficulty, reasoningDifficulty } from './difficulty.js';
 
 const levels = <K extends string>(keys: readonly K[], level: number) =>
@@ -51,7 +51,7 @@ describe('task difficulty from a rubric and router measurements', () => {
 });
 
 describe('difficulty of the routed phase', () => {
-  const state = (patch: Partial<WorkPhaseState>): WorkPhaseState =>
+  const state = (patch: Partial<EntryRoutingState>): EntryRoutingState =>
     ({ intentKey: 'k', providerInvocation: 1, observedMutationTools: 0, ...patch });
   const handoff = (target: 'plan' | 'review' | 'implement', rubric: ExecutionRubric | ReasoningRubric | undefined) => ({
     id: 'h', requester: 'a/A', target, pending: true, evidence: noFiles, ...(rubric ? { rubric } : {}),
@@ -113,13 +113,13 @@ describe('difficulty of the routed phase', () => {
   });
 
   it('uses an active plan rubric and its measurements for implementation', () => {
-    const contract = { status: 'active', rubric: execution(5), measured: small } as unknown as WorkPhaseState['contract'];
+    const contract = { status: 'active', rubric: execution(5), measured: small } as unknown as EntryRoutingState['contract'];
     const planned = state({ reasoningHandoff: handoff('plan', reasoning(1)), contract });
     expect(phaseDifficulty(planned, 'implement')).toMatchObject({ value: 1, source: 'execution-rubric' });
   });
 
   it('a broken contract supplies no implementation demand', () => {
-    const contract = { status: 'broken', rubric: execution(5), measured: small } as unknown as WorkPhaseState['contract'];
+    const contract = { status: 'broken', rubric: execution(5), measured: small } as unknown as EntryRoutingState['contract'];
     expect(phaseDifficulty(state({ contract }), 'implement')).toBeUndefined();
   });
 

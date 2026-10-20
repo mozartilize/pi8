@@ -1,6 +1,6 @@
 import { MODEL_THINKING_LEVELS } from '../routing/score/scorer.js';
 import { AUTO_MODEL_ID, ROUTER_PROVIDER_ID } from '../types.js';
-import { SELECTION_ENTRY_TYPE, type BranchEntryLike } from '../routing/context/persistence.js';
+import { SELECTION_ENTRY_TYPE, type BranchEntryLike } from '../routing/context/branch-provenance.js';
 
 export const SERVING_ENTRY_TYPE = 'pi8-serving-v1';
 const LEGACY_CONTEXT_ENTRY_TYPE = 'pi8-routing-context-v1';

@@ -19,7 +19,7 @@ import { candidateFeatures } from '../routing/features/candidate.js';
 import { compileActionFeatures } from '../routing/optimization/compile.js';
 import { createBoundaryAuthorization, type BoundaryAuthorizationV1, type BoundaryScope } from '../routing/policy/boundary-authorization.js';
 import { isExcludedExecutor } from '../routing/policy/execution-contract.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import type { DecisionStateV1 } from '../routing/features/state.js';
 import { composeTaskDemand } from '../routing/features/task-demand.js';
 import { WorkerLpAdapter } from '../routing/optimization/lp.js';
@@ -91,7 +91,7 @@ export interface UnifiedTurnInput {
   state: DecisionStateV1;
   cause: DecisionCause;
   authorizationScope: BoundaryScope;
-  workState?: WorkPhaseState;
+  entryState?: EntryRoutingState;
   /** Routable candidates; their models define the legal action set. */
   candidates: readonly Candidate[];
   registryModels: readonly RegistryModelInfo[];
@@ -201,7 +201,7 @@ function reasonText(result: UnifiedDecision, chosen: string, preparationTarget: 
 /** Classify absent demand without inferring it from an earlier entry's log join key. */
 function difficultyMissingReason(input: UnifiedTurnInput): UnifiedDecisionMeta['difficultyMissingReason'] {
   if (input.state.contextAcquisition) return 'collecting-context';
-  const work = input.workState;
+  const work = input.entryState;
   const contract = work?.contract;
   if (input.state.phase === 'implement' && contract && !contract.rubric
     && (contract.status === 'active' || contract.status === 'executed')) return 'no-rubric';
@@ -217,7 +217,7 @@ function difficultyMissingReason(input: UnifiedTurnInput): UnifiedDecisionMeta['
  * belongs to the entry that the scope names.
  */
 function authorize(input: UnifiedTurnInput, selection: readonly SelectionCandidate[]): BoundaryAuthorizationV1 {
-  const work = input.workState;
+  const work = input.entryState;
   const flow = work?.executionFlow;
   const live = flow !== undefined && work!.intentKey !== undefined
     && (work!.sourceEntryId ?? work!.intentKey) === input.authorizationScope.entryId;

@@ -13,10 +13,10 @@
  * invalid continuation itself.
  */
 import type { AgentBeforeSettleEvent, AgentBeforeSettleEventResult } from '@earendil-works/pi-coding-agent';
-import { appendWorkLifecycleSignal, type SettleReminderKind, type WorkLifecycleSignal } from '../host/decisionlog.js';
+import { appendSettleSignal, type SettleReminderKind, type SettleSignal } from '../host/decisionlog.js';
 import { servedKey } from '../host/ui.js';
 import { ROUTER_SETTLE_PREFIX } from '../routing/policy/continuation.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import { entryRoutingScope, type EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import { refreshSourceEvidence, sourceEvidenceCounts } from './entry-evidence.js';
 import { logContextHandoff } from './gathering-gate.js';
 import { ACQUISITION_DENIAL_LIMIT } from '../routing/policy/context-acquisition.js';
@@ -34,26 +34,26 @@ export const CONTEXT_SETTLE_TEXT = [
  * shows a boundary the model never declared: a plan, review, or change written
  * by the gathering model skips that type's minimum.
  */
-function owesHandoff(state: WorkPhaseState): boolean {
+function owesHandoff(state: EntryRoutingState): boolean {
   if (state.status !== 'triage' || state.contextSettleReminded) return false;
   const directAnswer = state.deliverable === 'gather';
   return !directAnswer || (state.contextDenials ?? 0) > 0;
 }
 
 /** Every accepted `hand_off_context` outcome: ready, or a question to the user. */
-function declaredHandoff(state: WorkPhaseState): boolean {
+function declaredHandoff(state: EntryRoutingState): boolean {
   return state.handoffKey !== undefined || state.contextNeedsUser === true;
 }
 
 function logSettle(
-  state: WorkPhaseState,
+  state: EntryRoutingState,
   session: RouterSession,
-  action: Extract<WorkLifecycleSignal['action'], `settle-${string}`>,
+  action: Extract<SettleSignal['action'], `settle-${string}`>,
   reminder: SettleReminderKind,
 ): void {
   const served = session.getLastServed();
-  appendWorkLifecycleSignal({
-    intentKey: state.intentKey,
+  appendSettleSignal({
+    intentKey: state.intentKey, routingScope: entryRoutingScope(state),
     served: served ? servedKey(served) : 'unknown/unknown',
     action,
     reminder,
@@ -67,9 +67,9 @@ export async function settleReminder(
   session: RouterSession,
 ): Promise<AgentBeforeSettleEventResult | undefined> {
   if (event.outcome !== 'completed') return undefined;
-  const before = session.getWorkPhaseState();
+  const before = session.getEntryRoutingState();
   const source = await refreshSourceEvidence(session);
-  const state = session.getWorkPhaseState();
+  const state = session.getEntryRoutingState();
   if (!state || before?.intentKey !== state.intentKey || before?.evidence !== state.evidence) return undefined;
   if (state.sourceEvidencePending && state.status !== 'clarification-only') {
     const sourceSettleAttempts = (state.sourceSettleAttempts ?? 0) + 1;
@@ -78,7 +78,7 @@ export async function settleReminder(
     logContextHandoff(state, served ? servedKey(served) : 'unknown/unknown',
       exhausted ? 'source-settle-exhausted' : 'source-settle-repair',
       source ? { sourceEvidence: sourceEvidenceCounts(source) } : {});
-    session.commitWorkPhaseState({ ...state, sourceSettleAttempts,
+    session.commitEntryRoutingState({ ...state, sourceSettleAttempts,
       ...(exhausted ? { status: 'clarification-only' as const } : {}) });
     const instruction = exhausted
       ? 'Router: The referenced source could not be verified. Tell the user this limitation. Ask for the missing source or input. Do not call tools.'
@@ -89,7 +89,7 @@ export async function settleReminder(
     }] };
   }
   if (state.status === 'clarification-only' || !owesHandoff(state)) return undefined;
-  session.commitWorkPhaseState({ ...state, contextSettleReminded: true });
+  session.commitEntryRoutingState({ ...state, contextSettleReminded: true });
   logSettle(state, session, 'settle-reminder', 'context');
   const text = CONTEXT_SETTLE_TEXT;
   // A handler's entries replace the drafts of the handlers before it.
@@ -110,10 +110,10 @@ export async function settleReminder(
  */
 export function logSettleOutcomes(session: RouterSession): void {
   try {
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     if (!state || state.settleOutcomeLogged || !state.contextSettleReminded) return;
     logSettle(state, session, declaredHandoff(state) ? 'settle-followed' : 'settle-ignored', 'context');
-    session.commitWorkPhaseState({ ...state, settleOutcomeLogged: true });
+    session.commitEntryRoutingState({ ...state, settleOutcomeLogged: true });
   } catch {
     // Logging must never fail the end of a run.
   }

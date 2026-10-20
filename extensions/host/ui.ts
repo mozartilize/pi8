@@ -14,10 +14,7 @@ import type {
   RoutingDecision,
   UnifiedActionTrace,
   UnifiedDecisionMeta,
-  WorkContextMeta,
 } from '../types.js';
-import { activeWorkItem, ledgerTopics, type TopicLedger } from '../routing/context/ledger.js';
-import type { BranchState, ContextReason } from '../routing/context/types.js';
 
 export interface ServedInfo {
   /** The model that actually produced the turn, after any fallback. */
@@ -85,16 +82,10 @@ const CAUSE_LABELS: Readonly<Record<DecisionCause, string>> = {
   resume: 'reused the route from before the pin',
   'semi-hold': 'kept the current model (semi mode)',
   incumbent: 'kept the model serving this session until a handoff',
-  'work-context': 'a follow-up that carries on its resolved work item\'s task type',
 };
 
 /** Plain-language context reason, as the user reads it. */
-const CONTEXT_REASON_LABELS: Readonly<Record<ContextReason, string>> = {
-  'identity-unresolved': 'which work it belongs to',
-  'referenced-artifact': 'files it references',
-  'reasoning-prep': 'preparing the plan or review',
-  'carried-open-context': 'left open by an earlier request',
-};
+
 
 /** Multi-line detail for `/router-status`. */
 export function formatDecisionDetail(
@@ -115,39 +106,12 @@ export function formatDecisionDetail(
     `  reason:     ${decision.reason}`,
     ...unifiedLines(decision.unified),
     ...(decision.mutationObserved && decision.dimension !== 'implement' ? ['  phase:      editing'] : []),
-    ...workContextLines(decision.workContext),
     ...routingNotes(served),
     ...handoffLine(decision),
     ...(decision.executionContract ? contractLines(decision.executionContract) : []),
     ...(decision.trajectoryFriction ? [trajectoryLine(decision.trajectoryFriction)] : []),
     ...(decision.switched ? ['  note:       switched models from the previous turn'] : []),
     ...(chain ? [`  chain:      ${chain}`] : []),
-  ];
-}
-
-const RESOLVER_LABELS: Readonly<Record<WorkContextMeta['resolver'], string>> = {
-  deterministic: 'continues the active work, no model asked',
-  'context-handoff': 'selected after collecting context',
-  fallback: 'not recorded on this branch',
-};
-
-const LEGACY_LABEL = 'found in conversation from before tracking started';
-
-/** The `/router-why` lines for the entry's work context: ids and plain language, no titles. */
-function workContextLines(context: WorkContextMeta | undefined): string[] {
-  if (!context) return [];
-  const target = context.workItemId === 'NONE'
-    ? 'a side question outside any work item'
-    : context.workItemId === 'UNKNOWN'
-      ? 'no work item'
-      : `${context.relation === 'new' || context.relation === 'switch' ? 'new' : context.relation} work item ${context.workItemId}`;
-  const reasons = context.contextReasons.map((reason) => CONTEXT_REASON_LABELS[reason]).join(', ');
-  const status = !context.contextSatisfied ? 'still needed'
-    : context.resolver === 'context-handoff' && reasons ? 'collected'
-    : 'current';
-  return [
-    `  work:       ${target} (${context.legacy ? LEGACY_LABEL : RESOLVER_LABELS[context.resolver]})`,
-    `  context:    ${status}${reasons ? ` (${reasons})` : ''}`,
   ];
 }
 
@@ -269,40 +233,6 @@ function trajectoryLine(tf: NonNullable<RoutingDecision['trajectoryFriction']>):
   if (tf.unavailable) return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}; no permitted recovery action can accept this prompt`;
   const kinds = tf.signals.map((signal) => `${signal.severity} ${signal.kind.replaceAll('-', ' ')}`).join(', ');
   return `  struggle:   score ${tf.tfi.toFixed(2)} on ${tf.fromModel}${kinds ? ` (${kinds})` : ''}`;
-}
-
-/**
- * The session's work context for `/router-status`: local, user-facing state,
- * so titles are shown; nothing here reaches the decision log.
- */
-export function formatWorkContext(
-  ledger: TopicLedger,
-  branchState: BranchState,
-): string[] {
-  if (branchState === 'legacy-uninitialized') {
-    return ['Work context: none yet; earlier requests that the router did not serve are searched when a message returns to their work'];
-  }
-  if (branchState === 'native-empty' || ledger.items.size === 0) {
-    return ['Work context: none yet'];
-  }
-  const topics = ledgerTopics(ledger).length;
-  const open = [...ledger.items.values()].filter((item) => item.status === 'active' || item.status === 'blocked').length;
-  const counts = `${open} open of ${ledger.items.size} work item${ledger.items.size === 1 ? '' : 's'} in ${topics} topic${topics === 1 ? '' : 's'}`;
-  const active = activeWorkItem(ledger);
-  const lines = [
-    active
-      ? `Work context: ${active.title} (topic: ${active.topic.title}; ${counts})`
-      : `Work context: no active work item (${counts})`,
-  ];
-  if (active) {
-    const grounded = active.grounding.length;
-    lines.push(`  work item:  ${active.id}, ${active.status}, ${active.anchors.length} anchor${active.anchors.length === 1 ? '' : 's'}, ${grounded} read and fingerprinted`);
-    if (active.openContext?.length) {
-      const reasons = active.openContext.map((reason) => CONTEXT_REASON_LABELS[reason]).join(', ');
-      lines.push(`  context:    still needed before its next change (${reasons})`);
-    }
-  }
-  return lines;
 }
 
 /**

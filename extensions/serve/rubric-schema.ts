@@ -1,5 +1,5 @@
 /**
- * The rubric parameters of `hand_off_context`, `reopen_work`, and `commit_execution`. Each tool asks
+ * The rubric parameters of `hand_off_context` and `commit_execution`. Each tool asks
  * for the same rubric of a task type, with the same criteria and levels, so the router values every
  * declaration of that task type in one way.
  */

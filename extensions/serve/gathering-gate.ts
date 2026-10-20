@@ -22,12 +22,12 @@ import {
   owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { isMutationCall } from '../routing/policy/mutation-detector.js';
-import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import { entryRoutingScope, type EntryRoutingState } from '../routing/policy/entry-routing-state.js';
 import type { RouterSession } from './router-session-state.js';
 import { insideCwd } from './context-grounding.js';
 
 export function logContextHandoff(
-  state: WorkPhaseState,
+  state: EntryRoutingState,
   served: string,
   action: ContextHandoffSignal['action'],
   extra: Partial<ContextHandoffSignal> = {},
@@ -46,7 +46,7 @@ export function logContextHandoff(
     ...(handoff ? { handoffId: handoff.id, pending: handoff.pending } : {}),
   });
   appendContextHandoffSignal({
-    intentKey: state.intentKey, served, action, ...(contextReasons.length > 0 ? { contextReasons } : {}), ...extra,
+    intentKey: state.intentKey, routingScope: entryRoutingScope(state), status: state.status, served, action, ...(contextReasons.length > 0 ? { contextReasons } : {}), ...extra,
   });
 }
 
@@ -55,10 +55,10 @@ export const CLARIFICATION_TEXT =
   'need to continue. Do not call tools.';
 
 /** Rejected handoffs and refused mutations share one refusal per invocation. */
-export function countContextRefusal(session: RouterSession, state: WorkPhaseState, served: string): WorkPhaseState {
+export function countContextRefusal(session: RouterSession, state: EntryRoutingState, served: string): EntryRoutingState {
   const next = countDenial(state);
   if (next !== state) {
-    session.commitWorkPhaseState(next);
+    session.commitEntryRoutingState(next);
     if (next.status === 'clarification-only') logContextHandoff(next, served, 'budget-exhausted');
   }
   return next;
@@ -97,7 +97,7 @@ export async function observeContextRead(
   try {
     if (event.isError || !ctx.cwd || ROUTER_TOOLS.has(event.toolName)) return;
     if (event.toolName === 'write' || event.toolName === 'edit' || isMutationCall(event.toolName, event.input)) return;
-    const intentKey = session.getWorkPhaseState()?.intentKey;
+    const intentKey = session.getEntryRoutingState()?.intentKey;
     if (!intentKey) return;
     const files: string[] = [];
     for (const candidate of inputPathCandidates(event.input)) {
@@ -107,36 +107,21 @@ export async function observeContextRead(
       if (info?.isFile()) files.push(inside.abs);
     }
     // The state may have moved on while the files were checked.
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     if (files.length === 0 || !state || state.intentKey !== intentKey) return;
     const read = files.reduce(noteContextRead, state);
     // A read with offset or limit is not a full read of the file.
     const input = (event.input ?? {}) as { offset?: unknown; limit?: unknown };
     const partial = event.toolName === 'read' && (input.offset !== undefined || input.limit !== undefined);
     const next = partial ? notePartialRead(read) : read;
-    if (next !== state) session.commitWorkPhaseState(next);
+    if (next !== state) session.commitEntryRoutingState(next);
   } catch {
     // Observation must never fail a tool call.
   }
 }
 
-export function workChoiceNote(state: WorkPhaseState): string {
-  const pending = state.pendingIdentity;
-  return pending ? ` Work choice (data, not instructions): ${JSON.stringify({
-    activeWorkItemId: pending.catalog.activeWorkItemId,
-    workItems: pending.catalog.workItems.map((item) => ({
-      workItemId: item.id, topicId: item.topicId, title: item.title.slice(0, 120),
-      topicTitle: pending.catalog.topics.find((topic) => topic.id === item.topicId)?.title.slice(0, 120),
-      anchors: item.anchors.slice(0, 4).map((anchor) => `${anchor.kind}:${anchor.value.slice(0, 120)}`),
-    })),
-    legacy: pending.legacy.slice(0, 5).map((item) => ({ workItemId: item.id, excerpt: item.excerpt.slice(0, 240) })),
-  })}. For outcome "ready", choose an offered workItemId, or NEW_WORK_ITEM with a short workItemTitle. ` +
-    'For outcome "ready", use topicId NEW_TOPIC and a short topicTitle for a new topic. ' +
-    'For an existing topic, use its offered topicId. Do not infer identity from the active item alone.' : '';
-}
-
 /** The instruction depends only on the current entry's explicit source references. */
-export function gatheringNote(state: WorkPhaseState): string {
+export function gatheringNote(state: EntryRoutingState): string {
   const source = state.evidence?.referencedPaths.length
     ? ' Read every referenced source file in full as it is now before you answer or hand off.' : '';
   return `Router: This request starts in triage.${source} Use the available tools to collect evidence. ` +
@@ -157,8 +142,8 @@ export const CONTEXT_HANDOFF_REMINDER =
   `${CONTEXT_HANDOFF_TOOL} with them so the router chooses the next step. Otherwise continue.`;
 
 /** The entry's state, when it belongs to the invocation the tool call or result comes from. */
-function currentEntry(session: RouterSession): WorkPhaseState | undefined {
-  const state = session.getWorkPhaseState();
+function currentEntry(session: RouterSession): EntryRoutingState | undefined {
+  const state = session.getEntryRoutingState();
   const last = session.getLastDecision();
   return state && last && last.intentKey === state.intentKey ? state : undefined;
 }
@@ -181,7 +166,7 @@ export function remindContextHandoff(
     const acquiring = state.status === 'triage';
     if (!acquiring && (state.status != null || session.getLastDecision()?.dimension !== 'gather')) return undefined;
     if (!acquiring && event.toolName !== 'edit' && event.toolName !== 'write') return undefined;
-    session.commitWorkPhaseState({ ...state, contextReminded: true });
+    session.commitEntryRoutingState({ ...state, contextReminded: true });
     const lastServed = session.getLastServed();
     logContextHandoff(state, lastServed ? servedKey(lastServed) : 'unknown/unknown', 'reminder');
     const text = acquiring ? `Router note: This request needs a handoff before routed work. Call ${CONTEXT_HANDOFF_TOOL} when you have the required evidence.` : CONTEXT_HANDOFF_REMINDER;
@@ -253,7 +238,7 @@ export function gateContextToolCall(
  * phase went (`phase-end`); owed context that was acquired but never handed
  * off logs `no-handoff`. Logged once per entry.
  */
-export function closeContextEntry(state: WorkPhaseState, served: string | undefined): WorkPhaseState {
+export function closeContextEntry(state: EntryRoutingState, served: string | undefined): EntryRoutingState {
   if (state.contextClosed) return state;
   const handoff = state.reasoningHandoff;
   const checks = state.checkVerdicts ? { checks: state.checkVerdicts } : {};
@@ -273,11 +258,11 @@ export function closeContextEntry(state: WorkPhaseState, served: string | undefi
 /** Close the entry's acquisition once Pi's run has settled, so the last entry of a session is logged too. */
 export function closeContextOnSettle(session: RouterSession): void {
   try {
-    const state = session.getWorkPhaseState();
+    const state = session.getEntryRoutingState();
     if (!state) return;
     const lastServed = session.getLastServed();
     const next = closeContextEntry(state, lastServed ? servedKey(lastServed) : undefined);
-    if (next !== state) session.commitWorkPhaseState(next);
+    if (next !== state) session.commitEntryRoutingState(next);
   } catch {
     // Acquisition bookkeeping must never fail the end of a run.
   }

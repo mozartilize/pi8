@@ -18,7 +18,7 @@ describe('entry-local source evidence', () => {
   function entry(prompt: string) {
     const sourceEntryId = tree.user(prompt);
     const evidence = createEntryEvidence({ key: sourceEntryId, promptText: prompt }, session.getRoutingEpoch(), temp.path, tree.manager());
-    session.commitWorkPhaseState({ intentKey: sourceEntryId, sourceEntryId, routingEpoch: session.getRoutingEpoch(),
+    session.commitEntryRoutingState({ intentKey: sourceEntryId, sourceEntryId, routingEpoch: session.getRoutingEpoch(),
       status: 'triage', providerInvocation: 1, observedMutationTools: 0, evidence,
       sourceEvidencePending: evidence.referencedPaths.length > 0 });
     return evidence;
@@ -31,31 +31,31 @@ describe('entry-local source evidence', () => {
   it('uses only explicit references in the genuine entry, never earlier files or plain path mentions', () => {
     tree.user('@old.ts implement this'); tree.assistant('done');
     const evidence = entry('explain bare.ts and @./source.ts:3 and @source.ts');
-    expect(evidence.entryId).toBe(session.getWorkPhaseState()!.sourceEntryId);
+    expect(evidence.entryId).toBe(session.getEntryRoutingState()!.sourceEntryId);
     expect(evidence.referencedPaths).toEqual(['source.ts']);
     expect(evidence.observedFiles.size).toBe(0);
-    expect(session.getWorkPhaseState()?.pendingIdentity).toBeUndefined();
+    expect(session.getEntryRoutingState()).not.toHaveProperty('workItemId');
   });
 
   it('does not credit a full read in an earlier entry to the same explicit path', async () => {
     writeFileSync(join(temp.path, 'source.ts'), 'full source');
     entry('@source.ts explain this'); await read('source.ts', 'full source');
-    expect(session.getWorkPhaseState()!.sourceEvidencePending).toBe(false);
+    expect(session.getEntryRoutingState()!.sourceEvidencePending).toBe(false);
     entry('@source.ts change this');
     expect(await refreshSourceEvidence(session)).toMatchObject({ fresh: 0, unmet: ['source.ts'] });
-    expect(session.getWorkPhaseState()!.sourceEvidencePending).toBe(true);
-    expect(session.getWorkPhaseState()!.evidence!.readCoverage.size).toBe(0);
+    expect(session.getEntryRoutingState()!.sourceEvidencePending).toBe(true);
+    expect(session.getEntryRoutingState()!.evidence!.readCoverage.size).toBe(0);
   });
 
   it('rechecks SHA freshness even when the source was satisfied earlier in the entry', async () => {
     writeFileSync(join(temp.path, 'source.ts'), 'first');
     entry('@source.ts explain this'); await read('source.ts', 'first');
-    expect(session.getWorkPhaseState()!.sourceEvidencePending).toBe(false);
+    expect(session.getEntryRoutingState()!.sourceEvidencePending).toBe(false);
     writeFileSync(join(temp.path, 'source.ts'), 'other');
     expect(await refreshSourceEvidence(session)).toMatchObject({ required: 1, fresh: 0, unmet: ['source.ts'] });
-    expect(session.getWorkPhaseState()!.sourceEvidencePending).toBe(true);
+    expect(session.getEntryRoutingState()!.sourceEvidencePending).toBe(true);
     await read('source.ts', 'other');
-    expect(session.getWorkPhaseState()!.sourceEvidencePending).toBe(false);
+    expect(session.getEntryRoutingState()!.sourceEvidencePending).toBe(false);
   });
 
   it('retains missing-file, directory, and oversized-source exemptions without manufacturing a read', async () => {
@@ -63,7 +63,7 @@ describe('entry-local source evidence', () => {
     writeFileSync(join(temp.path, 'large.ts'), 'x'.repeat(GROUNDING_MAX_BYTES + 1));
     entry('@missing.ts @scope/ @large.ts explain the available context');
     expect(await refreshSourceEvidence(session)).toMatchObject({ required: 3, fresh: 0, oversized: 1, unmet: [] });
-    expect(session.getWorkPhaseState()!.evidence!.observedFiles.size).toBe(0);
+    expect(session.getEntryRoutingState()!.evidence!.observedFiles.size).toBe(0);
     writeFileSync(join(temp.path, 'large.ts'), 'x'.repeat(GROUNDING_MAX_BYTES));
     expect(await refreshSourceEvidence(session)).toMatchObject({ oversized: 0, unmet: ['large.ts'] });
   });
@@ -73,10 +73,10 @@ describe('entry-local source evidence', () => {
     session.previousFlow = { flowId: 'flow', originEntryId: 'previous', originBoundaryId: 'boundary',
       strikesByModel: { 'a/model': 1 }, excludedModels: [] };
     session.invalidateRouting();
-    expect(session.getWorkPhaseState()?.evidence).toBeUndefined();
+    expect(session.getEntryRoutingState()?.evidence).toBeUndefined();
     expect(session.previousFlow).toBeUndefined();
     expect(session.getRoutingEpoch()).not.toBe(evidence.routingEpoch);
     session.reset();
-    expect(session.getWorkPhaseState()).toBeUndefined();
+    expect(session.getEntryRoutingState()).toBeUndefined();
   });
 });

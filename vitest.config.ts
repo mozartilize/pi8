@@ -1,12 +1,10 @@
 import { defineConfig } from 'vitest/config';
 
-// Default Vitest include/exclude, plus exclusion of git worktree copies.
-// Without the `.worktrees` entry, every `.worktrees/**` test file runs a
-// second time (doubling the suite) and the duplicated copies race each
-// other on shared resources — the `.gitignore` entry alone is not enough,
-// since Vitest does not consult it for test discovery.
+// Package tests live in extensions/ and eval/. Research scripts use a
+// separate test configuration. Worktree copies must not share test state.
 export default defineConfig({
   test: {
+    include: ['extensions/**/*.test.ts', 'eval/**/*.test.ts'],
     setupFiles: ['extensions/test-support/isolate-router-dir.ts'],
     exclude: [
       '**/node_modules/**',
