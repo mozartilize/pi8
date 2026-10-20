@@ -17,6 +17,9 @@ import { appendWorkLifecycleSignal, type SettleReminderKind, type WorkLifecycleS
 import { servedKey } from '../host/ui.js';
 import { ROUTER_SETTLE_PREFIX } from '../routing/policy/continuation.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import { refreshSourceEvidence, sourceEvidenceCounts } from './entry-evidence.js';
+import { logContextHandoff } from './gathering-gate.js';
+import { ACQUISITION_DENIAL_LIMIT } from '../routing/policy/context-acquisition.js';
 import type { RouterSession } from './router-session-state.js';
 
 export const CONTEXT_SETTLE_TEXT = [
@@ -59,14 +62,33 @@ function logSettle(
 }
 
 /** Remind a triage entry that tried to act without an accepted handoff. */
-export function settleReminder(
+export async function settleReminder(
   event: Pick<AgentBeforeSettleEvent, 'outcome' | 'entries'>,
   session: RouterSession,
-): AgentBeforeSettleEventResult | undefined {
+): Promise<AgentBeforeSettleEventResult | undefined> {
   if (event.outcome !== 'completed') return undefined;
+  const before = session.getWorkPhaseState();
+  const source = await refreshSourceEvidence(session);
   const state = session.getWorkPhaseState();
-  if (!state) return undefined;
-  if (!owesHandoff(state)) return undefined;
+  if (!state || before?.intentKey !== state.intentKey || before?.evidence !== state.evidence) return undefined;
+  if (state.sourceEvidencePending && state.status !== 'clarification-only') {
+    const sourceSettleAttempts = (state.sourceSettleAttempts ?? 0) + 1;
+    const exhausted = sourceSettleAttempts >= ACQUISITION_DENIAL_LIMIT;
+    const served = session.getLastServed();
+    logContextHandoff(state, served ? servedKey(served) : 'unknown/unknown',
+      exhausted ? 'source-settle-exhausted' : 'source-settle-repair',
+      source ? { sourceEvidence: sourceEvidenceCounts(source) } : {});
+    session.commitWorkPhaseState({ ...state, sourceSettleAttempts,
+      ...(exhausted ? { status: 'clarification-only' as const } : {}) });
+    const instruction = exhausted
+      ? 'Router: The referenced source could not be verified. Tell the user this limitation. Ask for the missing source or input. Do not call tools.'
+      : 'Router: Read the referenced source in full as it is now before you answer. Continue this same request without changing the product.';
+    return { continue: true, entries: [...(event.entries ?? []), {
+      type: 'custom_message', customType: 'pi8-settle',
+      content: `${ROUTER_SETTLE_PREFIX}\n${instruction}`, display: false,
+    }] };
+  }
+  if (state.status === 'clarification-only' || !owesHandoff(state)) return undefined;
   session.commitWorkPhaseState({ ...state, contextSettleReminded: true });
   logSettle(state, session, 'settle-reminder', 'context');
   const text = CONTEXT_SETTLE_TEXT;

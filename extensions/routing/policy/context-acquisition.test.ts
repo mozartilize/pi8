@@ -38,12 +38,12 @@ describe('entry phase', () => {
   it.each([
     ['plan', {}, 'gather', 'investigation'],
     ['review', {}, 'gather', 'investigation'],
-    ['implement', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', 'investigation'],
+    ['implement', { sourceEvidencePending: true }, 'gather', 'investigation'],
     ['implement', { contextReasons: ['carried-open-context'], contextSatisfied: false }, 'gather', 'investigation'],
     ['implement', { contextReasons: ['referenced-artifact'], contextSatisfied: true }, 'gather', 'investigation'],
     ['implement', { contextReasons: [], contextSatisfied: true }, 'gather', 'investigation'],
     ['implement', {}, 'gather', 'investigation'],
-    ['gather', { contextReasons: ['referenced-artifact'], contextSatisfied: false }, 'gather', 'investigation'],
+    ['gather', { sourceEvidencePending: true }, 'gather', 'investigation'],
   ] as const)('a %s deliverable with %j routes as its acquisition until handoff', (deliverable, over, dimension, cause) => {
     const entry = state({ deliverable, ...over } as Partial<WorkPhaseState>);
     expect(entryPhase(entry, deliverable)).toEqual({ dimension, ...(cause ? { cause } : {}) });
@@ -55,7 +55,7 @@ describe('entry phase', () => {
     });
     expect(entryPhase(toReview, 'review')).toEqual({ dimension: 'review', cause: 'investigation-handoff' });
     const toImplement = acceptContextHandoff(
-      state({ deliverable: 'implement', contextReasons: ['referenced-artifact'], contextSatisfied: false, status: 'triage' }),
+      state({ deliverable: 'implement', sourceEvidencePending: true, status: 'triage' }),
       { deliverable: 'implement', key: 'k' },
     );
     expect(entryPhase(toImplement, 'implement')).toEqual({ dimension: 'implement', cause: 'investigation-handoff' });
@@ -70,7 +70,7 @@ describe('entry phase', () => {
   });
 
   it('lists every reason an entry owes', () => {
-    expect(owedContext(state({ deliverable: 'review', contextReasons: ['referenced-artifact'], contextSatisfied: false })))
+    expect(owedContext(state({ deliverable: 'review', sourceEvidencePending: true })))
       .toEqual(['reasoning-prep', 'referenced-artifact']);
     expect(owedContext(state({ deliverable: 'gather' }))).toEqual([]);
     expect(owedContext(undefined)).toEqual([]);

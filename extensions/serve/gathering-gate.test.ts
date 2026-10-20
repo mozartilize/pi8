@@ -190,26 +190,18 @@ describe('context-handoff debug lines', () => {
       setDebugPath(path);
       logContextHandoff({
         intentKey: 'entry-a',
-        workItemId: 'work-7',
+        sourceEntryId: 'entry-a',
+        boundaryId: 'boundary-7',
         deliverable: 'plan',
         status: 'ready-pending',
         providerInvocation: 1,
         observedMutationTools: 0,
-        contextResolution: {
-          sourceEntryId: 'entry-a',
-          topicId: 'topic-3',
-          workItemId: 'work-7',
-          relation: 'continue',
-          deliverable: 'implement',
-          contextReasons: [],
-          resolver: 'context-handoff',
-        },
       }, 'openai/gpt', 'accept', { deliverable: 'implement' });
       const payload = JSON.parse(readFileSync(path, 'utf8').trim().split(' ').slice(2).join(' '));
       expect(payload).toMatchObject({
         action: 'accept',
-        workItemId: 'work-7',
-        topicId: 'topic-3',
+        entryId: 'entry-a',
+        boundaryId: 'boundary-7',
         phase: 'implement',
         status: 'ready-pending',
         intentKey: 'entry-a',

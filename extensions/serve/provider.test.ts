@@ -690,7 +690,7 @@ describe('provider orchestration', () => {
     harness.session.setManualModel('alpha/first');
     expect(harness.session.resumeManual()).toBe(true);
 
-    // A distinct entry must collect its own WorkItem identity.
+    // A distinct entry starts with its own evidence state.
     harness.resetEventStream();
     harness.scriptReply([{ type: 'text_delta', delta: 'ok2' }, { type: 'done' }]);
     await harness.serve(
@@ -699,10 +699,10 @@ describe('provider orchestration', () => {
     const resumed = harness.getProviderState().lastDecision!;
     expect(autoDecision.cause).toBe('investigation');
     expect(resumed.cause).toBe('investigation');
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+    expect(harness.session.getWorkPhaseState()?.evidence).toBeDefined();
     expect(harness.session.context.getLedger().items.size).toBe(0);
 
-    // The one-shot is spent even when identity cannot be resolved.
+    // A later entry cannot reuse the earlier boundary.
     harness.resetEventStream();
     harness.scriptReply([{ type: 'text_delta', delta: 'ok3' }, { type: 'done' }]);
     await harness.serve(
@@ -1980,30 +1980,30 @@ describe('context acquisition', () => {
     return state.lastDecision as unknown as RoutingDecision | undefined;
   }
 
-  it('collects unresolved work without creating a work item', async () => {
+  it('starts entry evidence without creating a work item', async () => {
     const session = await newSession();
     const first = await session.routeTurn('implement a CSV exporter');
     expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation' });
     expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+    expect(harness.session.getWorkPhaseState()?.evidence).toBeDefined();
   });
 
-  it('keeps one bounded choice set through repeated invocations of an unresolved entry', async () => {
+  it('keeps one evidence state through repeated invocations of an entry', async () => {
     const session = await newSession();
     await session.routeTurn('implement the CSV exporter');
-    const pending = harness.session.getWorkPhaseState()?.pendingIdentity;
+    const evidence = harness.session.getWorkPhaseState()?.evidence;
     await session.routeTurnAgainWithSameUserEntry();
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toEqual(pending);
+    expect(harness.session.getWorkPhaseState()?.evidence).toBe(evidence);
     expect(harness.session.context.getLedger().items.size).toBe(0);
   });
 
-  it('does not reuse a previous entry’s unresolved identity as a new entry’s identity', async () => {
+  it('does not reuse evidence from another entry', async () => {
     const session = await newSession();
     await session.routeTurn('implement a CSV exporter');
     const firstKey = harness.session.getWorkPhaseState()?.intentKey;
     await session.routeTurn('design a backup scheduler');
     expect(harness.session.getWorkPhaseState()?.intentKey).not.toBe(firstKey);
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity?.entryKey).toBe(harness.session.getWorkPhaseState()?.intentKey);
+    expect(harness.session.getWorkPhaseState()?.evidence?.entryId).toBe(harness.session.getWorkPhaseState()?.sourceEntryId);
     expect(harness.session.context.getLedger().items.size).toBe(0);
   });
 
@@ -2160,8 +2160,9 @@ describe('context acquisition', () => {
         .filter((r) => r.dimension === 'plan')
         .map((r) => r.reasoningHandoff as { pending?: boolean; owner?: string } | undefined);
       expect(logged.at(-1)).toMatchObject({ pending: false, owner: planning?.chosen });
-      // A different second handoff no longer applies.
-      expect((await submitPrepared(handoff(2))).accepted).toBe(false);
+      const previous = harness.session.getWorkPhaseState()!.boundaryId;
+      expect((await submitPrepared(handoff(2))).accepted).toBe(true);
+      expect(harness.session.getWorkPhaseState()!.boundaryId).not.toBe(previous);
     });
 
     it('selects the planning phase from the accepted task declaration', async () => {
@@ -2257,17 +2258,14 @@ describe('context acquisition', () => {
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('implement');
     });
 
-    it('records the selected work only after a ready handoff', async () => {
+    it('creates implementation authority only for the accepted entry boundary', async () => {
       const session = await newSession();
       await session.routeTurn('trace the scheduler race, then fix it');
-      expect(harness.session.context.getLedger().items.size).toBe(0);
       expect((await submitPrepared(handoff(1, 'implement'))).accepted).toBe(true);
-      const workItemId = harness.session.getWorkPhaseState()!.workItemId!;
-      expect(harness.session.context.getLedger().items.get(workItemId)?.openContext).toEqual([]);
+      expect(harness.session.getWorkPhaseState()?.executionFlow).toBeDefined();
       await session.routeTurnAgainWithSameUserEntry();
       const next = await session.routeTurn('ok go ahead');
-      // Recorded work does not establish task type or mutation authority for another entry.
-      expect(harness.session.context.getLedger().items.has(workItemId)).toBe(true);
+      expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
       expect(next).toMatchObject({ dimension: 'gather', cause: 'investigation' });
     });
 
@@ -2431,11 +2429,11 @@ describe('context acquisition', () => {
         expect(harness.session.context.getIncumbent()).toMatchObject({ registryId: 'beta/strong', dimension: 'plan' });
       });
 
-      it('records the work item the handoff chose with the incumbent', async () => {
+      it('remembers model identity without creating work at a handoff', async () => {
         await served();
-        const workItemId = harness.session.getWorkPhaseState()?.workItemId;
-        expect(workItemId).toBeDefined();
-        expect(harness.session.context.getIncumbent()?.workItemId).toBe(workItemId);
+        expect(harness.session.getWorkPhaseState()?.workItemId).toBeUndefined();
+        expect(harness.session.context.getIncumbent()?.workItemId).toBeUndefined();
+        expect(harness.session.context.getLedger().items.size).toBe(0);
       });
 
       it('starts a thin continuation after a plan in triage and competes without held ownership', async () => {
@@ -3138,18 +3136,18 @@ describe('context acquisition', () => {
     });
   });
 
-  it('reuses the unresolved work choice on later tool-loop turns of the same entry', async () => {
+  it('keeps entry evidence on later tool-loop turns', async () => {
     const session = await newSession();
     const first = await session.routeTurn('list the main features of docs/plan.md');
     const second = await session.routeTurnAgainWithSameUserEntry();
 
     expect(first?.dimension).toBe('gather');
     expect(second?.dimension).toBe('gather');
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+    expect(harness.session.getWorkPhaseState()?.evidence).toBeDefined();
   });
 
 describe('deep context', () => {
-  it('holds the work choice unresolved at a large context size', async () => {
+  it('keeps entry evidence at a large context size', async () => {
     const session = await newSession();
     const first = await session.routeTurn('investigate the flaky test', {
       estimatedContextTokens: 120_000,
@@ -3158,7 +3156,7 @@ describe('deep context', () => {
     expect(first?.dimension).toBe('gather');
     expect(after?.dimension).toBe('gather');
     expect(after?.cause).toBe(first?.cause);
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
+    expect(harness.session.getWorkPhaseState()?.evidence).toBeDefined();
   });
 
 });

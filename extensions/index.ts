@@ -67,6 +67,7 @@ import { planToolsNote } from './serve/router-tools-note.js';
 import { CONTEXT_HANDOFF_TOOL } from './routing/policy/context-acquisition.js';
 import { EXECUTION_CONTRACT_TOOL } from './routing/policy/execution-contract.js';
 import { observeContextGrounding } from './serve/context-grounding.js';
+import { refreshSourceEvidence } from './serve/entry-evidence.js';
 import { carryPhaseAcrossTree } from './serve/context-resolution.js';
 import { logSettleOutcomes, settleReminder } from './serve/settle-reminder.js';
 import {
@@ -471,11 +472,11 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
   // A missing hand_off_context can still be declared, so its reminder runs
   // here. agent_settled only records how the entry ended.
   let completedSettlement = false;
-  pi.on('agent_before_settle', (event, ctx) => {
+  pi.on('agent_before_settle', async (event, ctx) => {
     completedSettlement = isRouterAutoActive(ctx?.model) && event.outcome === 'completed';
     if (!isRouterAutoActive(ctx?.model)) return;
     try {
-      return settleReminder(event, session);
+      return await settleReminder(event, session);
     } catch {
       return undefined;
     }
@@ -487,6 +488,7 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     completedSettlement = false;
     closeContextOnSettle(session);
     closeContractOnSettle(session);
+    session.finishExecutionFlow();
   });
 
   // Both rewrite the history, so no cached prefix still matches it. Compaction
@@ -509,8 +511,17 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
 
   pi.on('turn_start', (event, ctx) => handleTurnStart(event, ctx, pi, session, runtime));
 
-  pi.on('tool_call', (event, ctx) => {
+  pi.on('tool_call', async (event, ctx) => {
     if (!isRouterAutoActive(ctx?.model)) return;
+    if (event.toolName === EXECUTION_CONTRACT_TOOL || isMutationCall(event.toolName, event.input)) {
+      const before = session.getWorkPhaseState();
+      const epoch = session.getRoutingEpoch();
+      await refreshSourceEvidence(session);
+      const live = session.getWorkPhaseState();
+      if (before?.intentKey !== live?.intentKey || before?.boundaryId !== live?.boundaryId || epoch !== session.getRoutingEpoch()) {
+        return { block: true, reason: 'Router: this call was not made. Its entry or routing boundary changed. Continue from the current entry.' };
+      }
+    }
     // Collecting context runs only its allowed tools, delegation included:
     // a refused call never runs, is not counted, attributed, or observed.
     const restricted = gateContextToolCall(event, session);

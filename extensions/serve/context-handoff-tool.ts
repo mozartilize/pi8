@@ -28,23 +28,15 @@ import {
   CONVERSATION_EVIDENCE,
   MAX_EVIDENCE_PATHS,
   acceptContextHandoff,
-  contextOwed,
   evidencePaths,
   evidenceShape,
-  owedContext,
 } from '../routing/policy/context-acquisition.js';
 import { declaredRubric } from '../routing/policy/execution-difficulty.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import { CONTINUE_TURN, CONTRACT_REMINDER, observeFiles, type Exec } from './execution-contract-tool.js';
 import type { RouterSession } from './router-session-state.js';
-import { planPendingIdentity, publishSelectedWork } from './context-resolution.js';
-import { readBranch } from '../routing/context/persistence.js';
-import { promptAnchorsForItem, referencedArtifactPaths } from '../routing/context/resolve.js';
-import type { ContextPlan } from '../routing/context/resolve.js';
-import type { GroundedArtifact, RoutingContextEvent } from '../routing/context/types.js';
-import { getWorkItem } from '../routing/context/ledger.js';
-import { contextCheck } from '../routing/context/resolve.js';
-import { oversizedArtifactCount, unmetArtifactPaths } from '../routing/context/grounding.js';
+import { refreshSourceEvidence, sourceEvidenceCounts, type SourceEvidenceStatus } from './entry-evidence.js';
+import { latestGenuineUserEntry, readBranch } from '../routing/context/persistence.js';
 import { CLARIFICATION_TEXT, countContextRefusal, logContextHandoff as log } from './gathering-gate.js';
 import { decisionEvidence } from '../routing/policy/decision-evidence.js';
 import { ROUTER_TOOLS_CONDITION } from './router-tools-note.js';
@@ -82,10 +74,9 @@ function contextHandoffParameters() {
     })),
     findings: Type.Optional(Type.String({ description: 'ready: what you found.' })),
     deliverable: Type.Optional(oneOf(DIMENSIONS, 'Required for ready: declare the task type. ready accepts plan, review, implement, or gather.')),
-    workItemId: Type.Optional(Type.String({ description: 'ready, when work is not yet selected: an offered work item or legacy id, or NEW_WORK_ITEM.' })),
-    topicId: Type.Optional(Type.String({ description: 'ready: the offered topic id, or NEW_TOPIC. Required when creating work in an existing topic.' })),
-    topicTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_TOPIC.' })),
-    workItemTitle: Type.Optional(Type.String({ description: 'ready: a short title when using NEW_WORK_ITEM.' })),
+    continuesFlow: Type.Optional(Type.Boolean({
+      description: 'Use only with ready and implement. Set true only if this request continues the previous implementation.',
+    })),
     complexity: Type.Optional(oneOf(COMPLEXITIES, 'Required for ready: how hard the task is.')),
     scope: Type.Optional(oneOf(SCOPES, 'Required for ready: bounded or open-ended.')),
     files: Type.Optional(Type.Array(Type.String(), {
@@ -122,14 +113,9 @@ const REJECTIONS = {
   'missing-task-shape': 'Context not handed off: give complexity and scope for the declared task. Call it again with both.',
   'artifact-not-read': 'Context not handed off: the request rests on files not read in full as they are now. Read every ' +
     'line of each file. Reads in parts count when together they show every line. Then call it again:',
-  'no-next-step': 'Context not handed off: hand off to implement, review, or plan. Hand off to gather only while collecting context. Call it again with one of those, or continue.',
+  'invalid-flow-continuation': 'Context not handed off: continuesFlow must be a boolean and applies only to ready with implement.',
   'invalid-outcome': 'Context not handed off: use ready or needs-user.',
-  'missing-work-choice': 'Context not handed off: choose a listed workItemId or NEW_WORK_ITEM.',
-  'invalid-work-choice': 'Context not handed off: the work and topic ids must be from this entry’s offered choices. Choose again.',
-  'missing-work-title': 'Context not handed off: give a short workItemTitle for NEW_WORK_ITEM.',
-  'missing-topic-title': 'Context not handed off: give a short topicTitle for NEW_TOPIC.',
   'stale-entry': 'Context not handed off: this request is no longer the active entry.',
-  'not-recorded': 'Context not handed off: the router could not record the handoff. Call it again.',
   internal: 'Context not handed off: internal router error. Call it again, or reply to the user.',
 } as const;
 
@@ -153,10 +139,7 @@ export interface ContextHandoffParams {
   question?: unknown;
   findings?: unknown;
   deliverable?: unknown;
-  workItemId?: unknown;
-  topicId?: unknown;
-  topicTitle?: unknown;
-  workItemTitle?: unknown;
+  continuesFlow?: unknown;
   complexity?: unknown;
   scope?: unknown;
   files?: unknown;
@@ -177,20 +160,22 @@ type Opened = Open | { reject: RejectCode; state?: WorkPhaseState; served?: stri
  * Whether the entry takes a handoff: while acquiring owed context, or a
  * `gather` entry escalating to implement, review, or plan.
  */
-function openFor(ctx: Pick<ExtensionContext, 'model'> | undefined, session: RouterSession): Opened {
+function openFor(ctx: (Pick<ExtensionContext, 'model'> & Partial<Pick<ExtensionContext, 'sessionManager'>>) | undefined, session: RouterSession): Opened {
   if (ctx?.model?.provider !== ROUTER_PROVIDER_ID || ctx.model.id !== AUTO_MODEL_ID) return { reject: 'not-router-auto' };
   const state = session.getWorkPhaseState();
   const last = session.getLastDecision();
   const lastServed = session.getLastServed();
   const served = lastServed ? servedKey(lastServed) : undefined;
   if (!state || !last || !served || last.intentKey !== state.intentKey) return { reject: 'no-task' };
+  const source = latestGenuineUserEntry(readBranch(ctx?.sessionManager));
+  if (source && state.sourceEntryId && source !== state.sourceEntryId) return { reject: 'stale-entry', state, served };
   if (state.status === 'clarification-only') return { reject: 'clarification-only', state, served };
-  if (state.status === 'ready-pending' || state.status === 'served' || state.reasoningHandoff) {
+  if (state.routingEpoch != null && state.routingEpoch !== session.getRoutingEpoch()) return { reject: 'stale-entry', state, served };
+  if (state.status === 'ready-pending') {
     return { reject: 'already-handed-off', state, served };
   }
   if (state.status === 'triage') return { state, served, acquiring: true };
-  // The incumbent changes phase by handing off; the router picks the next model.
-  if (last.dimension === 'gather' && !contextOwed(state)) return { state, served, acquiring: false };
+  if (state.status === 'served' || last.dimension === 'gather') return { state, served, acquiring: false };
   return { reject: 'not-acquiring', state, served };
 }
 
@@ -199,7 +184,7 @@ function handoffKey(params: ContextHandoffParams | undefined): string {
   const files = Array.isArray(params?.files) ? params.files.filter((f) => typeof f === 'string') : [];
   return JSON.stringify([
     params?.deliverable, params?.complexity, params?.scope,
-    params?.workItemId, params?.topicId, params?.topicTitle, params?.workItemTitle,
+    params?.continuesFlow ?? false,
     typeof params?.findings === 'string' ? params.findings.trim() : '',
     typeof params?.question === 'string' ? params.question.trim() : '',
     files, params?.difficulty ?? null, params?.remainingWork ?? null, params?.facts ?? null,
@@ -236,16 +221,6 @@ export async function measureEvidence(
   };
 }
 
-/**
- * Ready declares the next work phase. An investigation (gather) is a next phase only while
- * collecting context: a gather entry that already serves does not hand off to itself.
- * Lightweight answers use outcome `answer`.
- */
-function adoptedDeliverable(reported: Dimension, acquiring: boolean): Dimension | undefined {
-  if (reported === 'implement' || reported === 'review' || reported === 'plan') return reported;
-  return reported === 'gather' && acquiring ? reported : undefined;
-}
-
 /** I/O the submission needs, supplied by the caller so the decision itself stays synchronous. */
 export interface HandoffFacts {
   evidence?: ReasoningEvidence;
@@ -255,8 +230,8 @@ export interface HandoffFacts {
   unmet?: string[];
   /** Referenced files that owe no read because they are above the grounding size limit. */
   oversized?: number;
-  selectionError?: Extract<RejectCode, 'missing-work-choice' | 'invalid-work-choice' | 'missing-work-title' | 'missing-topic-title' | 'stale-entry'>;
-  selection?: { plan: ContextPlan; key: string; generation: number; groundings: GroundedArtifact[] };
+  scope?: { entry: WorkPhaseState; generation: number; epoch: number; key: string };
+  source?: SourceEvidenceStatus;
 }
 
 /**
@@ -289,7 +264,7 @@ function reject(
  */
 export function submitContextHandoff(
   params: ContextHandoffParams | undefined,
-  ctx: Pick<ExtensionContext, 'model'> | undefined,
+  ctx: (Pick<ExtensionContext, 'model'> & Partial<Pick<ExtensionContext, 'sessionManager'>>) | undefined,
   session: RouterSession,
   facts: HandoffFacts = {},
 ): ContextHandoffSubmission {
@@ -301,6 +276,20 @@ export function submitContextHandoff(
     return reject(session, opened.reject, opened.state, opened.served);
   }
   const { state, served } = opened;
+  if (params?.outcome === 'ready' && state.handoffKey === handoffKey(params)) {
+    return { accepted: true, text: 'Context already handed off. Continue with the next step.' };
+  }
+  if (params?.continuesFlow !== undefined && (typeof params.continuesFlow !== 'boolean'
+    || params.outcome !== 'ready' || params.deliverable !== 'implement')) {
+    return reject(session, 'invalid-flow-continuation', state, served);
+  }
+  if (facts.scope && (facts.scope.entry.intentKey !== state.intentKey
+    || facts.scope.entry.boundaryId !== state.boundaryId
+    || facts.scope.entry.evidence !== state.evidence
+    || facts.scope.generation !== session.getSessionGeneration()
+    || facts.scope.epoch !== session.getRoutingEpoch() || facts.scope.key !== handoffKey(params))) {
+    return reject(session, 'stale-entry', state, served);
+  }
 
   if (params?.outcome === 'needs-user') {
     if (!opened.acquiring) return reject(session, 'not-acquiring', state, served);
@@ -321,18 +310,12 @@ export function submitContextHandoff(
   }
   const complexity = member(COMPLEXITIES, params?.complexity);
   const scope = member(SCOPES, params?.scope);
-  const deliverable = adoptedDeliverable(reported, opened.acquiring);
-  if (!deliverable) return reject(session, 'no-next-step', state, served);
-  if (facts.selectionError) return reject(session, facts.selectionError, state, served);
+  const deliverable = reported;
+  if (state.evidence?.referencedPaths.length && !facts.source) {
+    return reject(session, 'artifact-not-read', state, served);
+  }
   if (facts.unmet && facts.unmet.length > 0) {
     return reject(session, 'artifact-not-read', state, served, ` ${facts.unmet.join(', ')}.`);
-  }
-  const selection = state.pendingIdentity ? facts.selection : undefined;
-  if (state.pendingIdentity && (!selection || selection.key !== handoffKey(params))) {
-    return reject(session, 'missing-work-choice', state, served);
-  }
-  if (selection && session.getSessionGeneration() !== selection.generation) {
-    return reject(session, 'stale-entry', state, served);
   }
   if (!complexity || !scope) return reject(session, 'missing-task-shape', state, served);
 
@@ -343,45 +326,22 @@ export function submitContextHandoff(
     reasoning = { requester: served, target: deliverable, ...(rubric ? { rubric } : {}), complexity, scope, evidence };
   }
   const key = handoffKey(params);
-  const plan = selection?.plan;
-  const workItemId = plan?.workItemId ?? state.workItemId;
-  const sourceEntryId = plan?.resolution.sourceEntryId ?? session.context.getEntrySource() ?? state.intentKey;
-  const events: RoutingContextEvent[] = [...(plan?.events ?? [])];
-  if (plan?.workItemId) {
-    for (const artifact of selection?.groundings ?? []) {
-      events.push({ v: 1, op: 'grounding-upsert', workItemId: plan.workItemId, artifact, sourceEntryId });
-    }
-  }
-  const itemIsPresent = getWorkItem(session.context.getLedger(), workItemId)
-    || events.some((event) => event.op === 'work-create' && event.workItem.id === workItemId);
-  if (workItemId && itemIsPresent) {
-    events.push({ v: 1, op: 'boundary', workItemId, boundary: 'investigation-handoff',
-      handoffId: state.intentKey, sourceEntryId });
-  }
-  // One append-only branch record must include the selection and the releasing boundary.
-  if (events.length > 0 && !session.context.appendCommit(events)) {
-    return reject(session, 'not-recorded', state, served);
-  }
-  const selected = plan ? publishSelectedWork(session, plan) : undefined;
-  const materialized = selected
-    ? { ...state, pendingIdentity: undefined, provisionalGrounding: undefined,
-      contextResolution: selected.resolution, workItemId: selected.workItemId,
-      contextReasons: selected.resolution.contextReasons, contextSatisfied: true }
-    : state;
-  if (selected) {
-    const cached = session.getCachedIntent();
-    if (cached?.key === state.intentKey) session.setCachedIntent({ ...cached, context: selected, dimension: deliverable });
-  }
   const declared = parseDeclaredFacts(params?.facts);
   // The shadow requirement is logged; it does not route.
   const changeFacts = {
     ...(declared ? { declared } : {}),
     log: factsLog(deliverable, declared, facts.change ?? {}),
   };
+  const previous = session.previousFlow;
+  const adopting = deliverable === 'implement' && !state.executionFlow && params?.continuesFlow === true && previous;
+  const materialized = adopting ? { ...state, executionFlow: previous } : state;
   const next = acceptContextHandoff(materialized, {
     deliverable, key, routingEpoch: session.getRoutingEpoch(), ...(reasoning ? { reasoning } : {}),
   });
-  session.commitWorkPhaseState({ ...next, changeFacts, priorCompletion: undefined, completion: undefined });
+  session.commitWorkPhaseState({ ...next, changeFacts });
+  if (deliverable === 'implement') session.previousFlow = undefined;
+  const cached = session.getCachedIntent();
+  if (cached?.key === state.intentKey) session.setCachedIntent({ ...cached, dimension: deliverable });
   log(state, served, 'accept', {
     ...(next.reasoningHandoff ? { handoff: next.reasoningHandoff } : {}),
     deliverable,
@@ -391,13 +351,16 @@ export function submitContextHandoff(
       trajectorySignals: session.trajectorySignals(),
     }),
     ...(facts.oversized ? { oversizedArtifacts: facts.oversized } : {}),
+    ...(facts.source ? { sourceEvidence: sourceEvidenceCounts(facts.source) } : {}),
   });
   if (next.reasoningHandoff) {
     const role = deliverable === 'plan' ? 'planning' : deliverable === 'review' ? 'review'
       : deliverable === 'gather' ? 'investigation' : 'implementation';
     return {
       accepted: true,
-      text: `Context handed off (${deliverable}). A ${role} model ` +
+      text: (deliverable === 'implement' && params?.continuesFlow === true && !state.executionFlow && !previous
+        ? 'No previous execution flow exists. This implementation starts a fresh flow.\n' : '') +
+        `Context handed off (${deliverable}). A ${role} model ` +
         'chosen for this difficulty continues from the next step with your findings and question. Make no changes now. ' +
         CONTINUE_TURN +
         (deliverable === 'implement' ? `\nFor the next implementation step:\n${CONTRACT_REMINDER}` : ''),
@@ -427,67 +390,15 @@ export async function prepareHandoffFacts(
   const opened = openFor(ctx, session);
   const reported = member(DIMENSIONS, params.deliverable);
   if ('reject' in opened || !reported || !filled(params.findings) || !filled(params.question)) return {};
-  const facts: HandoffFacts = {};
-  const deliverable = adoptedDeliverable(reported, opened.acquiring);
-  if (!deliverable) return {};
-  const pending = opened.state.pendingIdentity;
-  if (pending) {
-    const branch = ctx.sessionManager ? readBranch(ctx.sessionManager) : undefined;
-    if (session.getSessionGeneration() !== pending.generation
-      || (branch?.length && !branch.some((entry) => entry && typeof entry === 'object'
-        && (entry as { id?: unknown; type?: unknown; message?: { role?: unknown } }).id === pending.base.sourceEntryId
-        && (entry as { type?: unknown; message?: { role?: unknown } }).type === 'message'
-        && (entry as { message?: { role?: unknown } }).message?.role === 'user'))) {
-      facts.selectionError = 'stale-entry';
-      return facts;
-    }
-    const workItemId = filled(params.workItemId) ? params.workItemId.trim() : undefined;
-    if (!workItemId) { facts.selectionError = 'missing-work-choice'; return facts; }
-    const listed = pending.catalog.workItems.find((item) => item.id === workItemId);
-    const legacy = pending.legacy.find((item) => item.id === workItemId);
-    const topicId = filled(params.topicId) ? params.topicId.trim()
-      : listed?.topicId ?? 'NEW_TOPIC';
-    const shortTitle = (value: unknown) => filled(value) && value.trim().length <= 120;
-    if (workItemId === 'NEW_WORK_ITEM' && !shortTitle(params.workItemTitle)) {
-      facts.selectionError = 'missing-work-title'; return facts;
-    }
-    if (topicId === 'NEW_TOPIC' && workItemId !== 'NONE' && !shortTitle(params.topicTitle)) {
-      facts.selectionError = 'missing-topic-title'; return facts;
-    }
-    if (workItemId === 'NONE') {
-      facts.selectionError = 'invalid-work-choice'; return facts;
-    }
-    if (workItemId !== 'NEW_WORK_ITEM' && workItemId !== 'NONE' && !listed && !legacy) {
-      facts.selectionError = 'invalid-work-choice'; return facts;
-    }
-    const plan = planPendingIdentity(session, pending, { workItemId, topicId }, deliverable, {
-      ...(shortTitle(params.topicTitle) ? { topicTitle: (params.topicTitle as string).trim() } : {}),
-      ...(shortTitle(params.workItemTitle) ? { workItemTitle: (params.workItemTitle as string).trim() } : {}),
-    });
-    if (!plan) { facts.selectionError = 'invalid-work-choice'; return facts; }
-    const created = plan.events.find((event) => event.op === 'work-create');
-    const existing = getWorkItem(session.context.getLedger(), plan.workItemId);
-    const anchors = [...(existing?.anchors ?? created?.workItem.anchors ?? []), ...promptAnchorsForItem(pending.base.anchors)];
-    const required = referencedArtifactPaths({ anchors });
-    const groundings = (opened.state.provisionalGrounding ?? []).filter((artifact) => required.includes(artifact.anchorValue));
-    // Entry-local reads supersede stored hashes of the same files.
-    const grounding = [...groundings, ...(existing?.grounding ?? []).filter(
-      (artifact) => !groundings.some((fresh) => fresh.anchorValue === artifact.anchorValue),
-    )];
-    facts.unmet = await unmetArtifactPaths(ctx.cwd, { grounding, openContext: [] }, required);
-    facts.oversized = await oversizedArtifactCount(ctx.cwd, required);
-    if (facts.unmet.length > 0) return facts;
-    facts.selection = { plan, key: handoffKey(params), generation: pending.generation, groundings };
-  } else if (opened.acquiring && owedContext({ ...opened.state, deliverable }).includes('referenced-artifact')) {
-    const item = getWorkItem(session.context.getLedger(), opened.state.workItemId);
-    const check = contextCheck(['referenced-artifact'], item);
-    if (item && 'freshPaths' in check) {
-      // This handoff is the accepted context handoff that closes a directory reference.
-      facts.unmet = await unmetArtifactPaths(ctx.cwd, { ...item, openContext: [] }, check.freshPaths);
-      facts.oversized = await oversizedArtifactCount(ctx.cwd, check.freshPaths);
-      if (facts.unmet.length > 0) return facts;
-    }
-  }
+  if (opened.state.handoffKey === handoffKey(params)) return {};
+  const facts: HandoffFacts = {
+    scope: { entry: opened.state, generation: session.getSessionGeneration(), epoch: session.getRoutingEpoch(), key: handoffKey(params) },
+  };
+  const deliverable = reported;
+  facts.source = await refreshSourceEvidence(session);
+  facts.unmet = facts.source?.unmet;
+  facts.oversized = facts.source?.oversized;
+  if (facts.unmet?.length) return facts;
   const declared = parseDeclaredFacts(params.facts);
   const change = measureChange(exec, ctx.cwd, {
     ...(declared?.modify || declared?.create ? { targets: { modify: declared.modify ?? [], create: declared.create ?? [] } } : {}),
@@ -527,8 +438,8 @@ export function registerContextHandoffTool(pi: ExtensionAPI, session: RouterSess
         const live = session.getWorkPhaseState();
         debugLog('context-handoff.submit', {
           accepted: result.accepted,
-          workItemId: live?.workItemId,
-          topicId: live?.contextResolution?.topicId,
+          entryId: live?.sourceEntryId,
+          boundaryId: live?.boundaryId,
           phase: live?.reasoningHandoff?.target ?? live?.deliverable,
           status: live?.status,
         });

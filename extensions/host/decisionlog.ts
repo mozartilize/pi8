@@ -15,6 +15,7 @@ import type {
   Dimension,
   ReasoningHandoffMeta,
   RoutingDecision,
+  SourceEvidenceCounts,
   WorkContextMeta,
 } from '../types.js';
 import type { ContextReason } from '../routing/context/types.js';
@@ -121,6 +122,7 @@ export interface DecisionLogEntry {
     evidence?: DecisionEvidenceV1;
     /** Referenced files that owed no read because they are above the grounding size limit. */
     oversizedArtifacts?: number;
+    sourceEvidence?: SourceEvidenceCounts;
   };
   /** The entry's work-context resolution: tier, ids, categories; never titles. */
   workContext?: WorkContextMeta;
@@ -234,7 +236,7 @@ export interface ContextHandoffSignal {
    */
   action:
     | 'accept' | 'answer' | 'reject' | 'reminder' | 'deny' | 'needs-user' | 'budget-exhausted'
-    | 'served' | 'phase-end' | 'no-handoff';
+    | 'served' | 'phase-end' | 'no-handoff' | 'source-settle-repair' | 'source-settle-exhausted';
   rejectReason?: string;
   /** Tool name of a refused call. Set only on `deny`. No arguments. */
   deniedTool?: string;
@@ -246,6 +248,7 @@ export interface ContextHandoffSignal {
   evidence?: DecisionEvidenceV1;
   /** Referenced files that owed no read because they are above the grounding size limit. */
   oversizedArtifacts?: number;
+  sourceEvidence?: SourceEvidenceCounts;
 }
 
 /** Append a context handoff transition. Best-effort; never throws into the tool path. */
@@ -280,6 +283,7 @@ export function appendContextHandoffSignal(
         ...(signal.checks ? { checks: signal.checks } : {}),
         ...(signal.evidence ? { evidence: signal.evidence } : {}),
         ...(signal.oversizedArtifacts ? { oversizedArtifacts: signal.oversizedArtifacts } : {}),
+        ...(signal.sourceEvidence ? { sourceEvidence: signal.sourceEvidence } : {}),
       },
     };
     appendFileSync(path, serializeRecord(entry), 'utf8');

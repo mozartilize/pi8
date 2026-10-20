@@ -106,13 +106,7 @@ import {
   owedContext,
   serveContextHandoff,
 } from '../routing/policy/context-acquisition.js';
-import {
-  recordServedWork,
-  resolveEntryContext,
-  workContextMeta,
-  type PendingIdentity,
-  type ResolvedEntryContext,
-} from './context-resolution.js';
+import { createEntryEvidence, type EntryEvidenceState } from './entry-evidence.js';
 import {
   CLARIFICATION_NOTE,
   closeContextEntry,
@@ -121,7 +115,6 @@ import {
 } from './gathering-gate.js';
 import { applyNotePlans, messageAnchor, planRequestNote, type NotePlan } from './request-notes.js';
 import { planToolsNote } from './router-tools-note.js';
-import { incumbentWorkItem } from '../routing/policy/work-completion.js';
 
 /** Pi's model registry once the session binds it; undefined before `session_start`. */
 type ModelRegistry = ExtensionContext['modelRegistry'] | undefined;
@@ -415,23 +408,7 @@ function buildRoutableCandidates(args: {
   );
 }
 
-/**
- * A work-context failure must not block the turn: it routes as it would with
- * no work context at all.
- */
-async function failOpen<T>(work: () => Promise<T>): Promise<T | undefined> {
-  try {
-    return await work();
-  } catch (err) {
-    debugLog('context.error', { message: err instanceof Error ? err.message : String(err) });
-    return undefined;
-  }
-}
-
-/**
- * Resolve the entry's work context. Does not write the intent cache or touch
- * the stream. Identity and task-type adoption happen at `hand_off_context`.
- */
+/** Resolve current-entry provenance and explicit references without a work catalog. */
 async function resolveEntrySemantics(entry: {
   session: RouterSession;
   stillCurrent: () => boolean;
@@ -439,23 +416,15 @@ async function resolveEntrySemantics(entry: {
   dimension: Dimension;
   cause: DecisionCause;
   turn: { key: string; promptText: string };
-  context?: ResolvedEntryContext;
   extensionContext: ExtensionContext | undefined;
-  syntheticPrefixes: readonly string[];
-}): Promise<{ dimension: Dimension; cause: DecisionCause; context?: ResolvedEntryContext; pendingIdentity?: PendingIdentity; aborted: boolean }> {
+}): Promise<{ dimension: Dimension; cause: DecisionCause; evidence?: EntryEvidenceState; aborted: boolean }> {
   const { dimension, cause } = entry;
-  if (entry.cacheHit) return { dimension, cause, ...(entry.context ? { context: entry.context } : {}), aborted: false };
-  const resolved = await failOpen(() => resolveEntryContext({
-    session: entry.session,
-    sessionManager: entry.extensionContext?.sessionManager,
-    ...(entry.extensionContext?.cwd ? { cwd: entry.extensionContext.cwd } : {}),
-    turn: entry.turn,
-    deliverable: dimension,
-    syntheticPrefixes: entry.syntheticPrefixes,
-    stillCurrent: entry.stillCurrent,
-  }));
-  if (resolved?.kind === 'aborted') return { dimension, cause, aborted: true };
-  return { dimension, cause, ...(resolved ? { pendingIdentity: resolved.identity } : {}), aborted: false };
+  if (entry.cacheHit) return { dimension, cause, aborted: false };
+  const evidence = createEntryEvidence(entry.turn, entry.session.getRoutingEpoch(),
+    entry.extensionContext?.cwd ?? process.cwd(), entry.extensionContext?.sessionManager);
+  if (!entry.stillCurrent()) return { dimension, cause, aborted: true };
+  entry.session.context.setEntrySource(evidence.entryId);
+  return { dimension, cause, evidence, aborted: false };
 }
 
 function advanceWorkPhase(args: {
@@ -463,7 +432,7 @@ function advanceWorkPhase(args: {
   turnInput: ReturnType<typeof getTurnClassificationInput>;
   /** The entry's task type: what it owes the user. */
   deliverable: Dimension;
-  pendingIdentity?: PendingIdentity;
+  evidence?: EntryEvidenceState;
   session: RouterSession;
 }): void {
   let workPhaseState = args.session.getWorkPhaseState();
@@ -475,6 +444,7 @@ function advanceWorkPhase(args: {
       workPhaseState = closeContextEntry(workPhaseState, served);
       if (workPhaseState.contract) workPhaseState = closeContractEntry(workPhaseState, served);
     }
+    args.session.finishExecutionFlow();
     // Each genuine user entry starts at its own triage boundary.
     const sourceEntryId = args.session.context.getEntrySource() ?? args.turnInput.key;
     const routingEpoch = args.session.getRoutingEpoch();
@@ -490,7 +460,8 @@ function advanceWorkPhase(args: {
       ...(workPhaseState?.reasoningHandoff ? { previousHandoffId: workPhaseState.reasoningHandoff.id } : {}),
     };
 
-    if (args.pendingIdentity) workPhaseState = { ...workPhaseState, pendingIdentity: args.pendingIdentity };
+    if (args.evidence) workPhaseState = { ...workPhaseState, evidence: args.evidence,
+      sourceEvidencePending: args.evidence.referencedPaths.length > 0 };
   } else if (workPhaseState) {
     workPhaseState = nextProviderInvocation(workPhaseState);
   }
@@ -635,9 +606,7 @@ interface ResolvedTurn {
   baseDimension: Dimension;
   baseCause: DecisionCause;
   stillCurrent: () => boolean;
-  /** The entry's work-context resolution. */
-  context?: ResolvedEntryContext;
-  pendingIdentity?: PendingIdentity;
+  evidence?: EntryEvidenceState;
 }
 
 interface ScoredTurn {
@@ -736,7 +705,7 @@ async function resolveRouterTurn(args: {
 }): Promise<{ kind: 'ready'; resolved: ResolvedTurn } | RouterTurnOutcome> {
   const { prepared, session } = args;
   const { turnInput } = prepared.measured;
-  const { cacheHit, cachedIntent } = prepared.intent;
+  const { cacheHit } = prepared.intent;
 
   const sessionGeneration = session.getSessionGeneration();
   const routingEpoch = session.getRoutingEpoch();
@@ -751,9 +720,7 @@ async function resolveRouterTurn(args: {
     dimension: prepared.intent.baseDimension,
     cause: prepared.intent.baseCause,
     turn: turnInput,
-    ...(cachedIntent?.context && cacheHit ? { context: cachedIntent.context } : {}),
     extensionContext: prepared.extensionContext,
-    syntheticPrefixes: prepared.config.syntheticPrefixes,
   });
   if (entry.aborted) return SESSION_CHANGED;
   const baseDimension = entry.dimension;
@@ -765,15 +732,12 @@ async function resolveRouterTurn(args: {
       key: settled.key,
       dimension: baseDimension,
       cause: baseCause,
-      ...(entry.context ? { context: entry.context } : {}),
     });
   }
   debugLog('entry.context', {
     cacheHit,
     key: settled.key,
-    pendingIdentity: Boolean(entry.pendingIdentity),
-    workChoices: entry.pendingIdentity?.catalog.workItems.length,
-    topics: entry.pendingIdentity?.catalog.topics.length,
+    requiredSources: entry.evidence?.referencedPaths.length ?? 0,
   });
 
   return {
@@ -782,8 +746,7 @@ async function resolveRouterTurn(args: {
       baseDimension,
       baseCause,
       stillCurrent,
-      ...(entry.context ? { context: entry.context } : {}),
-      ...(entry.pendingIdentity ? { pendingIdentity: entry.pendingIdentity } : {}),
+      ...(entry.evidence ? { evidence: entry.evidence } : {}),
     },
   };
 }
@@ -882,7 +845,7 @@ async function scoreRouterTurn(args: {
     cacheHit,
     turnInput,
     deliverable: baseDimension,
-    ...(resolved.pendingIdentity ? { pendingIdentity: resolved.pendingIdentity } : {}),
+    ...(resolved.evidence ? { evidence: resolved.evidence } : {}),
     session,
   });
   // An entry that owes context acquires it first, read-only; an accepted
@@ -1087,7 +1050,6 @@ async function scoreRouterTurn(args: {
     const meta = current && contractMeta(current);
     if (meta) decision.executionContract = meta;
   }
-  if (resolved.context) decision.workContext = workContextMeta(resolved.context);
   decision.intentKey = turnInput.key;
   decision.routingScope = {
     entryId, boundaryId,
@@ -1271,7 +1233,7 @@ async function delegateRouterTurn(args: {
   const clarifying = entry?.status === 'clarification-only';
   const instruction = !entry ? undefined
     : clarifying ? CLARIFICATION_NOTE
-    : acquiring ? gatheringNote(entry)
+    : acquiring ? gatheringNote(entry) + session.previousFlowNote()
     : undefined;
   const delegatedContext = withEntryNotes(session, context, intentKey, entry ? instruction : undefined, !!entry);
   // The one clarification request: tools stay defined, so a history with
@@ -1391,9 +1353,7 @@ async function delegateRouterTurn(args: {
       if (status === 'clarification-only') return;
       if (session.getManualModel() || session.getSemiHold(intentKey)) return;
       const state = session.getWorkPhaseState();
-      const ownedWork = state?.workItemId ?? state?.completion?.workItemId ?? state?.priorCompletion?.workItemId;
-      const workItemId = incumbentWorkItem(session.context.getLedger(), lastServed.registryId, ownedWork);
-      session.context.recordIncumbent(lastServed, decision.dimension, session.context.getEntrySource() ?? intentKey, workItemId);
+      session.context.recordIncumbent(lastServed, decision.dimension, state?.sourceEntryId ?? intentKey);
 
     } catch {
       // A lost record only means the next entry is routed afresh.
@@ -1464,7 +1424,6 @@ async function delegateRouterTurn(args: {
     && session.getWorkPhaseState()?.boundaryAuthorization?.assignmentId !== scored.authorization.assignmentId)) return SESSION_CHANGED;
   const result = await runDelegationLoop(delegationOptions, stream).finally(() => delegationOptions.dispatch?.release());
   if (result.success && session.getSessionGeneration() === delegationSessionGeneration) {
-    recordServedWork(session, session.getWorkPhaseState()?.workItemId);
     const actual = session.getLastServed();
     if (config.reputation !== false && actual) {
       const request = session.getRequestCache();
@@ -1840,33 +1799,10 @@ async function resolveTrajectoryUnavailableGate(args: {
   }
 }
 
-/**
- * Resolve a pinned or resumed entry's work context. Only the deterministic
- * tiers apply; the pin chooses the model, not whether context is owed.
- */
-async function resolvePinnedEntryContext(
-  prepared: PreparedTurn,
-  session: RouterSession,
-): Promise<ResolvedEntryContext | PendingIdentity | undefined | 'aborted'> {
-  if (prepared.intent.cacheHit) return prepared.intent.cachedIntent?.context
-    ?? session.getWorkPhaseState()?.pendingIdentity;
-  const generation = session.getSessionGeneration();
-  const resolved = await failOpen(() => resolveEntryContext({
-    session,
-    sessionManager: prepared.extensionContext?.sessionManager,
-    ...(prepared.extensionContext?.cwd ? { cwd: prepared.extensionContext.cwd } : {}),
-    turn: prepared.measured.turnInput,
-    deliverable: prepared.intent.baseDimension,
-    ...(prepared.config.syntheticPrefixes.length > 0
-      ? { syntheticPrefixes: prepared.config.syntheticPrefixes }
-      : {}),
-    stillCurrent: () => session.getSessionGeneration() === generation,
-  }));
-  return resolved?.kind === 'aborted' ? 'aborted' : resolved?.identity;
-}
-
-function isPendingIdentity(value: ResolvedEntryContext | PendingIdentity | undefined): value is PendingIdentity {
-  return !!value && 'catalog' in value;
+function resolvePinnedEntryContext(prepared: PreparedTurn, session: RouterSession): EntryEvidenceState {
+  return prepared.intent.cacheHit && session.getWorkPhaseState()?.evidence
+    || createEntryEvidence(prepared.measured.turnInput, session.getRoutingEpoch(),
+      prepared.extensionContext?.cwd ?? process.cwd(), prepared.extensionContext?.sessionManager);
 }
 
 /** Serve the session-scoped manual pin and nothing else. */
@@ -1882,17 +1818,14 @@ async function runManualTurn(args: {
   stream: AssistantMessageEventStream;
 }): Promise<RouterTurnOutcome> {
   const { prepared, manualModel, cause = 'manual-override', context, options, pi, session, turnTimer, stream } = args;
-  const entryContext = await resolvePinnedEntryContext(prepared, session);
-  if (entryContext === 'aborted') return SESSION_CHANGED;
-  const pendingIdentity = isPendingIdentity(entryContext) ? entryContext : undefined;
-  const resolvedContext = entryContext && 'resolution' in entryContext ? entryContext : undefined;
+  const evidence = resolvePinnedEntryContext(prepared, session);
+  session.context.setEntrySource(evidence.entryId);
   if (!prepared.intent.cacheHit) {
     const { turnInput } = prepared.measured;
     session.setCachedIntent({
       key: turnInput.key,
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
-      ...(resolvedContext ? { context: resolvedContext } : {}),
     });
   }
   const candidates = manualCandidates(prepared, manualModel);
@@ -1914,8 +1847,7 @@ async function runManualTurn(args: {
     baseDimension: prepared.intent.baseDimension,
     baseCause: cause,
     stillCurrent: () => true,
-    ...(resolvedContext ? { context: resolvedContext } : {}),
-    ...(pendingIdentity ? { pendingIdentity } : {}),
+    evidence,
   };
   const scoring = await scoreRouterTurn({
     prepared: manualPrepared,
@@ -1984,10 +1916,9 @@ async function runResumeTurn(args: {
     return { kind: 'recompute' };
   }
   const generation = session.getSessionGeneration();
-  const entryContext = await resolvePinnedEntryContext(prepared, session);
+  const evidence = resolvePinnedEntryContext(prepared, session);
   const { turnInput } = prepared.measured;
-  if (entryContext === 'aborted') return SESSION_CHANGED;
-  if (isPendingIdentity(entryContext)) {
+  if (!prepared.intent.cacheHit) {
     session.clearPendingResume();
     return { kind: 'recompute' };
   }
@@ -1996,7 +1927,6 @@ async function runResumeTurn(args: {
       key: turnInput.key,
       dimension: prepared.intent.baseDimension,
       cause: prepared.intent.baseCause,
-      ...(entryContext ? { context: entryContext } : {}),
     });
   }
 
@@ -2004,7 +1934,7 @@ async function runResumeTurn(args: {
     baseDimension: resume.dimension,
     baseCause: 'resume',
     stillCurrent: () => session.getSessionGeneration() === generation,
-    ...(entryContext ? { context: entryContext } : {}),
+    evidence,
   };
   const selection = await scoreRouterTurn({ prepared, resolved, options, session, resume });
   if (selection.kind !== 'ready') return selection;

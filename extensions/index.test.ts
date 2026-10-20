@@ -1,3 +1,4 @@
+import { createEntryEvidence } from './serve/entry-evidence.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -389,14 +390,17 @@ describe('work ledger lifecycle', () => {
       await autoModelRouterExtension(pi);
       const base = { ...ctxFor(tree), cwd } as ExtensionContext;
       await handlers.get('session_start')!({ reason: 'resume' }, base);
+      defaultRouterSession.commitWorkPhaseState({ intentKey: 'entry', providerInvocation: 1, observedMutationTools: 0,
+        evidence: createEntryEvidence({ key: 'entry', promptText: '@req.md' }, defaultRouterSession.getRoutingEpoch(), cwd, tree.manager()),
+      });
       const read = { toolName: 'read', toolCallId: 'r1', input: { path: 'req.md' }, content: [{ type: 'text', text: 'spec\n' }] };
 
       await handlers.get('tool_result')!(read, { ...base, model: { provider: 'openai', id: 'gpt' } });
       expect(defaultRouterSession.context.getLedger().items.get('w_1')!.grounding).toEqual([]);
 
       await handlers.get('tool_result')!(read, { ...base, model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } });
-      expect(defaultRouterSession.context.getLedger().items.get('w_1')!.grounding).toHaveLength(1);
-      expect(tree.getBranch().at(-1)).toMatchObject({ customType: CONTEXT_ENTRY_TYPE, data: { op: 'grounding-upsert' } });
+      expect(defaultRouterSession.getWorkPhaseState()!.evidence!.observedFiles.has('req.md')).toBe(true);
+      expect(defaultRouterSession.context.getLedger().items.get('w_1')!.grounding).toEqual([]);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -490,12 +494,22 @@ describe('mutation observation hooks', () => {
     expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(1);
   });
 
+  it('refuses a mutation whose routing authority changes during its source check', async () => {
+    const handlers = await makeToolHandlers();
+    defaultRouterSession.setLastDecision({ ...routingDecision(['a/model']), intentKey: 'intent-a' });
+    defaultRouterSession.commitWorkPhaseState(entryState({ status: 'served', deliverable: 'implement' }));
+    const pending = handlers.get('tool_call')!({ toolName: 'write', input: { path: 'src/a.ts' } }, routerAutoCtx);
+    defaultRouterSession.invalidateRouting();
+    expect(await pending).toMatchObject({ block: true, reason: expect.stringContaining('boundary changed') });
+    expect(defaultRouterSession.getWorkPhaseState()?.observedMutationTools).toBe(0);
+  });
+
   it('keeps concrete-model sessions a complete no-op', async () => {
     const handlers = await makeToolHandlers();
     const toolCall = handlers.get('tool_call')!;
     defaultRouterSession.intent.commitWorkPhaseState(entryState());
     const before = defaultRouterSession.intent.getWorkPhaseState();
-    expect(toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, concreteCtx)).toBeUndefined();
+    expect(await toolCall({ toolName: 'edit', toolCallId: 'e1', input: {} }, concreteCtx)).toBeUndefined();
     expect(defaultRouterSession.intent.getWorkPhaseState()).toEqual(before);
   });
 
@@ -831,8 +845,8 @@ describe('mutation observation hooks', () => {
       defaultRouterSession.context.append(createEvent(workItem('w_1', 't_1', {
         anchors: [{ kind: 'path', value: 'spec.md', role: 'reference', source: 'user' }], openContext: ['referenced-artifact'],
       })));
-      investigating({
-        deliverable: 'implement', workItemId: 'w_1', contextReasons: ['referenced-artifact'], contextSatisfied: false,
+      investigating({ deliverable: 'implement', sourceEvidencePending: true,
+        evidence: createEntryEvidence({ key: 'intent-a', promptText: '@spec.md' }, defaultRouterSession.getRoutingEpoch(), repo),
       });
       const request = { ...READY, deliverable: 'implement' };
       const declined = await tool.execute('p1', request, undefined, undefined, ctx) as unknown as { content: Array<{ text: string }>; details: { accepted: boolean } };
@@ -918,7 +932,7 @@ describe('mutation observation hooks', () => {
     const content = [{ type: 'text', text: 'read' }];
     investigating({ deliverable: 'review' });
     const first = await toolResult({ toolName: 'read', toolCallId: 'r1', content }, routerAutoCtx) as { content: Array<{ text: string }> };
-    expect(first.content[1]!.text).toContain('needs a review');
+    expect(first.content[1]!.text).toContain('hand_off_context');
     expect(first.content[1]!.text).toContain('hand_off_context');
     expect(await toolResult({ toolName: 'read', toolCallId: 'r2', content }, routerAutoCtx)).toBeUndefined();
   });
@@ -1075,7 +1089,7 @@ describe('mutation observation hooks', () => {
     expect(await call('routing_context', { op: 'update', summary: 's' })).toBeUndefined();
     const stopped = await call('write');
     expect(stopped?.block).toBe(true);
-    expect(stopped?.reason).toContain('needs a review');
+    expect(stopped?.reason).toContain('hand_off_context');
     expect(stopped?.reason).toContain('hand_off_context');
     // Context tools do not spend the mutation refusal budget.
     expect(await call('ctx_execute_file', { path: 'src/a.ts', code: 'print(1)' })).toBeUndefined();
@@ -1121,7 +1135,7 @@ describe('mutation observation hooks', () => {
     expect((await hand('implement')).reasoningHandoff).toMatchObject({ target: 'implement' });
     expect((await hand('review')).reasoningHandoff).toMatchObject({ target: 'review' });
     expect((await hand('plan')).reasoningHandoff).toMatchObject({ target: 'plan' });
-    expect((await hand('gather')).status).toBeUndefined();
+    expect((await hand('gather')).status).toBe('ready-pending');
     expect((await hand('lightweight')).status).toBeUndefined();
   });
 

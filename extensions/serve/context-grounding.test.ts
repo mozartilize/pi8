@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RouterSession } from './router-session-state.js';
 import { observeContextGrounding } from './context-grounding.js';
-import { GROUNDING_MAX_BYTES, isFresh, resultText } from '../routing/context/grounding.js';
-import { activateEvent, createEvent, workItem } from '../test-support/context-fixtures.js';
+import { GROUNDING_MAX_BYTES, resultText } from '../routing/context/grounding.js';
+import { createEntryEvidence, refreshSourceEvidence } from './entry-evidence.js';
 import { SessionTree } from '../test-support/session-tree.js';
 
 describe('grounding from tool results', () => {
@@ -23,27 +23,24 @@ describe('grounding from tool results', () => {
     writeFileSync(join(cwd, 'other.md'), 'unrelated\n');
     tree = new SessionTree();
     session = new RouterSession();
-    const u = tree.user('@requirements/foo.md implement this in src.ts');
-    session.context.append(createEvent(workItem('w_1', 't_1', {
-      anchors: [
-        { kind: 'path', value: 'requirements/foo.md', source: 'user' },
-        { kind: 'path', value: 'src.ts', source: 'user' },
-      ],
-    }), u));
-    session.context.append(activateEvent('w_1', u));
+    tree.user('@requirements/foo.md implement this in @src.ts');
+    session.commitWorkPhaseState({ intentKey: 'entry', sourceEntryId: 'e1', routingEpoch: 0,
+      providerInvocation: 1, observedMutationTools: 0, status: 'triage', sourceEvidencePending: true,
+      evidence: createEntryEvidence({ key: 'entry', promptText: '@requirements/foo.md @src.ts' }, 0, cwd, tree.manager()),
+    });
   });
   afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
   const ctx = () => ({ cwd, sessionManager: tree.manager() }) as never;
-  const grounding = () => session.context.getLedger().items.get('w_1')!.grounding;
+  const grounding = () => [...session.getWorkPhaseState()!.evidence!.observedFiles].map(([anchorValue, observation]) => ({ anchorValue, ...observation }));
 
   it('records a SHA-256 fingerprint for a successful whole-file read of an anchor', async () => {
     await observeContextGrounding(
       { toolName: 'read', input: { path: 'requirements/foo.md' }, content: text('CSV with a header row\n'), isError: false } as never,
       ctx(), session,
     );
-    expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md', observedBy: 'read', observedAtEntryId: 'e1' })]);
-    expect(await isFresh(cwd, grounding()[0]!)).toBe(true);
+    expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md' })]);
+    expect((await refreshSourceEvidence(session))?.fresh).toBe(1);
   });
 
   it('records nothing for a partial, failed, or unanchored read', async () => {
@@ -68,8 +65,8 @@ describe('grounding from tool results', () => {
     await read(3, 2, '\n\n[1 more lines in file. Use offset=5 to continue.]');
     expect(grounding()).toEqual([]);
     await read(5, 1, '');
-    expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md', observedBy: 'read' })]);
-    expect(await isFresh(cwd, grounding()[0]!)).toBe(true);
+    expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md' })]);
+    expect((await refreshSourceEvidence(session))?.fresh).toBe(1);
   });
 
   it('grounds files larger than one Pi read returns, read through Pi\'s own read tool', async () => {
@@ -92,7 +89,7 @@ describe('grounding from tool results', () => {
         reads += 1;
       } while (offset != null);
       expect(reads).toBeGreaterThan(1);
-      expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md', sha256: sha, observedBy: 'read' })]);
+      expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md', sha256: sha })]);
     }
   });
 
@@ -118,10 +115,12 @@ describe('grounding from tool results', () => {
   it('keeps an anchor grounded through the model\'s own writes and edits', async () => {
     writeFileSync(join(cwd, 'src.ts'), 'export const a = 1;\n');
     await observeContextGrounding({ toolName: 'write', input: { path: 'src.ts' }, content: text('ok') } as never, ctx(), session);
-    expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'src.ts', observedBy: 'self-edit' })]);
+    expect(grounding()).toEqual([]);
+    await observeContextGrounding({ toolName: 'read', input: { path: 'src.ts' }, content: text('export const a = 1;\n') } as never, ctx(), session);
+    expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'src.ts' })]);
     writeFileSync(join(cwd, 'src.ts'), 'export const a = 2;\n');
     await observeContextGrounding({ toolName: 'edit', input: { path: 'src.ts' }, content: text('ok') } as never, ctx(), session);
-    expect(await isFresh(cwd, grounding()[0]!)).toBe(true);
+    expect((await refreshSourceEvidence(session))?.fresh).toBe(1);
   });
 
   it('never grounds from an edit of a file the model has not seen whole', async () => {
@@ -138,7 +137,7 @@ describe('grounding from tool results', () => {
   });
 
   it('leaves an anchor the model only named ungrounded', () => {
-    expect(session.context.getLedger().items.get('w_1')!.anchors).toHaveLength(2);
+    expect(session.getWorkPhaseState()!.evidence!.referencedPaths).toEqual(['requirements/foo.md', 'src.ts']);
     expect(grounding()).toEqual([]);
   });
 
@@ -152,8 +151,8 @@ describe('grounding from tool results', () => {
 
     it('grounds a whole file another reader returned, whatever its header', async () => {
       await result('tilth_read', { path: abs(), mode: 'full' }, `# ${abs()} (31 lines, ~300 tokens) [full]\n\n${body}`);
-      expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md', observedBy: 'read' })]);
-      expect(await isFresh(cwd, grounding()[0]!)).toBe(true);
+      expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md' })]);
+      expect((await refreshSourceEvidence(session))?.fresh).toBe(1);
     });
 
     it('never grounds from a result cut short, even one still tagged as full', async () => {
@@ -169,7 +168,7 @@ describe('grounding from tool results', () => {
       await result('tilth_read', { path: 'requirements/foo.md', section: '1-15' }, section(0, 15));
       expect(grounding()).toEqual([]);
       await result('some_future_reader', { file: 'requirements/foo.md' }, section(15, 30));
-      expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md', observedBy: 'read' })]);
+      expect(grounding()).toEqual([expect.objectContaining({ anchorValue: 'requirements/foo.md' })]);
     });
 
     it('never grounds from derived output, and does when the output is the file itself', async () => {

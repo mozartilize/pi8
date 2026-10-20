@@ -21,6 +21,14 @@ export type Dimension =
   | 'implement'
   | 'review';
 
+/** Source verification diagnostics contain counts, never paths or content. */
+export interface SourceEvidenceCounts {
+  required: number;
+  fresh: number;
+  partial: number;
+  oversized: number;
+}
+
 /** One normalized benchmark row after adapter + registry intersection. */
 export interface BenchModel {
   /** Canonical "provider/id" that EXISTS in Pi's model registry. */

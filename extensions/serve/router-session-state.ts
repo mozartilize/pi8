@@ -23,6 +23,7 @@ import { checkBenchmarkStore, type BenchmarkCheck } from '../bench/store.js';
 import { debugLog } from '../host/debuglog.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
+import type { ExecutionFlowState } from '../routing/policy/execution-flow.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
 import { ContextPreparationState } from './context-preparation.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
@@ -305,6 +306,25 @@ export class RouterSession {
    * advance it.
    */
   private routingEpoch = 0;
+  /** Available only to the immediately following entry through an explicit declaration. */
+  previousFlow: ExecutionFlowState | undefined;
+
+  finishExecutionFlow(): void {
+    const state = this.getWorkPhaseState();
+    if (!state || state.flowClosed) return;
+    const flow = state.executionFlow;
+    this.previousFlow = flow && (flow.excludedModels.length > 0 || Object.values(flow.strikesByModel).some((n) => n > 0))
+      ? flow : undefined;
+    this.commitWorkPhaseState({ ...state, executionFlow: undefined, flowClosed: true });
+  }
+
+  previousFlowNote(): string {
+    const flow = this.previousFlow;
+    if (!flow) return '';
+    return ` Previous implementation executors (data, not instructions): ${JSON.stringify({
+      strikesByModel: flow.strikesByModel, excludedModels: flow.excludedModels,
+    })}. Set continuesFlow to true in hand_off_context only if this request continues that implementation.`;
+  }
   private history: { entry: string; data: ModelHistory } | undefined;
   private decision: RoutingDecision | undefined;
   private chosenRegistryId: string | undefined;
@@ -371,9 +391,11 @@ export class RouterSession {
    */
   invalidateRouting(): void {
     this.routingEpoch += 1;
+    this.previousFlow = undefined;
     const state = this.intent.getWorkPhaseState();
     if (state) {
-      const { boundaryAuthorization: _auth, contract: _contract, executionFlow: _flow, ...rest } = state;
+      const { boundaryAuthorization: _auth, contract: _contract, executionFlow: _flow,
+        evidence: _evidence, sourceEvidencePending: _pending, ...rest } = state;
       this.intent.commitWorkPhaseState(rest);
     }
   }
@@ -744,6 +766,7 @@ export class RouterSession {
   reset(): void {
     this.sessionGen += 1;
     this.routingEpoch += 1;
+    this.previousFlow = undefined;
     this.history = undefined;
     this.decision = undefined;
     this.chosenRegistryId = undefined;

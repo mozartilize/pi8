@@ -20,7 +20,6 @@
  */
 import { dirname } from 'node:path';
 import type { DecisionCause, Dimension, ReasoningEvidence, ReasoningHandoffMeta } from '../../types.js';
-import { CONTEXT_DELIVERABLES } from '../context/resolve.js';
 import type { ContextReason } from '../context/types.js';
 import { handoffBoundaryId, type WorkPhaseState } from './work-phase.js';
 import { newExecutionFlow } from './execution-flow.js';
@@ -72,11 +71,8 @@ export function owedContext(state: WorkPhaseState | undefined): ContextReason[] 
   const deliverable = state?.deliverable;
   if (!state || !deliverable) return [];
   const reasons: ContextReason[] = [];
-  if (state.pendingIdentity) reasons.push('identity-unresolved');
   if (deliverable === 'plan' || deliverable === 'review') reasons.push('reasoning-prep');
-  if (CONTEXT_DELIVERABLES.has(deliverable) && state.contextSatisfied === false) {
-    reasons.push(...(state.contextReasons ?? []));
-  }
+  if (state.sourceEvidencePending) reasons.push('referenced-artifact');
   return reasons;
 }
 
@@ -88,7 +84,7 @@ export function contextOwed(state: WorkPhaseState | undefined): boolean {
 /** The entry is in the restricted phase: its tools are limited until a model serves the next one. */
 export function acquisitionRestricted(state: WorkPhaseState | undefined): boolean {
   const status = state?.status;
-  return status === 'triage' || status === 'clarification-only' || status === 'ready-pending';
+  return !!state?.sourceEvidencePending || status === 'triage' || status === 'clarification-only' || status === 'ready-pending';
 }
 
 /**
@@ -162,7 +158,7 @@ export function acceptContextHandoff(
     routingEpoch?: number;
   },
 ): WorkPhaseState {
-  if (state.status === 'ready-pending' || state.status === 'served' || state.reasoningHandoff) return state;
+  if (state.handoffKey === accepted.key || state.status === 'ready-pending') return state;
   const entryId = state.sourceEntryId ?? state.intentKey;
   const boundaryId = handoffBoundaryId(entryId, accepted.routingEpoch ?? state.routingEpoch ?? 0, accepted.key);
   const executionFlow = accepted.deliverable === 'implement'
@@ -174,6 +170,8 @@ export function acceptContextHandoff(
     status: 'ready-pending',
     handoffKey: accepted.key,
     boundaryId,
+    boundaryAuthorization: undefined,
+    contract: undefined,
     ...(executionFlow ? { executionFlow } : {}),
     ...(accepted.reasoning ? { reasoningHandoff: { ...accepted.reasoning, id: state.intentKey, pending: true } } : {}),
   };

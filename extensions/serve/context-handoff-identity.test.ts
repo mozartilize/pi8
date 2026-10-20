@@ -1,352 +1,205 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Context } from '@earendil-works/pi-ai';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { createTempRouterDir } from '../test-support/temp-router-dir.js';
 import { registryModel } from '../test-support/router-fixtures.js';
 import { setupProviderTest, type ProviderTestHarness } from '../test-support/provider-harness.js';
 import { SessionTree } from '../test-support/session-tree.js';
-import { CONTEXT_ENTRY_TYPE } from '../routing/context/persistence.js';
 import { observeContextGrounding } from './context-grounding.js';
 import { prepareHandoffFacts, registerContextHandoffTool, submitContextHandoff } from './context-handoff-tool.js';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { RouterSession } from './router-session-state.js';
-import { gatheringNote } from './gathering-gate.js';
 import { phaseDifficulty } from '../routing/features/difficulty.js';
 
 vi.mock('@earendil-works/pi-ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@earendil-works/pi-ai')>()),
-  createAssistantMessageEventStream: vi.fn(),
-  isRetryableAssistantError: () => false,
+  createAssistantMessageEventStream: vi.fn(), isRetryableAssistantError: () => false,
 }));
 vi.mock('@earendil-works/pi-ai/compat', () => ({ streamSimple: vi.fn() }));
 
-const BENCHMARKS = [{
-  registryId: 'alpha/cheap', benchSlug: 'alpha-cheap', active: true,
-  quality: { intelligence: 0.5, coding: 0.5, agenticCoding: 0.5 },
-  priceInputPer1M: 0.1, priceOutputPer1M: 0.2, source: 'test',
-}];
-const MODEL = registryModel('alpha/cheap', {
-  contextWindow: 200000, maxTokens: 8192,
-  cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
-});
-const READY = {
-  outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded', findings: 'checked the request', question: 'implement the change',
-};
+const READY = { outcome: 'ready', deliverable: 'implement', complexity: 'trivial', scope: 'bounded',
+  findings: 'checked the request', question: 'implement the change' };
+const models = ['alpha/cheap', 'beta/strong'].map((id) => registryModel(id, {
+  contextWindow: 200000, maxTokens: 8192, cost: { input: 0.1, output: 0.2, cacheRead: 0, cacheWrite: 0 },
+}));
+const benchmarks = models.map((model) => ({ registryId: `${model.provider}/${model.id}`,
+  benchSlug: model.id, active: true, quality: { intelligence: 50, coding: 50, agenticCoding: 50 }, source: 'test' }));
 
-describe('entry-scoped work choice at the context handoff', () => {
+describe('entry-scoped context handoff', () => {
   let temp: ReturnType<typeof createTempRouterDir>;
   let harness: ProviderTestHarness;
   let tree: SessionTree;
   let cwd: string;
-  let routerCtx: { cwd: string; model: { provider: string; id: string }; sessionManager: ReturnType<SessionTree['manager']> };
+  let ctx: { cwd: string; model: { provider: string; id: string }; sessionManager: ReturnType<SessionTree['manager']> };
   beforeEach(async () => {
     temp = createTempRouterDir();
-    cwd = join(temp.path, 'repo');
-    mkdirSync(join(cwd, 'requirements'), { recursive: true });
-    writeFileSync(join(cwd, 'requirements', 'foo.md'), 'CSV header\n');
+    cwd = join(temp.path, 'repo'); mkdirSync(cwd);
+    writeFileSync(join(cwd, 'source.ts'), 'first\nsecond\nthird\nfourth');
     tree = new SessionTree();
-    routerCtx = { cwd, model: { provider: 'router', id: 'auto' }, sessionManager: tree.manager() };
-    harness = await setupProviderTest({ dir: temp.path, benchmarks: BENCHMARKS as never,
-      models: [MODEL], ctx: routerCtx as never });
-    harness.session.context.bindPersistence((event) => tree.appendEntry(CONTEXT_ENTRY_TYPE, event));
+    ctx = { cwd, model: { provider: 'router', id: 'auto' }, sessionManager: tree.manager() };
+    harness = await setupProviderTest({ dir: temp.path, benchmarks: benchmarks as never, models, ctx: ctx as never });
     harness.scriptReply([{ type: 'text_delta', delta: 'served' }, { type: 'done' }]);
   });
   afterEach(() => { vi.restoreAllMocks(); temp.cleanup(); });
 
-  async function entry(prompt: string) {
-    tree.user(prompt, Date.now() + tree.getBranch().length);
-    return serveBranch();
-  }
-  async function serveBranch() {
-    const messages = tree.getBranch().filter((event) => event.type === 'message')
-      .map((event) => ({ role: event.message!.role, content: event.message!.content, timestamp: event.message!.timestamp }));
+  async function serve() {
     harness.resetEventStream();
+    const messages = tree.getBranch().filter((event) => event.type === 'message').map((event) => event.message!);
     await harness.serve({ messages } as unknown as Context);
-    return harness.getProviderState().lastDecision!;
   }
-  async function handoff(params: Record<string, unknown>) {
-    const facts = await prepareHandoffFacts(params, routerCtx as never, harness.session, async () => ({ stdout: '', stderr: '', code: 0 }) as never);
-    return submitContextHandoff(params, routerCtx as never, harness.session, facts);
+  async function entry(prompt: string) { tree.user(prompt, tree.getBranch().length + 1); await serve(); }
+  async function handoff(params: Record<string, unknown> = READY) {
+    const facts = await prepareHandoffFacts(params, ctx as never, harness.session,
+      async () => ({ stdout: '', stderr: '', code: 0 }) as never);
+    return submitContextHandoff(params, ctx as never, harness.session, facts);
+  }
+  async function read(text = 'first\nsecond\nthird\nfourth', offset?: number) {
+    await observeContextGrounding({ toolName: 'read', input: { path: 'source.ts', ...(offset ? { offset } : {}) },
+      content: [{ type: 'text', text }], isError: false } as never, ctx as never, harness.session);
+  }
+  async function struckFlow() {
+    await entry('implement the parser');
+    expect((await handoff()).accepted).toBe(true);
+    await serve();
+    const state = harness.session.getWorkPhaseState()!;
+    const flow = { ...state.executionFlow!, strikesByModel: { 'alpha/cheap': 2 }, excludedModels: ['alpha/cheap'] };
+    harness.session.commitWorkPhaseState({ ...state, executionFlow: flow });
+    return flow;
   }
 
-  it('routes an unresolved entry without a work event, then creates work only on an accepted handoff', async () => {
-    const first = await entry('implement a CSV exporter');
-    expect(first).toMatchObject({ dimension: 'gather', cause: 'investigation' });
-    expect(first.workContext).toBeUndefined();
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(gatheringNote(harness.session.getWorkPhaseState()!)).toContain('NEW_WORK_ITEM');
-    expect((await handoff({ ...READY, workItemId: 'made-up', topicId: 'NEW_TOPIC', topicTitle: 'Export' })).accepted).toBe(false);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC',
-      topicTitle: 'Export', workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    const item = [...harness.session.context.getLedger().items.values()][0]!;
-    expect(item).toMatchObject({ title: 'CSV exporter' });
-    const records = tree.getBranch().filter((event) => event.type === 'custom' && event.customType === CONTEXT_ENTRY_TYPE
-      && (event.data as { op?: string }).op === 'context-commit');
-    expect(records).toHaveLength(1);
-    expect(records[0]?.data).toMatchObject({ op: 'context-commit', events: [
-      { op: 'work-create' }, { op: 'activate' }, { op: 'boundary' },
-    ] });
-    harness.session.context.restore(tree.getBranch());
-    expect(harness.session.context.getLedger().activeWorkItemId).toBe(item.id);
-    expect(harness.session.context.getLedger().items.get(item.id)?.openContext).toEqual([]);
-    const next = await entry('implement it');
-    // The next entry is offered the work again and chooses it at its own handoff.
-    expect(next.workContext).toBeUndefined();
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity?.catalog.activeWorkItemId).toBe(item.id);
-  });
-
-  it('keeps manual-pinned unresolved work provisional until an accepted handoff', async () => {
-    harness.session.setManualModel('alpha/cheap');
-    const first = await entry('@requirements/foo.md implement the exporter');
-    expect(first.dimension).toBe('gather');
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    await observeContextGrounding({ toolName: 'read', input: { path: 'requirements/foo.md' },
-      content: [{ type: 'text', text: 'CSV header\n' }], isError: false } as never,
-    routerCtx as never, harness.session);
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export',
-      workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    expect(harness.session.context.getLedger().items.size).toBe(1);
-  });
-
-  it('leaves no selected work when a ready boundary cannot persist', async () => {
-    await entry('implement a CSV exporter');
-    harness.session.context.bindPersistence((event) => {
-      if (event.op === 'context-commit' && event.events.some((inner) => inner.op === 'boundary')) {
-        throw new Error('boundary storage unavailable');
-      }
-      tree.appendEntry(CONTEXT_ENTRY_TYPE, event);
-    });
-    const response = await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM',
-      topicTitle: 'Export', workItemTitle: 'CSV exporter' });
-    expect(response.accepted).toBe(false);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(harness.session.context.getLedger().activeWorkItemId).toBeUndefined();
-    expect(tree.getBranch().filter((event) => event.type === 'custom' && event.customType === CONTEXT_ENTRY_TYPE
-      && (event.data as { op?: string }).op === 'context-commit')).toEqual([]);
-  });
-
-  it('requires an entry-local complete read before creating work with a referenced file', async () => {
-    await entry('@requirements/foo.md implement the exporter');
-    const params = { ...READY, workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC',
-      topicTitle: 'Export', workItemTitle: 'CSV exporter' };
-    const denied = await handoff(params);
-    expect(denied.accepted).toBe(false);
-    expect(denied.text).toContain('requirements/foo.md');
-    await observeContextGrounding({ toolName: 'read', input: { path: 'requirements/foo.md' },
-      content: [{ type: 'text', text: 'CSV header\n' }], isError: false } as never,
-    routerCtx as never, harness.session);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    expect(harness.session.getWorkPhaseState()?.provisionalGrounding).toHaveLength(1);
-    expect((await handoff(params)).accepted).toBe(true);
-    const item = [...harness.session.context.getLedger().items.values()][0]!;
-    expect(item.grounding).toHaveLength(1);
-    expect(item.grounding[0]!.anchorValue).toBe('requirements/foo.md');
-  });
-
-  it('does not treat pasted artifact contents as a router-observed read', async () => {
-    await entry('@requirements/foo.md implement the importer. Full contents: CSV header');
-    const params = { ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Import', workItemTitle: 'Importer' };
-    expect(harness.session.getWorkPhaseState()?.provisionalGrounding).toBeUndefined();
-    expect((await handoff(params)).accepted).toBe(false);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-    await observeContextGrounding({ toolName: 'read', input: { path: 'requirements/foo.md' },
-      content: [{ type: 'text', text: 'CSV header\n' }], isError: false } as never,
-    routerCtx as never, harness.session);
-    expect((await handoff(params)).accepted).toBe(true);
-  });
-
-  it('keeps an existing work item unchanged when its selection cannot persist', async () => {
-    await entry('implement a CSV exporter');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export',
-      workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    const original = [...harness.session.context.getLedger().items.values()][0]!;
-    await entry('@requirements/foo.md extend the exporter');
-    await observeContextGrounding({ toolName: 'read', input: { path: 'requirements/foo.md' },
-      content: [{ type: 'text', text: 'CSV header\n' }], isError: false } as never,
-    routerCtx as never, harness.session);
-    const persisted = tree.getBranch().filter((event) => event.type === 'custom' && event.customType === CONTEXT_ENTRY_TYPE).length;
-    harness.session.context.bindPersistence((event) => {
-      if (event.op === 'context-commit' && event.events.some((inner) => inner.op === 'grounding-upsert')) {
-        throw new Error('storage unavailable');
-      }
-      tree.appendEntry(CONTEXT_ENTRY_TYPE, event);
-    });
-    const rejected = await handoff({ ...READY, workItemId: original.id });
-    expect(rejected.accepted).toBe(false);
-    expect(harness.session.context.getLedger().items.get(original.id)).toEqual(original);
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
-    expect(tree.getBranch().filter((event) => event.type === 'custom' && event.customType === CONTEXT_ENTRY_TYPE)).toHaveLength(persisted);
-  });
-
-  it('does not credit provisional reads to the previous active work item', async () => {
-    await entry('implement a CSV exporter');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export', workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    const original = [...harness.session.context.getLedger().items.values()][0]!;
-    await entry('@requirements/foo.md review the database backup');
-    await observeContextGrounding({ toolName: 'read', input: { path: 'requirements/foo.md' },
-      content: [{ type: 'text', text: 'CSV header\n' }], isError: false } as never,
-    routerCtx as never, harness.session);
-    expect(harness.session.context.getLedger().items.get(original.id)?.grounding).toHaveLength(0);
-    expect(harness.session.getWorkPhaseState()?.provisionalGrounding).toHaveLength(1);
-  });
-
-  it('only accepts listed work and topic ids and can start another work item in a listed topic', async () => {
-    await entry('implement a CSV exporter');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export', workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    const original = [...harness.session.context.getLedger().items.values()][0]!;
-    await entry('review error handling in the exporter');
-    const pending = harness.session.getWorkPhaseState()!.pendingIdentity!;
-    expect(pending.catalog.workItems.map((item) => item.id)).toContain(original.id);
-    expect(gatheringNote(harness.session.getWorkPhaseState()!)).toContain(original.id);
-    expect((await handoff({ ...READY, deliverable: 'review', workItemId: original.id,
-      topicId: 'fabricated-topic' })).accepted).toBe(false);
-    const second = await handoff({ ...READY, deliverable: 'review', workItemId: 'NEW_WORK_ITEM',
-      topicId: original.topic.id, workItemTitle: 'Error review' });
-    expect(second).toMatchObject({ accepted: true });
-    const created = [...harness.session.context.getLedger().items.values()].find((item) => item.id !== original.id)!;
-    expect(created).toMatchObject({ title: 'Error review', topic: { id: original.topic.id } });
-    expect(harness.session.context.getLedger().items.size).toBe(2);
-  });
-
-  it('derives new, switch, and resume relations from selected work', async () => {
-    await entry('implement a CSV exporter');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export',
-      workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    const original = [...harness.session.context.getLedger().items.values()][0]!;
-    expect(harness.session.getWorkPhaseState()?.contextResolution?.relation).toBe('new');
-
-    await entry('implement a separate importer');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicId: original.topic.id,
-      workItemTitle: 'Importer' })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contextResolution?.relation).toBe('new');
-
-    await entry('implement a backup scheduler');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicId: 'NEW_TOPIC',
-      topicTitle: 'Backup', workItemTitle: 'Backup scheduler' })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contextResolution?.relation).toBe('switch');
-
-    await entry('update the CSV exporter');
-    expect((await handoff({ ...READY, workItemId: original.id })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()?.contextResolution).toMatchObject({
-      relation: 'resume', workItemId: original.id,
-    });
-    expect(harness.session.context.getLedger().items.size).toBe(3);
-  });
-
-  it('rejects the answer outcome without changing entry state or demand', async () => {
-    await entry('explain the supplied result');
-    const before = harness.session.getWorkPhaseState();
-    const result = await handoff({ ...READY, outcome: 'answer', deliverable: 'gather' });
-    expect(result).toMatchObject({ accepted: false, text: expect.stringContaining('use ready or needs-user') });
-    expect(harness.session.getWorkPhaseState()).toBe(before);
-    expect(phaseDifficulty(before, 'gather')).toBeUndefined();
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-  });
-
-  it('carries declared gather demand into selection through a ready boundary', async () => {
-    await entry('find the source handlers');
-    const triage = harness.session.getWorkPhaseState()!.boundaryId;
-    expect((await handoff({ ...READY, deliverable: 'gather', complexity: 'routine',
-      workItemId: 'NEW_WORK_ITEM', topicTitle: 'Handlers', workItemTitle: 'Find handlers',
-    })).accepted).toBe(true);
-    expect(harness.session.getWorkPhaseState()!.boundaryId).not.toBe(triage);
-    const next = await serveBranch();
-    expect(next.unified).toMatchObject({ difficulty: 0.25, difficultySource: 'declared-complexity',
-      difficultyBounds: { reasoning: { lower: 0.125, upper: 0.375 }, agentic: { lower: 0.125, upper: 0.375 },
-        research: { lower: 0.125, upper: 0.375 } },
-    });
-    expect(next.unified?.difficultyMissingReason).toBeUndefined();
-    await entry('explain a different result');
-    expect(phaseDifficulty(harness.session.getWorkPhaseState(), 'gather')).toBeUndefined();
-  });
-
-  it('offers no lightweight task type in the tool schema', () => {
-    let parameters: unknown;
+  it('declares only ready, needs-user, and the optional explicit flow continuation', () => {
+    let parameters: any;
     registerContextHandoffTool({ registerTool: (tool: { parameters: unknown }) => { parameters = tool.parameters; } } as unknown as ExtensionAPI,
       new RouterSession());
-    const deliverable = JSON.stringify((parameters as { properties: { deliverable: unknown } }).properties.deliverable);
-    expect(deliverable).toContain('"gather"');
-    expect(deliverable).not.toContain('lightweight');
+    expect(parameters.properties.outcome.anyOf.map((v: { const: string }) => v.const)).toEqual(['ready', 'needs-user']);
+    for (const key of ['workItemId', 'topicId', 'topicTitle', 'workItemTitle']) expect(parameters.properties).not.toHaveProperty(key);
+    expect(parameters.properties.continuesFlow.type).toBe('boolean');
+    expect(JSON.stringify(parameters.properties.deliverable)).not.toContain('lightweight');
   });
 
-  it('rejects the task type lightweight for every outcome', async () => {
+  it('creates gather boundaries with declared demand and repeats the accepted payload without a new boundary', async () => {
+    await entry('investigate the failure');
+    const triage = harness.session.getWorkPhaseState()!.boundaryId;
+    const params = { ...READY, deliverable: 'gather', complexity: 'routine' };
+    expect((await handoff(params)).accepted).toBe(true);
+    const boundary = harness.session.getWorkPhaseState()!.boundaryId;
+    expect(boundary).not.toBe(triage);
+    await serve();
+    expect(phaseDifficulty(harness.session.getWorkPhaseState(), 'gather')).toMatchObject({ value: 0.25, source: 'declared-complexity' });
+    const served = harness.session.getWorkPhaseState();
+    expect((await handoff(params)).accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()).toBe(served);
+    expect((await handoff({ ...params, findings: 'another independent failure' })).accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()!.boundaryId).not.toBe(boundary);
+    expect(harness.session.context.getLedger().items.size).toBe(0);
+  });
+
+  it('keeps strikes across two implement handoffs in the same entry', async () => {
+    const flow = await struckFlow();
+    expect((await handoff({ ...READY, findings: 'revised implementation evidence' })).accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()!.executionFlow).toEqual(flow);
+    await serve();
+    expect(harness.session.getLastDecision()!.fallbackChain).not.toContain('alpha/cheap');
+    expect(harness.session.getLastServed()!.registryId).toBe('beta/strong');
+  });
+
+  it('carries the previous flow only through the next entry\'s explicit implement declaration', async () => {
+    const flow = await struckFlow();
+    harness.session.finishExecutionFlow();
+    await entry('continue');
+    const delegated = JSON.stringify(vi.mocked(streamSimple).mock.calls.at(-1)?.[1]);
+    expect(delegated).toContain('alpha/cheap');
+    expect(delegated).toContain('Set continuesFlow to true');
+    expect(harness.session.getWorkPhaseState()!.executionFlow).toBeUndefined();
+    expect((await handoff({ ...READY, continuesFlow: true })).accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()!.executionFlow).toEqual(flow);
+    expect(harness.session.previousFlow).toBeUndefined();
+    await serve();
+    expect(harness.session.getLastDecision()!.fallbackChain).not.toContain('alpha/cheap');
+  });
+
+  it('starts a fresh flow with a diagnostic when no previous flow exists', async () => {
+    await entry('implement the parser');
+    const result = await handoff({ ...READY, continuesFlow: true });
+    expect(result).toMatchObject({ accepted: true, text: expect.stringContaining('No previous execution flow exists') });
+    expect(harness.session.getWorkPhaseState()!.executionFlow).toMatchObject({ strikesByModel: {}, excludedModels: [] });
+  });
+
+  it('discards an unlinked flow and cannot adopt it across an unrelated answer entry', async () => {
+    const flow = await struckFlow();
+    await entry('what does CSV mean?');
+    expect(harness.session.previousFlow).toEqual(flow);
+    harness.session.finishExecutionFlow();
+    expect(harness.session.previousFlow).toBeUndefined();
+    await entry('implement another parser');
+    expect((await handoff({ ...READY, continuesFlow: true })).accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()!.executionFlow!.flowId).not.toBe(flow.flowId);
+    expect(harness.session.getWorkPhaseState()!.executionFlow!.excludedModels).toEqual([]);
+  });
+
+  it('discards the previous flow when a fresh implementation omits continuesFlow', async () => {
+    const flow = await struckFlow();
+    await entry('implement an unrelated scheduler');
+    expect((await handoff()).accepted).toBe(true);
+    expect(harness.session.previousFlow).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()!.executionFlow!.flowId).not.toBe(flow.flowId);
+    expect(harness.session.getWorkPhaseState()!.executionFlow!.strikesByModel).toEqual({});
+  });
+
+  it.each([{ deliverable: 'plan', continuesFlow: true }, { outcome: 'needs-user', continuesFlow: true },
+    { continuesFlow: 'true' }, { outcome: 'answer' }, { deliverable: 'lightweight' }])('rejects invalid declaration %j without spending a source refusal', async (patch) => {
     await entry('hello');
-    for (const outcome of ['ready'] as const) {
-      const result = await handoff({ ...READY, outcome, deliverable: 'lightweight', workItemId: 'NONE' });
-      expect(result.accepted, outcome).toBe(false);
-      expect(result.text, outcome).toContain('name the task type');
-    }
-    expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
+    const state = harness.session.getWorkPhaseState();
+    expect((await handoff({ ...READY, ...patch })).accepted).toBe(false);
+    expect(harness.session.getWorkPhaseState()).toBe(state);
   });
 
-  it('offers earlier unrouted work as a bounded choice without inheriting grounding', async () => {
-    tree.modelChange('openai', 'manual');
-    const old = tree.user('design the CSV exporter before the router existed');
-    tree.assistant('The exporter should use headers.');
-    tree.modelChange('router', 'auto');
-    await entry('continue designing the CSV exporter');
-    const pending = harness.session.getWorkPhaseState()?.pendingIdentity;
-    expect(pending?.legacy.length).toBeGreaterThan(0);
-    expect(gatheringNote(harness.session.getWorkPhaseState()!)).toContain(pending!.legacy[0]!.id);
-    const result = await handoff({ ...READY, deliverable: 'plan', workItemId: pending!.legacy[0]!.id,
-      topicId: 'NEW_TOPIC', topicTitle: 'Export' });
-    expect(result).toMatchObject({ accepted: true });
-    const item = [...harness.session.context.getLedger().items.values()][0]!;
-    expect(item).toMatchObject({ legacySourceEntryId: old });
-    expect(item.grounding).toEqual([]);
+  it('requires a complete current-entry read even when files are declared or the model is pinned', async () => {
+    harness.session.setManualModel('alpha/cheap');
+    await entry('@source.ts implement the parser');
+    expect((await handoff({ ...READY, files: ['source.ts'] })).accepted).toBe(false);
+    await read('first\nsecond', 1);
+    expect(harness.session.getWorkPhaseState()!.sourceEvidencePending).toBe(true);
+    await read('third\nfourth', 3);
+    expect(harness.session.getWorkPhaseState()!.sourceEvidencePending).toBe(false);
+    expect((await handoff()).accepted).toBe(true);
+    await entry('@source.ts explain another result');
+    expect(harness.session.getWorkPhaseState()!.evidence!.observedFiles.size).toBe(0);
+    expect((await handoff()).accepted).toBe(false);
   });
 
-  it('does not attach a new task to active work because both name the same file', async () => {
-    await entry('implement a CSV exporter');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export', workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    const original = [...harness.session.context.getLedger().items.values()][0]!;
-    await entry('@requirements/foo.md implement a different importer');
-    expect(harness.session.getWorkPhaseState()?.workItemId).toBeUndefined();
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity?.catalog.workItems.map((item) => item.id)).toContain(original.id);
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicId: original.topic.id,
-      workItemTitle: 'Importer' })).accepted).toBe(false);
-    await observeContextGrounding({ toolName: 'read', input: { path: 'requirements/foo.md' },
-      content: [{ type: 'text', text: 'CSV header\n' }], isError: false } as never,
-    routerCtx as never, harness.session);
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicId: original.topic.id,
-      workItemTitle: 'Importer' })).accepted).toBe(true);
-    expect(harness.session.context.getLedger().items.size).toBe(2);
+  it('logs source counts without paths or source content at an accepted boundary', async () => {
+    await entry('@source.ts implement the parser');
+    await read();
+    expect((await handoff({ ...READY, files: ['source.ts'] })).accepted).toBe(true);
+    const text = readFileSync(join(temp.path, 'decisions.jsonl'), 'utf8');
+    const accepted = text.trim().split('\n').map((line) => JSON.parse(line))
+      .find((record) => record.investigationHandoff?.action === 'accept');
+    expect(accepted.investigationHandoff.sourceEvidence).toEqual({ required: 1, fresh: 1, partial: 0, oversized: 0 });
+    expect(text).not.toContain('source.ts');
+    expect(text).not.toContain('first\\nsecond');
   });
 
-  it('leaves a follow-up’s identity unresolved until its handoff', async () => {
-    await entry('implement a CSV exporter');
-    expect((await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export', workItemTitle: 'CSV exporter' })).accepted).toBe(true);
-    const original = [...harness.session.context.getLedger().items.values()][0]!;
-    await entry('@requirements/foo.md implement a separate parser');
-    await entry('ok go ahead');
-    expect(harness.session.getWorkPhaseState()?.pendingIdentity).toBeDefined();
-    expect(harness.session.getWorkPhaseState()?.workItemId).toBeUndefined();
-    expect(harness.session.context.getLedger().items.size).toBe(1);
-    expect(harness.session.context.getLedger().items.get(original.id)?.grounding).toEqual([]);
+  it('rejects a changed source and permits needs-user without falsely satisfying it', async () => {
+    await entry('@source.ts implement the parser');
+    await read();
+    writeFileSync(join(cwd, 'source.ts'), 'changed content');
+    expect((await handoff()).accepted).toBe(false);
+    expect((await handoff({ outcome: 'needs-user', question: 'Which source version should I use?' })).accepted).toBe(true);
+    expect(harness.session.getWorkPhaseState()).toMatchObject({ status: 'clarification-only', sourceEvidencePending: true });
   });
 
-  it('rejects a read when its file changes before the work is chosen', async () => {
-    await entry('@requirements/foo.md implement a CSV exporter');
-    await observeContextGrounding({ toolName: 'read', input: { path: 'requirements/foo.md' },
-      content: [{ type: 'text', text: 'CSV header\n' }], isError: false } as never,
-    routerCtx as never, harness.session);
-    writeFileSync(join(cwd, 'requirements', 'foo.md'), 'different header\n');
-    const response = await handoff({ ...READY, workItemId: 'NEW_WORK_ITEM',
-      topicTitle: 'Export', workItemTitle: 'CSV exporter' });
-    expect(response).toMatchObject({ accepted: false });
-    expect(response.text).toContain('requirements/foo.md');
-    expect(harness.session.context.getLedger().items.size).toBe(0);
-  });
-
-  it('rejects a choice made for a prior session generation', async () => {
-    await entry('implement a CSV exporter');
-    const params = { ...READY, workItemId: 'NEW_WORK_ITEM', topicTitle: 'Export', workItemTitle: 'CSV exporter' };
-    const facts = await prepareHandoffFacts(params, routerCtx as never, harness.session, async () => ({ stdout: '', stderr: '', code: 0 }) as never);
-    harness.session.reset();
-    expect(submitContextHandoff(params, routerCtx as never, harness.session, facts).accepted).toBe(false);
-    expect(harness.session.context.getLedger().items.size).toBe(0);
+  it.each(['entry', 'epoch', 'session'] as const)('rejects prepared facts after a different %s becomes current', async (change) => {
+    await entry('implement the parser');
+    const facts = await prepareHandoffFacts(READY, ctx as never, harness.session,
+      async () => ({ stdout: '', stderr: '', code: 0 }) as never);
+    if (change === 'entry') await entry('implement a scheduler');
+    if (change === 'epoch') harness.session.invalidateRouting();
+    if (change === 'session') harness.session.reset();
+    const state = harness.session.getWorkPhaseState();
+    expect(submitContextHandoff(READY, ctx as never, harness.session, facts).accepted).toBe(false);
+    expect(harness.session.getWorkPhaseState()).toBe(state);
   });
 });

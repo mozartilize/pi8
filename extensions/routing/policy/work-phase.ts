@@ -8,6 +8,7 @@ import type { GroundedArtifact } from '../context/types.js';
 import type { PendingIdentity } from '../../serve/context-resolution.js';
 import type { BoundaryAuthorizationV1 } from './boundary-authorization.js';
 import type { ExecutionFlowState } from './execution-flow.js';
+import type { EntryEvidenceState } from '../../serve/entry-evidence.js';
 
 /** Stable boundary id of an entry's triage. */
 export function triageBoundaryId(sourceEntryId: string, routingEpoch: number): string {
@@ -41,6 +42,12 @@ export interface WorkPhaseState {
   contract?: ExecutionContract;
   /** Strike and exclusion scope of this entry's implementation; never persisted. */
   executionFlow?: ExecutionFlowState;
+  /** The entry's flow has been transferred or discarded at settlement. */
+  flowClosed?: boolean;
+  /** Source observations and coverage belong only to this entry. */
+  evidence?: EntryEvidenceState;
+  sourceEvidencePending?: boolean;
+  sourceSettleAttempts?: number;
   /** The one handoff reminder for this entry was already appended. */
   contractReminded?: boolean;
   /** Files the entry's tools looked at, most recent first; router-observed, never inherited. */
