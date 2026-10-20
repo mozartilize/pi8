@@ -24,6 +24,7 @@ import { debugLog } from '../host/debuglog.js';
 import { servedKey, type ServedInfo } from '../host/ui.js';
 import type { WorkPhaseState } from '../routing/policy/work-phase.js';
 import type { ExecutionFlowState } from '../routing/policy/execution-flow.js';
+import { ServingHistoryState } from './serving-history.js';
 import { BlacklistState, defaultBlacklistState } from './blacklist.js';
 import { ContextPreparationState } from './context-preparation.js';
 import { TrajectoryState } from '../routing/struggle/trajectory.js';
@@ -291,6 +292,7 @@ export class RouterSession {
   public readonly blacklist: BlacklistState;
   public readonly intent: IntentState;
   public readonly context = new RoutingContextState();
+  public readonly serving = new ServingHistoryState();
   /** Router notes recorded on the active branch; the persistence binding survives resets. */
   public readonly notes = new RequestNoteState();
   /** Smaller-window action that waits for Pi compaction. */
@@ -392,6 +394,8 @@ export class RouterSession {
   invalidateRouting(): void {
     this.routingEpoch += 1;
     this.previousFlow = undefined;
+    this.preparation.reset();
+    this.trajectory.reset();
     const state = this.intent.getWorkPhaseState();
     if (state) {
       const { boundaryAuthorization: _auth, contract: _contract, executionFlow: _flow,
@@ -788,6 +792,7 @@ export class RouterSession {
 
     this.intent.reset();
     this.context.reset();
+    this.serving.reset();
     this.notes.reset();
     this.preparation.reset();
     this.trajectory.reset();

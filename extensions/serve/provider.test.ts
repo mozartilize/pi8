@@ -1792,7 +1792,7 @@ describe('incumbent continuation and deep context', () => {
     harness.resetEventStream();
     await harness.serve(earlier);
     expect(harness.getProviderState().lastDecision?.dimension).toBe('implement');
-    const incumbent = harness.session.context.getIncumbent();
+    const incumbent = harness.session.serving.getIncumbent();
     expect(incumbent).toBeDefined();
     tree.assistant('Next I will implement the approved API authentication changes.');
     tree.user('ok go for it', Date.now() + 1);
@@ -2041,7 +2041,7 @@ describe('context acquisition', () => {
       expect(first?.dimension).toBe('gather');
       expect(harness.session.getWorkPhaseState()?.status).toBe('triage');
       expect(harness.session.context.getLedger().items.size).toBe(0);
-      expect(harness.session.context.getIncumbent()?.registryId).toBe(harness.session.getLastServed()?.registryId);
+      expect(harness.session.serving.getIncumbent()?.registryId).toBe(harness.session.getLastServed()?.registryId);
       expect((await session.routeTurnAgainWithSameUserEntry())?.dimension).toBe('gather');
       expect(harness.getProviderState().lastDecision?.unified?.difficulty).toBeUndefined();
     });
@@ -2423,16 +2423,16 @@ describe('context acquisition', () => {
       it('records the last actual serve, including triage', async () => {
         const session = await newSession();
         await session.routeTurn(PLAN_PROMPT);
-        expect(harness.session.context.getIncumbent()).toMatchObject({ registryId: 'alpha/cheap', dimension: 'gather' });
+        expect(harness.session.serving.getIncumbent()).toMatchObject({ registryId: 'alpha/cheap' });
         await submitPrepared(handoff(5));
         await session.routeTurnAgainWithSameUserEntry();
-        expect(harness.session.context.getIncumbent()).toMatchObject({ registryId: 'beta/strong', dimension: 'plan' });
+        expect(harness.session.serving.getIncumbent()).toMatchObject({ registryId: 'beta/strong' });
       });
 
       it('remembers model identity without creating work at a handoff', async () => {
         await served();
         expect(harness.session.getWorkPhaseState()?.workItemId).toBeUndefined();
-        expect(harness.session.context.getIncumbent()?.workItemId).toBeUndefined();
+        expect(harness.session.serving.getIncumbent()).not.toHaveProperty('workItemId');
         expect(harness.session.context.getLedger().items.size).toBe(0);
       });
 
@@ -2481,7 +2481,7 @@ describe('context acquisition', () => {
         const session = await newSession();
         harness.session.setManualModel('alpha/cheap');
         await session.routeTurn('please handle the pending adjustment');
-        expect(harness.session.context.getIncumbent()).toBeUndefined();
+        expect(harness.session.serving.getIncumbent()).toBeUndefined();
       });
     });
   });
@@ -3823,16 +3823,35 @@ describe('gathering direct answers', () => {
     expect(harness.outStream.events.filter((e) => e.type === 'text_delta').map((e) => (e as { delta: string }).delta))
       .toEqual(['visible answer']);
     expect(harness.outStream.events.filter((e) => e.type === 'done')).toHaveLength(1);
-    expect(harness.session.context.getIncumbent()?.registryId).toBe('a/model');
+    expect(harness.session.serving.getIncumbent()?.registryId).toBe('a/model');
     expect(harness.session.context.getLedger().items.size).toBe(0);
     const logged = await records();
     expect(actions(logged)).toEqual([]);
     expect(JSON.stringify(logged)).not.toContain('visible answer');
   });
 
+  it('uses restored served effort as a candidate identity, not a task type, effort minimum, or exclusion', async () => {
+    const harness = await setupProviderTest({ dir: temp.path, models: [registryModel('a/model', {
+      reasoning: true, thinkingLevelMap: { off: null, minimal: null, low: 'low', medium: null, high: 'high', xhigh: null, max: null },
+    })] });
+    harness.session.serving.restore([{ type: 'custom', customType: 'pi8-routing-context-v1', data: {
+      v: 1, op: 'incumbent', served: { registryId: 'a/model', thinkingLevel: 'high' }, dimension: 'implement',
+      sourceEntryId: 'old', workItemId: 'old-work', excludedExecutors: ['a/model'], contractStrikes: { 'a/model': 2 },
+    } }]);
+    harness.scriptReply([{ type: 'text_delta', delta: 'answer' }, { type: 'done' }]);
+    await harness.serve(context);
+    expect(harness.session.getLastDecision()?.dimension).toBe('gather');
+    expect(harness.session.getWorkPhaseState()?.boundaryAuthorization?.allowedActors)
+      .toEqual(expect.arrayContaining(['a/model:low', 'a/model:high']));
+    expect(harness.session.getLastDecision()?.unified?.ranked).toBe(2);
+    expect(harness.session.getWorkPhaseState()?.executionFlow).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.contract).toBeUndefined();
+    expect(harness.session.getWorkPhaseState()?.sourceEvidencePending).toBe(false);
+  });
+
   it('answers from triage with an incumbent and starts the next entry without a handoff', async () => {
     const harness = await setupProviderTest({ dir: temp.path, models: [registryModel('a/model')] });
-    harness.session.context.recordIncumbent({ registryId: 'a/model' }, 'implement', 'previous');
+    harness.session.serving.record({ registryId: 'a/model' }, 'previous');
     harness.scriptReply([{ type: 'text_delta', delta: 'direct answer' }, { type: 'done' }]);
     await harness.serve(context);
     expect(harness.streamedModels()).toEqual(['a/model']);

@@ -61,14 +61,14 @@ import {
   defaultRuntimeBindings,
 } from './serve/router-session-state.js';
 import { isMutationCall } from './routing/policy/mutation-detector.js';
-import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, readBranch, requestRouting } from './routing/context/persistence.js';
+import { SELECTION_ENTRY_TYPE, readBranch } from './routing/context/persistence.js';
 import { REQUEST_NOTE_ENTRY_TYPE, applyNotePlans, type NotableMessage } from './serve/request-notes.js';
 import { planToolsNote } from './serve/router-tools-note.js';
 import { CONTEXT_HANDOFF_TOOL } from './routing/policy/context-acquisition.js';
 import { EXECUTION_CONTRACT_TOOL } from './routing/policy/execution-contract.js';
 import { observeContextGrounding } from './serve/context-grounding.js';
 import { refreshSourceEvidence } from './serve/entry-evidence.js';
-import { carryPhaseAcrossTree } from './serve/context-resolution.js';
+import { SERVING_ENTRY_TYPE, rebuildServingHistory } from './serve/serving-history.js';
 import { logSettleOutcomes, settleReminder } from './serve/settle-reminder.js';
 import {
   closeContextOnSettle,
@@ -206,7 +206,7 @@ async function handleSessionStart(
   } catch {
     // Session cleanup is best-effort and must not block startup.
   }
-  restoreWorkLedger(ctx, session);
+  restoreBranchState(ctx, session);
   // Point per-session logs (decisions + debug) at THIS session's directory,
   // and pick up the `debug` config flag.
   try {
@@ -273,26 +273,19 @@ function recordModelSelection(pi: ExtensionAPI, ctx: ExtensionContext | undefine
   try {
     const model = ctx?.model;
     if (!model || typeof pi.appendEntry !== 'function') return;
-    if (requestRouting(readBranch(ctx?.sessionManager)).routedAtEnd === isRouterAutoActive(model)) return;
+    if (rebuildServingHistory(readBranch(ctx?.sessionManager)).routerSelected === isRouterAutoActive(model)) return;
     pi.appendEntry(SELECTION_ENTRY_TYPE, { provider: model.provider, modelId: model.id });
   } catch {
     // Without the record, the next routed entry's own events show the router served it.
   }
 }
 
-/**
- * Rebuild the work ledger and the recorded router notes from the active
- * branch. Reading never writes: a branch without a ledger stays untracked
- * until its next genuine user entry.
- */
-function restoreWorkLedger(ctx: ExtensionContext | undefined, session: RouterSession): void {
-  try {
-    const branch = readBranch(ctx?.sessionManager);
-    session.context.restore(branch);
-    session.notes.restore(branch);
-  } catch {
-    // An unreadable branch routes as a fresh one.
-  }
+/** Rebuild only branch-valid serving identity and recorded request notes. Reading never writes. */
+function restoreBranchState(ctx: ExtensionContext | undefined, session: RouterSession): void {
+  session.endServing();
+  const branch = readBranch(ctx?.sessionManager);
+  session.serving.restore(branch);
+  session.notes.restore(branch);
 }
 
 function handleModelSelect(
@@ -317,7 +310,7 @@ function handleModelSelect(
   // A concrete model selection makes the previous router decision stale,
   // and ends the incumbent: switching back starts by collecting context.
   if (event.model.provider !== ROUTER_PROVIDER_ID || event.model.id !== AUTO_MODEL_ID) {
-    session.context.clearIncumbent();
+    session.serving.clearIncumbent();
     session.endServing();
   }
   if (event.model.provider !== ROUTER_PROVIDER_ID) {
@@ -329,10 +322,8 @@ function handleModelSelect(
     // Pi applies the new model's thinking level during the switch; that is
     // not a user choice, so the next turn must not read it as one.
     adoptPiThinkingLevel(pi, session);
-    // Requests sent under the previous model were not served by the router:
-    // the rebuilt ledger no longer continues the active item, and the
-    // requests become history that a later entry can return to.
-    restoreWorkLedger(ctx, session);
+    // Branch order determines which served identity survives model selection.
+    restoreBranchState(ctx, session);
   }
 }
 
@@ -441,8 +432,8 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
   if (typeof pi.registerEntryRenderer === 'function') {
     pi.registerEntryRenderer(DEBUG_ENTRY_TYPE, (entry, _options, theme) => renderDebugEntry(entry, theme));
   }
-  session.context.bindPersistence((event) => {
-    if (typeof pi.appendEntry === 'function') pi.appendEntry(CONTEXT_ENTRY_TYPE, event);
+  session.serving.bindPersistence((event) => {
+    if (typeof pi.appendEntry === 'function') pi.appendEntry(SERVING_ENTRY_TYPE, event);
   });
   session.notes.bindPersistence((note) => {
     if (typeof pi.appendEntry === 'function') pi.appendEntry(REQUEST_NOTE_ENTRY_TYPE, note);
@@ -491,16 +482,15 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     session.finishExecutionFlow();
   });
 
-  // Both rewrite the history, so no cached prefix still matches it. Compaction
-  // keeps the branch, and with it the ledger; tree navigation moves to
-  // another branch, whose own events rebuild it and which keeps only the
-  // entry state that still applies there.
+  // Compaction and tree navigation invalidate cached prefixes. Tree navigation
+  // also ends entry authority before branch-valid serving identity is restored.
   pi.on('session_compact', () => session.clearWarmCaches());
   pi.on('session_tree', (_event, ctx) => {
     session.invalidateRouting();
     session.clearWarmCaches();
-    restoreWorkLedger(ctx, session);
-    carryPhaseAcrossTree(session, readBranch(ctx?.sessionManager));
+    restoreBranchState(ctx, session);
+    session.commitWorkPhaseState(undefined);
+    session.setCachedIntent(undefined);
   });
 
   pi.on('context', (event, ctx) => handleContext(event, ctx, session));
@@ -516,6 +506,9 @@ export default async function autoModelRouterExtension(pi: ExtensionAPI) {
     if (event.toolName === EXECUTION_CONTRACT_TOOL || isMutationCall(event.toolName, event.input)) {
       const before = session.getWorkPhaseState();
       const epoch = session.getRoutingEpoch();
+      if (before?.routingEpoch != null && before.routingEpoch !== epoch) {
+        return { block: true, reason: 'Router: this call was not made. Its routing authority expired.' };
+      }
       await refreshSourceEvidence(session);
       const live = session.getWorkPhaseState();
       if (before?.intentKey !== live?.intentKey || before?.boundaryId !== live?.boundaryId || epoch !== session.getRoutingEpoch()) {

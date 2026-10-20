@@ -1,3 +1,4 @@
+import { SERVING_ENTRY_TYPE, rebuildServingHistory } from './serve/serving-history.js';
 import { createEntryEvidence } from './serve/entry-evidence.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -20,8 +21,8 @@ import type { WorkPhaseState } from './routing/policy/work-phase.js';
 import { createBoundaryAuthorization } from './routing/policy/boundary-authorization.js';
 import { closeSelectorPorts } from './serve/unified-decision.js';
 import { SessionTree } from './test-support/session-tree.js';
-import { activateEvent, createEvent, workItem } from './test-support/context-fixtures.js';
-import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE, requestRouting } from './routing/context/persistence.js';
+import { createEvent, workItem } from './test-support/context-fixtures.js';
+import { CONTEXT_ENTRY_TYPE, SELECTION_ENTRY_TYPE } from './routing/context/persistence.js';
 
 vi.mock('./host/commands.js', () => ({ registerCommands: vi.fn(() => vi.fn()) }));
 vi.mock('./serve/provider.js', async (importOriginal) => ({
@@ -162,7 +163,7 @@ describe('session lifecycle resets', () => {
   }
 });
 
-describe('work ledger lifecycle', () => {
+describe('branch serving lifecycle', () => {
   function makePi(tree: SessionTree) {
     const handlers = new Map<string, (...args: any[]) => unknown>();
     const appendEntry = vi.fn(tree.appendEntry);
@@ -184,117 +185,57 @@ describe('work ledger lifecycle', () => {
   });
 
   for (const reason of ['startup', 'reload', 'resume', 'fork'] as const) {
-    it(`rebuilds the branch ledger on session_start(${reason})`, async () => {
-      const tree = new SessionTree();
-      const u = tree.user('implement the export');
-      tree.event(createEvent(workItem('w_1', 't_1'), u));
-      tree.event(activateEvent('w_1', u));
-      const { handlers, pi } = makePi(tree);
+    it(`restores only branch serving identity on session_start(${reason})`, async () => {
+      const tree = new SessionTree(); const source = tree.user('implement the export');
+      tree.appendEntry('pi8-routing-context-v1', { v: 1, op: 'incumbent',
+        served: { registryId: 'a/model', thinkingLevel: 'high' }, dimension: 'implement',
+        sourceEntryId: source, workItemId: 'old-work' });
+      const { handlers, pi, appendEntry } = makePi(tree);
       await autoModelRouterExtension(pi);
-
       await handlers.get('session_start')!({ reason }, ctxFor(tree));
-
-      expect(defaultRouterSession.context.getBranchState()).toBe('tracked');
-      expect(defaultRouterSession.context.getLedger().activeWorkItemId).toBe('w_1');
+      expect(defaultRouterSession.serving.getIncumbent()).toEqual({ registryId: 'a/model', thinkingLevel: 'high' });
+      expect(defaultRouterSession.getWorkPhaseState()).toBeUndefined();
+      expect(defaultRouterSession.getLastDecision()).toBeUndefined();
+      expect(appendEntry).not.toHaveBeenCalled();
     });
   }
 
-  it('loads a long pre-pi8 session as legacy without writing to it', async () => {
+  it('loads a branch without serving events without writing or inferring work', async () => {
     const tree = new SessionTree();
-    for (let i = 0; i < 50; i += 1) {
-      tree.user(`request ${i}`);
-      tree.assistant(`answer ${i}`);
-    }
-    const leaf = tree.getLeafId();
-    const { handlers, pi, appendEntry } = makePi(tree);
+    for (let i = 0; i < 50; i++) { tree.user(`request ${i}`); tree.assistant(`answer ${i}`); }
+    const leaf = tree.getLeafId(); const { handlers, pi, appendEntry } = makePi(tree);
     await autoModelRouterExtension(pi);
-
     await handlers.get('session_start')!({ reason: 'resume' }, ctxFor(tree));
-    await handlers.get('session_start')!({ reason: 'reload' }, ctxFor(tree));
-    await handlers.get('session_tree')!({ newLeafId: leaf, oldLeafId: leaf }, ctxFor(tree));
-
-    expect(defaultRouterSession.context.getBranchState()).toBe('legacy-uninitialized');
-    expect(appendEntry).not.toHaveBeenCalled();
-    expect(tree.getLeafId()).toBe(leaf);
+    await handlers.get('session_tree')!({}, ctxFor(tree));
+    expect(defaultRouterSession.serving.getIncumbent()).toBeUndefined();
+    expect(defaultRouterSession.getWorkPhaseState()).toBeUndefined();
+    expect(appendEntry).not.toHaveBeenCalled(); expect(tree.getLeafId()).toBe(leaf);
   });
 
-  it('rebuilds from the new branch on session_tree', async () => {
-    const tree = new SessionTree();
-    const u1 = tree.user('first');
-    tree.event(createEvent(workItem('w_1'), u1));
+  it('ends entry authority before restoring serving identity on tree navigation, even on the same branch', async () => {
+    const tree = new SessionTree(); const u = tree.user('first');
+    tree.appendEntry(SERVING_ENTRY_TYPE, { v: 1, op: 'served', registryId: 'a/first', effort: 'high', sourceEntryId: u });
     const before = tree.getLeafId();
-    const u2 = tree.user('second');
-    tree.event(createEvent(workItem('w_2'), u2));
-    const after = tree.getLeafId();
-    const { handlers, pi } = makePi(tree);
-    await autoModelRouterExtension(pi);
-    await handlers.get('session_start')!({ reason: 'resume' }, ctxFor(tree));
-    expect(defaultRouterSession.context.getLedger().items.size).toBe(2);
-
-    tree.navigate(before);
-    await handlers.get('session_tree')!({ newLeafId: before, oldLeafId: after }, ctxFor(tree));
-    expect([...defaultRouterSession.context.getLedger().items.keys()]).toEqual(['w_1']);
-
-    tree.navigate(after);
-    await handlers.get('session_tree')!({ newLeafId: after, oldLeafId: before }, ctxFor(tree));
-    expect(defaultRouterSession.context.getLedger().items.size).toBe(2);
-  });
-
-  it('keeps the entry state on session_tree only while its entry is on the branch', async () => {
-    const tree = new SessionTree();
-    const u1 = tree.user('plan the export', 100);
-    tree.event(createEvent(workItem('w_1', 't_1', { lastDeliverable: 'plan' }), u1));
-    tree.event(activateEvent('w_1', u1));
-    const fork = tree.assistant('planned');
-    tree.user('look up the export callers', 200);
-    const leaf = tree.getLeafId();
-    const { handlers, pi } = makePi(tree);
-    await autoModelRouterExtension(pi);
-    await handlers.get('session_start')!({ reason: 'resume' }, ctxFor(tree));
-    const state: WorkPhaseState = {
-      intentKey: '2:200:abcd',
-      deliverable: 'gather',
-      providerInvocation: 3,
-      observedMutationTools: 1,
-      boundaryAuthorization: createBoundaryAuthorization(
-        { sessionGeneration: 1, profileDigest: 'd', contextRevision: 1, entryId: 'u', routingEpoch: 0, boundaryId: 'b', phase: 'gather', assignmentId: 'a1', revision: 1 }, ['alpha/cheap']),
-      status: 'triage',
-      workItemId: 'w_1',
-    };
-    defaultRouterSession.commitWorkPhaseState(state);
-
-    // The entry stays, without the routing authority of the earlier epoch.
-    const epoch = defaultRouterSession.getRoutingEpoch();
-    await handlers.get('session_tree')!({ newLeafId: leaf, oldLeafId: leaf }, ctxFor(tree));
-    const { boundaryAuthorization: _dropped, ...withoutAuthority } = state;
-    expect(defaultRouterSession.getWorkPhaseState()).toEqual(withoutAuthority);
-    expect(defaultRouterSession.getRoutingEpoch()).toBe(epoch + 1);
-
-    // Off the entry's branch, only what a thin continuation inherits stays,
-    // raised to the restored active item's task type.
-    tree.navigate(fork);
-    await handlers.get('session_tree')!({ newLeafId: fork, oldLeafId: leaf }, ctxFor(tree));
-    expect(defaultRouterSession.getWorkPhaseState()).toEqual({
-      intentKey: '2:200:abcd',
-      deliverable: 'plan',
-      providerInvocation: 3,
-      observedMutationTools: 0,
+    tree.user('second'); tree.appendEntry(SERVING_ENTRY_TYPE, { v: 1, op: 'served', registryId: 'b/second', sourceEntryId: 'second' });
+    const after = tree.getLeafId(); const { handlers, pi, appendEntry } = makePi(tree);
+    await autoModelRouterExtension(pi); await handlers.get('session_start')!({ reason: 'resume' }, ctxFor(tree));
+    expect(defaultRouterSession.serving.getIncumbent()).toEqual({ registryId: 'b/second' });
+    defaultRouterSession.commitWorkPhaseState({ intentKey: 'entry', status: 'served', providerInvocation: 2, observedMutationTools: 1,
+      evidence: createEntryEvidence({ key: 'entry', promptText: '@source.ts' }, defaultRouterSession.getRoutingEpoch(), '/repo'),
+      boundaryAuthorization: createBoundaryAuthorization({ sessionGeneration: 1, profileDigest: 'd', contextRevision: 1,
+        entryId: 'entry', routingEpoch: 1, boundaryId: 'b', phase: 'implement', assignmentId: 'a', revision: 1 }, ['a/first']),
     });
-  });
-
-  it('reads an untracked branch as legacy after a switch to router/auto, without writing to it', async () => {
-    const tree = new SessionTree();
-    tree.modelChange('openai', 'gpt-5');
-    const { handlers, pi, appendEntry } = makePi(tree);
-    await autoModelRouterExtension(pi);
-    await handlers.get('session_start')!({ reason: 'new' }, ctxFor(tree));
-    expect(defaultRouterSession.context.getBranchState()).toBe('native-empty');
-
-    tree.user('refactor the cache');
-    tree.assistant('done');
-    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
-    await handlers.get('model_select')!({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctxFor(tree));
-    expect(defaultRouterSession.context.getBranchState()).toBe('legacy-uninitialized');
+    const epoch = defaultRouterSession.getRoutingEpoch();
+    await handlers.get('session_tree')!({}, ctxFor(tree));
+    expect(defaultRouterSession.getRoutingEpoch()).toBe(epoch + 1);
+    expect(defaultRouterSession.getWorkPhaseState()).toBeUndefined();
+    expect(defaultRouterSession.getCachedIntent()).toBeUndefined();
+    expect(defaultRouterSession.getPreviousServed()).toBeUndefined();
+    expect(defaultRouterSession.previousFlow).toBeUndefined();
+    tree.navigate(before); await handlers.get('session_tree')!({}, ctxFor(tree));
+    expect(defaultRouterSession.serving.getIncumbent()).toEqual({ registryId: 'a/first', thinkingLevel: 'high' });
+    tree.navigate(after); await handlers.get('session_tree')!({}, ctxFor(tree));
+    expect(defaultRouterSession.serving.getIncumbent()).toEqual({ registryId: 'b/second' });
     expect(appendEntry).not.toHaveBeenCalled();
   });
 
@@ -323,28 +264,8 @@ describe('work ledger lifecycle', () => {
     await handlers.get('before_agent_start')!(prompt, withModel('openai', 'gpt-5'));
     expect(appendEntry).toHaveBeenCalledTimes(1);
 
-    const concrete = tree.user('sent to gpt-5');
-    expect(requestRouting(tree.getBranch()).unrouted.has(concrete)).toBe(true);
-  });
-
-  it('stops continuing the active item when router/auto returns after requests to another model', async () => {
-    const tree = new SessionTree();
-    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
-    const u = tree.user('implement the export');
-    tree.event(createEvent(workItem('w_1', 't_1'), u));
-    tree.event(activateEvent('w_1', u));
-    const { handlers, pi } = makePi(tree);
-    await autoModelRouterExtension(pi);
-    await handlers.get('session_start')!({ reason: 'resume' }, ctxFor(tree));
-    expect(defaultRouterSession.context.getLedger().activeWorkItemId).toBe('w_1');
-
-    tree.modelChange('openai', 'gpt-5');
-    tree.user('fix the login page');
-    tree.assistant('done');
-    tree.modelChange(ROUTER_PROVIDER_ID, AUTO_MODEL_ID);
-    await handlers.get('model_select')!({ model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } }, ctxFor(tree));
-    expect(defaultRouterSession.context.getLedger().activeWorkItemId).toBeUndefined();
-    expect(defaultRouterSession.context.getLedger().items.get('w_1')?.status).toBe('active');
+    tree.user('sent to gpt-5');
+    expect(rebuildServingHistory(tree.getBranch()).routerSelected).toBe(false);
   });
 
   it('ends the served model when Pi selects a concrete model, so it sets no minimum after router/auto returns', async () => {
@@ -366,16 +287,13 @@ describe('work ledger lifecycle', () => {
     expect(defaultRouterSession.getLastChosenRegistryId()).toBeUndefined();
   });
 
-  it('keeps the ledger across compaction', async () => {
-    const tree = new SessionTree();
-    const u = tree.user('first');
-    tree.event(createEvent(workItem('w_1'), u));
-    const { handlers, pi } = makePi(tree);
-    await autoModelRouterExtension(pi);
+  it('keeps branch serving identity across compaction', async () => {
+    const tree = new SessionTree(); const u = tree.user('first');
+    tree.appendEntry(SERVING_ENTRY_TYPE, { v: 1, op: 'served', registryId: 'a/model', sourceEntryId: u });
+    const { handlers, pi } = makePi(tree); await autoModelRouterExtension(pi);
     await handlers.get('session_start')!({ reason: 'resume' }, ctxFor(tree));
-
     await handlers.get('session_compact')!({}, ctxFor(tree));
-    expect(defaultRouterSession.context.getLedger().items.has('w_1')).toBe(true);
+    expect(defaultRouterSession.serving.getIncumbent()).toEqual({ registryId: 'a/model' });
   });
 
   it('grounds an anchored file from a read result, only while router/auto serves', async () => {
@@ -383,9 +301,7 @@ describe('work ledger lifecycle', () => {
     try {
       writeFileSync(join(cwd, 'req.md'), 'spec\n');
       const tree = new SessionTree();
-      const u = tree.user('@req.md implement this');
-      tree.event(createEvent(workItem('w_1', 't_1', { anchors: [{ kind: 'path', value: 'req.md', source: 'user' }] }), u));
-      tree.event(activateEvent('w_1', u));
+      tree.user('@req.md implement this');
       const { handlers, pi } = makePi(tree);
       await autoModelRouterExtension(pi);
       const base = { ...ctxFor(tree), cwd } as ExtensionContext;
@@ -396,11 +312,11 @@ describe('work ledger lifecycle', () => {
       const read = { toolName: 'read', toolCallId: 'r1', input: { path: 'req.md' }, content: [{ type: 'text', text: 'spec\n' }] };
 
       await handlers.get('tool_result')!(read, { ...base, model: { provider: 'openai', id: 'gpt' } });
-      expect(defaultRouterSession.context.getLedger().items.get('w_1')!.grounding).toEqual([]);
+      expect(defaultRouterSession.getWorkPhaseState()!.evidence!.observedFiles.size).toBe(0);
 
       await handlers.get('tool_result')!(read, { ...base, model: { provider: ROUTER_PROVIDER_ID, id: AUTO_MODEL_ID } });
       expect(defaultRouterSession.getWorkPhaseState()!.evidence!.observedFiles.has('req.md')).toBe(true);
-      expect(defaultRouterSession.context.getLedger().items.get('w_1')!.grounding).toEqual([]);
+      expect(tree.getBranch().some((e) => e.customType === CONTEXT_ENTRY_TYPE)).toBe(false);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -429,13 +345,12 @@ describe('work ledger lifecycle', () => {
     await handlers.get('session_start')!({ reason: 'new' }, ctxFor(tree));
     const u = tree.user('implement the export');
 
-    expect(defaultRouterSession.context.append(createEvent(workItem('w_1'), u))).toBe(true);
-    // A duplicate does not apply and is not written.
-    expect(defaultRouterSession.context.append(createEvent(workItem('w_1'), u))).toBe(false);
-
+    defaultRouterSession.serving.record({ registryId: 'a/model', thinkingLevel: 'high' }, u);
+    defaultRouterSession.serving.record({ registryId: 'a/model', thinkingLevel: 'high' }, u);
     expect(appendEntry).toHaveBeenCalledTimes(1);
-    expect(appendEntry).toHaveBeenCalledWith(CONTEXT_ENTRY_TYPE, expect.objectContaining({ op: 'work-create' }));
-    expect(tree.getBranch().at(-1)).toMatchObject({ type: 'custom', customType: CONTEXT_ENTRY_TYPE });
+    expect(appendEntry).toHaveBeenCalledWith(SERVING_ENTRY_TYPE,
+      { v: 1, op: 'served', registryId: 'a/model', effort: 'high', sourceEntryId: u });
+    expect(tree.getBranch().at(-1)).toMatchObject({ type: 'custom', customType: SERVING_ENTRY_TYPE });
   });
 });
 

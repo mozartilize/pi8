@@ -423,7 +423,6 @@ async function resolveEntrySemantics(entry: {
   const evidence = createEntryEvidence(entry.turn, entry.session.getRoutingEpoch(),
     entry.extensionContext?.cwd ?? process.cwd(), entry.extensionContext?.sessionManager);
   if (!entry.stillCurrent()) return { dimension, cause, aborted: true };
-  entry.session.context.setEntrySource(evidence.entryId);
   return { dimension, cause, evidence, aborted: false };
 }
 
@@ -446,7 +445,7 @@ function advanceWorkPhase(args: {
     }
     args.session.finishExecutionFlow();
     // Each genuine user entry starts at its own triage boundary.
-    const sourceEntryId = args.session.context.getEntrySource() ?? args.turnInput.key;
+    const sourceEntryId = args.evidence?.entryId ?? args.turnInput.key;
     const routingEpoch = args.session.getRoutingEpoch();
     workPhaseState = {
       intentKey: args.turnInput.key,
@@ -698,7 +697,7 @@ async function prepareRouterTurn(args: {
   };
 }
 
-/** Resolve this entry's work identity and local task-type floor. */
+/** Resolve current-entry evidence without changing its base task type. */
 async function resolveRouterTurn(args: {
   prepared: PreparedTurn;
   session: RouterSession;
@@ -881,9 +880,9 @@ async function scoreRouterTurn(args: {
 
   // Pi clears lastServed at stream start; the rotated value is the model and
   // effort that actually served, including an incumbent effort raise or fallback.
-  // That effort is the incumbent's minimum thinking level even when no row
-  // measures it, so the chosen key stands in only when no row of the model can.
-  const previous = session.getPreviousServed();
+  // The served effort identifies the incumbent candidate. Only a continuing
+  // boundary can retain its thinking minimum.
+  const previous = session.getPreviousServed() ?? session.serving.getIncumbent();
   const servedCandidateKey = previous && servedKey(previous);
   const incumbentRegistryId = handBack
     ? submitterKey(routableCandidates, handBack.submitter)
@@ -1306,7 +1305,7 @@ async function delegateRouterTurn(args: {
         phase: state?.boundaryAuthorization?.phase ?? decision.dimension,
         assignmentId: state?.boundaryAuthorization?.assignmentId ?? '',
         flowId: state?.boundaryAuthorization?.flowId,
-        branchId: JSON.stringify([session.context.getEntrySource(), state?.intentKey]),
+        branchId: JSON.stringify([state?.sourceEntryId, state?.intentKey]),
         session: session.getSessionGeneration(), profileDigest: readPreferences().digest,
         authorization: state?.boundaryAuthorization?.revision ?? -1,
         context: state?.providerInvocation ?? 0,
@@ -1343,17 +1342,17 @@ async function delegateRouterTurn(args: {
   // `/router-why` show the boundary's owner for the invocation that took it.
   delegationOptions.settleServed = (lastServed, finalDecision) => {
     const settled = settleBoundary(lastServed, finalDecision);
-    noteIncumbent(lastServed, settled);
+    noteIncumbent(lastServed);
     return settled;
   };
   // The last actual auto serve is the incumbent candidate for the next entry.
-  const noteIncumbent = (lastServed: ServedInfo, decision: RoutingDecision): void => {
+  const noteIncumbent = (lastServed: ServedInfo): void => {
     try {
       const status = session.getWorkPhaseState()?.status;
       if (status === 'clarification-only') return;
       if (session.getManualModel() || session.getSemiHold(intentKey)) return;
       const state = session.getWorkPhaseState();
-      session.context.recordIncumbent(lastServed, decision.dimension, state?.sourceEntryId ?? intentKey);
+      session.serving.record(lastServed, state?.sourceEntryId ?? intentKey);
 
     } catch {
       // A lost record only means the next entry is routed afresh.
@@ -1533,7 +1532,7 @@ function pinOnThinkingChange(
     const manual = session.getManualModel();
     const registryId = manual
       ? resolveManualModel(manual, models)?.registryId
-      : session.getPreviousServed()?.registryId;
+      : (session.getPreviousServed() ?? session.serving.getIncumbent())?.registryId;
     const model = registryId ? models.find((m) => `${m.provider}/${m.id}` === registryId) : undefined;
     if (!registryId || !model) return;
     const level = resolveThinkingLevel(model, requested as ThinkingLevel);
@@ -1653,7 +1652,7 @@ async function resolveSemiGate(args: {
     const ctx = prepared.extensionContext;
     if (!ctx?.hasUI) return { kind: 'proceed' };
     const ui = ctx.ui;
-    const previous = session.getPreviousServed();
+    const previous = session.getPreviousServed() ?? session.serving.getIncumbent();
     const incumbent = args.incumbent ?? previous?.registryId;
     // Only a switch away from an established incumbent is a "model changed".
     if (!incumbent) return { kind: 'proceed' };
@@ -1819,7 +1818,6 @@ async function runManualTurn(args: {
 }): Promise<RouterTurnOutcome> {
   const { prepared, manualModel, cause = 'manual-override', context, options, pi, session, turnTimer, stream } = args;
   const evidence = resolvePinnedEntryContext(prepared, session);
-  session.context.setEntrySource(evidence.entryId);
   if (!prepared.intent.cacheHit) {
     const { turnInput } = prepared.measured;
     session.setCachedIntent({
@@ -2091,7 +2089,7 @@ export function registerAutoRouterProvider(
   // `router/auto`. Once a model has served, the conversation lives in that
   // model's window, so advertise its limits; the routable maximum only covers
   // a session that has not served yet.
-  const served = session.getLastServed() ?? session.getPreviousServed();
+  const served = session.getLastServed() ?? session.getPreviousServed() ?? session.serving.getIncumbent();
   const slash = served?.registryId.indexOf('/') ?? -1;
   const servedModel = served && slash > 0
     ? registryModels.find((m) =>
